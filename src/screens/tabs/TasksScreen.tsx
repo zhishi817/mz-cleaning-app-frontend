@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Alert, Linking, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import { hairline, moderateScale } from '../../lib/scale'
@@ -42,6 +42,46 @@ function startOfWeekMonday(d: Date) {
 
 function daysInMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
+}
+
+function displayTime(t: string | null, fallback: string) {
+  const s = String(t || '').trim()
+  return s || fallback
+}
+
+function normalizeHttpUrl(raw: string | null | undefined) {
+  const s = String(raw || '').trim()
+  if (!s) return null
+  if (/^https?:\/\//i.test(s)) return s
+  return `https://${s}`
+}
+
+async function copyText(text: string) {
+  const s = String(text || '').trim()
+  if (!s) return
+  if (Platform.OS !== 'web') return
+  const nav: any = (globalThis as any).navigator
+  if (nav?.clipboard?.writeText) {
+    try {
+      await nav.clipboard.writeText(s)
+      return
+    } catch {}
+  }
+  try {
+    const doc: any = (globalThis as any).document
+    if (!doc?.createElement) return
+    const ta = doc.createElement('textarea')
+    ta.value = s
+    ta.setAttribute('readonly', 'true')
+    ta.style.position = 'fixed'
+    ta.style.left = '-9999px'
+    ta.style.top = '0'
+    doc.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    try { doc.execCommand('copy') } catch {}
+    try { doc.body.removeChild(ta) } catch {}
+  } catch {}
 }
 
 export default function TasksScreen(props: Props) {
@@ -124,7 +164,21 @@ export default function TasksScreen(props: Props) {
     return { header, cells }
   }, [locale, selectedDate, tasksByDate])
 
-  const selectedTasks = useMemo(() => tasksByDate.get(selectedDate) || [], [selectedDate, tasksByDate])
+  const selectedTasks = useMemo(() => {
+    const list = tasksByDate.get(selectedDate) || []
+    const copy = list.slice()
+    copy.sort((a, b) => {
+      const ar = String(a.region || '').trim()
+      const br = String(b.region || '').trim()
+      const aEmpty = !ar
+      const bEmpty = !br
+      if (aEmpty !== bEmpty) return aEmpty ? 1 : -1
+      const r0 = ar.localeCompare(br)
+      if (r0) return r0
+      return String(a.title || '').localeCompare(String(b.title || ''))
+    })
+    return copy
+  }, [selectedDate, tasksByDate])
 
   const sectionTitle = useMemo(() => {
     if (period === 'today') return t('tasks_section_today')
@@ -282,10 +336,15 @@ export default function TasksScreen(props: Props) {
                         </View>
                       </View>
 
-                      <View style={styles.taskAddrRow}>
+                      <Pressable
+                        onPress={() => copyText(task.address)}
+                        style={({ pressed }) => [styles.taskAddrRow, pressed ? styles.segmentPressed : null]}
+                      >
                         <Ionicons name="location-outline" size={moderateScale(14)} color="#9CA3AF" />
-                        <Text style={styles.taskAddr}>{task.address}</Text>
-                      </View>
+                        <Text style={styles.taskAddr} selectable numberOfLines={1}>
+                          {task.address || '-'}
+                        </Text>
+                      </Pressable>
 
                       <View style={styles.taskTags}>
                         <View style={styles.tagGray}>
@@ -314,47 +373,69 @@ export default function TasksScreen(props: Props) {
 
                   <View style={styles.divider} />
 
-                  <View style={styles.timeRow}>
-                    <View style={styles.timeCol}>
-                      <Text style={styles.timeLabel}>{t('tasks_checkout')}</Text>
-                      <View style={styles.timeValueRow}>
-                        <Ionicons name="time-outline" size={moderateScale(14)} color="#EF4444" />
-                        <Text style={styles.timeValue}>{task.checkoutTime}</Text>
-                      </View>
+                  {task.hasCheckout || task.hasCheckin ? (
+                    <View style={styles.timeRow}>
+                      {task.hasCheckout ? (
+                        <View style={styles.timeCol}>
+                          <Text style={styles.timeLabel}>{t('tasks_checkout')}</Text>
+                          <View style={styles.timeValueRow}>
+                            <Ionicons name="time-outline" size={moderateScale(14)} color="#EF4444" />
+                            <Text style={styles.timeValue}>{displayTime(task.checkoutTime, '10:00')}</Text>
+                          </View>
+                        </View>
+                      ) : null}
+                      {task.hasCheckin ? (
+                        <View style={styles.timeCol}>
+                          <Text style={styles.timeLabel}>{t('tasks_next_checkin')}</Text>
+                          <View style={styles.timeValueRow}>
+                            <Ionicons name="person-outline" size={moderateScale(14)} color="#2563EB" />
+                            <Text style={styles.timeValue}>{displayTime(task.nextCheckinTime, '15:00')}</Text>
+                          </View>
+                        </View>
+                      ) : null}
                     </View>
-                    <View style={styles.timeCol}>
-                      <Text style={styles.timeLabel}>{t('tasks_next_checkin')}</Text>
-                      <View style={styles.timeValueRow}>
-                        <Ionicons name="person-outline" size={moderateScale(14)} color="#2563EB" />
-                        <Text style={styles.timeValue}>{task.nextCheckinTime}</Text>
-                      </View>
-                    </View>
-                  </View>
+                  ) : null}
 
                   <View style={styles.codeRow}>
-                    <View style={[styles.codeCard, styles.codeCardMuted]}>
-                      <Text style={styles.codeLabel}>{t('tasks_old_code')}</Text>
-                      <Text style={[styles.codeValue, styles.codeValueMuted]}>{task.oldCode}</Text>
-                    </View>
+                    {task.hasCheckout ? (
+                      <View style={[styles.codeCard, styles.codeCardMuted]}>
+                        <Text style={styles.codeLabel}>{t('tasks_old_code')}</Text>
+                        <Text style={[styles.codeValue, styles.codeValueMuted]}>{task.oldCode || ''}</Text>
+                      </View>
+                    ) : null}
                     <View style={[styles.codeCard, styles.codeCardBlue]}>
                       <View style={styles.codeLabelRow}>
                         <Ionicons name="lock-closed-outline" size={moderateScale(12)} color="#2563EB" />
                         <Text style={[styles.codeLabel, styles.codeLabelBlue]}>{t('tasks_master_code')}</Text>
                       </View>
-                      <Text style={[styles.codeValue, styles.codeValueBlue]}>{task.masterCode}</Text>
+                      <Text style={[styles.codeValue, styles.codeValueBlue]}>{task.masterCode || ''}</Text>
                     </View>
-                    <View style={[styles.codeCard, styles.codeCardGreen]}>
-                      <Text style={[styles.codeLabel, styles.codeLabelGreen]}>{t('tasks_new_code')}</Text>
-                      <Text style={[styles.codeValue, styles.codeValueGreen]}>{task.newCode}</Text>
-                    </View>
+                    {task.hasCheckin ? (
+                      <View style={[styles.codeCard, styles.codeCardGreen]}>
+                        <Text style={[styles.codeLabel, styles.codeLabelGreen]}>{t('tasks_new_code')}</Text>
+                        <Text style={[styles.codeValue, styles.codeValueGreen]}>{task.newCode || ''}</Text>
+                      </View>
+                    ) : null}
                   </View>
 
-                  <View style={styles.linkRow}>
+                  <Pressable
+                    onPress={async () => {
+                      const url = normalizeHttpUrl(task.guideUrl)
+                      if (!url) {
+                        Alert.alert('提示', '暂无入住指南，请联系管理员')
+                        return
+                      }
+                      try {
+                        await Linking.openURL(url)
+                      } catch {}
+                    }}
+                    style={({ pressed }) => [styles.linkRow, pressed ? styles.segmentPressed : null]}
+                  >
                     <Ionicons name="open-outline" size={moderateScale(16)} color="#2563EB" />
-                    <Text style={styles.linkText}>
-                      {t('tasks_view_guide')} (Keypad code: {task.keypadCode})
+                    <Text style={styles.linkText} numberOfLines={1}>
+                      {task.guideUrl ? t('tasks_view_guide') : '暂无入住指南，请联系管理员'}
                     </Text>
-                  </View>
+                  </Pressable>
 
                   <View style={styles.actionsRow}>
                     <Pressable

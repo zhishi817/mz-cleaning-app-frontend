@@ -6,15 +6,19 @@ export type Task = {
   id: string
   date: string
   title: string
+  region: string
   address: string
   unitType: string
   status: TaskStatus
-  checkoutTime: string
-  nextCheckinTime: string
-  oldCode: string
-  masterCode: string
-  newCode: string
-  keypadCode: string
+  guideUrl?: string | null
+  hasCheckout: boolean
+  hasCheckin: boolean
+  checkoutTime: string | null
+  nextCheckinTime: string | null
+  oldCode: string | null
+  masterCode: string | null
+  newCode: string | null
+  keypadCode: string | null
   keyPhotoUri: string | null
   completedAt: string | null
   completedBy: string | null
@@ -61,9 +65,13 @@ function seed(): Task[] {
       id: 't1',
       date: d0,
       title: 'WSP3702A',
+      region: 'CBD',
       address: '45 Green Ln',
       unitType: 'STUDIO',
       status: 'pending_key_photo',
+      guideUrl: null,
+      hasCheckout: true,
+      hasCheckin: true,
       checkoutTime: '10:00',
       nextCheckinTime: '13:00',
       oldCode: '4321',
@@ -80,9 +88,13 @@ function seed(): Task[] {
       id: 't2',
       date: d1,
       title: 'WSP1290B',
+      region: 'CBD',
       address: '12 King St',
       unitType: '1BR',
       status: 'pending_key_photo',
+      guideUrl: null,
+      hasCheckout: true,
+      hasCheckin: true,
       checkoutTime: '09:30',
       nextCheckinTime: '14:00',
       oldCode: '2211',
@@ -99,9 +111,13 @@ function seed(): Task[] {
       id: 't3',
       date: d2,
       title: 'WSP4401C',
+      region: 'Docklands',
       address: '8 Harbour Rd',
       unitType: '2BR',
       status: 'pending_key_photo',
+      guideUrl: null,
+      hasCheckout: true,
+      hasCheckin: true,
       checkoutTime: '11:00',
       nextCheckinTime: '15:00',
       oldCode: '1357',
@@ -118,9 +134,13 @@ function seed(): Task[] {
       id: 't4',
       date: d3,
       title: 'WSP7820D',
+      region: 'CBD',
       address: '99 Ocean Ave',
       unitType: 'STUDIO',
       status: 'pending_key_photo',
+      guideUrl: null,
+      hasCheckout: true,
+      hasCheckin: true,
       checkoutTime: '10:00',
       nextCheckinTime: '13:00',
       oldCode: '1234',
@@ -136,6 +156,90 @@ function seed(): Task[] {
   ]
 }
 
+function statusRank(status: TaskStatus) {
+  if (status === 'pending_key_photo') return 0
+  if (status === 'cleaning') return 1
+  return 2
+}
+
+function maxTime(a: string | null, b: string | null) {
+  if (!a) return b
+  if (!b) return a
+  return a >= b ? a : b
+}
+
+function minTime(a: string | null, b: string | null) {
+  if (!a) return b
+  if (!b) return a
+  return a <= b ? a : b
+}
+
+export function mergeSamePropertySameDay(items: Task[]): Task[] {
+  const groups = new Map<string, Task[]>()
+  for (const t of items) {
+    const key = `${t.date}|${t.title}`
+    const arr = groups.get(key)
+    if (arr) arr.push(t)
+    else groups.set(key, [t])
+  }
+
+  const merged: Task[] = []
+  for (const arr of groups.values()) {
+    if (arr.length === 1) {
+      merged.push(arr[0]!)
+      continue
+    }
+    const base = arr.slice().sort((a, b) => String(a.id).localeCompare(String(b.id)))[0]!
+    let status = base.status
+    let hasCheckout = base.hasCheckout
+    let hasCheckin = base.hasCheckin
+    let checkoutTime = base.checkoutTime
+    let nextCheckinTime = base.nextCheckinTime
+    let oldCode = base.oldCode
+    let newCode = base.newCode
+    let masterCode = base.masterCode
+    let keypadCode = base.keypadCode
+    let guideUrl = base.guideUrl ?? null
+    let region = base.region
+    let address = base.address
+    let unitType = base.unitType
+
+    for (const t of arr) {
+      if (statusRank(t.status) < statusRank(status)) status = t.status
+      hasCheckout = hasCheckout || t.hasCheckout
+      hasCheckin = hasCheckin || t.hasCheckin
+      if (t.hasCheckout) checkoutTime = maxTime(checkoutTime, t.checkoutTime)
+      if (t.hasCheckin) nextCheckinTime = minTime(nextCheckinTime, t.nextCheckinTime)
+      if (!region && t.region) region = t.region
+      if (!address && t.address) address = t.address
+      if (!unitType && t.unitType) unitType = t.unitType
+      if (!guideUrl && t.guideUrl) guideUrl = t.guideUrl
+      if (!newCode && t.newCode) newCode = t.newCode
+      if (!oldCode && t.oldCode) oldCode = t.oldCode
+      if (!masterCode && t.masterCode) masterCode = t.masterCode
+      if (!keypadCode && t.keypadCode) keypadCode = t.keypadCode
+    }
+
+    merged.push({
+      ...base,
+      status,
+      hasCheckout,
+      hasCheckin,
+      checkoutTime,
+      nextCheckinTime,
+      oldCode,
+      newCode,
+      masterCode,
+      keypadCode,
+      guideUrl,
+      region,
+      address,
+      unitType,
+    })
+  }
+  return merged
+}
+
 async function persist() {
   await setJson(STORAGE_KEY, state)
 }
@@ -145,9 +249,9 @@ export async function initTasksStore() {
   initialized = true
   const saved = await getJson<StoreState>(STORAGE_KEY)
   if (saved?.items?.length) {
-    state = { items: saved.items }
+    state = { items: mergeSamePropertySameDay(saved.items) }
   } else {
-    state = { items: seed() }
+    state = { items: mergeSamePropertySameDay(seed()) }
     await persist()
   }
 }
