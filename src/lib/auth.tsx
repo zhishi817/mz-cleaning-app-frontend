@@ -30,7 +30,7 @@ function localTokenFor(username: string) {
 }
 
 function canUseLocalLogin() {
-  return LOCAL_LOGIN_ENABLED || !API_BASE_URL
+  return !!(__DEV__ && LOCAL_LOGIN_ENABLED && !API_BASE_URL)
 }
 
 export function AuthProvider(props: { children: React.ReactNode }) {
@@ -64,7 +64,8 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         }
         const username = u?.username || decodeURIComponent(t.split(':')[1] || '') || LOCAL_LOGIN_USERNAME
         const role = u?.role || LOCAL_LOGIN_ROLE
-        const localUser = { username, role }
+        const id = u?.id || `local:${username}`
+        const localUser = { id, username, role }
         await setStoredUser(localUser)
         setToken(t)
         setUser(localUser)
@@ -97,7 +98,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       const alias: Record<string, string> = { ops: 'cs', field: 'cleaner' }
       const username = alias[params.username] || params.username
       if (canUseLocalLogin() && username.trim() === LOCAL_LOGIN_USERNAME && params.password === LOCAL_LOGIN_PASSWORD) {
-        const localUser = { username: username.trim(), role: LOCAL_LOGIN_ROLE }
+        const localUser = { id: `local:${username.trim()}`, username: username.trim(), role: LOCAL_LOGIN_ROLE }
         const localToken = localTokenFor(localUser.username)
         await setAuthToken(localToken)
         await setStoredUser(localUser)

@@ -1,13 +1,17 @@
 import React from 'react'
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native'
+import { useNavigation } from '@react-navigation/native'
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { clearAppLocalData } from '../../lib/appReset'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline } from '../../lib/scale'
+import type { MeStackParamList } from '../../navigation/RootNavigator'
 
 export default function AccountScreen() {
   const { t } = useI18n()
   const { signOut } = useAuth()
+  const navigation = useNavigation<NativeStackNavigationProp<MeStackParamList>>()
 
   async function onLogout() {
     const ok = await new Promise<boolean>(resolve => {
@@ -35,6 +39,10 @@ export default function AccountScreen() {
   return (
     <View style={styles.page}>
       <View style={styles.card}>
+        <Pressable style={({ pressed }) => [styles.btn, pressed ? styles.pressed : null]} onPress={() => navigation.navigate('ChangePassword')}>
+          <Text style={styles.btnText}>修改密码</Text>
+        </Pressable>
+        <View style={styles.sep} />
         <Pressable style={({ pressed }) => [styles.btn, pressed ? styles.pressed : null]} onPress={onLogout}>
           <Text style={styles.btnText}>{t('me_logout')}</Text>
         </Pressable>

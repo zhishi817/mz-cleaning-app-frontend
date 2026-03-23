@@ -64,3 +64,12 @@ jest.mock('expo-secure-store', () => {
     }),
   }
 })
+
+jest.mock('expo-av', () => {
+  const React = require('react')
+  const Video = (props: any) => React.createElement('Video', props, null)
+  return {
+    ResizeMode: { CONTAIN: 'contain', COVER: 'cover', STRETCH: 'stretch' },
+    Video,
+  }
+})
