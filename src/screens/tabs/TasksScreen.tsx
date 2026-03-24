@@ -1080,7 +1080,7 @@ export default function TasksScreen(props: Props) {
                             </Pressable>
                           ) : null}
                           <Pressable
-                            onPress={() => props.navigation.navigate('RepairForm', { taskId: task.id })}
+                            onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
                             style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
                           >
                             <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
@@ -1095,7 +1095,7 @@ export default function TasksScreen(props: Props) {
                             <Text style={styles.actionText}>{t('tasks_btn_upload_key')}</Text>
                           </Pressable>
                           <Pressable
-                            onPress={() => props.navigation.navigate('RepairForm', { taskId: task.id })}
+                            onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
                             style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
                           >
                             <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
@@ -1112,7 +1112,7 @@ export default function TasksScreen(props: Props) {
                   ) : isInspectionTask ? (
                     <View style={styles.actionsRow}>
                       <Pressable
-                        onPress={() => props.navigation.navigate('RepairForm', { taskId: task.id })}
+                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
                         style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
                       >
                         <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Image, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Dimensions, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
@@ -100,6 +100,7 @@ export default function TaskDetailScreen(props: Props) {
   const [localKeyPhotoUrl, setLocalKeyPhotoUrl] = useState<string | null>(null)
   const [lockboxLocalUrl, setLockboxLocalUrl] = useState<string | null>(null)
   const [lockboxUploading, setLockboxUploading] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
 
   useEffect(() => {
     setHasInit(true)
@@ -112,6 +113,10 @@ export default function TaskDetailScreen(props: Props) {
 
   const items = getWorkTasksSnapshot().items
   const task = useMemo<WorkTaskItem | null>(() => items.find(x => x.id === id) || null, [id, items])
+  const previewSize = useMemo(() => {
+    const { width, height } = Dimensions.get('window')
+    return { width, height }
+  }, [])
 
   async function onUploadKey() {
     if (!task) return
@@ -399,7 +404,8 @@ export default function TaskDetailScreen(props: Props) {
   }
 
   return (
-    <ScrollView style={styles.page} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+    <>
+      <ScrollView style={styles.page} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <View style={styles.card}>
         <View style={styles.titleRow}>
           <Text style={styles.title}>{title2}</Text>
@@ -498,13 +504,7 @@ export default function TaskDetailScreen(props: Props) {
             <View style={styles.line} />
             <Text style={styles.sectionTitle}>钥匙照片</Text>
             <Pressable
-              onPress={async () => {
-                try {
-                  await Linking.openURL(keyPhotoUrl)
-                } catch {
-                  Alert.alert(t('common_error'), '打开失败')
-                }
-              }}
+              onPress={() => setPreviewUrl(keyPhotoUrl)}
               style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
             >
               <Image source={{ uri: keyPhotoUrl }} style={styles.photo} />
@@ -524,13 +524,7 @@ export default function TaskDetailScreen(props: Props) {
                     {it.note ? <Text style={styles.restockNote} numberOfLines={2}>{String(it.note)}</Text> : null}
                     {it.photo_url ? (
                       <Pressable
-                        onPress={async () => {
-                          try {
-                            await Linking.openURL(String(it.photo_url))
-                          } catch {
-                            Alert.alert(t('common_error'), '打开失败')
-                          }
-                        }}
+                        onPress={() => setPreviewUrl(String(it.photo_url))}
                         style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
                       >
                         <Image source={{ uri: String(it.photo_url) }} style={styles.photo} />
@@ -642,13 +636,7 @@ export default function TaskDetailScreen(props: Props) {
             </Pressable>
             {effectiveMarkPhotoUrl ? (
               <Pressable
-                onPress={async () => {
-                  try {
-                    await Linking.openURL(String(effectiveMarkPhotoUrl))
-                  } catch {
-                    Alert.alert(t('common_error'), '打开失败')
-                  }
-                }}
+                onPress={() => setPreviewUrl(String(effectiveMarkPhotoUrl))}
                 style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
               >
                 <Image source={{ uri: String(effectiveMarkPhotoUrl) }} style={styles.photo} />
@@ -719,6 +707,36 @@ export default function TaskDetailScreen(props: Props) {
         ) : null}
       </View>
     </ScrollView>
+    <Modal visible={!!previewUrl} transparent animationType="fade" onRequestClose={() => setPreviewUrl(null)}>
+      <Pressable style={styles.previewBackdrop} onPress={() => setPreviewUrl(null)}>
+        <Pressable style={styles.previewCard} onPress={() => {}}>
+          <View style={styles.previewTopRow}>
+            <Pressable onPress={() => setPreviewUrl(null)} style={({ pressed }) => [styles.previewCloseBtn, pressed ? styles.pressed : null]}>
+              <Text style={styles.previewCloseText}>关闭</Text>
+            </Pressable>
+          </View>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={styles.previewScrollContent}
+            maximumZoomScale={3}
+            minimumZoomScale={1}
+            showsVerticalScrollIndicator={false}
+            showsHorizontalScrollIndicator={false}
+            bounces={false}
+            centerContent
+          >
+            {previewUrl ? (
+              <Image
+                source={{ uri: previewUrl }}
+                style={{ width: previewSize.width, height: Math.max(240, previewSize.height - 120) }}
+                resizeMode="contain"
+              />
+            ) : null}
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
+    </>
   )
 }
 
@@ -776,4 +794,10 @@ const styles = StyleSheet.create({
   restockTitle: { color: '#111827', fontWeight: '900' },
   restockNote: { marginTop: 6, color: '#6B7280', fontWeight: '700' },
   videoInline: { width: '100%', height: moderateScale(220), backgroundColor: '#0B0F17' },
+  previewBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.86)', padding: 12, justifyContent: 'center' },
+  previewCard: { flex: 1, borderRadius: 16, overflow: 'hidden', backgroundColor: '#000000' },
+  previewTopRow: { height: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 10 },
+  previewCloseBtn: { height: 32, paddingHorizontal: 12, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
+  previewCloseText: { color: '#FFFFFF', fontWeight: '900' },
+  previewScrollContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
 })

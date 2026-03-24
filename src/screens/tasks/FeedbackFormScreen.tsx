@@ -1,0 +1,368 @@
+import React, { useEffect, useMemo, useState } from 'react'
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import type { NativeStackScreenProps } from '@react-navigation/native-stack'
+import { Ionicons } from '@expo/vector-icons'
+import * as ImagePicker from 'expo-image-picker'
+import { useAuth } from '../../lib/auth'
+import { useI18n } from '../../lib/i18n'
+import { hairline, moderateScale } from '../../lib/scale'
+import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
+import { createPropertyFeedback, listPropertyFeedbacks, uploadCleaningMedia, type PropertyFeedback } from '../../lib/api'
+import type { TasksStackParamList } from '../../navigation/RootNavigator'
+
+type Props = NativeStackScreenProps<TasksStackParamList, 'FeedbackForm'>
+
+type Kind = 'maintenance' | 'deep_cleaning'
+
+const AREA_OPTIONS = ['入户走廊', '客厅', '厨房', '卧室', '阳台', '浴室', '其他'] as const
+const CATEGORY_OPTIONS = ['电器', '家具', '其他'] as const
+
+function fmtTime(s: string) {
+  const d = new Date(String(s || ''))
+  if (Number.isNaN(d.getTime())) return String(s || '')
+  const pad2 = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+
+export default function FeedbackFormScreen(props: Props) {
+  const { t } = useI18n()
+  const { token, user } = useAuth()
+
+  const [kind, setKind] = useState<Kind>('maintenance')
+  const [area, setArea] = useState<(typeof AREA_OPTIONS)[number] | null>(null)
+  const [areas, setAreas] = useState<Array<(typeof AREA_OPTIONS)[number]>>([])
+  const [category, setCategory] = useState<(typeof CATEGORY_OPTIONS)[number] | null>(null)
+  const [detail, setDetail] = useState('')
+  const [media, setMedia] = useState<string[]>([])
+
+  const [loadingList, setLoadingList] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [pending, setPending] = useState<PropertyFeedback[]>([])
+  const [pendingError, setPendingError] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState(false)
+
+  const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
+  const propertyId = String(task?.property_id || task?.property?.id || '').trim()
+  const propertyCode = String(task?.property?.code || '').trim()
+
+  useEffect(() => {
+    props.navigation.setOptions({ title: t('tasks_btn_repair') })
+  }, [props.navigation, t])
+
+  async function refreshPending() {
+    if (!token) return
+    if (!propertyId && !propertyCode) return
+    try {
+      setLoadingList(true)
+      setPendingError(null)
+      const list = await listPropertyFeedbacks(token, { property_id: propertyId || undefined, property_code: propertyCode || undefined, status: ['open', 'in_progress'], limit: 20 })
+      setPending(Array.isArray(list) ? list : [])
+    } catch (e: any) {
+      setPendingError(String(e?.message || '加载失败'))
+      setPending([])
+    } finally {
+      setLoadingList(false)
+    }
+  }
+
+  useEffect(() => {
+    refreshPending()
+  }, [token, propertyId, propertyCode])
+
+  function resetForm(nextKind: Kind) {
+    setKind(nextKind)
+    setArea(null)
+    setAreas([])
+    setCategory(null)
+    setDetail('')
+    setMedia([])
+  }
+
+  async function ensureCameraPerm() {
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync()
+      return !!perm.granted
+    } catch {
+      return false
+    }
+  }
+
+  async function onTakePhoto() {
+    if (!token) {
+      Alert.alert(t('common_error'), '请先登录')
+      return
+    }
+    const ok = await ensureCameraPerm()
+    if (!ok) {
+      Alert.alert('需要相机权限', '请在系统设置中允许相机权限后再拍照')
+      return
+    }
+    try {
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 })
+      if (res.canceled || !res.assets?.length) return
+      const a = res.assets[0] as any
+      const uri = String(a.uri || '').trim()
+      if (!uri) return
+      const name = String(a.fileName || uri.split('/').pop() || `fb-${Date.now()}.jpg`)
+      const mimeType = String(a.mimeType || 'image/jpeg')
+      const up = await uploadCleaningMedia(token, { uri, name, mimeType })
+      setMedia(prev => [...prev, up.url])
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '拍照失败'))
+    }
+  }
+
+  function toggleArea(a: (typeof AREA_OPTIONS)[number]) {
+    setAreas(prev => (prev.includes(a) ? prev.filter(x => x !== a) : [...prev, a]))
+  }
+
+  const canSubmit = useMemo(() => {
+    if (!propertyId) return false
+    const d = detail.trim()
+    if (!d) return false
+    if (kind === 'maintenance') {
+      return !!area && !!category
+    }
+    return areas.length > 0 && media.length > 0
+  }, [area, areas.length, category, detail, kind, media.length, propertyId])
+
+  async function onSubmit() {
+    if (!token) {
+      Alert.alert(t('common_error'), '请先登录')
+      return
+    }
+    if (!propertyId) {
+      Alert.alert(t('common_error'), '缺少房源信息')
+      return
+    }
+    const d = detail.trim()
+    if (!d) {
+      Alert.alert(t('common_error'), '请填写详情')
+      return
+    }
+    if (kind === 'maintenance') {
+      if (!area) return Alert.alert(t('common_error'), '请选择问题区域')
+      if (!category) return Alert.alert(t('common_error'), '请选择问题类型')
+    } else {
+      if (!areas.length) return Alert.alert(t('common_error'), '请选择需要清洁的区域')
+      if (!media.length) return Alert.alert(t('common_error'), '请拍照上传')
+    }
+
+    try {
+      setSubmitting(true)
+      await createPropertyFeedback(token, {
+        kind,
+        property_id: propertyId,
+        source_task_id: task?.id ? String(task.id) : undefined,
+        area: kind === 'maintenance' ? String(area) : undefined,
+        areas: kind === 'deep_cleaning' ? areas : undefined,
+        category: kind === 'maintenance' ? String(category) : undefined,
+        detail: d,
+        media_urls: media,
+      })
+      Alert.alert(t('common_ok'), '提交成功')
+      resetForm(kind)
+      await refreshPending()
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '提交失败'))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const grouped = useMemo(() => {
+    const m = pending.filter(x => String(x.kind || '') === 'maintenance')
+    const d = pending.filter(x => String(x.kind || '') === 'deep_cleaning')
+    return { m, d }
+  }, [pending])
+
+  return (
+    <ScrollView style={styles.page} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      {!task ? (
+        <Text style={styles.muted}>{t('common_loading')}</Text>
+      ) : (
+        <View style={styles.card}>
+          <View style={styles.headRow}>
+            <Text style={styles.title}>问题反馈</Text>
+            <View style={styles.badge}>
+              <Ionicons name="home-outline" size={moderateScale(14)} color="#2563EB" />
+              <Text style={styles.badgeText}>{task.title}</Text>
+            </View>
+          </View>
+          {task.property?.address ? <Text style={styles.sub}>{task.property.address}</Text> : null}
+
+          <View style={styles.segmentRow}>
+            <Pressable
+              onPress={() => resetForm('maintenance')}
+              style={({ pressed }) => [styles.segment, kind === 'maintenance' ? styles.segmentActive : null, pressed ? styles.pressed : null]}
+            >
+              <Text style={[styles.segmentText, kind === 'maintenance' ? styles.segmentTextActive : null]}>房源维修</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => resetForm('deep_cleaning')}
+              style={({ pressed }) => [styles.segment, kind === 'deep_cleaning' ? styles.segmentActive : null, pressed ? styles.pressed : null]}
+            >
+              <Text style={[styles.segmentText, kind === 'deep_cleaning' ? styles.segmentTextActive : null]}>深度清洁</Text>
+            </Pressable>
+          </View>
+
+          {kind === 'maintenance' ? (
+            <>
+              <Text style={styles.label}>问题区域</Text>
+              <View style={styles.chipsRow}>
+                {AREA_OPTIONS.map(a => (
+                  <Pressable
+                    key={a}
+                    onPress={() => setArea(a)}
+                    style={({ pressed }) => [styles.chip, area === a ? styles.chipActive : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={[styles.chipText, area === a ? styles.chipTextActive : null]}>{a}</Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <Text style={styles.label}>问题类型</Text>
+              <View style={styles.chipsRow}>
+                {CATEGORY_OPTIONS.map(c => (
+                  <Pressable
+                    key={c}
+                    onPress={() => setCategory(c)}
+                    style={({ pressed }) => [styles.chip, category === c ? styles.chipActive : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={[styles.chipText, category === c ? styles.chipTextActive : null]}>{c}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </>
+          ) : (
+            <>
+              <Text style={styles.label}>需要清洁的区域</Text>
+              <View style={styles.chipsRow}>
+                {AREA_OPTIONS.map(a => (
+                  <Pressable
+                    key={a}
+                    onPress={() => toggleArea(a)}
+                    style={({ pressed }) => [styles.chip, areas.includes(a) ? styles.chipActive : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={[styles.chipText, areas.includes(a) ? styles.chipTextActive : null]}>{a}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </>
+          )}
+
+          <Text style={styles.label}>{kind === 'maintenance' ? '问题详情' : '说明（可选）'}</Text>
+          <TextInput
+            value={detail}
+            onChangeText={v => (v.length <= 800 ? setDetail(v) : setDetail(v.slice(0, 800)))}
+            style={[styles.input, styles.textarea]}
+            placeholder={kind === 'maintenance' ? '请详细描述问题' : '请描述需要深清的内容'}
+            placeholderTextColor="#9CA3AF"
+            multiline
+          />
+
+          <Text style={styles.label}>{kind === 'maintenance' ? '上传附件（拍照）' : '上传照片（必填）'}</Text>
+          <View style={styles.row}>
+            <Pressable onPress={onTakePhoto} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
+              <Text style={styles.photoBtnText}>拍照上传</Text>
+            </Pressable>
+            <Text style={styles.photoHint}>{media.length ? `已上传 ${media.length} 张` : '仅支持相机拍摄'}</Text>
+          </View>
+
+          <Pressable
+            onPress={onSubmit}
+            disabled={submitting || !canSubmit}
+            style={({ pressed }) => [styles.submitBtn, submitting || !canSubmit ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
+          >
+            <Text style={styles.submitText}>{submitting ? t('common_loading') : '提交'}</Text>
+          </Pressable>
+
+          <View style={styles.divider} />
+
+          <View style={styles.pendingHead}>
+            <Text style={styles.pendingTitle}>本房源待解决</Text>
+            <Pressable onPress={() => setExpanded(v => !v)} style={({ pressed }) => [styles.pendingToggle, pressed ? styles.pressed : null]}>
+              <Text style={styles.pendingToggleText}>{expanded ? '收起' : '展开'}</Text>
+            </Pressable>
+          </View>
+
+          {loadingList ? (
+            <Text style={styles.muted}>{t('common_loading')}</Text>
+          ) : pendingError ? (
+            <View style={{ marginTop: 8 }}>
+              <Text style={styles.muted}>{`加载失败：${pendingError}`}</Text>
+              <Pressable onPress={refreshPending} style={({ pressed }) => [styles.pendingToggle, { alignSelf: 'flex-start', marginTop: 10 }, pressed ? styles.pressed : null]}>
+                <Text style={styles.pendingToggleText}>重试</Text>
+              </Pressable>
+            </View>
+          ) : !pending.length ? (
+            <Text style={styles.muted}>暂无待解决记录</Text>
+          ) : (
+            <View style={{ marginTop: 8 }}>
+              <Text style={styles.groupTitle}>{`维修 (${grouped.m.length})`}</Text>
+              {(expanded ? grouped.m : grouped.m.slice(0, 3)).map(x => (
+                <View key={String(x.id)} style={styles.pendingItem}>
+                  <Text style={styles.pendingLine} numberOfLines={2}>
+                    {`${String(x.area || '').trim()} / ${String(x.category || '').trim()}  ${String(x.detail || '').trim()}`}
+                  </Text>
+                  <Text style={styles.pendingMeta}>{`${String(x.created_by_name || '').trim() || 'unknown'}  ${fmtTime(String(x.created_at || ''))}`}</Text>
+                </View>
+              ))}
+              <Text style={[styles.groupTitle, { marginTop: 10 }]}>{`深清 (${grouped.d.length})`}</Text>
+              {(expanded ? grouped.d : grouped.d.slice(0, 3)).map(x => (
+                <View key={String(x.id)} style={styles.pendingItem}>
+                  <Text style={styles.pendingLine} numberOfLines={2}>
+                    {`${Array.isArray((x as any).areas) ? (x as any).areas.join('、') : ''}  ${String(x.detail || '').trim()}`}
+                  </Text>
+                  <Text style={styles.pendingMeta}>{`${String(x.created_by_name || '').trim() || 'unknown'}  ${fmtTime(String(x.created_at || ''))}`}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+      )}
+    </ScrollView>
+  )
+}
+
+const styles = StyleSheet.create({
+  page: { flex: 1, backgroundColor: '#F6F7FB' },
+  content: { padding: 16 },
+  card: { width: '100%', backgroundColor: '#FFFFFF', borderRadius: 16, padding: 12, borderWidth: hairline(), borderColor: '#EEF0F6' },
+  headRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
+  title: { fontSize: 16, fontWeight: '900', color: '#111827' },
+  badge: { height: 30, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '70%' },
+  badgeText: { color: '#2563EB', fontWeight: '900', flexShrink: 1 },
+  sub: { marginTop: 8, color: '#6B7280', fontWeight: '700' },
+  segmentRow: { marginTop: 12, flexDirection: 'row', gap: 10 },
+  segment: { flex: 1, height: 38, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  segmentActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
+  segmentText: { fontWeight: '900', color: '#374151' },
+  segmentTextActive: { color: '#FFFFFF' },
+  label: { marginTop: 14, marginBottom: 8, color: '#111827', fontWeight: '900' },
+  chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { height: 34, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  chipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
+  chipText: { color: '#374151', fontWeight: '900' },
+  chipTextActive: { color: '#FFFFFF' },
+  input: { borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, fontWeight: '700', color: '#111827' },
+  textarea: { height: 120, paddingTop: 12, textAlignVertical: 'top' },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  photoBtn: { height: 38, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  photoBtnText: { fontWeight: '900', color: '#111827' },
+  photoHint: { color: '#6B7280', fontWeight: '700' },
+  submitBtn: { marginTop: 14, height: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  submitDisabled: { backgroundColor: '#93C5FD' },
+  submitText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
+  divider: { marginTop: 14, borderTopWidth: hairline(), borderTopColor: '#EEF0F6' },
+  pendingHead: { marginTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  pendingTitle: { fontWeight: '900', color: '#111827' },
+  pendingToggle: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB' },
+  pendingToggleText: { fontWeight: '900', color: '#111827', fontSize: 12 },
+  groupTitle: { marginTop: 6, fontWeight: '900', color: '#374151' },
+  pendingItem: { marginTop: 8, padding: 10, borderRadius: 12, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6' },
+  pendingLine: { fontWeight: '800', color: '#111827' },
+  pendingMeta: { marginTop: 6, color: '#6B7280', fontWeight: '700', fontSize: 12 },
+  muted: { color: '#6B7280', fontWeight: '700' },
+  pressed: { opacity: 0.92 },
+})

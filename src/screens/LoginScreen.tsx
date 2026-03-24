@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import { Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useAuth } from '../lib/auth'
 import { validateLoginForm } from '../lib/validators'
@@ -29,8 +29,10 @@ export default function LoginScreen(props: Props) {
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.page}>
       <View style={styles.card}>
-        <Text style={styles.title}>MZStay 线下应用</Text>
-        <Text style={styles.subTitle}>请使用后台创建的账号登录</Text>
+        <View style={styles.header}>
+          <Image source={require('../../assets/icon.png')} style={styles.logo} />
+          <Text style={styles.brandTitle}>MZ Cleaning</Text>
+        </View>
 
         <View style={styles.field}>
           <Text style={styles.label}>用户名 / 手机号</Text>
@@ -96,7 +98,20 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E6E9F2',
   },
-  title: {
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  logo: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: '#0B0B0B',
+  },
+  brandTitle: {
+    marginLeft: 12,
     fontSize: 22,
     fontWeight: '700',
     color: '#111827',

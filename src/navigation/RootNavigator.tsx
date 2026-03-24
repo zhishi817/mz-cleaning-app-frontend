@@ -19,7 +19,7 @@ import ProfileEditScreen from '../screens/me/ProfileEditScreen'
 import AccountScreen from '../screens/me/AccountScreen'
 import ChangePasswordScreen from '../screens/me/ChangePasswordScreen'
 import TaskDetailScreen from '../screens/tasks/TaskDetailScreen'
-import RepairFormScreen from '../screens/tasks/RepairFormScreen'
+import FeedbackFormScreen from '../screens/tasks/FeedbackFormScreen'
 import SuppliesFormScreen from '../screens/tasks/SuppliesFormScreen'
 
 export type AuthStackParamList = {
@@ -44,7 +44,7 @@ const MeStack = createNativeStackNavigator<MeStackParamList>()
 export type TasksStackParamList = {
   TasksList: undefined
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
-  RepairForm: { taskId: string }
+  FeedbackForm: { taskId: string }
   SuppliesForm: { taskId: string }
 }
 
@@ -89,7 +89,7 @@ function TasksStackNavigator() {
     <TasksStack.Navigator screenOptions={{ headerTitleAlign: 'center' }}>
       <TasksStack.Screen name="TasksList" component={TasksScreen} options={{ headerShown: false, title: t('tabs_tasks') }} />
       <TasksStack.Screen name="TaskDetail" component={TaskDetailScreen} options={{ title: t('task_detail_title') }} />
-      <TasksStack.Screen name="RepairForm" component={RepairFormScreen} options={{ title: t('tasks_btn_repair') }} />
+      <TasksStack.Screen name="FeedbackForm" component={FeedbackFormScreen} options={{ title: t('tasks_btn_repair') }} />
       <TasksStack.Screen name="SuppliesForm" component={SuppliesFormScreen} options={{ title: '补品填报' }} />
     </TasksStack.Navigator>
   )

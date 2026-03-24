@@ -157,7 +157,7 @@ export default function SuppliesFormScreen(props: Props) {
                 <TextInput
                   value={it.note}
                   onChangeText={v => setItem(idx, { note: v })}
-                  style={[styles.input, styles.note, { marginTop: 8 }]}
+                  style={[styles.input, styles.note, { marginTop: 6 }]}
                   placeholder="其他需要补充/检查的内容（可选）"
                   placeholderTextColor="#9CA3AF"
                   multiline
@@ -228,27 +228,27 @@ export default function SuppliesFormScreen(props: Props) {
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#F6F7FB' },
   content: { padding: 16 },
-  card: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14, borderWidth: hairline(), borderColor: '#EEF0F6' },
+  card: { width: '100%', backgroundColor: '#FFFFFF', borderRadius: 16, padding: 12, borderWidth: hairline(), borderColor: '#EEF0F6' },
   headRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
   title: { fontSize: 16, fontWeight: '900', color: '#111827' },
-  badge: { height: 30, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 6 },
-  badgeText: { color: '#2563EB', fontWeight: '900' },
+  badge: { height: 30, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '70%' },
+  badgeText: { color: '#2563EB', fontWeight: '900', flexShrink: 1 },
   sub: { marginTop: 8, color: '#6B7280', fontWeight: '700' },
-  itemBlock: { marginTop: 14, paddingTop: 14, borderTopWidth: hairline(), borderTopColor: '#EEF0F6' },
-  label: { marginBottom: 8, color: '#111827', fontWeight: '900' },
-  input: { height: 44, borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, fontWeight: '700', color: '#111827' },
-  row: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  itemBlock: { marginTop: 10, paddingTop: 10, borderTopWidth: hairline(), borderTopColor: '#EEF0F6' },
+  label: { marginBottom: 6, color: '#111827', fontWeight: '900' },
+  input: { height: 38, borderRadius: 10, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 10, fontWeight: '700', color: '#111827' },
+  row: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
   qty: { flex: 1 },
-  chip: { height: 44, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  chip: { flex: 1, height: 36, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   chipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
   chipText: { color: '#374151', fontWeight: '900' },
   chipTextActive: { color: '#FFFFFF' },
-  note: { height: 80, paddingTop: 12, textAlignVertical: 'top', marginTop: 10 },
-  photoBtn: { height: 44, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  note: { height: 64, paddingTop: 10, textAlignVertical: 'top', marginTop: 8 },
+  photoBtn: { height: 38, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   photoBtnText: { fontWeight: '900', color: '#111827' },
-  photoPreview: { marginTop: 10, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6' },
-  photo: { width: '100%', height: moderateScale(200), backgroundColor: '#F3F4F6' },
-  submitBtn: { marginTop: 14, height: 46, borderRadius: 14, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  photoPreview: { marginTop: 8, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6' },
+  photo: { width: '100%', height: moderateScale(160), backgroundColor: '#F3F4F6' },
+  submitBtn: { marginTop: 12, height: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   submitDisabled: { backgroundColor: '#93C5FD' },
   submitText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
   muted: { color: '#6B7280', fontWeight: '700' },
