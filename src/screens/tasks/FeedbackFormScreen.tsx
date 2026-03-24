@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Dimensions, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
@@ -24,6 +24,48 @@ function fmtTime(s: string) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
 }
 
+function extractContentText(raw: any) {
+  const s0 = String(raw ?? '').trim()
+  if (!s0) return ''
+  const s = s0.startsWith('{') || s0.startsWith('[') ? s0 : s0.includes('{"content"') ? s0.slice(s0.indexOf('{')) : s0
+  if (!(s.startsWith('{') || s.startsWith('['))) return s0
+  try {
+    const j = JSON.parse(s)
+    if (Array.isArray(j)) {
+      const lines = j
+        .map((x: any) => {
+          if (typeof x === 'string') return x.trim()
+          const c = x?.content
+          return typeof c === 'string' ? c.trim() : ''
+        })
+        .filter(Boolean)
+      if (lines.length) return lines.join('；')
+    }
+    if (j && typeof j === 'object') {
+      const c = (j as any).content
+      if (typeof c === 'string' && c.trim()) return c.trim()
+    }
+  } catch {}
+  return s0
+}
+
+function normalizeUrls(raw: any): string[] {
+  if (!raw) return []
+  if (Array.isArray(raw)) return raw.map((x) => String(x || '').trim()).filter(Boolean)
+  if (typeof raw === 'string') {
+    const s = raw.trim()
+    if (!s) return []
+    if (s.startsWith('[') || s.startsWith('{')) {
+      try {
+        const j = JSON.parse(s)
+        if (Array.isArray(j)) return j.map((x) => String(x || '').trim()).filter(Boolean)
+      } catch {}
+    }
+    return [s]
+  }
+  return []
+}
+
 export default function FeedbackFormScreen(props: Props) {
   const { t } = useI18n()
   const { token, user } = useAuth()
@@ -40,6 +82,8 @@ export default function FeedbackFormScreen(props: Props) {
   const [pending, setPending] = useState<PropertyFeedback[]>([])
   const [pendingError, setPendingError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
+  const [detailItem, setDetailItem] = useState<PropertyFeedback | null>(null)
+  const [detailImg, setDetailImg] = useState<string | null>(null)
 
   const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
   const propertyId = String(task?.property_id || task?.property?.id || '').trim()
@@ -176,8 +220,13 @@ export default function FeedbackFormScreen(props: Props) {
     return { m, d }
   }, [pending])
 
+  const screen = useMemo(() => Dimensions.get('window'), [])
+  const detailMedia = useMemo(() => normalizeUrls((detailItem as any)?.media_urls), [detailItem])
+  const detailText = useMemo(() => extractContentText((detailItem as any)?.detail), [detailItem])
+
   return (
-    <ScrollView style={styles.page} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+    <>
+      <ScrollView style={styles.page} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       {!task ? (
         <Text style={styles.muted}>{t('common_loading')}</Text>
       ) : (
@@ -301,27 +350,82 @@ export default function FeedbackFormScreen(props: Props) {
             <View style={{ marginTop: 8 }}>
               <Text style={styles.groupTitle}>{`维修 (${grouped.m.length})`}</Text>
               {(expanded ? grouped.m : grouped.m.slice(0, 3)).map(x => (
-                <View key={String(x.id)} style={styles.pendingItem}>
+                <Pressable key={String(x.id)} onPress={() => setDetailItem(x)} style={({ pressed }) => [styles.pendingItem, pressed ? styles.pressed : null]}>
                   <Text style={styles.pendingLine} numberOfLines={2}>
-                    {`${String(x.area || '').trim()} / ${String(x.category || '').trim()}  ${String(x.detail || '').trim()}`}
+                    {`${String((x as any).area || '').trim() ? `[${String((x as any).area || '').trim()}] ` : ''}${extractContentText((x as any).detail)}`}
                   </Text>
+                  {normalizeUrls((x as any).media_urls).length ? <Text style={styles.pendingHint}>查看照片</Text> : null}
                   <Text style={styles.pendingMeta}>{`${String(x.created_by_name || '').trim() || 'unknown'}  ${fmtTime(String(x.created_at || ''))}`}</Text>
-                </View>
+                </Pressable>
               ))}
               <Text style={[styles.groupTitle, { marginTop: 10 }]}>{`深清 (${grouped.d.length})`}</Text>
               {(expanded ? grouped.d : grouped.d.slice(0, 3)).map(x => (
-                <View key={String(x.id)} style={styles.pendingItem}>
+                <Pressable key={String(x.id)} onPress={() => setDetailItem(x)} style={({ pressed }) => [styles.pendingItem, pressed ? styles.pressed : null]}>
                   <Text style={styles.pendingLine} numberOfLines={2}>
-                    {`${Array.isArray((x as any).areas) ? (x as any).areas.join('、') : ''}  ${String(x.detail || '').trim()}`}
+                    {`${Array.isArray((x as any).areas) && (x as any).areas.length ? `[${(x as any).areas.join('、')}] ` : ''}${extractContentText((x as any).detail)}`}
                   </Text>
+                  {normalizeUrls((x as any).media_urls).length ? <Text style={styles.pendingHint}>查看照片</Text> : null}
                   <Text style={styles.pendingMeta}>{`${String(x.created_by_name || '').trim() || 'unknown'}  ${fmtTime(String(x.created_at || ''))}`}</Text>
-                </View>
+                </Pressable>
               ))}
             </View>
           )}
         </View>
       )}
-    </ScrollView>
+      </ScrollView>
+      <Modal visible={!!detailItem} transparent animationType="fade" onRequestClose={() => setDetailItem(null)}>
+        <Pressable style={styles.detailBackdrop} onPress={() => setDetailItem(null)}>
+          <Pressable style={styles.detailCard} onPress={() => {}}>
+            <View style={styles.detailTopRow}>
+              <Text style={styles.detailTitle}>详情</Text>
+              <Pressable onPress={() => setDetailItem(null)} style={({ pressed }) => [styles.detailCloseBtn, pressed ? styles.pressed : null]}>
+                <Text style={styles.detailCloseText}>关闭</Text>
+              </Pressable>
+            </View>
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12 }} keyboardShouldPersistTaps="handled">
+              <Text style={styles.detailText}>{detailText || '-'}</Text>
+              {detailMedia.length ? (
+                <View style={{ marginTop: 12 }}>
+                  <Text style={styles.detailSubTitle}>{`照片 (${detailMedia.length})`}</Text>
+                  <View style={styles.thumbRow}>
+                    {detailMedia.map(u => (
+                      <Pressable key={u} onPress={() => setDetailImg(u)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
+                        <Image source={{ uri: u }} style={styles.thumb} />
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+      <Modal visible={!!detailImg} transparent animationType="fade" onRequestClose={() => setDetailImg(null)}>
+        <Pressable style={styles.previewBackdrop} onPress={() => setDetailImg(null)}>
+          <Pressable style={styles.previewCard} onPress={() => {}}>
+            <View style={styles.previewTopRow}>
+              <Pressable onPress={() => setDetailImg(null)} style={({ pressed }) => [styles.previewCloseBtn, pressed ? styles.pressed : null]}>
+                <Text style={styles.previewCloseText}>关闭</Text>
+              </Pressable>
+            </View>
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={styles.previewScrollContent}
+              maximumZoomScale={3}
+              minimumZoomScale={1}
+              showsVerticalScrollIndicator={false}
+              showsHorizontalScrollIndicator={false}
+              bounces={false}
+              centerContent
+            >
+              {detailImg ? (
+                <Image source={{ uri: detailImg }} style={{ width: screen.width, height: Math.max(240, screen.height - 120) }} resizeMode="contain" />
+              ) : null}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </>
   )
 }
 
@@ -362,7 +466,25 @@ const styles = StyleSheet.create({
   groupTitle: { marginTop: 6, fontWeight: '900', color: '#374151' },
   pendingItem: { marginTop: 8, padding: 10, borderRadius: 12, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6' },
   pendingLine: { fontWeight: '800', color: '#111827' },
+  pendingHint: { marginTop: 6, color: '#2563EB', fontWeight: '900', fontSize: 12 },
   pendingMeta: { marginTop: 6, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   muted: { color: '#6B7280', fontWeight: '700' },
   pressed: { opacity: 0.92 },
+  detailBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', padding: 14, justifyContent: 'center' },
+  detailCard: { maxHeight: '85%', borderRadius: 16, overflow: 'hidden', backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#EEF0F6' },
+  detailTopRow: { height: 48, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: hairline(), borderBottomColor: '#EEF0F6' },
+  detailTitle: { fontWeight: '900', color: '#111827' },
+  detailCloseBtn: { height: 32, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  detailCloseText: { fontWeight: '900', color: '#111827' },
+  detailText: { fontWeight: '800', color: '#111827', lineHeight: 20 },
+  detailSubTitle: { fontWeight: '900', color: '#111827' },
+  thumbRow: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  thumbWrap: { width: 92, height: 92, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
+  thumb: { width: '100%', height: '100%' },
+  previewBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.86)', padding: 12, justifyContent: 'center' },
+  previewCard: { flex: 1, borderRadius: 16, overflow: 'hidden', backgroundColor: '#000000' },
+  previewTopRow: { height: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 10 },
+  previewCloseBtn: { height: 32, paddingHorizontal: 12, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
+  previewCloseText: { color: '#FFFFFF', fontWeight: '900' },
+  previewScrollContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
 })
