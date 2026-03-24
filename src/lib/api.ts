@@ -340,12 +340,89 @@ export async function listChecklistItems(token: string) {
   return data as ChecklistItem[]
 }
 
-export async function uploadCleaningMedia(token: string, file: { uri: string; name: string; mimeType: string }) {
+export type PropertyFeedback = {
+  id: string
+  property_id: string
+  source_task_id?: string | null
+  kind: 'maintenance' | 'deep_cleaning'
+  area?: string | null
+  areas?: string[] | null
+  category?: string | null
+  detail: string
+  media_urls?: string[] | null
+  created_by?: string | null
+  created_by_name?: string | null
+  created_at: string
+  status: 'open' | 'in_progress' | 'resolved' | 'cancelled'
+  resolved_at?: string | null
+}
+
+export async function listPropertyFeedbacks(
+  token: string,
+  params: { property_id?: string; property_code?: string; status?: Array<PropertyFeedback['status']>; limit?: number },
+) {
+  const sp = new URLSearchParams()
+  if (params.property_id) sp.set('property_id', params.property_id)
+  if (params.property_code) sp.set('property_code', params.property_code)
+  if (params.status?.length) sp.set('status', params.status.join(','))
+  if (params.limit) sp.set('limit', String(params.limit))
+  const urls = buildUrlCandidates(`mzapp/property-feedbacks?${sp.toString()}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    const res = await fetch(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } })
+    lastRes = res
+    if (res.ok) return (await res.json()) as PropertyFeedback[]
+  }
+  const msg = lastRes ? await parseErrorMessage(lastRes) : ''
+  throw new Error(msg || '获取失败')
+}
+
+export async function createPropertyFeedback(
+  token: string,
+  params: {
+    kind: PropertyFeedback['kind']
+    property_id: string
+    source_task_id?: string
+    area?: string
+    areas?: string[]
+    category?: string
+    detail: string
+    media_urls?: string[]
+  },
+) {
+  const urls = buildUrlCandidates('mzapp/property-feedbacks')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    })
+    lastRes = res
+    if (res.ok) return (await res.json()) as PropertyFeedback
+  }
+  const msg = lastRes ? await parseErrorMessage(lastRes) : ''
+  throw new Error(msg || '提交失败')
+}
+
+export async function uploadCleaningMedia(
+  token: string,
+  file: { uri: string; name: string; mimeType: string },
+  meta?: Record<string, string | undefined | null>,
+) {
   const urls = buildUrlCandidates('cleaning-app/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   const { compressImageForUpload } = await import('./imageCompression')
   const compressedUri = await compressImageForUpload(file.uri)
   const form = new FormData()
+  if (meta) {
+    for (const [k, v] of Object.entries(meta)) {
+      const vv = String(v ?? '').trim()
+      if (vv) form.append(k, vv)
+    }
+  }
   form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
 
   let lastRes: Response | null = null
@@ -396,7 +473,7 @@ export async function uploadCleaningVideo(token: string, file: { uri: string; na
   return { url: u }
 }
 
-export async function startCleaningTask(token: string, taskId: string, params: { media_url: string }) {
+export async function startCleaningTask(token: string, taskId: string, params: { media_url: string; captured_at?: string }) {
   const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(taskId)}/start`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null

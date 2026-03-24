@@ -123,17 +123,46 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_error'), '仅清洁/检查任务支持上传钥匙')
       return
     }
-    const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 })
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync()
+      if (!perm.granted) {
+        Alert.alert('需要相机权限', '请在系统设置中允许相机权限后再拍照', [
+          { text: '取消', style: 'cancel' },
+          { text: '去设置', onPress: () => Linking.openSettings() },
+        ])
+        return
+      }
+    } catch {}
+
+    let res: ImagePicker.ImagePickerResult
+    try {
+      res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.9 })
+    } catch (e: any) {
+      Alert.alert(t('common_error'), '无法打开相机（模拟器不支持相机拍照，请用真机测试）')
+      return
+    }
     if (res.canceled || !res.assets?.length) return
     const a = res.assets[0] as any
     const uri = String(a.uri || '').trim()
     if (!uri) return
 
+    const propertyCode = String((task as any)?.property?.code || '').trim()
+    const now = new Date()
+    const pad2 = (n: number) => String(n).padStart(2, '0')
+    const watermarkTime = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`
+    const username = String((user as any)?.username || '').trim()
+    const watermarkText = `${propertyCode || '未知房号'}  ${username || '未知用户'}\n${watermarkTime}`
+    const capturedAt = now.toISOString()
+
     try {
       const name = String(a.fileName || uri.split('/').pop() || `key-${Date.now()}.jpg`)
       const mimeType = String(a.mimeType || 'image/jpeg')
-      const up = await uploadCleaningMedia(token, { uri, name, mimeType })
-      await startCleaningTask(token, String(task.source_id), { media_url: up.url })
+      const up = await uploadCleaningMedia(
+        token,
+        { uri, name, mimeType },
+        { purpose: 'key_photo', watermark: '1', watermark_text: watermarkText, property_code: propertyCode, captured_at: capturedAt },
+      )
+      await startCleaningTask(token, String(task.source_id), { media_url: up.url, captured_at: capturedAt })
       setLocalKeyPhotoUrl(up.url)
       Alert.alert(t('common_ok'), '钥匙上传成功')
     } catch (e: any) {
@@ -145,7 +174,13 @@ export default function TaskDetailScreen(props: Props) {
         return
       }
       try {
-        await enqueueKeyUpload({ cleaning_task_id: String(task.source_id), source_uri: uri })
+        await enqueueKeyUpload({
+          cleaning_task_id: String(task.source_id),
+          source_uri: uri,
+          property_code: propertyCode,
+          captured_at: capturedAt,
+          watermark_text: watermarkText,
+        })
         Alert.alert(t('common_ok'), '已离线保存，网络恢复后自动上传')
       } catch (e2: any) {
         Alert.alert(t('common_error'), String(e2?.message || msg))
@@ -510,7 +545,7 @@ export default function TaskDetailScreen(props: Props) {
 
             <View style={styles.actionsRow}>
               <Pressable
-                onPress={() => props.navigation.navigate('RepairForm', { taskId: task.id })}
+                onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
                 style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
               >
                 <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
@@ -570,7 +605,7 @@ export default function TaskDetailScreen(props: Props) {
                   </Pressable>
                 ) : null}
                 <Pressable
-                  onPress={() => props.navigation.navigate('RepairForm', { taskId: task.id })}
+                  onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
                   style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
                 >
                   <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
@@ -582,7 +617,7 @@ export default function TaskDetailScreen(props: Props) {
                   <Text style={styles.actionText}>{t('tasks_btn_upload_key')}</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => props.navigation.navigate('RepairForm', { taskId: task.id })}
+                  onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
                   style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
                 >
                   <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
