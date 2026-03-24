@@ -491,16 +491,18 @@ export default function FeedbackFormScreen(props: Props) {
           </Pressable>
         </Pressable>
       </Modal>
-      <Modal visible={!!detailImgRemote} transparent animationType="fade" onRequestClose={() => setDetailImgRemote(null)}>
-        <Pressable
-          style={styles.previewBackdrop}
-          onPress={() => {
-            setDetailImgRemote(null)
-            setDetailImgViewUri(null)
-            setDetailImgError(null)
-          }}
-        >
-          <Pressable style={styles.previewCard} onPress={() => {}}>
+      <Modal
+        visible={!!detailImgRemote}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setDetailImgRemote(null)
+          setDetailImgViewUri(null)
+          setDetailImgError(null)
+        }}
+      >
+        <View style={styles.previewBackdrop}>
+          <View style={styles.previewCard}>
             <View style={[styles.previewTopRow, { paddingTop: Math.max(10, insets.top) }]}>
               <Pressable
                 onPress={() => {
@@ -557,8 +559,8 @@ export default function FeedbackFormScreen(props: Props) {
                 </Pressable>
               ) : null}
             </ScrollView>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
     </>
   )
