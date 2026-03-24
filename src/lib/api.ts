@@ -68,7 +68,11 @@ async function parseErrorMessage(res: Response) {
     try {
       const json = JSON.parse(txt) as any
       const msg = json?.message
-      if (typeof msg === 'string' && msg.trim()) return msg.trim()
+      if (typeof msg === 'string' && msg.trim()) {
+        const errs = Array.isArray(json?.errors) ? json.errors.map((x: any) => String(x || '').trim()).filter(Boolean) : []
+        const merged = errs.length ? `${msg.trim()}: ${errs.join(' | ')}` : msg.trim()
+        return merged.slice(0, 240)
+      }
     } catch {
       const t = String(txt || '').trim()
       if (t) return t.slice(0, 180)
