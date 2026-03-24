@@ -126,6 +126,7 @@ export default function FeedbackFormScreen(props: Props) {
   const [detailItem, setDetailItem] = useState<PropertyFeedback | null>(null)
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerIndex, setViewerIndex] = useState(0)
+  const [viewerUrls, setViewerUrls] = useState<string[]>([])
   const [viewerCache, setViewerCache] = useState<Record<string, { uri: string | null; loading: boolean; error: string | null }>>({})
 
   const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
@@ -174,6 +175,22 @@ export default function FeedbackFormScreen(props: Props) {
     }
   }
 
+  async function ensureLibraryPerm() {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync()
+      return !!perm.granted
+    } catch {
+      return false
+    }
+  }
+
+  function buildWatermarkText(iso: string) {
+    const username = String((user as any)?.username || (user as any)?.email || '').trim()
+    const line1 = `${propertyCode || '未知房号'}${username ? `  ${username}` : ''}`.trim()
+    const line2 = fmtTime(iso)
+    return `${line1}\n${line2}`.trim()
+  }
+
   async function onTakePhoto() {
     if (!token) {
       Alert.alert(t('common_error'), '请先登录')
@@ -192,10 +209,37 @@ export default function FeedbackFormScreen(props: Props) {
       if (!uri) return
       const name = String(a.fileName || uri.split('/').pop() || `fb-${Date.now()}.jpg`)
       const mimeType = String(a.mimeType || 'image/jpeg')
-      const up = await uploadCleaningMedia(token, { uri, name, mimeType })
+      const capturedAt = new Date().toISOString()
+      const up = await uploadCleaningMedia(token, { uri, name, mimeType }, { watermark: '1', purpose: 'feedback', property_code: propertyCode, captured_at: capturedAt, watermark_text: buildWatermarkText(capturedAt) })
       setMedia(prev => [...prev, up.url])
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '拍照失败'))
+    }
+  }
+
+  async function onPickFromAlbum() {
+    if (!token) {
+      Alert.alert(t('common_error'), '请先登录')
+      return
+    }
+    const ok = await ensureLibraryPerm()
+    if (!ok) {
+      Alert.alert('需要相册权限', '请在系统设置中允许相册权限后再选择照片')
+      return
+    }
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 })
+      if (res.canceled || !res.assets?.length) return
+      const a = res.assets[0] as any
+      const uri = String(a.uri || '').trim()
+      if (!uri) return
+      const name = String(a.fileName || uri.split('/').pop() || `fb-${Date.now()}.jpg`)
+      const mimeType = String(a.mimeType || 'image/jpeg')
+      const capturedAt = new Date().toISOString()
+      const up = await uploadCleaningMedia(token, { uri, name, mimeType }, { watermark: '1', purpose: 'feedback', property_code: propertyCode, captured_at: capturedAt, watermark_text: buildWatermarkText(capturedAt) })
+      setMedia(prev => [...prev, up.url])
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '选择失败'))
     }
   }
 
@@ -302,7 +346,7 @@ export default function FeedbackFormScreen(props: Props) {
       const lower = u.toLowerCase()
       const ext = lower.includes('.png') ? '.png' : lower.includes('.webp') ? '.webp' : '.jpg'
       const target = `${base}${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`
-      const headers = token ? { Authorization: `Bearer ${token}` } : undefined
+      const headers = token && sameHost ? { Authorization: `Bearer ${token}` } : undefined
       const dl: any = await FileSystem.downloadAsync(u, target, headers ? { headers } : undefined)
       const status = Number(dl?.status || 0)
       const contentType = String(dl?.headers?.['Content-Type'] || dl?.headers?.['content-type'] || '').trim().toLowerCase()
@@ -315,10 +359,11 @@ export default function FeedbackFormScreen(props: Props) {
     }
   }
 
-  function openViewerAt(index: number) {
-    const list = detailMedia
+  function openViewerAt(list0: string[], index: number) {
+    const list = (list0 || []).map((x) => toAbsoluteUrl(x)).filter(Boolean)
     if (!list.length) return
     const idx = Math.max(0, Math.min(list.length - 1, Number(index) || 0))
+    setViewerUrls(list)
     setViewerIndex(idx)
     setViewerOpen(true)
     setTimeout(() => {
@@ -333,11 +378,11 @@ export default function FeedbackFormScreen(props: Props) {
 
   useEffect(() => {
     if (!viewerOpen) return
-    const list = detailMedia
+    const list = viewerUrls
     if (!list.length) return
     const u = list[viewerIndex]
     if (u) ensureViewerReady(u).catch(() => {})
-  }, [viewerIndex, viewerOpen, detailMedia])
+  }, [viewerIndex, viewerOpen, viewerUrls])
 
   return (
     <>
@@ -430,8 +475,22 @@ export default function FeedbackFormScreen(props: Props) {
             <Pressable onPress={onTakePhoto} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
               <Text style={styles.photoBtnText}>拍照上传</Text>
             </Pressable>
-            <Text style={styles.photoHint}>{media.length ? `已上传 ${media.length} 张` : '仅支持相机拍摄'}</Text>
+            <Pressable onPress={onPickFromAlbum} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
+              <Text style={styles.photoBtnText}>相册选择</Text>
+            </Pressable>
+            <Text style={styles.photoHint}>{media.length ? `已上传 ${media.length} 张` : '支持相机/相册'}</Text>
           </View>
+          {media.length ? (
+            <View style={{ marginTop: 10 }}>
+              <View style={styles.thumbRow}>
+                  {media.map((u, idx) => (
+                    <Pressable key={u} onPress={() => openViewerAt(media, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
+                    <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.thumb} resizeMode="contain" />
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ) : null}
 
           <Pressable
             onPress={onSubmit}
@@ -505,7 +564,7 @@ export default function FeedbackFormScreen(props: Props) {
                   <Text style={styles.detailSubTitle}>{`照片 (${detailMedia.length})`}</Text>
                   <View style={styles.thumbRow}>
                     {detailMedia.map((u, idx) => (
-                      <Pressable key={u} onPress={() => openViewerAt(idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
+                      <Pressable key={u} onPress={() => openViewerAt(detailMedia, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
                         <Image source={{ uri: u }} style={styles.thumb} resizeMode="contain" />
                       </Pressable>
                     ))}
@@ -528,10 +587,10 @@ export default function FeedbackFormScreen(props: Props) {
                 onMomentumScrollEnd={(e) => {
                   const x = Number(e?.nativeEvent?.contentOffset?.x || 0)
                   const idx = Math.round(x / Math.max(1, screen.width))
-                  setViewerIndex(Math.max(0, Math.min(detailMedia.length - 1, idx)))
+                  setViewerIndex(Math.max(0, Math.min(viewerUrls.length - 1, idx)))
                 }}
               >
-                {detailMedia.map((u) => {
+                {viewerUrls.map((u) => {
                   const abs = toAbsoluteUrl(u)
                   const st = viewerCache[abs]
                   const uri = st?.uri || abs
@@ -547,15 +606,15 @@ export default function FeedbackFormScreen(props: Props) {
                 })}
               </ScrollView>
               <View style={[styles.viewerTopRow, { paddingTop: Math.max(10, insets.top) }]}>
-                <Text style={styles.viewerIndex}>{`${viewerIndex + 1}/${detailMedia.length}`}</Text>
+                <Text style={styles.viewerIndex}>{`${viewerIndex + 1}/${viewerUrls.length}`}</Text>
                 <Pressable onPress={() => setViewerOpen(false)} style={({ pressed }) => [styles.viewerCloseBtn, pressed ? styles.pressed : null]}>
                   <Text style={styles.viewerCloseText}>关闭</Text>
                 </Pressable>
               </View>
-              {detailMedia[viewerIndex] ? (
+              {viewerUrls[viewerIndex] ? (
                 <Pressable
                   onPress={async () => {
-                    const abs = toAbsoluteUrl(detailMedia[viewerIndex])
+                    const abs = toAbsoluteUrl(viewerUrls[viewerIndex])
                     try {
                       await Linking.openURL(abs)
                     } catch {
@@ -571,6 +630,60 @@ export default function FeedbackFormScreen(props: Props) {
           ) : null}
         </View>
       </Modal>
+      {!detailItem && viewerOpen ? (
+        <View style={styles.viewerOverlay}>
+          <ScrollView
+            ref={(r) => {
+              viewerRef.current = r
+            }}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            contentOffset={{ x: viewerIndex * screen.width, y: 0 }}
+            onMomentumScrollEnd={(e) => {
+              const x = Number(e?.nativeEvent?.contentOffset?.x || 0)
+              const idx = Math.round(x / Math.max(1, screen.width))
+              setViewerIndex(Math.max(0, Math.min(viewerUrls.length - 1, idx)))
+            }}
+          >
+            {viewerUrls.map((u) => {
+              const abs = toAbsoluteUrl(u)
+              const st = viewerCache[abs]
+              const uri = st?.uri || abs
+              const err = st?.error
+              const loading = st?.loading
+              return (
+                <View key={u} style={{ width: screen.width, height: screen.height }}>
+                  <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+                  {loading ? <Text style={[styles.viewerHint, styles.viewerHintPos]}>加载中…</Text> : null}
+                  {err ? <Text style={[styles.viewerHint, styles.viewerHintPos]}>{err}</Text> : null}
+                </View>
+              )
+            })}
+          </ScrollView>
+          <View style={[styles.viewerTopRow, { paddingTop: Math.max(10, insets.top) }]}>
+            <Text style={styles.viewerIndex}>{`${viewerIndex + 1}/${viewerUrls.length}`}</Text>
+            <Pressable onPress={() => setViewerOpen(false)} style={({ pressed }) => [styles.viewerCloseBtn, pressed ? styles.pressed : null]}>
+              <Text style={styles.viewerCloseText}>关闭</Text>
+            </Pressable>
+          </View>
+          {viewerUrls[viewerIndex] ? (
+            <Pressable
+              onPress={async () => {
+                const abs = toAbsoluteUrl(viewerUrls[viewerIndex])
+                try {
+                  await Linking.openURL(abs)
+                } catch {
+                  Alert.alert(t('common_error'), '打开失败')
+                }
+              }}
+              style={({ pressed }) => [styles.viewerLinkBtnAbs, pressed ? styles.pressed : null]}
+            >
+              <Text style={styles.viewerLinkText}>在浏览器打开</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
     </>
   )
 }
