@@ -606,7 +606,7 @@ const styles = StyleSheet.create({
   muted: { color: '#6B7280', fontWeight: '700' },
   pressed: { opacity: 0.92 },
   detailBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', padding: 14, justifyContent: 'center' },
-  detailCard: { maxHeight: '85%', borderRadius: 16, overflow: 'hidden', backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#EEF0F6' },
+  detailCard: { width: '100%', flex: 1, maxHeight: '85%', borderRadius: 16, overflow: 'hidden', backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#EEF0F6' },
   detailTopRow: { height: 48, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: hairline(), borderBottomColor: '#EEF0F6' },
   detailTitle: { fontWeight: '900', color: '#111827' },
   detailCloseBtn: { height: 32, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
