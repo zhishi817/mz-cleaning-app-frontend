@@ -1,8 +1,10 @@
-import React, { useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Linking, Pressable, SectionList, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
-import { contacts, type Contact } from '../../data/contacts'
+import { listUsers } from '../../lib/api'
+import { useAuth } from '../../lib/auth'
+import { getContactsSnapshot, setContactsSnapshot, subscribeContactsSnapshot, type ContactItem } from '../../lib/contactsStore'
 import { normalizeAuMobile } from '../../lib/phone'
 import { hairline, moderateScale } from '../../lib/scale'
 import type { ContactsStackParamList } from '../../navigation/RootNavigator'
@@ -30,14 +32,65 @@ function initials(name: string) {
 
 export default function ContactsScreen(props: Props) {
   const { t } = useI18n()
+  const { token } = useAuth()
   const [query, setQuery] = useState('')
-  const listRef = useRef<SectionList<Contact>>(null)
+  const listRef = useRef<SectionList<ContactItem>>(null)
+  const [contactsSnap, setContactsSnapLocal] = useState(() => getContactsSnapshot())
+  const [hasLoaded, setHasLoaded] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  useEffect(() => subscribeContactsSnapshot(() => setContactsSnapLocal(getContactsSnapshot())), [])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        if (!token) {
+          setLoadError(null)
+          setHasLoaded(true)
+          return
+        }
+        const users = await listUsers(token)
+        if (cancelled) return
+        const sysItems: ContactItem[] = users.map(u => ({
+          id: `user:${String(u.id)}`,
+          source: 'system',
+          name: String(u.username || u.id),
+          phone_au: (u as any).phone_au == null ? null : String((u as any).phone_au || '').trim() || null,
+          username: String(u.username || ''),
+          role: String(u.role || ''),
+        }))
+        const prev = getContactsSnapshot()
+        const nextItems = [...prev.items.filter(x => x.source !== 'system'), ...sysItems]
+        const next = { items: nextItems, updated_at: Date.now() }
+        setContactsSnapshot(next)
+        setContactsSnapLocal(next)
+        setLoadError(null)
+      } catch (e: any) {
+        setLoadError(String(e?.message || '加载失败'))
+      }
+      setHasLoaded(true)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [token])
+
+  const allItems = useMemo(() => {
+    return contactsSnap.items.filter(x => x.source === 'system')
+  }, [contactsSnap.items])
 
   const sections = useMemo(() => {
     const q = query.trim().toLowerCase()
-    const filtered = q ? contacts.filter(c => c.name.toLowerCase().includes(q)) : contacts
-    const sorted = [...filtered].sort((a, b) => a.name.localeCompare(b.name))
-    const map = new Map<string, Contact[]>()
+    const filtered = q
+      ? allItems.filter(c => {
+          const name = String(c.name || '').toLowerCase()
+          const phone = String(c.phone_au || '').toLowerCase()
+          return name.includes(q) || phone.includes(q)
+        })
+      : allItems
+    const sorted = [...filtered].sort((a, b) => String(a.name).localeCompare(String(b.name)))
+    const map = new Map<string, ContactItem[]>()
     for (const c of sorted) {
       const key = initialOf(c.name)
       const arr = map.get(key) || []
@@ -46,19 +99,24 @@ export default function ContactsScreen(props: Props) {
     }
     const keys = Array.from(map.keys()).sort((a, b) => (a === '#' ? 1 : b === '#' ? -1 : a.localeCompare(b)))
     return keys.map(k => ({ title: k, data: map.get(k) || [] }))
-  }, [query])
+  }, [allItems, query])
 
   const indexLetters = useMemo(() => sections.map(s => s.title), [sections])
 
-  async function call(mobileAu: string) {
-    const phone = normalizeAuMobile(mobileAu)
+  async function call(mobileAu: string | null) {
+    const raw = String(mobileAu || '').trim()
+    if (!raw) {
+      Alert.alert('无法拨打', '未找到号码')
+      return
+    }
+    const phone = normalizeAuMobile(raw)
     const url = `tel:${phone}`
     try {
       const supported = await Linking.canOpenURL(url)
       if (!supported) throw new Error('not supported')
       await Linking.openURL(url)
     } catch {
-      Alert.alert('无法拨打', `请检查设备拨号功能或号码：${mobileAu}`)
+      Alert.alert('无法拨打', `请检查设备拨号功能或号码：${raw}`)
     }
   }
 
@@ -79,6 +137,16 @@ export default function ContactsScreen(props: Props) {
       </View>
 
       <View style={styles.listWrap}>
+        {hasLoaded && loadError ? (
+          <View style={styles.emptyWrap}>
+            <Text style={styles.emptyText}>{`加载失败：${loadError}`}</Text>
+          </View>
+        ) : null}
+        {hasLoaded && allItems.length === 0 ? (
+          <View style={styles.emptyWrap}>
+            <Text style={styles.emptyText}>暂无用户</Text>
+          </View>
+        ) : null}
         <SectionList
           ref={listRef as any}
           sections={sections as any}
@@ -100,12 +168,12 @@ export default function ContactsScreen(props: Props) {
                 <Text style={styles.name} numberOfLines={1}>
                   {item.name}
                 </Text>
-                <Text style={styles.mobile}>{item.mobileAu}</Text>
+                <Text style={styles.mobile}>{item.phone_au || '-'}</Text>
               </View>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`call-${item.id}`}
-                onPress={() => call(item.mobileAu)}
+                onPress={() => call(item.phone_au)}
                 style={({ pressed }) => [styles.callBtn, pressed ? styles.rowPressed : null]}
                 hitSlop={10}
               >
@@ -156,6 +224,8 @@ const styles = StyleSheet.create({
   },
   searchInput: { flex: 1, fontSize: 14, fontWeight: '700', color: '#111827' },
   listWrap: { flex: 1 },
+  emptyWrap: { paddingHorizontal: 16, paddingTop: 10 },
+  emptyText: { color: '#9CA3AF', fontWeight: '700' },
   content: { paddingHorizontal: 16, paddingBottom: 16 },
   sectionHeader: { paddingTop: 10, paddingBottom: 6, paddingHorizontal: 2 },
   sectionHeaderText: { color: '#9CA3AF', fontSize: 12, fontWeight: '900' },

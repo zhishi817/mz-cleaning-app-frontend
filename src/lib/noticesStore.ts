@@ -67,12 +67,28 @@ async function persist() {
   await setJson(STORAGE_KEY, state)
 }
 
+function dedupeLoadedState(input: StoreState) {
+  const seen = new Set<string>()
+  const unreadIds: Record<string, true> = {}
+  const items: Notice[] = []
+  for (const n of input.items || []) {
+    const rawId = String(n?.id || '').trim() || nextId()
+    let id = rawId
+    if (seen.has(id)) id = nextId()
+    seen.add(id)
+    const fixed: Notice = { ...n, id }
+    items.push(fixed)
+    if (input.unreadIds && (input.unreadIds as any)[rawId]) unreadIds[id] = true
+  }
+  return { items, unreadIds }
+}
+
 export async function initNoticesStore() {
   if (initialized) return
   initialized = true
   const saved = await getJson<StoreState>(STORAGE_KEY)
   if (saved?.items?.length) {
-    state = { items: saved.items, unreadIds: saved.unreadIds || {} }
+    state = dedupeLoadedState({ items: saved.items, unreadIds: saved.unreadIds || {} })
   } else {
     const items = seed()
     const unreadIds = Object.fromEntries(items.map(i => [i.id, true])) as Record<string, true>
@@ -100,7 +116,8 @@ export async function markNoticeRead(id: string) {
 }
 
 function nextId() {
-  return `n${Math.floor(Date.now() / 1000)}`
+  const rand = Math.random().toString(36).slice(2, 8)
+  return `n${Date.now()}-${rand}`
 }
 
 export async function prependNotice(input: Omit<Notice, 'id' | 'createdAt'> & { id?: string; createdAt?: string }) {

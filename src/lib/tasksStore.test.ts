@@ -5,7 +5,8 @@ test('tasks store uploads key photo and sets status to cleaning', async () => {
   await (AsyncStorage as any).clear()
   const mod = require('./tasksStore') as typeof import('./tasksStore')
 
-  await mod.initTasksStore()
+  const bucketKey = mod.makeTasksBucketKey({ userId: 'u1', date_from: '2026-01-01', date_to: '2026-01-01', view: 'mine' })
+  await mod.initTasksStore({ bucketKey, allowSeed: true })
   const first = mod.getTasksSnapshot().items[0]!
   expect(first.status).toBe('pending_key_photo')
   expect(first.keyPhotoUri).toBeNull()
@@ -21,7 +22,8 @@ test('tasks store completes task and records metadata', async () => {
   await (AsyncStorage as any).clear()
   const mod = require('./tasksStore') as typeof import('./tasksStore')
 
-  await mod.initTasksStore()
+  const bucketKey = mod.makeTasksBucketKey({ userId: 'u1', date_from: '2026-01-01', date_to: '2026-01-01', view: 'mine' })
+  await mod.initTasksStore({ bucketKey, allowSeed: true })
   const first = mod.getTasksSnapshot().items[0]!
 
   await mod.completeTask({
@@ -53,6 +55,7 @@ test('tasks store merges same property same day and preserves checkout/checkin p
     address: 'addr',
     unitType: '1BR',
     status: 'pending_key_photo',
+    routeOrder: null,
     guideUrl: null,
     hasCheckout: true,
     hasCheckin: false,

@@ -5,8 +5,8 @@ import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { initTasksStore, getTasksSnapshot } from '../../lib/tasksStore'
 import { createRepairTicket, type RepairUrgency, initRepairsStore } from '../../lib/repairsStore'
+import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'RepairForm'>
@@ -29,7 +29,6 @@ export default function RepairFormScreen(props: Props) {
 
   useEffect(() => {
     ;(async () => {
-      await initTasksStore()
       await initRepairsStore()
       setReady(true)
     })()
@@ -37,7 +36,7 @@ export default function RepairFormScreen(props: Props) {
 
   const task = useMemo(() => {
     if (!ready) return null
-    return getTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null
+    return getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null
   }, [props.route.params.taskId, ready])
 
   function typeLabel(k: RepairType) {
@@ -77,7 +76,7 @@ export default function RepairFormScreen(props: Props) {
       await createRepairTicket({
         taskId: task.id,
         propertyTitle: task.title,
-        address: task.address,
+        address: task.property?.address || '',
         type,
         description: d,
         urgency,
@@ -107,7 +106,7 @@ export default function RepairFormScreen(props: Props) {
               <Text style={styles.badgeText}>{task.title}</Text>
             </View>
           </View>
-          <Text style={styles.sub}>{task.address}</Text>
+          <Text style={styles.sub}>{task.property?.address || ''}</Text>
 
           <Text style={styles.label}>{t('repair_field_type')}</Text>
           <View style={styles.chipsRow}>
@@ -192,4 +191,3 @@ const styles = StyleSheet.create({
   muted: { color: '#6B7280', fontWeight: '700' },
   pressed: { opacity: 0.92 },
 })
-

@@ -1,8 +1,8 @@
-import React, { useMemo } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Alert, Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
-import { contacts } from '../../data/contacts'
+import { getContactsSnapshot, subscribeContactsSnapshot } from '../../lib/contactsStore'
 import { normalizeAuMobile } from '../../lib/phone'
 import { hairline, moderateScale } from '../../lib/scale'
 import type { ContactsStackParamList } from '../../navigation/RootNavigator'
@@ -20,21 +20,29 @@ function initials(name: string) {
 }
 
 export default function ContactDetailScreen(props: Props) {
-  const contact = useMemo(() => contacts.find(c => c.id === props.route.params.id) || null, [props.route.params.id])
+  const [snap, setSnap] = useState(() => getContactsSnapshot())
+  useEffect(() => subscribeContactsSnapshot(() => setSnap(getContactsSnapshot())), [])
+  const contact = useMemo(() => snap.items.find(c => c.id === props.route.params.id) || null, [props.route.params.id, snap.items])
+  const effective = contact
 
   async function call() {
-    if (!contact) return
-    const url = `tel:${normalizeAuMobile(contact.mobileAu)}`
+    if (!effective) return
+    const raw = String(effective.phone_au || '').trim()
+    if (!raw) {
+      Alert.alert('无法拨打', '未找到号码')
+      return
+    }
+    const url = `tel:${normalizeAuMobile(raw)}`
     try {
       const supported = await Linking.canOpenURL(url)
       if (!supported) throw new Error('not supported')
       await Linking.openURL(url)
     } catch {
-      Alert.alert('无法拨打', `请检查设备拨号功能或号码：${contact.mobileAu}`)
+      Alert.alert('无法拨打', `请检查设备拨号功能或号码：${raw}`)
     }
   }
 
-  if (!contact) {
+  if (!effective) {
     return (
       <View style={styles.page}>
         <Text style={styles.title}>Not found</Text>
@@ -47,21 +55,19 @@ export default function ContactDetailScreen(props: Props) {
       <View style={styles.card}>
         <View style={styles.row}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{initials(contact.name)}</Text>
+            <Text style={styles.avatarText}>{initials(effective.name)}</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.name}>{contact.name}</Text>
-            <Text style={styles.meta}>
-              {contact.department} · {contact.title}
-            </Text>
+            <Text style={styles.name}>{effective.name}</Text>
+            {effective.source === 'system' ? <Text style={styles.meta}>{`${effective.username || ''}${effective.role ? ` · ${effective.role}` : ''}`}</Text> : null}
           </View>
         </View>
 
         <View style={styles.line} />
 
         <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Mobile</Text>
-          <Text style={styles.infoValue}>{contact.mobileAu}</Text>
+          <Text style={styles.infoLabel}>澳洲手机号</Text>
+          <Text style={styles.infoValue}>{effective.phone_au || '-'}</Text>
         </View>
         <Pressable accessibilityRole="button" accessibilityLabel="call-contact" onPress={call} style={({ pressed }) => [styles.callBtn, pressed ? styles.pressed : null]}>
           <Ionicons name="call" size={moderateScale(18)} color="#FFFFFF" />

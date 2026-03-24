@@ -13,11 +13,14 @@ import NoticesScreen from '../screens/tabs/NoticesScreen'
 import ContactsScreen from '../screens/tabs/ContactsScreen'
 import MeScreen from '../screens/tabs/MeScreen'
 import NoticeDetailScreen from '../screens/notices/NoticeDetailScreen'
+import InfoCenterDetailScreen from '../screens/notices/InfoCenterDetailScreen'
 import ContactDetailScreen from '../screens/contacts/ContactDetailScreen'
 import ProfileEditScreen from '../screens/me/ProfileEditScreen'
 import AccountScreen from '../screens/me/AccountScreen'
+import ChangePasswordScreen from '../screens/me/ChangePasswordScreen'
 import TaskDetailScreen from '../screens/tasks/TaskDetailScreen'
 import RepairFormScreen from '../screens/tasks/RepairFormScreen'
+import SuppliesFormScreen from '../screens/tasks/SuppliesFormScreen'
 
 export type AuthStackParamList = {
   Login: undefined
@@ -42,11 +45,13 @@ export type TasksStackParamList = {
   TasksList: undefined
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
   RepairForm: { taskId: string }
+  SuppliesForm: { taskId: string }
 }
 
 export type NoticesStackParamList = {
   NoticesList: undefined
   NoticeDetail: { id: string }
+  InfoCenterDetail: { kind: 'property' | 'secret'; title: string; subtitle?: string; body?: string; url?: string | null; copyText?: string | null; secretId?: string }
 }
 
 export type ContactsStackParamList = {
@@ -58,6 +63,7 @@ export type MeStackParamList = {
   MeHome: undefined
   ProfileEdit: undefined
   Account: undefined
+  ChangePassword: undefined
 }
 
 function BootScreen() {
@@ -84,6 +90,7 @@ function TasksStackNavigator() {
       <TasksStack.Screen name="TasksList" component={TasksScreen} options={{ headerShown: false, title: t('tabs_tasks') }} />
       <TasksStack.Screen name="TaskDetail" component={TaskDetailScreen} options={{ title: t('task_detail_title') }} />
       <TasksStack.Screen name="RepairForm" component={RepairFormScreen} options={{ title: t('tasks_btn_repair') }} />
+      <TasksStack.Screen name="SuppliesForm" component={SuppliesFormScreen} options={{ title: '补品填报' }} />
     </TasksStack.Navigator>
   )
 }
@@ -92,8 +99,9 @@ function NoticesStackNavigator() {
   const { t } = useI18n()
   return (
     <NoticesStack.Navigator screenOptions={{ headerTitleAlign: 'center' }}>
-      <NoticesStack.Screen name="NoticesList" component={NoticesScreen} options={{ title: t('notices_title') }} />
+      <NoticesStack.Screen name="NoticesList" component={NoticesScreen} options={{ headerShown: false, title: t('notices_title') }} />
       <NoticesStack.Screen name="NoticeDetail" component={NoticeDetailScreen} options={{ title: t('notices_title') }} />
+      <NoticesStack.Screen name="InfoCenterDetail" component={InfoCenterDetailScreen} options={{ title: t('notices_title') }} />
     </NoticesStack.Navigator>
   )
 }
@@ -115,6 +123,7 @@ function MeStackNavigator() {
       <MeStack.Screen name="MeHome" component={MeScreen} options={{ title: t('me_title') }} />
       <MeStack.Screen name="ProfileEdit" component={ProfileEditScreen} options={{ title: t('profile_edit') }} />
       <MeStack.Screen name="Account" component={AccountScreen} options={{ title: t('account_manage') }} />
+      <MeStack.Screen name="ChangePassword" component={ChangePasswordScreen} options={{ title: '修改密码' }} />
     </MeStack.Navigator>
   )
 }

@@ -1,4 +1,6 @@
 import { getJson, setJson } from './storage'
+import { API_BASE_URL } from '../config/env'
+import { listCleaningAppTasks, type CleaningAppTask } from './api'
 
 export type TaskStatus = 'pending_key_photo' | 'cleaning' | 'completed'
 
@@ -10,6 +12,7 @@ export type Task = {
   address: string
   unitType: string
   status: TaskStatus
+  routeOrder?: number | null
   guideUrl?: string | null
   hasCheckout: boolean
   hasCheckin: boolean
@@ -26,15 +29,20 @@ export type Task = {
   completionSupplies: string[]
 }
 
+export type TasksView = 'mine' | 'all'
+
 type StoreState = {
   items: Task[]
+  bucketKey: string | null
+  updatedAt: string | null
 }
 
-const STORAGE_KEY = 'mzstay.tasks.store.v1'
+const STORAGE_PREFIX = 'mzstay.tasks.store.v2:'
+const ROUTE_META_PREFIX = 'mzstay.tasks.route.v1:'
 
 const listeners = new Set<() => void>()
-let state: StoreState = { items: [] }
-let initialized = false
+let state: StoreState = { items: [], bucketKey: null, updatedAt: null }
+let initializedKey: string | null = null
 
 function emit() {
   for (const cb of listeners) cb()
@@ -52,6 +60,32 @@ function addDays(d: Date, days: number) {
   const nd = new Date(d)
   nd.setDate(nd.getDate() + days)
   return nd
+}
+
+function normalizeBase(base: string) {
+  return String(base || '').trim().replace(/\/+$/g, '')
+}
+
+function envKey() {
+  const b = normalizeBase(API_BASE_URL)
+  return b ? `remote:${b}` : 'local'
+}
+
+function storageKey(bucketKey: string) {
+  return `${STORAGE_PREFIX}${bucketKey}`
+}
+
+function routeMetaKey(userId: string) {
+  const u = String(userId || '').trim() || 'unknown'
+  return `${ROUTE_META_PREFIX}${envKey()}:${u}`
+}
+
+export function makeTasksBucketKey(params: { userId: string; date_from: string; date_to: string; view: TasksView }) {
+  const u = String(params.userId || '').trim() || 'unknown'
+  const df = String(params.date_from || '').trim()
+  const dt = String(params.date_to || '').trim()
+  const view = params.view === 'all' ? 'all' : 'mine'
+  return `${envKey()}:${u}:${df}~${dt}:${view}`
 }
 
 function seed(): Task[] {
@@ -156,6 +190,87 @@ function seed(): Task[] {
   ]
 }
 
+async function persist() {
+  if (!state.bucketKey) return
+  await setJson(storageKey(state.bucketKey), state)
+}
+
+export async function initTasksStore(params: { bucketKey: string; allowSeed?: boolean }) {
+  const key = String(params.bucketKey || '').trim()
+  if (!key) throw new Error('missing bucketKey')
+  if (initializedKey === key) return
+  initializedKey = key
+  state = { items: [], bucketKey: key, updatedAt: null }
+  const saved = await getJson<StoreState>(storageKey(key))
+  if (saved?.items?.length) {
+    state = { items: mergeSamePropertySameDay(saved.items), bucketKey: key, updatedAt: saved.updatedAt || null }
+  } else if (params.allowSeed) {
+    state = { items: mergeSamePropertySameDay(seed()), bucketKey: key, updatedAt: new Date().toISOString() }
+    await persist()
+  } else {
+    state = { items: [], bucketKey: key, updatedAt: null }
+  }
+  emit()
+}
+
+export function subscribeTasks(cb: () => void) {
+  listeners.add(cb)
+  return () => listeners.delete(cb)
+}
+
+export function getTasksSnapshot() {
+  return state
+}
+
+function mapStatus(raw: string): TaskStatus {
+  const s = String(raw || '').trim().toLowerCase()
+  if (!s) return 'pending_key_photo'
+  if (s === 'in_progress' || s === 'restock_pending') return 'cleaning'
+  if (s === 'cleaned' || s === 'restocked' || s === 'inspected' || s === 'ready') return 'completed'
+  return 'pending_key_photo'
+}
+
+function mapRemoteTask(t: CleaningAppTask): Task {
+  const date = String(t.task_date || t.date || '').slice(0, 10)
+  const code = t.property?.code || ''
+  const region = String(t.property?.region || '').trim()
+  const address = t.property?.address || ''
+  const unitType = t.property?.unit_type || ''
+  const guideUrl = t.property?.access_guide_link ? String(t.property.access_guide_link) : null
+  const checkoutTime = typeof t.checkout_time === 'string' && t.checkout_time.trim() ? t.checkout_time.trim() : null
+  const nextCheckinTime = typeof t.checkin_time === 'string' && t.checkin_time.trim() ? t.checkin_time.trim() : null
+  const oldCode = typeof t.old_code === 'string' && t.old_code.trim() ? t.old_code.trim() : null
+  const newCode = typeof t.new_code === 'string' && t.new_code.trim() ? t.new_code.trim() : null
+  const access = typeof t.access_code === 'string' && t.access_code.trim() ? t.access_code.trim() : null
+  const hasCheckout = !!(checkoutTime || oldCode)
+  const hasCheckin = !!(nextCheckinTime || newCode)
+  const title = code || (t.id ? `ID:${String(t.id).slice(0, 6)}` : '')
+  return {
+    id: t.id,
+    date,
+    title,
+    region,
+    address,
+    unitType,
+    status: mapStatus(t.status),
+    routeOrder: null,
+    guideUrl,
+    hasCheckout,
+    hasCheckin,
+    checkoutTime,
+    nextCheckinTime,
+    oldCode,
+    masterCode: access,
+    newCode,
+    keypadCode: access ? `${access}#` : null,
+    keyPhotoUri: null,
+    completedAt: null,
+    completedBy: null,
+    completionNote: '',
+    completionSupplies: [],
+  }
+}
+
 function statusRank(status: TaskStatus) {
   if (status === 'pending_key_photo') return 0
   if (status === 'cleaning') return 1
@@ -225,44 +340,82 @@ export function mergeSamePropertySameDay(items: Task[]): Task[] {
       status,
       hasCheckout,
       hasCheckin,
+      region,
+      address,
+      unitType,
+      guideUrl,
       checkoutTime,
       nextCheckinTime,
       oldCode,
       newCode,
       masterCode,
       keypadCode,
-      guideUrl,
-      region,
-      address,
-      unitType,
     })
   }
   return merged
 }
 
-async function persist() {
-  await setJson(STORAGE_KEY, state)
+export async function refreshTasksFromServer(params: {
+  token: string
+  userId: string
+  date_from: string
+  date_to: string
+  view: TasksView
+}) {
+  const bucketKey = makeTasksBucketKey({ userId: params.userId, date_from: params.date_from, date_to: params.date_to, view: params.view })
+  await initTasksStore({ bucketKey, allowSeed: String(params.token || '').startsWith('local:') })
+  if (String(params.token || '').startsWith('local:')) return
+  const prevById = new Map(state.items.map(i => [i.id, i] as const))
+  const routeMeta = (await getJson<Record<string, number>>(routeMetaKey(params.userId))) || {}
+  const remote = await listCleaningAppTasks(params.token, {
+    date_from: params.date_from,
+    date_to: params.date_to,
+    assignee_id: params.view === 'mine' ? params.userId : undefined,
+  })
+  const items0 = remote.map((rt) => {
+    const mapped = mapRemoteTask(rt)
+    const prev = prevById.get(mapped.id)
+    const metaOrder = routeMeta[mapped.id]
+    return {
+      ...mapped,
+      routeOrder: typeof metaOrder === 'number' ? metaOrder : prev?.routeOrder || mapped.routeOrder || null,
+      keyPhotoUri: prev?.keyPhotoUri ?? mapped.keyPhotoUri,
+      completedAt: prev?.completedAt ?? mapped.completedAt,
+      completedBy: prev?.completedBy ?? mapped.completedBy,
+      completionNote: prev?.completionNote ?? mapped.completionNote,
+      completionSupplies: prev?.completionSupplies ?? mapped.completionSupplies,
+    }
+  })
+  const items = mergeSamePropertySameDay(items0)
+  state = { items, bucketKey, updatedAt: new Date().toISOString() }
+  await persist()
+  emit()
 }
 
-export async function initTasksStore() {
-  if (initialized) return
-  initialized = true
-  const saved = await getJson<StoreState>(STORAGE_KEY)
-  if (saved?.items?.length) {
-    state = { items: mergeSamePropertySameDay(saved.items) }
-  } else {
-    state = { items: mergeSamePropertySameDay(seed()) }
-    await persist()
+export async function setTaskRouteOrders(params: { userId: string; updates: Array<{ taskId: string; routeOrder: number | null }> }) {
+  const userId = String(params.userId || '').trim()
+  if (!userId) throw new Error('missing userId')
+  const updates = params.updates || []
+  if (!updates.length) return
+
+  const routeMeta = (await getJson<Record<string, number>>(routeMetaKey(userId))) || {}
+  for (const u of updates) {
+    const id = String(u.taskId || '').trim()
+    if (!id) continue
+    if (typeof u.routeOrder === 'number' && Number.isFinite(u.routeOrder) && u.routeOrder > 0) routeMeta[id] = u.routeOrder
+    else delete routeMeta[id]
   }
-}
+  await setJson(routeMetaKey(userId), routeMeta)
 
-export function subscribeTasks(cb: () => void) {
-  listeners.add(cb)
-  return () => listeners.delete(cb)
-}
-
-export function getTasksSnapshot() {
-  return state
+  const patchMap = new Map(updates.map(u => [String(u.taskId || '').trim(), u.routeOrder] as const).filter(x => x[0]))
+  const nextItems = state.items.map((t) => {
+    const ro = patchMap.get(t.id)
+    if (ro === undefined) return t
+    return { ...t, routeOrder: ro }
+  })
+  state = { ...state, items: nextItems, updatedAt: new Date().toISOString() }
+  await persist()
+  emit()
 }
 
 export async function setTaskKeyPhotoUploaded(taskId: string, uri: string) {
@@ -275,7 +428,7 @@ export async function setTaskKeyPhotoUploaded(taskId: string, uri: string) {
         }
       : t,
   )
-  state = { items: nextItems }
+  state = { ...state, items: nextItems, updatedAt: new Date().toISOString() }
   await persist()
   emit()
 }
@@ -299,7 +452,7 @@ export async function completeTask(params: {
         }
       : t,
   )
-  state = { items: nextItems }
+  state = { ...state, items: nextItems, updatedAt: new Date().toISOString() }
   await persist()
   emit()
 }

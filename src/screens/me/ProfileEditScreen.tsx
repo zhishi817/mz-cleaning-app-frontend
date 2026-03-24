@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Image, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { defaultProfileFromUser, getProfile, setProfile, type Profile } from '../../lib/profileStore'
+import { getMyProfile, updateMyProfile, uploadMzappMedia } from '../../lib/api'
 import { hairline, moderateScale } from '../../lib/scale'
 
 function isValidName(name: string) {
@@ -21,27 +22,38 @@ function isValidAuMobile(input: string) {
 }
 
 export default function ProfileEditScreen() {
-  const { user } = useAuth()
+  const { user, token } = useAuth()
   const { t } = useI18n()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState<Profile>(() => defaultProfileFromUser(user))
+  const [localAvatarUri, setLocalAvatarUri] = useState<string | null>(null)
 
   const initials = useMemo(() => {
-    const parts = form.name.trim().split(/\s+/g).filter(Boolean)
+    const parts = form.display_name.trim().split(/\s+/g).filter(Boolean)
     const a = (parts[0] || '?')[0] || '?'
     const b = parts.length > 1 ? (parts[parts.length - 1] || '')[0] || '' : ''
     return `${a}${b}`.toUpperCase()
-  }, [form.name])
+  }, [form.display_name])
 
   useEffect(() => {
     ;(async () => {
-      const saved = await getProfile()
+      const saved = await getProfile(user)
       if (saved) setForm(saved)
       else setForm(defaultProfileFromUser(user))
+      if (token) {
+        try {
+          const remote = await getMyProfile(token)
+          setForm({
+            avatar_url: remote.avatar_url || null,
+            display_name: String(remote.display_name || remote.username || ''),
+            phone_au: String(remote.phone_au || ''),
+          })
+        } catch {}
+      }
       setLoading(false)
     })()
-  }, [user])
+  }, [token, user])
 
   async function pickAvatar() {
     try {
@@ -57,17 +69,29 @@ export default function ProfileEditScreen() {
         aspect: [1, 1],
       })
       if (result.canceled) return
-      const uri = result.assets?.[0]?.uri
+      const asset = (result.assets?.[0] as any) || null
+      const uri = String(asset?.uri || '').trim()
       if (!uri) return
-      setForm(prev => ({ ...prev, avatarUri: uri }))
+      setLocalAvatarUri(uri)
+      if (!token) {
+        Alert.alert(t('common_error'), '请先登录')
+        return
+      }
+      const name = String(asset?.fileName || uri.split('/').pop() || `avatar-${Date.now()}.jpg`)
+      const mimeType = String(asset?.mimeType || 'image/jpeg')
+      const up = await uploadMzappMedia(token, { uri, name: String(name), mimeType })
+      const updated = await updateMyProfile(token, { avatar_url: up.url })
+      const next: Profile = { avatar_url: updated.avatar_url || up.url, display_name: form.display_name, phone_au: form.phone_au }
+      setForm(next)
+      await setProfile(user, next)
     } catch {
       Alert.alert(t('common_error'), t('profile_pick_failed'))
     }
   }
 
   async function onSave() {
-    const nameOk = isValidName(form.name)
-    const mobileOk = isValidAuMobile(form.mobileAu)
+    const nameOk = isValidName(form.display_name)
+    const mobileOk = isValidAuMobile(form.phone_au)
     if (!nameOk) {
       Alert.alert(t('common_error'), t('profile_invalid_name'))
       return
@@ -78,7 +102,15 @@ export default function ProfileEditScreen() {
     }
     try {
       setSaving(true)
-      await setProfile({ ...form, name: form.name.trim(), mobileAu: form.mobileAu.trim() })
+      const cleaned: Profile = { ...form, display_name: form.display_name.trim(), phone_au: form.phone_au.trim() }
+      if (token) {
+        const updated = await updateMyProfile(token, { display_name: cleaned.display_name, phone_au: cleaned.phone_au || null })
+        cleaned.avatar_url = updated.avatar_url || cleaned.avatar_url
+        cleaned.phone_au = String(updated.phone_au || cleaned.phone_au || '')
+        cleaned.display_name = String(updated.display_name || cleaned.display_name || '')
+      }
+      await setProfile(user, cleaned)
+      setForm(cleaned)
       Alert.alert(t('common_ok'), t('common_saved'))
     } catch {
       Alert.alert(t('common_error'), t('profile_save_failed'))
@@ -99,9 +131,13 @@ export default function ProfileEditScreen() {
     <View style={styles.page}>
       <View style={styles.card}>
         <View style={styles.avatarRow}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{initials}</Text>
-          </View>
+          {localAvatarUri || form.avatar_url ? (
+            <Image source={{ uri: localAvatarUri || form.avatar_url || '' }} style={styles.avatarImg} />
+          ) : (
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{initials}</Text>
+            </View>
+          )}
           <Pressable onPress={pickAvatar} style={({ pressed }) => [styles.avatarBtn, pressed ? styles.pressed : null]} disabled={Platform.OS === 'web'}>
             <Ionicons name="image-outline" size={moderateScale(18)} color="#2563EB" />
             <Text style={styles.avatarBtnText}>{t('profile_avatar')}</Text>
@@ -111,31 +147,23 @@ export default function ProfileEditScreen() {
         {Platform.OS === 'web' && (
           <View style={styles.field}>
             <Text style={styles.label}>Avatar URL</Text>
-            <TextInput value={form.avatarUri || ''} onChangeText={v => setForm(p => ({ ...p, avatarUri: v || null }))} style={styles.input} placeholder="https://..." />
+            <TextInput value={form.avatar_url || ''} onChangeText={v => setForm(p => ({ ...p, avatar_url: v || null }))} style={styles.input} placeholder="https://..." />
           </View>
         )}
 
         <View style={styles.field}>
           <Text style={styles.label}>{t('profile_name')}</Text>
-          <TextInput value={form.name} onChangeText={v => setForm(p => ({ ...p, name: v }))} style={styles.input} placeholder={t('profile_name')} />
+          <TextInput value={form.display_name} onChangeText={v => setForm(p => ({ ...p, display_name: v }))} style={styles.input} placeholder={t('profile_name')} />
         </View>
         <View style={styles.field}>
           <Text style={styles.label}>{t('profile_phone')}</Text>
           <TextInput
-            value={form.mobileAu}
-            onChangeText={v => setForm(p => ({ ...p, mobileAu: v }))}
+            value={form.phone_au}
+            onChangeText={v => setForm(p => ({ ...p, phone_au: v }))}
             style={styles.input}
             placeholder="04xx xxx xxx"
             keyboardType="phone-pad"
           />
-        </View>
-        <View style={styles.field}>
-          <Text style={styles.label}>{t('profile_dept')}</Text>
-          <TextInput value={form.department} onChangeText={v => setForm(p => ({ ...p, department: v }))} style={styles.input} placeholder={t('profile_dept')} />
-        </View>
-        <View style={styles.field}>
-          <Text style={styles.label}>{t('profile_title')}</Text>
-          <TextInput value={form.title} onChangeText={v => setForm(p => ({ ...p, title: v }))} style={styles.input} placeholder={t('profile_title')} />
         </View>
 
         <Pressable onPress={onSave} style={({ pressed }) => [styles.saveBtn, pressed ? styles.pressed : null, saving ? styles.saveDisabled : null]} disabled={saving}>
@@ -165,6 +193,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  avatarImg: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#DBEAFE' },
   avatarText: { color: '#1D4ED8', fontSize: 18, fontWeight: '900' },
   avatarBtn: {
     height: 36,

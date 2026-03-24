@@ -1,11 +1,12 @@
 import React, { useCallback, useMemo, useState } from 'react'
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native'
+import { Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { defaultProfileFromUser, getProfile, type Profile } from '../../lib/profileStore'
+import { getMyProfile } from '../../lib/api'
 import { hairline } from '../../lib/scale'
 import type { MeStackParamList } from '../../navigation/RootNavigator'
 
@@ -21,7 +22,7 @@ function initialsOf(username: string) {
 type Props = NativeStackScreenProps<MeStackParamList, 'MeHome'>
 
 export default function MeScreen(props: Props) {
-  const { user, signOut } = useAuth()
+  const { user, token, signOut } = useAuth()
   const { locale, setLocale, t } = useI18n()
   const [profile, setProfile] = useState<Profile>(() => defaultProfileFromUser(user))
 
@@ -29,17 +30,29 @@ export default function MeScreen(props: Props) {
     useCallback(() => {
       let alive = true
       ;(async () => {
-        const saved = await getProfile()
+        const saved = await getProfile(user)
         if (!alive) return
         setProfile(saved || defaultProfileFromUser(user))
+        if (token) {
+          try {
+            const remote = await getMyProfile(token)
+            if (!alive) return
+            const merged: Profile = {
+              avatar_url: remote.avatar_url || null,
+              display_name: String(remote.display_name || remote.username || ''),
+              phone_au: String(remote.phone_au || ''),
+            }
+            setProfile(merged)
+          } catch {}
+        }
       })()
       return () => {
         alive = false
       }
-    }, [user]),
+    }, [token, user]),
   )
 
-  const initials = useMemo(() => initialsOf(profile?.name || user?.username || ''), [profile?.name, user?.username])
+  const initials = useMemo(() => initialsOf(profile?.display_name || user?.username || ''), [profile?.display_name, user?.username])
 
   async function onLogout() {
     const ok = await new Promise<boolean>(resolve => {
@@ -56,12 +69,16 @@ export default function MeScreen(props: Props) {
     <View style={styles.page}>
       <View style={styles.card}>
         <View style={styles.row}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{initials}</Text>
-          </View>
+          {profile?.avatar_url ? (
+            <Image source={{ uri: profile.avatar_url }} style={styles.avatarImg} />
+          ) : (
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{initials}</Text>
+            </View>
+          )}
           <View style={{ flex: 1 }}>
-            <Text style={styles.username}>{profile?.name || user?.username || '-'}</Text>
-            <Text style={styles.role}>{profile?.department || user?.role || '-'}</Text>
+            <Text style={styles.username}>{profile?.display_name || user?.username || '-'}</Text>
+            <Text style={styles.role}>{user?.role || '-'}</Text>
           </View>
         </View>
       </View>
@@ -121,6 +138,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  avatarImg: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#DBEAFE' },
   avatarText: { color: '#1D4ED8', fontSize: 18, fontWeight: '800' },
   username: { fontSize: 18, fontWeight: '800', color: '#111827' },
   role: { marginTop: 4, color: '#6B7280', fontSize: 13 },
