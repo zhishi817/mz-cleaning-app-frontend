@@ -517,63 +517,57 @@ export default function FeedbackFormScreen(props: Props) {
       </Modal>
       <Modal
         visible={viewerOpen}
-        transparent
+        transparent={false}
         animationType="fade"
-        presentationStyle="overFullScreen"
-        statusBarTranslucent
         onRequestClose={() => setViewerOpen(false)}
       >
         <View style={styles.viewerModalBackdrop}>
-          <View style={styles.viewerModalCard}>
-            <View style={[styles.viewerTopRow, { paddingTop: Math.max(10, insets.top) }]}>
-              <Text style={styles.viewerIndex}>{`${viewerIndex + 1}/${detailMedia.length}`}</Text>
-              <Pressable onPress={() => setViewerOpen(false)} style={({ pressed }) => [styles.viewerCloseBtn, pressed ? styles.pressed : null]}>
-                <Text style={styles.viewerCloseText}>关闭</Text>
-              </Pressable>
-            </View>
-            <ScrollView
-              ref={(r) => {
-                viewerRef.current = r
-              }}
-              horizontal
-              pagingEnabled
-              showsHorizontalScrollIndicator={false}
-              contentOffset={{ x: viewerIndex * screen.width, y: 0 }}
-              onMomentumScrollEnd={(e) => {
-                const x = Number(e?.nativeEvent?.contentOffset?.x || 0)
-                const idx = Math.round(x / Math.max(1, screen.width))
-                setViewerIndex(Math.max(0, Math.min(detailMedia.length - 1, idx)))
-              }}
-            >
-              {detailMedia.map((u) => {
-                const abs = toAbsoluteUrl(u)
-                const st = viewerCache[abs]
-                const uri = st?.uri || abs
-                const err = st?.error
-                const loading = st?.loading
-                const padTop = Math.max(10, insets.top)
-                const h = Math.max(240, screen.height - padTop - insets.bottom - 64)
-                return (
-                  <View key={u} style={{ width: screen.width, height: h, alignItems: 'center', justifyContent: 'center' }}>
-                    {loading ? <Text style={styles.viewerHint}>加载中…</Text> : null}
-                    {err ? <Text style={styles.viewerHint}>{err}</Text> : null}
-                    <Image source={{ uri }} style={{ width: screen.width, height: h - 54 }} resizeMode="contain" />
-                    <Pressable
-                      onPress={async () => {
-                        try {
-                          await Linking.openURL(abs)
-                        } catch {
-                          Alert.alert(t('common_error'), '打开失败')
-                        }
-                      }}
-                      style={({ pressed }) => [styles.viewerLinkBtn, pressed ? styles.pressed : null]}
-                    >
-                      <Text style={styles.viewerLinkText}>在浏览器打开</Text>
-                    </Pressable>
-                  </View>
-                )
-              })}
-            </ScrollView>
+          <ScrollView
+            ref={(r) => {
+              viewerRef.current = r
+            }}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            contentOffset={{ x: viewerIndex * screen.width, y: 0 }}
+            onMomentumScrollEnd={(e) => {
+              const x = Number(e?.nativeEvent?.contentOffset?.x || 0)
+              const idx = Math.round(x / Math.max(1, screen.width))
+              setViewerIndex(Math.max(0, Math.min(detailMedia.length - 1, idx)))
+            }}
+          >
+            {detailMedia.map((u) => {
+              const abs = toAbsoluteUrl(u)
+              const st = viewerCache[abs]
+              const uri = st?.uri || abs
+              const err = st?.error
+              const loading = st?.loading
+              return (
+                <View key={u} style={{ width: screen.width, height: screen.height, alignItems: 'center', justifyContent: 'center' }}>
+                  {loading ? <Text style={styles.viewerHint}>加载中…</Text> : null}
+                  {err ? <Text style={styles.viewerHint}>{err}</Text> : null}
+                  <Image source={{ uri }} style={{ width: screen.width, height: screen.height }} resizeMode="contain" />
+                  <Pressable
+                    onPress={async () => {
+                      try {
+                        await Linking.openURL(abs)
+                      } catch {
+                        Alert.alert(t('common_error'), '打开失败')
+                      }
+                    }}
+                    style={({ pressed }) => [styles.viewerLinkBtn, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={styles.viewerLinkText}>在浏览器打开</Text>
+                  </Pressable>
+                </View>
+              )
+            })}
+          </ScrollView>
+          <View style={[styles.viewerTopRow, { paddingTop: Math.max(10, insets.top) }]}>
+            <Text style={styles.viewerIndex}>{`${viewerIndex + 1}/${detailMedia.length}`}</Text>
+            <Pressable onPress={() => setViewerOpen(false)} style={({ pressed }) => [styles.viewerCloseBtn, pressed ? styles.pressed : null]}>
+              <Text style={styles.viewerCloseText}>关闭</Text>
+            </Pressable>
           </View>
         </View>
       </Modal>
@@ -633,9 +627,8 @@ const styles = StyleSheet.create({
   thumbRow: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   thumbWrap: { width: 92, height: 92, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   thumb: { width: '100%', height: '100%' },
-  viewerModalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)' },
-  viewerModalCard: { flex: 1 },
-  viewerTopRow: { minHeight: 52, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 12 },
+  viewerModalBackdrop: { flex: 1, backgroundColor: '#000000' },
+  viewerTopRow: { position: 'absolute', left: 0, right: 0, top: 0, minHeight: 52, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 12 },
   viewerIndex: { color: '#FFFFFF', fontWeight: '900', marginTop: 10 },
   viewerCloseBtn: { height: 32, paddingHorizontal: 12, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center', marginTop: 10 },
   viewerCloseText: { color: '#FFFFFF', fontWeight: '900' },
