@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "MZStay_app",
-    "slug": "MZStay_app",
+    "name": "MZStay App",
+    "slug": "mzstay-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -13,7 +13,12 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.mzproperty.cleaning",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -25,6 +30,11 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "1f7721fb-d570-4b01-8335-310ead68238a"
+      }
     }
   }
 }
