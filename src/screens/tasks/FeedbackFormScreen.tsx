@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Dimensions, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
@@ -124,10 +124,9 @@ export default function FeedbackFormScreen(props: Props) {
   const [pendingError, setPendingError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [detailItem, setDetailItem] = useState<PropertyFeedback | null>(null)
-  const [detailImgRemote, setDetailImgRemote] = useState<string | null>(null)
-  const [detailImgViewUri, setDetailImgViewUri] = useState<string | null>(null)
-  const [detailImgLoading, setDetailImgLoading] = useState(false)
-  const [detailImgError, setDetailImgError] = useState<string | null>(null)
+  const [viewerOpen, setViewerOpen] = useState(false)
+  const [viewerIndex, setViewerIndex] = useState(0)
+  const [viewerCache, setViewerCache] = useState<Record<string, { uri: string | null; loading: boolean; error: string | null }>>({})
 
   const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
   const propertyId = String(task?.property_id || task?.property?.id || '').trim()
@@ -267,6 +266,7 @@ export default function FeedbackFormScreen(props: Props) {
   const screen = useMemo(() => Dimensions.get('window'), [])
   const detailMedia = useMemo(() => normalizeUrls((detailItem as any)?.media_urls), [detailItem])
   const detailText = useMemo(() => extractContentText((detailItem as any)?.detail), [detailItem])
+  const viewerRef = useRef<ScrollView | null>(null)
 
   const apiHost = useMemo(() => {
     try {
@@ -278,15 +278,22 @@ export default function FeedbackFormScreen(props: Props) {
     }
   }, [])
 
-  async function openDetailImage(url: string) {
+  async function ensureViewerReady(url: string) {
     const u = toAbsoluteUrl(url)
     if (!u) return
-    setDetailImgRemote(u)
-    setDetailImgViewUri(null)
-    setDetailImgError(null)
-    setDetailImgLoading(true)
-    setDetailItem(null)
+    const existed = viewerCache[u]
+    if (existed && (existed.loading || existed.uri || existed.error)) return
+    setViewerCache(prev => ({ ...prev, [u]: { uri: null, loading: true, error: null } }))
     try {
+      let sameHost = false
+      try {
+        const host = new URL(u).host
+        sameHost = !!apiHost && host === apiHost
+      } catch {}
+      if (!sameHost) {
+        setViewerCache(prev => ({ ...prev, [u]: { uri: u, loading: false, error: null } }))
+        return
+      }
       const base = FileSystem.cacheDirectory ? `${FileSystem.cacheDirectory}feedback-preview/` : null
       if (!base) throw new Error('no cache directory')
       try {
@@ -295,26 +302,42 @@ export default function FeedbackFormScreen(props: Props) {
       const lower = u.toLowerCase()
       const ext = lower.includes('.png') ? '.png' : lower.includes('.webp') ? '.webp' : '.jpg'
       const target = `${base}${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`
-      let sameHost = false
-      try {
-        const host = new URL(u).host
-        sameHost = !!apiHost && host === apiHost
-      } catch {}
-      const headers = token && sameHost ? { Authorization: `Bearer ${token}` } : undefined
+      const headers = token ? { Authorization: `Bearer ${token}` } : undefined
       const dl: any = await FileSystem.downloadAsync(u, target, headers ? { headers } : undefined)
       const status = Number(dl?.status || 0)
       const contentType = String(dl?.headers?.['Content-Type'] || dl?.headers?.['content-type'] || '').trim().toLowerCase()
       if (status && status >= 400) throw new Error(`下载失败 (${status})`)
       if (contentType && !contentType.startsWith('image/')) throw new Error(`不是图片 (${contentType || 'unknown'})`)
       const localUri = String(dl?.uri || target || '').trim()
-      setDetailImgViewUri(localUri || u)
+      setViewerCache(prev => ({ ...prev, [u]: { uri: localUri || u, loading: false, error: null } }))
     } catch (e: any) {
-      setDetailImgError(String(e?.message || '图片加载失败'))
-      setDetailImgViewUri(u)
-    } finally {
-      setDetailImgLoading(false)
+      setViewerCache(prev => ({ ...prev, [u]: { uri: u, loading: false, error: String(e?.message || '图片加载失败') } }))
     }
   }
+
+  function openViewerAt(index: number) {
+    const list = detailMedia
+    if (!list.length) return
+    const idx = Math.max(0, Math.min(list.length - 1, Number(index) || 0))
+    setViewerIndex(idx)
+    setViewerOpen(true)
+    setTimeout(() => {
+      try {
+        viewerRef.current?.scrollTo({ x: idx * screen.width, y: 0, animated: false })
+      } catch {}
+    }, 0)
+    ensureViewerReady(list[idx]).catch(() => {})
+    if (idx > 0) ensureViewerReady(list[idx - 1]).catch(() => {})
+    if (idx + 1 < list.length) ensureViewerReady(list[idx + 1]).catch(() => {})
+  }
+
+  useEffect(() => {
+    if (!viewerOpen) return
+    const list = detailMedia
+    if (!list.length) return
+    const u = list[viewerIndex]
+    if (u) ensureViewerReady(u).catch(() => {})
+  }, [viewerIndex, viewerOpen, detailMedia])
 
   return (
     <>
@@ -480,8 +503,8 @@ export default function FeedbackFormScreen(props: Props) {
                 <View style={{ marginTop: 12 }}>
                   <Text style={styles.detailSubTitle}>{`照片 (${detailMedia.length})`}</Text>
                   <View style={styles.thumbRow}>
-                    {detailMedia.map(u => (
-                      <Pressable key={u} onPress={() => openDetailImage(u)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
+                    {detailMedia.map((u, idx) => (
+                      <Pressable key={u} onPress={() => openViewerAt(idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
                         <Image source={{ uri: u }} style={styles.thumb} />
                       </Pressable>
                     ))}
@@ -489,81 +512,60 @@ export default function FeedbackFormScreen(props: Props) {
                 </View>
               ) : null}
             </ScrollView>
-          </View>
-        </View>
-      </Modal>
-      <Modal
-        visible={!!detailImgRemote}
-        transparent
-        animationType="fade"
-        presentationStyle="overFullScreen"
-        statusBarTranslucent
-        onRequestClose={() => {
-          setDetailImgRemote(null)
-          setDetailImgViewUri(null)
-          setDetailImgError(null)
-          setDetailImgLoading(false)
-        }}
-      >
-        <View style={styles.previewBackdrop}>
-          <View style={styles.previewCard}>
-            <View style={[styles.previewTopRow, { paddingTop: Math.max(10, insets.top) }]}>
-              <Pressable
-                onPress={() => {
-                  setDetailImgRemote(null)
-                  setDetailImgViewUri(null)
-                  setDetailImgError(null)
-                  setDetailImgLoading(false)
-                }}
-                style={({ pressed }) => [styles.previewCloseBtn, pressed ? styles.pressed : null]}
-              >
-                <Text style={styles.previewCloseText}>关闭</Text>
-              </Pressable>
-            </View>
-            <ScrollView
-              style={{ flex: 1 }}
-              contentContainerStyle={styles.previewScrollContent}
-              maximumZoomScale={3}
-              minimumZoomScale={1}
-              showsVerticalScrollIndicator={false}
-              showsHorizontalScrollIndicator={false}
-              bounces={false}
-              centerContent
-            >
-              {detailImgLoading ? <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>加载中…</Text> : null}
-              {detailImgError ? <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>{detailImgError}</Text> : null}
-              {detailImgRemote ? (
-                <Image
-                  source={{ uri: detailImgViewUri || detailImgRemote }}
-                  style={{ width: screen.width, height: Math.max(240, screen.height - 120) }}
-                  resizeMode="contain"
-                  onError={() => setDetailImgError('图片加载失败')}
-                />
-              ) : null}
-              {detailImgRemote ? (
-                <Text style={{ color: 'rgba(255,255,255,0.72)', fontWeight: '700', fontSize: 12, marginTop: 12 }} numberOfLines={2}>
-                  {detailImgRemote}
-                </Text>
-              ) : null}
-              {detailImgRemote ? (
-                <Pressable
-                  onPress={async () => {
-                    try {
-                      await Linking.openURL(detailImgRemote)
-                    } catch {
-                      Alert.alert(t('common_error'), '打开失败')
-                    }
+            {viewerOpen ? (
+              <View style={styles.viewerOverlay}>
+                <View style={[styles.viewerTopRow, { paddingTop: Math.max(10, insets.top) }]}>
+                  <Text style={styles.viewerIndex}>{`${viewerIndex + 1}/${detailMedia.length}`}</Text>
+                  <Pressable
+                    onPress={() => setViewerOpen(false)}
+                    style={({ pressed }) => [styles.viewerCloseBtn, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={styles.viewerCloseText}>关闭</Text>
+                  </Pressable>
+                </View>
+                <ScrollView
+                  ref={(r) => {
+                    viewerRef.current = r
                   }}
-                  style={({ pressed }) => [
-                    styles.pendingToggle,
-                    { marginTop: 16, backgroundColor: 'rgba(255,255,255,0.14)', borderColor: 'rgba(255,255,255,0.22)' },
-                    pressed ? styles.pressed : null,
-                  ]}
+                  horizontal
+                  pagingEnabled
+                  showsHorizontalScrollIndicator={false}
+                  contentOffset={{ x: viewerIndex * screen.width, y: 0 }}
+                  onMomentumScrollEnd={(e) => {
+                    const x = Number(e?.nativeEvent?.contentOffset?.x || 0)
+                    const idx = Math.round(x / Math.max(1, screen.width))
+                    setViewerIndex(Math.max(0, Math.min(detailMedia.length - 1, idx)))
+                  }}
                 >
-                  <Text style={[styles.pendingToggleText, { color: '#FFFFFF' }]}>在浏览器打开</Text>
-                </Pressable>
-              ) : null}
-            </ScrollView>
+                  {detailMedia.map((u) => {
+                    const abs = toAbsoluteUrl(u)
+                    const st = viewerCache[abs]
+                    const uri = st?.uri || abs
+                    const err = st?.error
+                    const loading = st?.loading
+                    return (
+                      <View key={u} style={{ width: screen.width, height: screen.height - 80, alignItems: 'center', justifyContent: 'center' }}>
+                        {loading ? <Text style={styles.viewerHint}>加载中…</Text> : null}
+                        {err ? <Text style={styles.viewerHint}>{err}</Text> : null}
+                        <Image source={{ uri }} style={{ width: screen.width, height: screen.height - 120 }} resizeMode="contain" />
+                        <Pressable
+                          onPress={async () => {
+                            try {
+                              await Linking.openURL(abs)
+                            } catch {
+                              Alert.alert(t('common_error'), '打开失败')
+                            }
+                          }}
+                          style={({ pressed }) => [styles.viewerLinkBtn, pressed ? styles.pressed : null]}
+                        >
+                          <Text style={styles.viewerLinkText}>在浏览器打开</Text>
+                        </Pressable>
+                      </View>
+                    )
+                  })}
+                </ScrollView>
+              </View>
+            ) : null}
           </View>
         </View>
       </Modal>
@@ -623,10 +625,12 @@ const styles = StyleSheet.create({
   thumbRow: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   thumbWrap: { width: 92, height: 92, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   thumb: { width: '100%', height: '100%' },
-  previewBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.86)', padding: 12, justifyContent: 'center' },
-  previewCard: { flex: 1, borderRadius: 16, overflow: 'hidden', backgroundColor: '#000000' },
-  previewTopRow: { minHeight: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'flex-end', paddingHorizontal: 10 },
-  previewCloseBtn: { height: 32, paddingHorizontal: 12, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
-  previewCloseText: { color: '#FFFFFF', fontWeight: '900' },
-  previewScrollContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
+  viewerOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#000000' },
+  viewerTopRow: { minHeight: 52, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 12 },
+  viewerIndex: { color: '#FFFFFF', fontWeight: '900', marginTop: 10 },
+  viewerCloseBtn: { height: 32, paddingHorizontal: 12, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center', marginTop: 10 },
+  viewerCloseText: { color: '#FFFFFF', fontWeight: '900' },
+  viewerHint: { color: 'rgba(255,255,255,0.78)', fontWeight: '800', marginBottom: 10, paddingHorizontal: 16, textAlign: 'center' },
+  viewerLinkBtn: { marginTop: 12, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.14)', borderWidth: hairline(), borderColor: 'rgba(255,255,255,0.22)' },
+  viewerLinkText: { color: '#FFFFFF', fontWeight: '900', fontSize: 12 },
 })
