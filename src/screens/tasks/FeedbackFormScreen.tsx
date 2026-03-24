@@ -489,8 +489,9 @@ export default function FeedbackFormScreen(props: Props) {
       )}
       </ScrollView>
       <Modal visible={!!detailItem} transparent animationType="fade" onRequestClose={() => setDetailItem(null)}>
-        <View style={styles.detailBackdrop}>
-          <View style={styles.detailCard}>
+        <View style={styles.detailModalRoot}>
+          <View style={styles.detailCardWrap}>
+            <View style={styles.detailCard}>
             <View style={styles.detailTopRow}>
               <Text style={styles.detailTitle}>详情</Text>
               <Pressable onPress={() => setDetailItem(null)} style={({ pressed }) => [styles.detailCloseBtn, pressed ? styles.pressed : null]}>
@@ -512,63 +513,62 @@ export default function FeedbackFormScreen(props: Props) {
                 </View>
               ) : null}
             </ScrollView>
+            </View>
           </View>
-        </View>
-      </Modal>
-      <Modal
-        visible={viewerOpen}
-        transparent={false}
-        animationType="fade"
-        onRequestClose={() => setViewerOpen(false)}
-      >
-        <View style={styles.viewerModalBackdrop}>
-          <ScrollView
-            ref={(r) => {
-              viewerRef.current = r
-            }}
-            horizontal
-            pagingEnabled
-            showsHorizontalScrollIndicator={false}
-            contentOffset={{ x: viewerIndex * screen.width, y: 0 }}
-            onMomentumScrollEnd={(e) => {
-              const x = Number(e?.nativeEvent?.contentOffset?.x || 0)
-              const idx = Math.round(x / Math.max(1, screen.width))
-              setViewerIndex(Math.max(0, Math.min(detailMedia.length - 1, idx)))
-            }}
-          >
-            {detailMedia.map((u) => {
-              const abs = toAbsoluteUrl(u)
-              const st = viewerCache[abs]
-              const uri = st?.uri || abs
-              const err = st?.error
-              const loading = st?.loading
-              return (
-                <View key={u} style={{ width: screen.width, height: screen.height, alignItems: 'center', justifyContent: 'center' }}>
-                  {loading ? <Text style={styles.viewerHint}>加载中…</Text> : null}
-                  {err ? <Text style={styles.viewerHint}>{err}</Text> : null}
-                  <Image source={{ uri }} style={{ width: screen.width, height: screen.height }} resizeMode="contain" />
-                  <Pressable
-                    onPress={async () => {
-                      try {
-                        await Linking.openURL(abs)
-                      } catch {
-                        Alert.alert(t('common_error'), '打开失败')
-                      }
-                    }}
-                    style={({ pressed }) => [styles.viewerLinkBtn, pressed ? styles.pressed : null]}
-                  >
-                    <Text style={styles.viewerLinkText}>在浏览器打开</Text>
-                  </Pressable>
-                </View>
-              )
-            })}
-          </ScrollView>
-          <View style={[styles.viewerTopRow, { paddingTop: Math.max(10, insets.top) }]}>
-            <Text style={styles.viewerIndex}>{`${viewerIndex + 1}/${detailMedia.length}`}</Text>
-            <Pressable onPress={() => setViewerOpen(false)} style={({ pressed }) => [styles.viewerCloseBtn, pressed ? styles.pressed : null]}>
-              <Text style={styles.viewerCloseText}>关闭</Text>
-            </Pressable>
-          </View>
+          {viewerOpen ? (
+            <View style={styles.viewerOverlay}>
+              <ScrollView
+                ref={(r) => {
+                  viewerRef.current = r
+                }}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                contentOffset={{ x: viewerIndex * screen.width, y: 0 }}
+                onMomentumScrollEnd={(e) => {
+                  const x = Number(e?.nativeEvent?.contentOffset?.x || 0)
+                  const idx = Math.round(x / Math.max(1, screen.width))
+                  setViewerIndex(Math.max(0, Math.min(detailMedia.length - 1, idx)))
+                }}
+              >
+                {detailMedia.map((u) => {
+                  const abs = toAbsoluteUrl(u)
+                  const st = viewerCache[abs]
+                  const uri = st?.uri || abs
+                  const err = st?.error
+                  const loading = st?.loading
+                  return (
+                    <View key={u} style={{ width: screen.width, height: screen.height }}>
+                      <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+                      {loading ? <Text style={[styles.viewerHint, styles.viewerHintPos]}>加载中…</Text> : null}
+                      {err ? <Text style={[styles.viewerHint, styles.viewerHintPos]}>{err}</Text> : null}
+                    </View>
+                  )
+                })}
+              </ScrollView>
+              <View style={[styles.viewerTopRow, { paddingTop: Math.max(10, insets.top) }]}>
+                <Text style={styles.viewerIndex}>{`${viewerIndex + 1}/${detailMedia.length}`}</Text>
+                <Pressable onPress={() => setViewerOpen(false)} style={({ pressed }) => [styles.viewerCloseBtn, pressed ? styles.pressed : null]}>
+                  <Text style={styles.viewerCloseText}>关闭</Text>
+                </Pressable>
+              </View>
+              {detailMedia[viewerIndex] ? (
+                <Pressable
+                  onPress={async () => {
+                    const abs = toAbsoluteUrl(detailMedia[viewerIndex])
+                    try {
+                      await Linking.openURL(abs)
+                    } catch {
+                      Alert.alert(t('common_error'), '打开失败')
+                    }
+                  }}
+                  style={({ pressed }) => [styles.viewerLinkBtnAbs, pressed ? styles.pressed : null]}
+                >
+                  <Text style={styles.viewerLinkText}>在浏览器打开</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       </Modal>
     </>
@@ -616,7 +616,8 @@ const styles = StyleSheet.create({
   pendingMeta: { marginTop: 6, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   muted: { color: '#6B7280', fontWeight: '700' },
   pressed: { opacity: 0.92 },
-  detailBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', padding: 14, justifyContent: 'center' },
+  detailModalRoot: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
+  detailCardWrap: { flex: 1, padding: 14, justifyContent: 'center' },
   detailCard: { width: '100%', flex: 1, maxHeight: '85%', borderRadius: 16, overflow: 'hidden', backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#EEF0F6' },
   detailTopRow: { height: 48, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: hairline(), borderBottomColor: '#EEF0F6' },
   detailTitle: { fontWeight: '900', color: '#111827' },
@@ -627,12 +628,13 @@ const styles = StyleSheet.create({
   thumbRow: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   thumbWrap: { width: 92, height: 92, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   thumb: { width: '100%', height: '100%' },
-  viewerModalBackdrop: { flex: 1, backgroundColor: '#000000' },
+  viewerOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#000000' },
   viewerTopRow: { position: 'absolute', left: 0, right: 0, top: 0, minHeight: 52, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 12 },
   viewerIndex: { color: '#FFFFFF', fontWeight: '900', marginTop: 10 },
   viewerCloseBtn: { height: 32, paddingHorizontal: 12, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center', marginTop: 10 },
   viewerCloseText: { color: '#FFFFFF', fontWeight: '900' },
-  viewerHint: { color: 'rgba(255,255,255,0.78)', fontWeight: '800', marginBottom: 10, paddingHorizontal: 16, textAlign: 'center' },
-  viewerLinkBtn: { marginTop: 12, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.14)', borderWidth: hairline(), borderColor: 'rgba(255,255,255,0.22)' },
+  viewerHint: { color: 'rgba(255,255,255,0.78)', fontWeight: '800', paddingHorizontal: 16, textAlign: 'center' },
+  viewerHintPos: { position: 'absolute', left: 0, right: 0, top: '50%', marginTop: -14 },
+  viewerLinkBtnAbs: { position: 'absolute', left: 12, bottom: 12, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.14)', borderWidth: hairline(), borderColor: 'rgba(255,255,255,0.22)' },
   viewerLinkText: { color: '#FFFFFF', fontWeight: '900', fontSize: 12 },
 })
