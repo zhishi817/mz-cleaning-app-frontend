@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
 import * as ImagePicker from 'expo-image-picker'
 import { ResizeMode, Video } from 'expo-av'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
@@ -88,6 +89,7 @@ function pad2(n: number) {
 export default function TaskDetailScreen(props: Props) {
   const { t } = useI18n()
   const { user, token } = useAuth()
+  const insets = useSafeAreaInsets()
   const [hasInit, setHasInit] = useState(false)
   const [, bump] = useState(0)
   const id = props.route.params.id
@@ -101,6 +103,7 @@ export default function TaskDetailScreen(props: Props) {
   const [lockboxLocalUrl, setLockboxLocalUrl] = useState<string | null>(null)
   const [lockboxUploading, setLockboxUploading] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [autoUploadKeyDone, setAutoUploadKeyDone] = useState(false)
 
   useEffect(() => {
     setHasInit(true)
@@ -270,10 +273,13 @@ export default function TaskDetailScreen(props: Props) {
   useEffect(() => {
     if (!task) return
     if (action !== 'upload_key') return
+    if (autoUploadKeyDone) return
+    props.navigation.setParams({ action: undefined })
+    setAutoUploadKeyDone(true)
     ;(async () => {
       await onUploadKey()
     })()
-  }, [action, task])
+  }, [action, task, autoUploadKeyDone, props.navigation])
 
   if (!hasInit) {
     return (
@@ -710,7 +716,7 @@ export default function TaskDetailScreen(props: Props) {
     <Modal visible={!!previewUrl} transparent animationType="fade" onRequestClose={() => setPreviewUrl(null)}>
       <Pressable style={styles.previewBackdrop} onPress={() => setPreviewUrl(null)}>
         <Pressable style={styles.previewCard} onPress={() => {}}>
-          <View style={styles.previewTopRow}>
+          <View style={[styles.previewTopRow, { paddingTop: Math.max(10, insets.top) }]}>
             <Pressable onPress={() => setPreviewUrl(null)} style={({ pressed }) => [styles.previewCloseBtn, pressed ? styles.pressed : null]}>
               <Text style={styles.previewCloseText}>关闭</Text>
             </Pressable>
@@ -796,7 +802,7 @@ const styles = StyleSheet.create({
   videoInline: { width: '100%', height: moderateScale(220), backgroundColor: '#0B0F17' },
   previewBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.86)', padding: 12, justifyContent: 'center' },
   previewCard: { flex: 1, borderRadius: 16, overflow: 'hidden', backgroundColor: '#000000' },
-  previewTopRow: { height: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 10 },
+  previewTopRow: { minHeight: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'flex-end', paddingHorizontal: 10 },
   previewCloseBtn: { height: 32, paddingHorizontal: 12, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
   previewCloseText: { color: '#FFFFFF', fontWeight: '900' },
   previewScrollContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
