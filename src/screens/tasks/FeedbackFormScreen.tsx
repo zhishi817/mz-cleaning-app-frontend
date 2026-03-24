@@ -9,6 +9,7 @@ import { hairline, moderateScale } from '../../lib/scale'
 import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
 import { createPropertyFeedback, listPropertyFeedbacks, uploadCleaningMedia, type PropertyFeedback } from '../../lib/api'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
+import { API_BASE_URL } from '../../config/env'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'FeedbackForm'>
 
@@ -49,19 +50,56 @@ function extractContentText(raw: any) {
   return s0
 }
 
+function normalizeBase(base: string) {
+  return String(base || '').trim().replace(/\/+$/g, '')
+}
+
+function toAbsoluteUrl(rawUrl: any) {
+  const s0 = String(rawUrl ?? '').trim()
+  if (!s0) return ''
+  if (/^https?:\/\//i.test(s0)) return s0
+  if (s0.startsWith('//')) return `https:${s0}`
+  const base = normalizeBase(API_BASE_URL)
+  const stripAuth = base.replace(/\/auth\/?$/g, '')
+  const stripApi = stripAuth.replace(/\/api\/?$/g, '')
+  const root = stripApi || stripAuth || base
+  if (!root) return s0
+  if (s0.startsWith('/')) return `${root}${s0}`
+  if (/^[\w.-]+\.[a-z]{2,}/i.test(s0)) return `https://${s0}`
+  return s0
+}
+
 function normalizeUrls(raw: any): string[] {
   if (!raw) return []
-  if (Array.isArray(raw)) return raw.map((x) => String(x || '').trim()).filter(Boolean)
+  if (Array.isArray(raw)) {
+    return raw
+      .map((x: any) => {
+        if (typeof x === 'string') return toAbsoluteUrl(x)
+        const u = x?.url ?? x?.uri ?? x?.photo_url ?? x?.path
+        return toAbsoluteUrl(u)
+      })
+      .map((x) => String(x || '').trim())
+      .filter(Boolean)
+  }
   if (typeof raw === 'string') {
     const s = raw.trim()
     if (!s) return []
     if (s.startsWith('[') || s.startsWith('{')) {
       try {
         const j = JSON.parse(s)
-        if (Array.isArray(j)) return j.map((x) => String(x || '').trim()).filter(Boolean)
+        if (Array.isArray(j)) {
+          return j
+            .map((x: any) => {
+              if (typeof x === 'string') return toAbsoluteUrl(x)
+              const u = x?.url ?? x?.uri ?? x?.photo_url ?? x?.path
+              return toAbsoluteUrl(u)
+            })
+            .map((x) => String(x || '').trim())
+            .filter(Boolean)
+        }
       } catch {}
     }
-    return [s]
+    return [toAbsoluteUrl(s)].filter(Boolean)
   }
   return []
 }
