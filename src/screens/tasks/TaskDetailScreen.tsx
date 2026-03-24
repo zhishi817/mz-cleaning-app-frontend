@@ -513,7 +513,7 @@ export default function TaskDetailScreen(props: Props) {
               onPress={() => setPreviewUrl(keyPhotoUrl)}
               style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
             >
-              <Image source={{ uri: keyPhotoUrl }} style={styles.photo} />
+              <Image source={{ uri: keyPhotoUrl }} style={styles.photo} resizeMode="contain" />
             </Pressable>
           </>
         ) : null}
@@ -533,7 +533,7 @@ export default function TaskDetailScreen(props: Props) {
                         onPress={() => setPreviewUrl(String(it.photo_url))}
                         style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
                       >
-                        <Image source={{ uri: String(it.photo_url) }} style={styles.photo} />
+                        <Image source={{ uri: String(it.photo_url) }} style={styles.photo} resizeMode="contain" />
                       </Pressable>
                     ) : null}
                   </View>
@@ -645,7 +645,7 @@ export default function TaskDetailScreen(props: Props) {
                 onPress={() => setPreviewUrl(String(effectiveMarkPhotoUrl))}
                 style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
               >
-                <Image source={{ uri: String(effectiveMarkPhotoUrl) }} style={styles.photo} />
+                <Image source={{ uri: String(effectiveMarkPhotoUrl) }} style={styles.photo} resizeMode="contain" />
               </Pressable>
             ) : null}
 
@@ -732,11 +732,9 @@ export default function TaskDetailScreen(props: Props) {
             centerContent
           >
             {previewUrl ? (
-              <Image
-                source={{ uri: previewUrl }}
-                style={{ width: previewSize.width, height: Math.max(240, previewSize.height - 120) }}
-                resizeMode="contain"
-              />
+              <View style={{ width: previewSize.width, height: Math.max(240, previewSize.height - insets.top - insets.bottom - 80) }}>
+                <Image source={{ uri: previewUrl }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+              </View>
             ) : null}
           </ScrollView>
         </Pressable>
