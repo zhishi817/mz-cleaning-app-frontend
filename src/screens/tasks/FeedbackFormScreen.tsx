@@ -285,6 +285,7 @@ export default function FeedbackFormScreen(props: Props) {
     setDetailImgViewUri(null)
     setDetailImgError(null)
     setDetailImgLoading(true)
+    setDetailItem(null)
     try {
       const base = FileSystem.cacheDirectory ? `${FileSystem.cacheDirectory}feedback-preview/` : null
       if (!base) throw new Error('no cache directory')
@@ -495,6 +496,8 @@ export default function FeedbackFormScreen(props: Props) {
         visible={!!detailImgRemote}
         transparent
         animationType="fade"
+        presentationStyle="overFullScreen"
+        statusBarTranslucent
         onRequestClose={() => {
           setDetailImgRemote(null)
           setDetailImgViewUri(null)
