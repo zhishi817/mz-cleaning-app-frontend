@@ -465,8 +465,8 @@ export default function FeedbackFormScreen(props: Props) {
       )}
       </ScrollView>
       <Modal visible={!!detailItem} transparent animationType="fade" onRequestClose={() => setDetailItem(null)}>
-        <Pressable style={styles.detailBackdrop} onPress={() => setDetailItem(null)}>
-          <Pressable style={styles.detailCard} onPress={() => {}}>
+        <View style={styles.detailBackdrop}>
+          <View style={styles.detailCard}>
             <View style={styles.detailTopRow}>
               <Text style={styles.detailTitle}>详情</Text>
               <Pressable onPress={() => setDetailItem(null)} style={({ pressed }) => [styles.detailCloseBtn, pressed ? styles.pressed : null]}>
@@ -488,8 +488,8 @@ export default function FeedbackFormScreen(props: Props) {
                 </View>
               ) : null}
             </ScrollView>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
       <Modal
         visible={!!detailImgRemote}
@@ -499,6 +499,7 @@ export default function FeedbackFormScreen(props: Props) {
           setDetailImgRemote(null)
           setDetailImgViewUri(null)
           setDetailImgError(null)
+          setDetailImgLoading(false)
         }}
       >
         <View style={styles.previewBackdrop}>
@@ -509,6 +510,7 @@ export default function FeedbackFormScreen(props: Props) {
                   setDetailImgRemote(null)
                   setDetailImgViewUri(null)
                   setDetailImgError(null)
+                  setDetailImgLoading(false)
                 }}
                 style={({ pressed }) => [styles.previewCloseBtn, pressed ? styles.pressed : null]}
               >
