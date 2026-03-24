@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Dimensions, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Dimensions, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
+import * as FileSystem from 'expo-file-system/legacy'
 import * as ImagePicker from 'expo-image-picker'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
@@ -107,6 +109,7 @@ function normalizeUrls(raw: any): string[] {
 export default function FeedbackFormScreen(props: Props) {
   const { t } = useI18n()
   const { token, user } = useAuth()
+  const insets = useSafeAreaInsets()
 
   const [kind, setKind] = useState<Kind>('maintenance')
   const [area, setArea] = useState<(typeof AREA_OPTIONS)[number] | null>(null)
@@ -121,7 +124,10 @@ export default function FeedbackFormScreen(props: Props) {
   const [pendingError, setPendingError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [detailItem, setDetailItem] = useState<PropertyFeedback | null>(null)
-  const [detailImg, setDetailImg] = useState<string | null>(null)
+  const [detailImgRemote, setDetailImgRemote] = useState<string | null>(null)
+  const [detailImgViewUri, setDetailImgViewUri] = useState<string | null>(null)
+  const [detailImgLoading, setDetailImgLoading] = useState(false)
+  const [detailImgError, setDetailImgError] = useState<string | null>(null)
 
   const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
   const propertyId = String(task?.property_id || task?.property?.id || '').trim()
@@ -261,6 +267,34 @@ export default function FeedbackFormScreen(props: Props) {
   const screen = useMemo(() => Dimensions.get('window'), [])
   const detailMedia = useMemo(() => normalizeUrls((detailItem as any)?.media_urls), [detailItem])
   const detailText = useMemo(() => extractContentText((detailItem as any)?.detail), [detailItem])
+
+  async function openDetailImage(url: string) {
+    const u = toAbsoluteUrl(url)
+    if (!u) return
+    setDetailImgRemote(u)
+    setDetailImgViewUri(null)
+    setDetailImgError(null)
+    setDetailImgLoading(true)
+    try {
+      const base = FileSystem.cacheDirectory ? `${FileSystem.cacheDirectory}feedback-preview/` : null
+      if (!base) throw new Error('no cache directory')
+      try {
+        await FileSystem.makeDirectoryAsync(base, { intermediates: true })
+      } catch {}
+      const lower = u.toLowerCase()
+      const ext = lower.includes('.png') ? '.png' : lower.includes('.webp') ? '.webp' : '.jpg'
+      const target = `${base}${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`
+      const headers = token ? { Authorization: `Bearer ${token}` } : undefined
+      const dl = await FileSystem.downloadAsync(u, target, headers ? { headers } : undefined)
+      const localUri = String((dl as any)?.uri || target || '').trim()
+      setDetailImgViewUri(localUri || u)
+    } catch (e: any) {
+      setDetailImgError(String(e?.message || '图片加载失败'))
+      setDetailImgViewUri(u)
+    } finally {
+      setDetailImgLoading(false)
+    }
+  }
 
   return (
     <>
@@ -427,7 +461,7 @@ export default function FeedbackFormScreen(props: Props) {
                   <Text style={styles.detailSubTitle}>{`照片 (${detailMedia.length})`}</Text>
                   <View style={styles.thumbRow}>
                     {detailMedia.map(u => (
-                      <Pressable key={u} onPress={() => setDetailImg(u)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
+                      <Pressable key={u} onPress={() => openDetailImage(u)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
                         <Image source={{ uri: u }} style={styles.thumb} />
                       </Pressable>
                     ))}
@@ -438,11 +472,25 @@ export default function FeedbackFormScreen(props: Props) {
           </Pressable>
         </Pressable>
       </Modal>
-      <Modal visible={!!detailImg} transparent animationType="fade" onRequestClose={() => setDetailImg(null)}>
-        <Pressable style={styles.previewBackdrop} onPress={() => setDetailImg(null)}>
+      <Modal visible={!!detailImgRemote} transparent animationType="fade" onRequestClose={() => setDetailImgRemote(null)}>
+        <Pressable
+          style={styles.previewBackdrop}
+          onPress={() => {
+            setDetailImgRemote(null)
+            setDetailImgViewUri(null)
+            setDetailImgError(null)
+          }}
+        >
           <Pressable style={styles.previewCard} onPress={() => {}}>
-            <View style={styles.previewTopRow}>
-              <Pressable onPress={() => setDetailImg(null)} style={({ pressed }) => [styles.previewCloseBtn, pressed ? styles.pressed : null]}>
+            <View style={[styles.previewTopRow, { paddingTop: Math.max(10, insets.top) }]}>
+              <Pressable
+                onPress={() => {
+                  setDetailImgRemote(null)
+                  setDetailImgViewUri(null)
+                  setDetailImgError(null)
+                }}
+                style={({ pressed }) => [styles.previewCloseBtn, pressed ? styles.pressed : null]}
+              >
                 <Text style={styles.previewCloseText}>关闭</Text>
               </Pressable>
             </View>
@@ -456,8 +504,33 @@ export default function FeedbackFormScreen(props: Props) {
               bounces={false}
               centerContent
             >
-              {detailImg ? (
-                <Image source={{ uri: detailImg }} style={{ width: screen.width, height: Math.max(240, screen.height - 120) }} resizeMode="contain" />
+              {detailImgLoading ? <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>加载中…</Text> : null}
+              {detailImgError ? <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>{detailImgError}</Text> : null}
+              {detailImgRemote ? (
+                <Image
+                  source={{ uri: detailImgViewUri || detailImgRemote }}
+                  style={{ width: screen.width, height: Math.max(240, screen.height - 120) }}
+                  resizeMode="contain"
+                  onError={() => setDetailImgError('图片加载失败')}
+                />
+              ) : null}
+              {detailImgRemote ? (
+                <Pressable
+                  onPress={async () => {
+                    try {
+                      await Linking.openURL(detailImgRemote)
+                    } catch {
+                      Alert.alert(t('common_error'), '打开失败')
+                    }
+                  }}
+                  style={({ pressed }) => [
+                    styles.pendingToggle,
+                    { marginTop: 16, backgroundColor: 'rgba(255,255,255,0.14)', borderColor: 'rgba(255,255,255,0.22)' },
+                    pressed ? styles.pressed : null,
+                  ]}
+                >
+                  <Text style={[styles.pendingToggleText, { color: '#FFFFFF' }]}>在浏览器打开</Text>
+                </Pressable>
               ) : null}
             </ScrollView>
           </Pressable>
@@ -521,7 +594,7 @@ const styles = StyleSheet.create({
   thumb: { width: '100%', height: '100%' },
   previewBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.86)', padding: 12, justifyContent: 'center' },
   previewCard: { flex: 1, borderRadius: 16, overflow: 'hidden', backgroundColor: '#000000' },
-  previewTopRow: { height: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 10 },
+  previewTopRow: { minHeight: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'flex-end', paddingHorizontal: 10 },
   previewCloseBtn: { height: 32, paddingHorizontal: 12, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
   previewCloseText: { color: '#FFFFFF', fontWeight: '900' },
   previewScrollContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
