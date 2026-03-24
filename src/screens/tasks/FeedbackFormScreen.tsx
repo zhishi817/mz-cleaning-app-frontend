@@ -268,6 +268,16 @@ export default function FeedbackFormScreen(props: Props) {
   const detailMedia = useMemo(() => normalizeUrls((detailItem as any)?.media_urls), [detailItem])
   const detailText = useMemo(() => extractContentText((detailItem as any)?.detail), [detailItem])
 
+  const apiHost = useMemo(() => {
+    try {
+      const base = normalizeBase(API_BASE_URL)
+      if (!base) return ''
+      return new URL(base).host
+    } catch {
+      return ''
+    }
+  }, [])
+
   async function openDetailImage(url: string) {
     const u = toAbsoluteUrl(url)
     if (!u) return
@@ -284,9 +294,18 @@ export default function FeedbackFormScreen(props: Props) {
       const lower = u.toLowerCase()
       const ext = lower.includes('.png') ? '.png' : lower.includes('.webp') ? '.webp' : '.jpg'
       const target = `${base}${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`
-      const headers = token ? { Authorization: `Bearer ${token}` } : undefined
-      const dl = await FileSystem.downloadAsync(u, target, headers ? { headers } : undefined)
-      const localUri = String((dl as any)?.uri || target || '').trim()
+      let sameHost = false
+      try {
+        const host = new URL(u).host
+        sameHost = !!apiHost && host === apiHost
+      } catch {}
+      const headers = token && sameHost ? { Authorization: `Bearer ${token}` } : undefined
+      const dl: any = await FileSystem.downloadAsync(u, target, headers ? { headers } : undefined)
+      const status = Number(dl?.status || 0)
+      const contentType = String(dl?.headers?.['Content-Type'] || dl?.headers?.['content-type'] || '').trim().toLowerCase()
+      if (status && status >= 400) throw new Error(`下载失败 (${status})`)
+      if (contentType && !contentType.startsWith('image/')) throw new Error(`不是图片 (${contentType || 'unknown'})`)
+      const localUri = String(dl?.uri || target || '').trim()
       setDetailImgViewUri(localUri || u)
     } catch (e: any) {
       setDetailImgError(String(e?.message || '图片加载失败'))
@@ -513,6 +532,11 @@ export default function FeedbackFormScreen(props: Props) {
                   resizeMode="contain"
                   onError={() => setDetailImgError('图片加载失败')}
                 />
+              ) : null}
+              {detailImgRemote ? (
+                <Text style={{ color: 'rgba(255,255,255,0.72)', fontWeight: '700', fontSize: 12, marginTop: 12 }} numberOfLines={2}>
+                  {detailImgRemote}
+                </Text>
               ) : null}
               {detailImgRemote ? (
                 <Pressable
