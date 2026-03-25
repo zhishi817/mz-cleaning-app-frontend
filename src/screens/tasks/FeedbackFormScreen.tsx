@@ -528,7 +528,21 @@ export default function FeedbackFormScreen(props: Props) {
                   <Text style={styles.pendingLine} numberOfLines={2}>
                     {`${String((x as any).area || '').trim() ? `[${String((x as any).area || '').trim()}] ` : ''}${extractContentText((x as any).detail)}`}
                   </Text>
-                  {normalizeUrls((x as any).media_urls).length ? <Text style={styles.pendingHint}>查看照片</Text> : null}
+                  {normalizeUrls((x as any).media_urls).length ? (
+                    <View style={[styles.thumbRow, { marginTop: 8 }]}>
+                      {normalizeUrls((x as any).media_urls)
+                        .slice(0, 3)
+                        .map((u, i) => (
+                          <Pressable
+                            key={`${u}-${i}`}
+                            onPress={() => openViewerAt(normalizeUrls((x as any).media_urls), i)}
+                            style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}
+                          >
+                            <Image source={{ uri: u }} style={styles.thumb} resizeMode="contain" />
+                          </Pressable>
+                        ))}
+                    </View>
+                  ) : null}
                   <Text style={styles.pendingMeta}>{`${String(x.created_by_name || '').trim() || 'unknown'}  ${fmtTime(String(x.created_at || ''))}`}</Text>
                 </Pressable>
               ))}
@@ -538,7 +552,21 @@ export default function FeedbackFormScreen(props: Props) {
                   <Text style={styles.pendingLine} numberOfLines={2}>
                     {`${Array.isArray((x as any).areas) && (x as any).areas.length ? `[${(x as any).areas.join('、')}] ` : ''}${extractContentText((x as any).detail)}`}
                   </Text>
-                  {normalizeUrls((x as any).media_urls).length ? <Text style={styles.pendingHint}>查看照片</Text> : null}
+                  {normalizeUrls((x as any).media_urls).length ? (
+                    <View style={[styles.thumbRow, { marginTop: 8 }]}>
+                      {normalizeUrls((x as any).media_urls)
+                        .slice(0, 3)
+                        .map((u, i) => (
+                          <Pressable
+                            key={`${u}-${i}`}
+                            onPress={() => openViewerAt(normalizeUrls((x as any).media_urls), i)}
+                            style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}
+                          >
+                            <Image source={{ uri: u }} style={styles.thumb} resizeMode="contain" />
+                          </Pressable>
+                        ))}
+                    </View>
+                  ) : null}
                   <Text style={styles.pendingMeta}>{`${String(x.created_by_name || '').trim() || 'unknown'}  ${fmtTime(String(x.created_at || ''))}`}</Text>
                 </Pressable>
               ))}
@@ -725,7 +753,6 @@ const styles = StyleSheet.create({
   groupTitle: { marginTop: 6, fontWeight: '900', color: '#374151' },
   pendingItem: { marginTop: 8, padding: 10, borderRadius: 12, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6' },
   pendingLine: { fontWeight: '800', color: '#111827' },
-  pendingHint: { marginTop: 6, color: '#2563EB', fontWeight: '900', fontSize: 12 },
   pendingMeta: { marginTop: 6, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   muted: { color: '#6B7280', fontWeight: '700' },
   pressed: { opacity: 0.92 },
