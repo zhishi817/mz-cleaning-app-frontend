@@ -484,7 +484,7 @@ export default function FeedbackFormScreen(props: Props) {
             <View style={{ marginTop: 10 }}>
               <View style={styles.thumbRow}>
                   {media.map((u, idx) => (
-                    <Pressable key={u} onPress={() => openViewerAt(media, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
+                    <Pressable key={`${u}-${idx}`} onPress={() => openViewerAt(media, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
                     <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.thumb} resizeMode="contain" />
                   </Pressable>
                 ))}
@@ -523,8 +523,8 @@ export default function FeedbackFormScreen(props: Props) {
           ) : (
             <View style={{ marginTop: 8 }}>
               <Text style={styles.groupTitle}>{`维修 (${grouped.m.length})`}</Text>
-              {(expanded ? grouped.m : grouped.m.slice(0, 3)).map(x => (
-                <Pressable key={String(x.id)} onPress={() => setDetailItem(x)} style={({ pressed }) => [styles.pendingItem, pressed ? styles.pressed : null]}>
+              {(expanded ? grouped.m : grouped.m.slice(0, 3)).map((x, idx) => (
+                <Pressable key={`${String((x as any).kind || 'maintenance')}:${String(x.id)}:${idx}`} onPress={() => setDetailItem(x)} style={({ pressed }) => [styles.pendingItem, pressed ? styles.pressed : null]}>
                   <Text style={styles.pendingLine} numberOfLines={2}>
                     {`${String((x as any).area || '').trim() ? `[${String((x as any).area || '').trim()}] ` : ''}${extractContentText((x as any).detail)}`}
                   </Text>
@@ -533,8 +533,8 @@ export default function FeedbackFormScreen(props: Props) {
                 </Pressable>
               ))}
               <Text style={[styles.groupTitle, { marginTop: 10 }]}>{`深清 (${grouped.d.length})`}</Text>
-              {(expanded ? grouped.d : grouped.d.slice(0, 3)).map(x => (
-                <Pressable key={String(x.id)} onPress={() => setDetailItem(x)} style={({ pressed }) => [styles.pendingItem, pressed ? styles.pressed : null]}>
+              {(expanded ? grouped.d : grouped.d.slice(0, 3)).map((x, idx) => (
+                <Pressable key={`${String((x as any).kind || 'deep_cleaning')}:${String(x.id)}:${idx}`} onPress={() => setDetailItem(x)} style={({ pressed }) => [styles.pendingItem, pressed ? styles.pressed : null]}>
                   <Text style={styles.pendingLine} numberOfLines={2}>
                     {`${Array.isArray((x as any).areas) && (x as any).areas.length ? `[${(x as any).areas.join('、')}] ` : ''}${extractContentText((x as any).detail)}`}
                   </Text>
@@ -564,7 +564,7 @@ export default function FeedbackFormScreen(props: Props) {
                   <Text style={styles.detailSubTitle}>{`照片 (${detailMedia.length})`}</Text>
                   <View style={styles.thumbRow}>
                     {detailMedia.map((u, idx) => (
-                      <Pressable key={u} onPress={() => openViewerAt(detailMedia, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
+                      <Pressable key={`${u}-${idx}`} onPress={() => openViewerAt(detailMedia, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
                         <Image source={{ uri: u }} style={styles.thumb} resizeMode="contain" />
                       </Pressable>
                     ))}
@@ -590,14 +590,14 @@ export default function FeedbackFormScreen(props: Props) {
                   setViewerIndex(Math.max(0, Math.min(viewerUrls.length - 1, idx)))
                 }}
               >
-                {viewerUrls.map((u) => {
+                {viewerUrls.map((u, idx) => {
                   const abs = toAbsoluteUrl(u)
                   const st = viewerCache[abs]
                   const uri = st?.uri || abs
                   const err = st?.error
                   const loading = st?.loading
                   return (
-                    <View key={u} style={{ width: screen.width, height: screen.height }}>
+                    <View key={`${u}-${idx}`} style={{ width: screen.width, height: screen.height }}>
                       <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
                       {loading ? <Text style={[styles.viewerHint, styles.viewerHintPos]}>加载中…</Text> : null}
                       {err ? <Text style={[styles.viewerHint, styles.viewerHintPos]}>{err}</Text> : null}
@@ -646,14 +646,14 @@ export default function FeedbackFormScreen(props: Props) {
               setViewerIndex(Math.max(0, Math.min(viewerUrls.length - 1, idx)))
             }}
           >
-            {viewerUrls.map((u) => {
+            {viewerUrls.map((u, idx) => {
               const abs = toAbsoluteUrl(u)
               const st = viewerCache[abs]
               const uri = st?.uri || abs
               const err = st?.error
               const loading = st?.loading
               return (
-                <View key={u} style={{ width: screen.width, height: screen.height }}>
+                <View key={`${u}-${idx}`} style={{ width: screen.width, height: screen.height }}>
                   <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
                   {loading ? <Text style={[styles.viewerHint, styles.viewerHintPos]}>加载中…</Text> : null}
                   {err ? <Text style={[styles.viewerHint, styles.viewerHintPos]}>{err}</Text> : null}
