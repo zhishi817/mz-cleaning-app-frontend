@@ -106,6 +106,14 @@ function normalizeUrls(raw: any): string[] {
   return []
 }
 
+function normalizeForFingerprint(input: any) {
+  const s0 = String(input ?? '').trim()
+  if (!s0) return ''
+  const s1 = s0.replace(/\s+/g, ' ')
+  const s2 = s1.replace(/[，。！？、,.!?;:()（）【】\[\]{}'"“”‘’\-_/\\]+/g, ' ')
+  return s2.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
 export default function FeedbackFormScreen(props: Props) {
   const { t } = useI18n()
   const { token, user } = useAuth()
@@ -257,7 +265,7 @@ export default function FeedbackFormScreen(props: Props) {
     return areas.length > 0 && media.length > 0
   }, [area, areas.length, category, detail, kind, media.length, propertyId])
 
-  async function onSubmit() {
+  async function onSubmit(force?: boolean) {
     if (!token) {
       Alert.alert(t('common_error'), '请先登录')
       return
@@ -279,6 +287,54 @@ export default function FeedbackFormScreen(props: Props) {
       if (!media.length) return Alert.alert(t('common_error'), '请拍照上传')
     }
 
+    if (!force) {
+      const now = Date.now()
+      const winMs = 24 * 3600 * 1000
+      const detailNorm = normalizeForFingerprint(d).slice(0, 160)
+      if (kind === 'maintenance') {
+        const a0 = String(area || '').trim()
+        const c0 = String(category || '').trim()
+        const dup = pending.find((x: any) => {
+          if (String(x?.kind || '') !== 'maintenance') return false
+          const xa = String(x?.area || x?.category || '').trim()
+          const xc = String(x?.category_detail || '').trim()
+          if (xa !== a0) return false
+          if (xc !== c0) return false
+          const xt = normalizeForFingerprint(extractContentText(x?.detail)).slice(0, 160)
+          if (!xt) return false
+          if (xt !== detailNorm && !xt.startsWith(detailNorm.slice(0, 24))) return false
+          const ct = new Date(String(x?.created_at || '')).getTime()
+          return Number.isFinite(ct) ? now - ct <= winMs : true
+        })
+        if (dup) {
+          Alert.alert('可能重复提交', '该房源同区域同类型在 24 小时内已有类似问题。', [
+            { text: '查看已有', onPress: () => setDetailItem(dup as any) },
+            { text: '仍然提交', onPress: () => onSubmit(true) },
+          ])
+          return
+        }
+      } else {
+        const as0 = [...areas].map((s) => String(s || '').trim()).filter(Boolean).sort().join('、')
+        const dup = pending.find((x: any) => {
+          if (String(x?.kind || '') !== 'deep_cleaning') return false
+          const xa = Array.isArray(x?.areas) ? x.areas.map((s: any) => String(s || '').trim()).filter(Boolean).sort().join('、') : ''
+          if (xa !== as0) return false
+          const xt = normalizeForFingerprint(extractContentText(x?.detail)).slice(0, 160)
+          if (!xt) return false
+          if (xt !== detailNorm && !xt.startsWith(detailNorm.slice(0, 24))) return false
+          const ct = new Date(String(x?.created_at || '')).getTime()
+          return Number.isFinite(ct) ? now - ct <= winMs : true
+        })
+        if (dup) {
+          Alert.alert('可能重复提交', '该房源相同区域组合在 24 小时内已有类似深清需求。', [
+            { text: '查看已有', onPress: () => setDetailItem(dup as any) },
+            { text: '仍然提交', onPress: () => onSubmit(true) },
+          ])
+          return
+        }
+      }
+    }
+
     try {
       setSubmitting(true)
       await createPropertyFeedback(token, {
@@ -295,7 +351,17 @@ export default function FeedbackFormScreen(props: Props) {
       resetForm(kind)
       await refreshPending()
     } catch (e: any) {
-      Alert.alert(t('common_error'), String(e?.message || '提交失败'))
+      const msg = String(e?.message || '提交失败')
+      if (msg.startsWith('duplicate:')) {
+        const existingId = msg.split(':').slice(1).join(':').trim()
+        const hit = pending.find((x: any) => String(x?.id || '') === existingId) || null
+        Alert.alert('已存在相同问题', '已为你定位到已有记录。', [
+          { text: '打开已有', onPress: () => (hit ? setDetailItem(hit as any) : refreshPending()) },
+          { text: '好的' },
+        ])
+      } else {
+        Alert.alert(t('common_error'), msg)
+      }
     } finally {
       setSubmitting(false)
     }
@@ -493,7 +559,7 @@ export default function FeedbackFormScreen(props: Props) {
           ) : null}
 
           <Pressable
-            onPress={onSubmit}
+            onPress={() => onSubmit()}
             disabled={submitting || !canSubmit}
             style={({ pressed }) => [styles.submitBtn, submitting || !canSubmit ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
           >

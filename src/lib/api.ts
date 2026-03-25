@@ -69,8 +69,10 @@ async function parseErrorMessage(res: Response) {
       const json = JSON.parse(txt) as any
       const msg = json?.message
       if (typeof msg === 'string' && msg.trim()) {
+        const existingId = String(json?.existing_id || '').trim()
         const errs = Array.isArray(json?.errors) ? json.errors.map((x: any) => String(x || '').trim()).filter(Boolean) : []
-        const merged = errs.length ? `${msg.trim()}: ${errs.join(' | ')}` : msg.trim()
+        const merged0 = errs.length ? `${msg.trim()}: ${errs.join(' | ')}` : msg.trim()
+        const merged = msg.trim() === 'duplicate' && existingId ? `${merged0}:${existingId}` : merged0
         return merged.slice(0, 240)
       }
     } catch {
