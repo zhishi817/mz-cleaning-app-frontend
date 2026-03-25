@@ -287,17 +287,25 @@ export default function FeedbackFormScreen(props: Props) {
       if (!media.length) return Alert.alert(t('common_error'), '请拍照上传')
     }
 
+    let pendingNow: any[] = pending as any
     if (!force) {
+      try {
+        const latest = await listPropertyFeedbacks(token, { property_id: propertyId || undefined, property_code: propertyCode || undefined, status: ['open', 'in_progress'], limit: 50 })
+        if (Array.isArray(latest)) {
+          pendingNow = latest as any
+          setPending(latest as any)
+        }
+      } catch {}
       const now = Date.now()
       const winMs = 24 * 3600 * 1000
       const detailNorm = normalizeForFingerprint(d).slice(0, 160)
       if (kind === 'maintenance') {
         const a0 = String(area || '').trim()
         const c0 = String(category || '').trim()
-        const dup = pending.find((x: any) => {
+        const dup = pendingNow.find((x: any) => {
           if (String(x?.kind || '') !== 'maintenance') return false
           const xa = String(x?.area || x?.category || '').trim()
-          const xc = String(x?.category_detail || '').trim()
+          const xc = String(x?.category_detail || x?.category || '').trim()
           if (xa !== a0) return false
           if (xc !== c0) return false
           const xt = normalizeForFingerprint(extractContentText(x?.detail)).slice(0, 160)
@@ -315,7 +323,7 @@ export default function FeedbackFormScreen(props: Props) {
         }
       } else {
         const as0 = [...areas].map((s) => String(s || '').trim()).filter(Boolean).sort().join('、')
-        const dup = pending.find((x: any) => {
+        const dup = pendingNow.find((x: any) => {
           if (String(x?.kind || '') !== 'deep_cleaning') return false
           const xa = Array.isArray(x?.areas) ? x.areas.map((s: any) => String(s || '').trim()).filter(Boolean).sort().join('、') : ''
           if (xa !== as0) return false
