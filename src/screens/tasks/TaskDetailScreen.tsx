@@ -323,6 +323,10 @@ export default function TaskDetailScreen(props: Props) {
     return true
   })()
   const isCleaningSource = task.source_type === 'cleaning_tasks'
+  const isCleaningOrInspection = isCleaningSource && (String(task.task_kind || '').toLowerCase() === 'cleaning' || String(task.task_kind || '').toLowerCase() === 'inspection')
+  const wifiSsid = String((task as any)?.property?.wifi_ssid || '').trim()
+  const wifiPassword = String((task as any)?.property?.wifi_password || '').trim()
+  const routerLocation = String((task as any)?.property?.router_location || '').trim()
   const hasCheckout = !!checkoutTime
   const hasCheckin = !!checkinTime
   const titleSuffix = hasCheckout || hasCheckin ? `${hasCheckout ? '退房' : ''}${hasCheckout && hasCheckin ? ' ' : ''}${hasCheckin ? '入住' : ''}` : ''
@@ -414,6 +418,19 @@ export default function TaskDetailScreen(props: Props) {
             <Text style={styles.rowText}>{task.property.address}</Text>
             <Ionicons name="copy-outline" size={moderateScale(14)} color="#9CA3AF" />
           </Pressable>
+        ) : null}
+
+        {isCleaningOrInspection ? (
+          <>
+            <View style={styles.row}>
+              <Ionicons name="wifi-outline" size={moderateScale(14)} color="#9CA3AF" />
+              <Text style={styles.rowText}>{`Wi‑Fi：${wifiSsid || '-'}  密码：${wifiPassword || '-'}`}</Text>
+            </View>
+            <View style={styles.row}>
+              <Ionicons name="hardware-chip-outline" size={moderateScale(14)} color="#9CA3AF" />
+              <Text style={styles.rowText}>{`路由器位置：${routerLocation || '-'}`}</Text>
+            </View>
+          </>
         ) : null}
 
         <View style={styles.row}>

@@ -255,6 +255,9 @@ export type WorkTaskProperty = {
   unit_type: string
   region?: string | null
   access_guide_link?: string | null
+  wifi_ssid?: string | null
+  wifi_password?: string | null
+  router_location?: string | null
 }
 
 export type WorkTask = {
