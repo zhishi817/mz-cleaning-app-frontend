@@ -132,8 +132,10 @@ export default function SuppliesFormScreen(props: Props) {
         if (!String(it.photo_url || '').trim()) return false
       }
     }
-    if (!String(remoteAcNote || '').trim()) return false
-    if (!remoteAcEmbedded && !String(remoteAcPhotoUrl || '').trim()) return false
+    if (!remoteAcEmbedded) {
+      if (!String(remoteAcNote || '').trim()) return false
+      if (!String(remoteAcPhotoUrl || '').trim()) return false
+    }
     if (!String(remoteTvNote || '').trim()) return false
     if (!String(remoteTvPhotoUrl || '').trim()) return false
     return true
@@ -164,7 +166,7 @@ export default function SuppliesFormScreen(props: Props) {
     out.push({
       item_id: 'remote_ac',
       status: 'ok' as any,
-      note: remoteAcEmbedded ? (acNote ? `嵌在墙上；${acNote}` : '嵌在墙上') : acNote,
+      note: remoteAcEmbedded ? '嵌在墙上' : acNote,
       photo_url: remoteAcEmbedded ? undefined : (remoteAcPhotoUrl || undefined),
     } as any)
     out.push({
@@ -278,19 +280,25 @@ export default function SuppliesFormScreen(props: Props) {
 
           <View style={styles.itemBlock}>
             <Text style={styles.label}>遥控器拍照</Text>
-            <Text style={styles.muted}>请拍照并备注：空调遥控器、电视遥控器。空调遥控器嵌在墙上可不拍照。</Text>
+            <Text style={styles.muted}>电视遥控器：拍照+备注。空调遥控器：嵌墙无需拍照/备注；否则拍照+备注。</Text>
 
             <View style={{ marginTop: 10 }}>
               <Text style={styles.label}>空调遥控器</Text>
               <View style={styles.row}>
                 <Pressable
-                  onPress={() => setRemoteAcEmbedded(false)}
+                  onPress={() => {
+                    setRemoteAcEmbedded(false)
+                  }}
                   style={({ pressed }) => [styles.chip, !remoteAcEmbedded ? styles.chipActive : null, pressed ? styles.pressed : null]}
                 >
                   <Text style={[styles.chipText, !remoteAcEmbedded ? styles.chipTextActive : null]}>需要拍照</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => setRemoteAcEmbedded(true)}
+                  onPress={() => {
+                    setRemoteAcEmbedded(true)
+                    setRemoteAcPhotoUrl(null)
+                    setRemoteAcNote('')
+                  }}
                   style={({ pressed }) => [styles.chip, remoteAcEmbedded ? styles.chipActive : null, pressed ? styles.pressed : null]}
                 >
                   <Text style={[styles.chipText, remoteAcEmbedded ? styles.chipTextActive : null]}>嵌在墙上</Text>
@@ -322,14 +330,18 @@ export default function SuppliesFormScreen(props: Props) {
                 </>
               ) : null}
 
-              <TextInput
-                value={remoteAcNote}
-                onChangeText={setRemoteAcNote}
-                style={[styles.input, styles.note]}
-                placeholder="备注（必填）"
-                placeholderTextColor="#9CA3AF"
-                multiline
-              />
+              {remoteAcEmbedded ? (
+                <Text style={[styles.muted, { marginTop: 8 }]}>已选择嵌在墙上，无需拍照/备注。</Text>
+              ) : (
+                <TextInput
+                  value={remoteAcNote}
+                  onChangeText={setRemoteAcNote}
+                  style={[styles.input, styles.note]}
+                  placeholder="备注（必填）"
+                  placeholderTextColor="#9CA3AF"
+                  multiline
+                />
+              )}
             </View>
 
             <View style={{ marginTop: 12 }}>

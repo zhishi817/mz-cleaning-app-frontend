@@ -137,8 +137,10 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         if (!String(it.photo_url || '').trim()) return false
       }
     }
-    if (!String(remoteAcNote || '').trim()) return false
-    if (!remoteAcEmbedded && !String(remoteAcPhotoUrl || '').trim()) return false
+    if (!remoteAcEmbedded) {
+      if (!String(remoteAcNote || '').trim()) return false
+      if (!String(remoteAcPhotoUrl || '').trim()) return false
+    }
     if (!String(remoteTvNote || '').trim()) return false
     if (!String(remoteTvPhotoUrl || '').trim()) return false
     return true
@@ -301,7 +303,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     out.push({
       item_id: 'remote_ac',
       status: 'ok' as any,
-      note: remoteAcEmbedded ? (acNote ? `嵌在墙上；${acNote}` : '嵌在墙上') : acNote,
+      note: remoteAcEmbedded ? '嵌在墙上' : acNote,
       photo_url: remoteAcEmbedded ? undefined : (remoteAcPhotoUrl || undefined),
     } as any)
     out.push({
@@ -525,18 +527,24 @@ export default function CleaningSelfCompleteScreen(props: Props) {
               ))}
               <View style={styles.supBlock}>
                 <Text style={styles.supLabel}>遥控器拍照</Text>
-                <Text style={styles.mutedSmall}>请拍照并备注：空调遥控器、电视遥控器。空调遥控器嵌在墙上可不拍照。</Text>
+                <Text style={styles.mutedSmall}>电视遥控器：拍照+备注。空调遥控器：嵌墙无需拍照/备注；否则拍照+备注。</Text>
 
                 <Text style={[styles.supLabel, { marginTop: 10 }]}>空调遥控器</Text>
                 <View style={styles.supRow}>
                   <Pressable
-                    onPress={() => setRemoteAcEmbedded(false)}
+                    onPress={() => {
+                      setRemoteAcEmbedded(false)
+                    }}
                     style={({ pressed }) => [styles.supChip, !remoteAcEmbedded ? styles.supChipActive : null, pressed ? styles.pressed : null]}
                   >
                     <Text style={[styles.supChipText, !remoteAcEmbedded ? styles.supChipTextActive : null]}>需要拍照</Text>
                   </Pressable>
                   <Pressable
-                    onPress={() => setRemoteAcEmbedded(true)}
+                    onPress={() => {
+                      setRemoteAcEmbedded(true)
+                      setRemoteAcPhotoUrl(null)
+                      setRemoteAcNote('')
+                    }}
                     style={({ pressed }) => [styles.supChip, remoteAcEmbedded ? styles.supChipActive : null, pressed ? styles.pressed : null]}
                   >
                     <Text style={[styles.supChipText, remoteAcEmbedded ? styles.supChipTextActive : null]}>嵌在墙上</Text>
@@ -569,14 +577,18 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                   </>
                 ) : null}
 
-                <TextInput
-                  value={remoteAcNote}
-                  onChangeText={(v) => setRemoteAcNote(v)}
-                  style={[styles.supInput, styles.supNote]}
-                  placeholder="备注（必填）"
-                  placeholderTextColor="#9CA3AF"
-                  multiline
-                />
+                {remoteAcEmbedded ? (
+                  <Text style={[styles.mutedSmall, { marginTop: 8 }]}>已选择嵌在墙上，无需拍照/备注。</Text>
+                ) : (
+                  <TextInput
+                    value={remoteAcNote}
+                    onChangeText={(v) => setRemoteAcNote(v)}
+                    style={[styles.supInput, styles.supNote]}
+                    placeholder="备注（必填）"
+                    placeholderTextColor="#9CA3AF"
+                    multiline
+                  />
+                )}
 
                 <Text style={[styles.supLabel, { marginTop: 12 }]}>电视遥控器</Text>
                 <View style={styles.supRow}>
