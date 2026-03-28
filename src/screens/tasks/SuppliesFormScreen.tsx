@@ -31,6 +31,11 @@ export default function SuppliesFormScreen(props: Props) {
   const [photoUploadingIdx, setPhotoUploadingIdx] = useState<number | null>(null)
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
+  const [remoteAcEmbedded, setRemoteAcEmbedded] = useState(false)
+  const [remoteAcPhotoUrl, setRemoteAcPhotoUrl] = useState<string | null>(null)
+  const [remoteAcNote, setRemoteAcNote] = useState('')
+  const [remoteTvPhotoUrl, setRemoteTvPhotoUrl] = useState<string | null>(null)
+  const [remoteTvNote, setRemoteTvNote] = useState('')
 
   useEffect(() => {
     props.navigation.setOptions({ title: '补品填报' })
@@ -95,6 +100,26 @@ export default function SuppliesFormScreen(props: Props) {
     }
   }
 
+  async function onTakeRemotePhoto(kind: 'ac' | 'tv') {
+    if (!token) return
+    if (kind === 'ac' && remoteAcEmbedded) return
+    try {
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 })
+      if (res.canceled || !res.assets?.length) return
+      const a = res.assets[0] as any
+      const uri = String(a.uri || '').trim()
+      if (!uri) return
+      const name = String(a.fileName || uri.split('/').pop() || `remote-${kind}-${Date.now()}.jpg`)
+      const mimeType = String(a.mimeType || 'image/jpeg')
+      const up = await uploadCleaningMedia(token, { uri, name, mimeType })
+      if (kind === 'ac') setRemoteAcPhotoUrl(up.url)
+      else setRemoteTvPhotoUrl(up.url)
+      Alert.alert(t('common_ok'), '照片已上传')
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '上传失败'))
+    }
+  }
+
   const canSubmit = useMemo(() => {
     if (!items.length) return false
     for (const it of items) {
@@ -107,8 +132,12 @@ export default function SuppliesFormScreen(props: Props) {
         if (!String(it.photo_url || '').trim()) return false
       }
     }
+    if (!String(remoteAcNote || '').trim()) return false
+    if (!remoteAcEmbedded && !String(remoteAcPhotoUrl || '').trim()) return false
+    if (!String(remoteTvNote || '').trim()) return false
+    if (!String(remoteTvPhotoUrl || '').trim()) return false
     return true
-  }, [items])
+  }, [items, remoteAcEmbedded, remoteAcNote, remoteAcPhotoUrl, remoteTvNote, remoteTvPhotoUrl])
 
   async function onSubmit() {
     if (!token) {
@@ -130,6 +159,20 @@ export default function SuppliesFormScreen(props: Props) {
       note: x.note.trim() || undefined,
       photo_url: x.photo_url || undefined,
     }))
+    const acNote = String(remoteAcNote || '').trim()
+    const tvNote = String(remoteTvNote || '').trim()
+    out.push({
+      item_id: 'remote_ac',
+      status: 'ok' as any,
+      note: remoteAcEmbedded ? (acNote ? `嵌在墙上；${acNote}` : '嵌在墙上') : acNote,
+      photo_url: remoteAcEmbedded ? undefined : (remoteAcPhotoUrl || undefined),
+    } as any)
+    out.push({
+      item_id: 'remote_tv',
+      status: 'ok' as any,
+      note: tvNote,
+      photo_url: remoteTvPhotoUrl || undefined,
+    } as any)
     try {
       setSubmitting(true)
       await submitCleaningConsumables(token, String(task.source_id), { items: out })
@@ -232,6 +275,95 @@ export default function SuppliesFormScreen(props: Props) {
               ) : null}
             </View>
           ))}
+
+          <View style={styles.itemBlock}>
+            <Text style={styles.label}>遥控器拍照</Text>
+            <Text style={styles.muted}>请拍照并备注：空调遥控器、电视遥控器。空调遥控器嵌在墙上可不拍照。</Text>
+
+            <View style={{ marginTop: 10 }}>
+              <Text style={styles.label}>空调遥控器</Text>
+              <View style={styles.row}>
+                <Pressable
+                  onPress={() => setRemoteAcEmbedded(false)}
+                  style={({ pressed }) => [styles.chip, !remoteAcEmbedded ? styles.chipActive : null, pressed ? styles.pressed : null]}
+                >
+                  <Text style={[styles.chipText, !remoteAcEmbedded ? styles.chipTextActive : null]}>需要拍照</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setRemoteAcEmbedded(true)}
+                  style={({ pressed }) => [styles.chip, remoteAcEmbedded ? styles.chipActive : null, pressed ? styles.pressed : null]}
+                >
+                  <Text style={[styles.chipText, remoteAcEmbedded ? styles.chipTextActive : null]}>嵌在墙上</Text>
+                </Pressable>
+              </View>
+
+              {!remoteAcEmbedded ? (
+                <>
+                  <View style={styles.row}>
+                    <Pressable
+                      onPress={() => onTakeRemotePhoto('ac')}
+                      disabled={submitting}
+                      style={({ pressed }) => [styles.photoBtn, submitting ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
+                    >
+                      <Text style={styles.photoBtnText}>{remoteAcPhotoUrl ? '已拍照' : '拍照'}</Text>
+                    </Pressable>
+                  </View>
+                  {remoteAcPhotoUrl ? (
+                    <Pressable
+                      onPress={() => {
+                        setViewerUrl(remoteAcPhotoUrl)
+                        setViewerOpen(true)
+                      }}
+                      style={({ pressed }) => [styles.photoPreview, pressed ? styles.pressed : null]}
+                    >
+                      <Image source={{ uri: remoteAcPhotoUrl }} style={styles.photo} />
+                    </Pressable>
+                  ) : null}
+                </>
+              ) : null}
+
+              <TextInput
+                value={remoteAcNote}
+                onChangeText={setRemoteAcNote}
+                style={[styles.input, styles.note]}
+                placeholder="备注（必填）"
+                placeholderTextColor="#9CA3AF"
+                multiline
+              />
+            </View>
+
+            <View style={{ marginTop: 12 }}>
+              <Text style={styles.label}>电视遥控器</Text>
+              <View style={styles.row}>
+                <Pressable
+                  onPress={() => onTakeRemotePhoto('tv')}
+                  disabled={submitting}
+                  style={({ pressed }) => [styles.photoBtn, submitting ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
+                >
+                  <Text style={styles.photoBtnText}>{remoteTvPhotoUrl ? '已拍照' : '拍照'}</Text>
+                </Pressable>
+              </View>
+              {remoteTvPhotoUrl ? (
+                <Pressable
+                  onPress={() => {
+                    setViewerUrl(remoteTvPhotoUrl)
+                    setViewerOpen(true)
+                  }}
+                  style={({ pressed }) => [styles.photoPreview, pressed ? styles.pressed : null]}
+                >
+                  <Image source={{ uri: remoteTvPhotoUrl }} style={styles.photo} />
+                </Pressable>
+              ) : null}
+              <TextInput
+                value={remoteTvNote}
+                onChangeText={setRemoteTvNote}
+                style={[styles.input, styles.note]}
+                placeholder="备注（必填）"
+                placeholderTextColor="#9CA3AF"
+                multiline
+              />
+            </View>
+          </View>
 
           <Pressable
             onPress={onSubmit}

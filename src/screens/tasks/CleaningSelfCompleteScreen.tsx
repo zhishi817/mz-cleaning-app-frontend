@@ -117,6 +117,11 @@ export default function CleaningSelfCompleteScreen(props: Props) {
 
   const [suppliesSubmitted, setSuppliesSubmitted] = useState(false)
   const [supplies, setSupplies] = useState<SupplyItemState[]>([])
+  const [remoteAcEmbedded, setRemoteAcEmbedded] = useState(false)
+  const [remoteAcPhotoUrl, setRemoteAcPhotoUrl] = useState<string | null>(null)
+  const [remoteAcNote, setRemoteAcNote] = useState('')
+  const [remoteTvPhotoUrl, setRemoteTvPhotoUrl] = useState<string | null>(null)
+  const [remoteTvNote, setRemoteTvNote] = useState('')
 
   const lockboxOk = !!String(lockboxUrl || '').trim()
 
@@ -132,8 +137,12 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         if (!String(it.photo_url || '').trim()) return false
       }
     }
+    if (!String(remoteAcNote || '').trim()) return false
+    if (!remoteAcEmbedded && !String(remoteAcPhotoUrl || '').trim()) return false
+    if (!String(remoteTvNote || '').trim()) return false
+    if (!String(remoteTvPhotoUrl || '').trim()) return false
     return true
-  }, [supplies])
+  }, [supplies, remoteAcEmbedded, remoteAcNote, remoteAcPhotoUrl, remoteTvNote, remoteTvPhotoUrl])
 
   const refresh = useCallback(async () => {
     if (!token) return
@@ -251,6 +260,31 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     }
   }
 
+  async function onTakeRemotePhoto(kind: 'ac' | 'tv') {
+    if (!token) return
+    if (kind === 'ac' && remoteAcEmbedded) return
+    try {
+      const ok = await ensureCameraPerm()
+      if (!ok) {
+        Alert.alert(t('common_error'), '需要相机权限')
+        return
+      }
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 })
+      if (res.canceled || !res.assets?.length) return
+      const a = res.assets[0] as any
+      const uri = String(a.uri || '').trim()
+      if (!uri) return
+      const name = String(a.fileName || uri.split('/').pop() || `remote-${kind}-${Date.now()}.jpg`)
+      const mimeType = String(a.mimeType || 'image/jpeg')
+      const up = await uploadCleaningMedia(token, { uri, name, mimeType })
+      if (kind === 'ac') setRemoteAcPhotoUrl(up.url)
+      else setRemoteTvPhotoUrl(up.url)
+      Alert.alert(t('common_ok'), '照片已上传')
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '上传失败'))
+    }
+  }
+
   async function onSubmitSupplies() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!cleaningTaskId) return Alert.alert(t('common_error'), '缺少任务信息')
@@ -262,6 +296,20 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       note: x.note.trim() || undefined,
       photo_url: x.photo_url || undefined,
     }))
+    const acNote = String(remoteAcNote || '').trim()
+    const tvNote = String(remoteTvNote || '').trim()
+    out.push({
+      item_id: 'remote_ac',
+      status: 'ok' as any,
+      note: remoteAcEmbedded ? (acNote ? `嵌在墙上；${acNote}` : '嵌在墙上') : acNote,
+      photo_url: remoteAcEmbedded ? undefined : (remoteAcPhotoUrl || undefined),
+    } as any)
+    out.push({
+      item_id: 'remote_tv',
+      status: 'ok' as any,
+      note: tvNote,
+      photo_url: remoteTvPhotoUrl || undefined,
+    } as any)
     try {
       setSuppliesSubmitting(true)
       await submitCleaningConsumables(token, cleaningTaskId, { items: out })
@@ -475,6 +523,92 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                   ) : null}
                 </View>
               ))}
+              <View style={styles.supBlock}>
+                <Text style={styles.supLabel}>遥控器拍照</Text>
+                <Text style={styles.mutedSmall}>请拍照并备注：空调遥控器、电视遥控器。空调遥控器嵌在墙上可不拍照。</Text>
+
+                <Text style={[styles.supLabel, { marginTop: 10 }]}>空调遥控器</Text>
+                <View style={styles.supRow}>
+                  <Pressable
+                    onPress={() => setRemoteAcEmbedded(false)}
+                    style={({ pressed }) => [styles.supChip, !remoteAcEmbedded ? styles.supChipActive : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={[styles.supChipText, !remoteAcEmbedded ? styles.supChipTextActive : null]}>需要拍照</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => setRemoteAcEmbedded(true)}
+                    style={({ pressed }) => [styles.supChip, remoteAcEmbedded ? styles.supChipActive : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={[styles.supChipText, remoteAcEmbedded ? styles.supChipTextActive : null]}>嵌在墙上</Text>
+                  </Pressable>
+                </View>
+
+                {!remoteAcEmbedded ? (
+                  <>
+                    <View style={styles.supRow}>
+                      <Pressable
+                        onPress={() => onTakeRemotePhoto('ac')}
+                        disabled={suppliesSubmitting}
+                        style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                      >
+                        <Text style={styles.supPhotoText}>{remoteAcPhotoUrl ? '已拍照' : '拍照'}</Text>
+                      </Pressable>
+                    </View>
+                    {remoteAcPhotoUrl ? (
+                      <Pressable
+                        onPress={() => {
+                          setViewerUrls([toAbsoluteUrl(remoteAcPhotoUrl)])
+                          setViewerIndex(0)
+                          setViewerOpen(true)
+                        }}
+                        style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
+                      >
+                        <Image source={{ uri: toAbsoluteUrl(remoteAcPhotoUrl) }} style={styles.supPreviewImg} />
+                      </Pressable>
+                    ) : null}
+                  </>
+                ) : null}
+
+                <TextInput
+                  value={remoteAcNote}
+                  onChangeText={(v) => setRemoteAcNote(v)}
+                  style={[styles.supInput, styles.supNote]}
+                  placeholder="备注（必填）"
+                  placeholderTextColor="#9CA3AF"
+                  multiline
+                />
+
+                <Text style={[styles.supLabel, { marginTop: 12 }]}>电视遥控器</Text>
+                <View style={styles.supRow}>
+                  <Pressable
+                    onPress={() => onTakeRemotePhoto('tv')}
+                    disabled={suppliesSubmitting}
+                    style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                  >
+                    <Text style={styles.supPhotoText}>{remoteTvPhotoUrl ? '已拍照' : '拍照'}</Text>
+                  </Pressable>
+                </View>
+                {remoteTvPhotoUrl ? (
+                  <Pressable
+                    onPress={() => {
+                      setViewerUrls([toAbsoluteUrl(remoteTvPhotoUrl)])
+                      setViewerIndex(0)
+                      setViewerOpen(true)
+                    }}
+                    style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
+                  >
+                    <Image source={{ uri: toAbsoluteUrl(remoteTvPhotoUrl) }} style={styles.supPreviewImg} />
+                  </Pressable>
+                ) : null}
+                <TextInput
+                  value={remoteTvNote}
+                  onChangeText={(v) => setRemoteTvNote(v)}
+                  style={[styles.supInput, styles.supNote]}
+                  placeholder="备注（必填）"
+                  placeholderTextColor="#9CA3AF"
+                  multiline
+                />
+              </View>
               {supplies.length ? (
                 <Pressable
                   onPress={onSubmitSupplies}
