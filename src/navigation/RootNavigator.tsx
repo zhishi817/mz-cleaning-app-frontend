@@ -1,11 +1,15 @@
-import React from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Platform, View } from 'react-native'
-import { NavigationContainer } from '@react-navigation/native'
+import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { Ionicons } from '@expo/vector-icons'
+import * as Notifications from 'expo-notifications'
+import Constants from 'expo-constants'
 import { useAuth } from '../lib/auth'
 import { useI18n } from '../lib/i18n'
+import { getNoticesSnapshot, initNoticesStore, prependNotice, subscribeNotices } from '../lib/noticesStore'
+import { registerExpoPushToken } from '../lib/api'
 import LoginScreen from '../screens/LoginScreen'
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen'
 import TasksScreen from '../screens/tabs/TasksScreen'
@@ -21,6 +25,10 @@ import ChangePasswordScreen from '../screens/me/ChangePasswordScreen'
 import TaskDetailScreen from '../screens/tasks/TaskDetailScreen'
 import FeedbackFormScreen from '../screens/tasks/FeedbackFormScreen'
 import SuppliesFormScreen from '../screens/tasks/SuppliesFormScreen'
+import InspectionPanelScreen from '../screens/tasks/InspectionPanelScreen'
+import InspectionCompleteScreen from '../screens/tasks/InspectionCompleteScreen'
+import CleaningSelfCompleteScreen from '../screens/tasks/CleaningSelfCompleteScreen'
+import ManagerDailyTaskScreen from '../screens/tasks/ManagerDailyTaskScreen'
 
 export type AuthStackParamList = {
   Login: undefined
@@ -44,6 +52,10 @@ const MeStack = createNativeStackNavigator<MeStackParamList>()
 export type TasksStackParamList = {
   TasksList: undefined
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
+  InspectionPanel: { taskId: string }
+  InspectionComplete: { taskId: string }
+  CleaningSelfComplete: { taskId: string }
+  ManagerDailyTask: { taskId: string }
   FeedbackForm: { taskId: string }
   SuppliesForm: { taskId: string }
 }
@@ -89,6 +101,10 @@ function TasksStackNavigator() {
     <TasksStack.Navigator screenOptions={{ headerTitleAlign: 'center' }}>
       <TasksStack.Screen name="TasksList" component={TasksScreen} options={{ headerShown: false, title: t('tabs_tasks') }} />
       <TasksStack.Screen name="TaskDetail" component={TaskDetailScreen} options={{ title: t('task_detail_title') }} />
+      <TasksStack.Screen name="InspectionPanel" component={InspectionPanelScreen} options={{ title: '检查与补充' }} />
+      <TasksStack.Screen name="InspectionComplete" component={InspectionCompleteScreen} options={{ title: '标记已完成' }} />
+      <TasksStack.Screen name="CleaningSelfComplete" component={CleaningSelfCompleteScreen} options={{ title: '补充与完成' }} />
+      <TasksStack.Screen name="ManagerDailyTask" component={ManagerDailyTaskScreen} options={{ title: '每日清洁' }} />
       <TasksStack.Screen name="FeedbackForm" component={FeedbackFormScreen} options={{ title: t('tasks_btn_repair') }} />
       <TasksStack.Screen name="SuppliesForm" component={SuppliesFormScreen} options={{ title: '补品填报' }} />
     </TasksStack.Navigator>
@@ -130,6 +146,27 @@ function MeStackNavigator() {
 
 function AppTabs() {
   const { t } = useI18n()
+  const [unreadNotices, setUnreadNotices] = useState(0)
+
+  useEffect(() => {
+    let unsub: (() => void) | null = null
+    let alive = true
+    ;(async () => {
+      await initNoticesStore().catch(() => null)
+      if (!alive) return
+      const update = () => {
+        const n = Object.keys(getNoticesSnapshot().unreadIds || {}).length
+        setUnreadNotices(n)
+      }
+      update()
+      unsub = subscribeNotices(update)
+    })()
+    return () => {
+      alive = false
+      if (unsub) unsub()
+    }
+  }, [])
+
   return (
     <Tabs.Navigator
       screenOptions={({ route }) => ({
@@ -161,7 +198,14 @@ function AppTabs() {
                   : focused
                     ? 'person'
                     : 'person-outline'
-          return <Ionicons name={name as any} size={s} color={color} />
+          const icon = <Ionicons name={name as any} size={s} color={color} />
+          if (route.name !== 'Notices') return icon
+          return (
+            <View style={{ width: s, height: s }}>
+              {icon}
+              {unreadNotices > 0 ? <View style={styles.noticeTabDot} /> : null}
+            </View>
+          )
         },
       })}
     >
@@ -186,11 +230,131 @@ function AppTabs() {
 }
 
 export default function RootNavigator() {
-  const { status } = useAuth()
+  const { status, token, user } = useAuth()
+  const navRef = useNavigationContainerRef<any>()
+  const pushAskedRef = useRef(false)
+  const pushListenerRef = useRef<any>(null)
+  const pushResponseListenerRef = useRef<any>(null)
+
+  async function registerForPush() {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+      }),
+    })
+    const { status } = await Notifications.requestPermissionsAsync()
+    console.log('通知权限:', status)
+    if (status !== 'granted') return
+    const projectId =
+      String((Constants as any)?.expoConfig?.extra?.eas?.projectId || '') ||
+      String((Constants as any)?.easConfig?.projectId || '') ||
+      ''
+    let expoPushToken = ''
+    try {
+      const r = projectId ? await Notifications.getExpoPushTokenAsync({ projectId }) : await Notifications.getExpoPushTokenAsync()
+      expoPushToken = String((r as any)?.data || '').trim()
+    } catch {
+      const r = await Notifications.getExpoPushTokenAsync()
+      expoPushToken = String((r as any)?.data || '').trim()
+    }
+    if (!expoPushToken) return
+    try {
+      if (!token) return
+      await registerExpoPushToken(token, { expo_push_token: expoPushToken, platform: Platform.OS, ua: `mzstay/${String((Constants as any)?.expoConfig?.version || '')}` })
+    } catch {}
+  }
+
+  useEffect(() => {
+    if (pushAskedRef.current) return
+    if (status !== 'signedIn') return
+    pushAskedRef.current = true
+    registerForPush().catch(() => null)
+  }, [status, token, user?.id])
+
+  useEffect(() => {
+    if (pushListenerRef.current || pushResponseListenerRef.current) return
+    pushListenerRef.current = Notifications.addNotificationReceivedListener((n) => {
+      ;(async () => {
+        try {
+          await initNoticesStore()
+          const title = String(n?.request?.content?.title || '').trim() || '通知'
+          const body = String(n?.request?.content?.body || '').trim()
+          const data: any = n?.request?.content?.data || {}
+          const kind = String(data?.kind || '').trim()
+          const propertyCode = String(data?.property_code || '').trim()
+          const checkedOutAt = String(data?.checked_out_at || '').trim()
+          const eventId = String(data?.event_id || '').trim()
+          const fieldsKey = String(data?.fields_key || '').trim()
+          const reqId = String((n as any)?.request?.identifier || '').trim()
+          const id0 =
+            kind === 'guest_checked_out' && propertyCode && checkedOutAt
+              ? `guest_checked_out:${propertyCode}:${checkedOutAt}`
+              : kind === 'guest_checked_out_cancelled' && propertyCode
+                ? `guest_checked_out_cancelled:${propertyCode}:${checkedOutAt || ''}`
+                : kind === 'cleaning_task_manager_fields_updated' && propertyCode && fieldsKey
+                  ? `manager_fields:${propertyCode}:${fieldsKey}`
+                  : eventId || reqId || `${Date.now()}`
+          await prependNotice({ id: String(id0), type: 'update', title, summary: body.split('\n')[0]?.slice(0, 60) || body.slice(0, 60) || '通知', content: body || title })
+        } catch {}
+      })()
+    })
+    pushResponseListenerRef.current = Notifications.addNotificationResponseReceivedListener((r) => {
+      ;(async () => {
+        try {
+          await initNoticesStore()
+          const n: any = r?.notification
+          const title = String(n?.request?.content?.title || '').trim() || '通知'
+          const body = String(n?.request?.content?.body || '').trim()
+          const data: any = n?.request?.content?.data || {}
+          const kind = String(data?.kind || '').trim()
+          const propertyCode = String(data?.property_code || '').trim()
+          const checkedOutAt = String(data?.checked_out_at || '').trim()
+          const eventId = String(data?.event_id || '').trim()
+          const fieldsKey = String(data?.fields_key || '').trim()
+          const reqId = String(n?.request?.identifier || '').trim()
+          const id0 =
+            kind === 'guest_checked_out' && propertyCode && checkedOutAt
+              ? `guest_checked_out:${propertyCode}:${checkedOutAt}`
+              : kind === 'guest_checked_out_cancelled' && propertyCode
+                ? `guest_checked_out_cancelled:${propertyCode}:${checkedOutAt || ''}`
+                : kind === 'cleaning_task_manager_fields_updated' && propertyCode && fieldsKey
+                  ? `manager_fields:${propertyCode}:${fieldsKey}`
+                  : eventId || reqId || `${Date.now()}`
+          await prependNotice({ id: String(id0), type: 'update', title, summary: body.split('\n')[0]?.slice(0, 60) || body.slice(0, 60) || '通知', content: body || title })
+          if (navRef.isReady()) {
+            navRef.navigate('Notices', { screen: 'NoticeDetail', params: { id: String(id0) } })
+          }
+        } catch {}
+      })()
+    })
+    return () => {
+      try {
+        pushListenerRef.current?.remove?.()
+        pushResponseListenerRef.current?.remove?.()
+      } catch {}
+      pushListenerRef.current = null
+      pushResponseListenerRef.current = null
+    }
+  }, [navRef])
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navRef}>
       {status === 'booting' ? <BootScreen /> : status === 'signedIn' ? <AppTabs /> : <AuthStackNavigator />}
     </NavigationContainer>
   )
+}
+
+const styles = {
+  noticeTabDot: {
+    position: 'absolute' as const,
+    right: 0,
+    top: 0,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#EF4444',
+  },
 }

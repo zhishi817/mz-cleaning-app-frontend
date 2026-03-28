@@ -1,16 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Linking, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Image, Linking, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { reorderCleaningTasks } from '../../lib/api'
-import { markGuestCheckedOut } from '../../lib/api'
+import { markGuestCheckedOutBulk } from '../../lib/api'
 import { listMzappAlerts, markMzappAlertRead } from '../../lib/api'
+import { getMyProfile } from '../../lib/api'
 import { processKeyUploadQueue } from '../../lib/keyUploadQueue'
-import { initNoticesStore, prependNotice } from '../../lib/noticesStore'
+import { getNoticesSnapshot, initNoticesStore, prependNotice } from '../../lib/noticesStore'
+import { getProfile, setProfile, type Profile } from '../../lib/profileStore'
 import {
   getWorkTasksSnapshot,
   initWorkTasksStore,
@@ -58,8 +61,9 @@ function daysInMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
 }
 
-function isManagerRole(role: string) {
-  return role === 'admin' || role === 'offline_manager' || role === 'customer_service'
+function isManagerRole(roleNames: string[]) {
+  const rs = (roleNames || []).map((x) => String(x || '').trim()).filter(Boolean)
+  return rs.includes('admin') || rs.includes('offline_manager') || rs.includes('customer_service')
 }
 
 function urgencyRank(u: string) {
@@ -74,6 +78,8 @@ function statusLabel(status: string) {
   const s = String(status || '').trim().toLowerCase()
   if (s === 'done' || s === 'completed') return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
   if (s === 'to_inspect') return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+  if (s === 'to_hang_keys') return { text: '待挂钥匙', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+  if (s === 'to_complete') return { text: '待完成', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
   if (s === 'keys_hung') return { text: '已挂钥匙', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
   if (s === 'in_progress') return { text: '进行中', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
   if (s === 'assigned') return { text: '已分配', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
@@ -81,12 +87,27 @@ function statusLabel(status: string) {
   return { text: '待处理', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
 }
 
-function statusLabelForTask(task: WorkTaskItem) {
+function statusLabelForTask(task: WorkTaskItem, isManager: boolean) {
   const s = String(task.status || '').trim().toLowerCase()
   const meta = statusLabel(s)
   const source = String(task.source_type || '').trim().toLowerCase()
   const kind = String(task.task_kind || '').trim().toLowerCase()
+  if (source === 'cleaning_tasks' && kind === 'inspection') {
+    const inspectionIds = (task as any).inspection_task_ids
+    const cleaningIds = (task as any).cleaning_task_ids
+    const hasInspection = Array.isArray(inspectionIds) ? inspectionIds.length > 0 : true
+    const hasCleaning = Array.isArray(cleaningIds) ? cleaningIds.length > 0 : false
+    if (hasInspection && !hasCleaning) return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+    return meta
+  }
   if (source === 'cleaning_tasks' && kind === 'cleaning') {
+    const inspectionStatus = String((task as any).inspection_status || '').trim().toLowerCase()
+    const hasInspection = Array.isArray((task as any).inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
+    if (isManager) {
+      if ((s === 'done' || s === 'completed') && (hasInspection || inspectionStatus) && inspectionStatus !== 'done' && inspectionStatus !== 'completed' && inspectionStatus !== 'keys_hung') {
+        return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+      }
+    }
     const checkedOutAt = String((task as any).checked_out_at || '').trim()
     if (s !== 'in_progress' && s !== 'done' && s !== 'completed' && s !== 'cancelled' && s !== 'canceled') {
       if (checkedOutAt) return { text: '已退房', pill: styles.statusPurple, textStyle: styles.statusTextPurple }
@@ -131,14 +152,33 @@ function stripPhotoLines(text: any) {
   return lines.join('\n').trim()
 }
 
+function initialsOf(name: string) {
+  const parts = String(name || '')
+    .trim()
+    .split(/\s+/g)
+    .filter(Boolean)
+  const a = (parts[0] || '?')[0] || '?'
+  const b = parts.length > 1 ? (parts[parts.length - 1] || '')[0] || '' : ''
+  return `${a}${b}`.toUpperCase()
+}
+
 export default function TasksScreen(props: Props) {
   const { user, token } = useAuth()
   const { locale, t } = useI18n()
+  const roleNames = useMemo(() => {
+    const arr = Array.isArray((user as any)?.roles) ? ((user as any).roles as any[]) : []
+    const ids = arr.map((x) => String(x || '').trim()).filter(Boolean)
+    const primary = String((user as any)?.role || '').trim()
+    if (primary) ids.unshift(primary)
+    return Array.from(new Set(ids))
+  }, [user])
+  const canManagerMode = useMemo(() => isManagerRole(roleNames), [roleNames])
+  const [mode, setMode] = useState<'cleaning' | 'manager'>('cleaning')
   const [period, setPeriod] = useState<Period>('today')
   const [selectedDate, setSelectedDate] = useState<string>(() => ymd(new Date()))
   const [hasInit, setHasInit] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [view, setView] = useState<WorkTasksView>(() => (isManagerRole(String(user?.role || '')) ? 'all' : 'mine'))
+  const [view, setView] = useState<WorkTasksView>('mine')
   const [reorderMode, setReorderMode] = useState(false)
   const [orderMarks, setOrderMarks] = useState<Record<string, string>>({})
   const [orderList, setOrderList] = useState<string[]>([])
@@ -151,12 +191,46 @@ export default function TasksScreen(props: Props) {
   const weekRowRef = useRef<ScrollView>(null)
   const lastAlertsFetchRef = useRef(0)
   const shownAlertIdsRef = useRef<Record<string, boolean>>({})
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
 
   const greetingName = useMemo(() => {
     const raw = String(user?.username || '').trim()
     if (!raw) return 'User'
     return raw.includes('@') ? raw.split('@')[0] || raw : raw
   }, [user?.username])
+
+  useEffect(() => {
+    let alive = true
+    const refresh = async () => {
+      const saved = await getProfile(user)
+      if (!alive) return
+      setAvatarUrl(saved?.avatar_url || null)
+      if (!token) return
+      try {
+        const remote = await getMyProfile(token)
+        if (!alive) return
+        const nextAvatar = String(remote.avatar_url || '').trim() || null
+        setAvatarUrl(nextAvatar)
+        const merged: Profile = {
+          avatar_url: nextAvatar,
+          display_name: String(remote.display_name || remote.username || saved?.display_name || user?.username || ''),
+          phone_au: String(remote.phone_au || saved?.phone_au || ''),
+        }
+        await setProfile(user, merged)
+      } catch {}
+    }
+    const nav: any = props.navigation as any
+    const unsub = nav && typeof nav.addListener === 'function' ? nav.addListener('focus', refresh) : null
+    refresh()
+    return () => {
+      alive = false
+      try {
+        if (typeof unsub === 'function') unsub()
+      } catch {}
+    }
+  }, [props.navigation, token, user?.id, user?.username])
+
+  const headerInitials = useMemo(() => initialsOf(greetingName), [greetingName])
 
   useEffect(() => {
     if (period === 'today') setSelectedDate(ymd(new Date()))
@@ -171,12 +245,39 @@ export default function TasksScreen(props: Props) {
 
   useEffect(() => {
     if (!user?.id) return
-    setView(isManagerRole(String(user.role || '')) ? 'all' : 'mine')
+    if (!canManagerMode) {
+      setMode('cleaning')
+      setView('mine')
+      return
+    }
+    ;(async () => {
+      try {
+        const saved = String((await AsyncStorage.getItem('tasks_mode')) || '').trim()
+        setMode(saved === 'manager' ? 'manager' : 'cleaning')
+      } catch {
+        setMode('cleaning')
+      }
+    })()
   }, [user?.id])
 
   useEffect(() => {
-    if (!isManagerRole(String(user?.role || '')) && view !== 'mine') setView('mine')
-  }, [user?.role, view])
+    if (!canManagerMode) {
+      if (mode !== 'cleaning') setMode('cleaning')
+      if (view !== 'mine') setView('mine')
+      return
+    }
+    if (mode === 'cleaning' && view !== 'mine') setView('mine')
+    if (mode === 'manager' && view !== 'all' && view !== 'mine') setView('all')
+  }, [canManagerMode, mode, view])
+
+  useEffect(() => {
+    if (!canManagerMode) return
+    ;(async () => {
+      try {
+        await AsyncStorage.setItem('tasks_mode', mode)
+      } catch {}
+    })()
+  }, [canManagerMode, mode])
 
   const range = useMemo(() => {
     if (period === 'month') {
@@ -196,7 +297,7 @@ export default function TasksScreen(props: Props) {
     ;(async () => {
       if (!user?.id || !token) return
       await initNoticesStore().catch(() => null)
-      const effectiveView: WorkTasksView = isManagerRole(String(user.role || '')) ? view : 'mine'
+      const effectiveView: WorkTasksView = canManagerMode && mode === 'manager' ? view : 'mine'
       const bucketKey = makeWorkTasksBucketKey({ userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
       await initWorkTasksStore({ bucketKey })
       if (cancelled) return
@@ -220,7 +321,7 @@ export default function TasksScreen(props: Props) {
       if (stopped) return
       try {
         const r = await processKeyUploadQueue(token)
-        const v = isManagerRole(String(user.role || '')) ? view : 'mine'
+        const v = canManagerMode && mode === 'manager' ? view : 'mine'
         if (r.processed > 0) {
           await refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: v })
           await maybeFetchSlaAlerts()
@@ -435,22 +536,20 @@ export default function TasksScreen(props: Props) {
   }, [period, selectedDate, tasksByDate])
 
   const canReorder = useMemo(() => {
-    const role = String(user?.role || '')
     if (period === 'month') return false
-    if (role === 'cleaner' || role === 'cleaning_inspector' || role === 'cleaner_inspector') return true
+    if (roleNames.includes('cleaner') || roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')) return true
     return false
-  }, [period, user?.role])
+  }, [period, roleNames.join('|')])
 
   const isReorderableTask = useMemo(() => {
-    const role = String(user?.role || '')
     return (task: WorkTaskItem) => {
       if (task.source_type !== 'cleaning_tasks') return false
-      if (role === 'cleaner') return task.task_kind === 'cleaning'
-      if (role === 'cleaning_inspector') return task.task_kind === 'inspection'
-      if (role === 'cleaner_inspector') return task.task_kind === 'cleaning' || task.task_kind === 'inspection'
+      if (roleNames.includes('cleaner_inspector')) return task.task_kind === 'cleaning' || task.task_kind === 'inspection'
+      if (roleNames.includes('cleaning_inspector')) return task.task_kind === 'inspection'
+      if (roleNames.includes('cleaner')) return task.task_kind === 'cleaning'
       return false
     }
-  }, [user?.role])
+  }, [roleNames.join('|')])
 
   useEffect(() => {
     if (!reorderMode) return
@@ -460,9 +559,8 @@ export default function TasksScreen(props: Props) {
 
   const renderTasks = useMemo(() => selectedTasks, [selectedTasks])
   const visibleTasks = useMemo(() => {
-    const role = String(user?.role || '')
     const q = search.trim().toLowerCase()
-    const base = isManagerRole(role) && q ? items : renderTasks
+    const base = canManagerMode && mode === 'manager' && q ? items : renderTasks
     const filtered = q
       ? base.filter((t) => {
           const code = String(t.property?.code || '').toLowerCase()
@@ -493,8 +591,54 @@ export default function TasksScreen(props: Props) {
       }
       return String(a.title || '').localeCompare(String(b.title || ''))
     })
+    if (canManagerMode && mode === 'manager') {
+      const keyOf = (t: WorkTaskItem) => {
+        if (t.source_type !== 'cleaning_tasks') return ''
+        const d = String(t.scheduled_date || (t as any).date || '').slice(0, 10)
+        const code = String(t.property?.code || '').trim()
+        const pid = String(t.property_id || '').trim()
+        const title = String(t.title || '').trim()
+        const propKey = code || pid || title
+        if (!d || !propKey) return ''
+        return `${d}|${propKey}`
+      }
+      const isDone = (t: WorkTaskItem) => {
+        const s = String(t.status || '').trim().toLowerCase()
+        return s === 'done' || s === 'completed' || s === 'keys_hung'
+      }
+      const isCleaningKind = (t: WorkTaskItem) => String(t.task_kind || '').trim().toLowerCase() === 'cleaning'
+      const pick = (a: WorkTaskItem, b: WorkTaskItem) => {
+        const aDone = isDone(a)
+        const bDone = isDone(b)
+        if (aDone !== bDone) return aDone ? b : a
+        const aClean = isCleaningKind(a)
+        const bClean = isCleaningKind(b)
+        if (aClean !== bClean) return aClean ? a : b
+        const aiRaw = (a as any).sort_index
+        const biRaw = (b as any).sort_index
+        const ai = aiRaw == null ? Number.POSITIVE_INFINITY : Number(aiRaw)
+        const bi = biRaw == null ? Number.POSITIVE_INFINITY : Number(biRaw)
+        if (Number.isFinite(ai) && Number.isFinite(bi) && ai !== bi) return ai < bi ? a : b
+        return a
+      }
+      const order: string[] = []
+      const chosen = new Map<string, WorkTaskItem>()
+      const passthrough: WorkTaskItem[] = []
+      for (const t of list) {
+        const k = keyOf(t)
+        if (!k) {
+          passthrough.push(t)
+          continue
+        }
+        if (!chosen.has(k)) order.push(k)
+        const prev = chosen.get(k)
+        chosen.set(k, prev ? pick(prev, t) : t)
+      }
+      const deduped = [...passthrough, ...order.map((k) => chosen.get(k)).filter(Boolean)] as WorkTaskItem[]
+      return deduped
+    }
     return list
-  }, [items, renderTasks, search, user?.role])
+  }, [items, renderTasks, search, canManagerMode, mode])
 
   function showBanner(title: string, message: string) {
     setBanner({ title, message })
@@ -503,19 +647,37 @@ export default function TasksScreen(props: Props) {
   }
 
   useEffect(() => {
-    const role = String(user?.role || '')
-    const isInspector = role === 'cleaning_inspector' || role === 'cleaner_inspector'
+    const isInspector = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
     if (!isInspector) return
     if (period !== 'today') return
-    const toInspect = renderTasks.filter(t => t.source_type === 'cleaning_tasks' && t.task_kind === 'inspection' && String(t.status || '').toLowerCase() === 'to_inspect')
-    const fresh = toInspect.filter(t => !notifiedInspectionsRef.current[t.id])
-    if (!fresh.length) return
-    for (const t of fresh) notifiedInspectionsRef.current[t.id] = true
-    const first = fresh[0]
-    const title = first.property?.code || first.title || ''
-    const msg = fresh.length > 1 ? `${title} 等 ${fresh.length} 个待检查` : `${title} 待检查`
-    showBanner('房源清洁完毕', msg)
-    prependNotice({ type: 'system', title: '房源清洁完毕', summary: msg, content: msg }).catch(() => null)
+    let cancelled = false
+    ;(async () => {
+      await initNoticesStore().catch(() => null)
+      const existing = new Set(getNoticesSnapshot().items.map(n => n.id))
+      const toInspect = renderTasks.filter(t => t.source_type === 'cleaning_tasks' && t.task_kind === 'inspection' && String(t.status || '').toLowerCase() === 'to_inspect')
+      const fresh = toInspect.filter(t => !notifiedInspectionsRef.current[t.id] && !existing.has(`insp:to_inspect:${t.id}`))
+      if (!fresh.length || cancelled) return
+      for (const t of fresh) notifiedInspectionsRef.current[t.id] = true
+      const first = fresh[0]
+      const code = String(first.property?.code || first.title || '').trim()
+      const msg = fresh.length > 1 ? `${code} 等 ${fresh.length} 个待检查` : `${code} 待检查`
+      showBanner('房源清洁完毕', msg)
+      for (const t of fresh) {
+        const code2 = String(t.property?.code || t.title || '').trim()
+        const addr2 = String(t.property?.address || '').trim()
+        const body = [code2 ? `房源：${code2}` : '', addr2 ? `地址：${addr2}` : '', '状态：待检查'].filter(Boolean).join('\n')
+        await prependNotice({
+          id: `insp:to_inspect:${t.id}`,
+          type: 'update',
+          title: code2 ? `房源清洁完毕：${code2}` : '房源清洁完毕',
+          summary: '待检查',
+          content: body || '状态：待检查',
+        })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [period, renderTasks, user?.role])
 
   useEffect(() => {
@@ -530,14 +692,34 @@ export default function TasksScreen(props: Props) {
         String(t.status || '').toLowerCase() === 'in_progress' &&
         !!String((t as any).key_photo_url || '').trim(),
     )
-    const fresh = keysUploaded.filter(t => !notifiedInspectionsRef.current[`key:${t.id}`])
-    if (!fresh.length) return
-    for (const t of fresh) notifiedInspectionsRef.current[`key:${t.id}`] = true
-    const first = fresh[0]
-    const title = first.property?.code || first.title || ''
-    const msg = fresh.length > 1 ? `${title} 等 ${fresh.length} 个已上传钥匙` : `${title} 已上传钥匙`
-    showBanner('钥匙已上传', msg)
-    prependNotice({ type: 'system', title: '钥匙已上传', summary: msg, content: msg }).catch(() => null)
+    let cancelled = false
+    ;(async () => {
+      await initNoticesStore().catch(() => null)
+      const existing = new Set(getNoticesSnapshot().items.map(n => n.id))
+      const fresh = keysUploaded.filter(t => !notifiedInspectionsRef.current[`key:${t.id}`] && !existing.has(`insp:key_uploaded:${t.id}`))
+      if (!fresh.length || cancelled) return
+      for (const t of fresh) notifiedInspectionsRef.current[`key:${t.id}`] = true
+      const first = fresh[0]
+      const code = String(first.property?.code || first.title || '').trim()
+      const msg = fresh.length > 1 ? `${code} 等 ${fresh.length} 个已上传钥匙` : `${code} 已上传钥匙`
+      showBanner('钥匙已上传', msg)
+      for (const t of fresh) {
+        const code2 = String(t.property?.code || t.title || '').trim()
+        const addr2 = String(t.property?.address || '').trim()
+        const photo = String((t as any).key_photo_url || '').trim()
+        const body = [code2 ? `房源：${code2}` : '', addr2 ? `地址：${addr2}` : '', '事件：钥匙已上传', photo ? `照片：${photo}` : ''].filter(Boolean).join('\n')
+        await prependNotice({
+          id: `insp:key_uploaded:${t.id}`,
+          type: 'key',
+          title: code2 ? `钥匙已上传：${code2}` : '钥匙已上传',
+          summary: '钥匙照片已更新',
+          content: body || '事件：钥匙已上传',
+        })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [period, renderTasks, user?.role])
 
   useEffect(() => {
@@ -554,31 +736,68 @@ export default function TasksScreen(props: Props) {
         return Date.now() - ms < 6 * 60 * 60 * 1000
       },
     )
-    const fresh = checkedOut.filter(t => !notifiedInspectionsRef.current[`co:${t.id}`])
-    if (!fresh.length) return
-    for (const t of fresh) notifiedInspectionsRef.current[`co:${t.id}`] = true
-    const first = fresh[0]
-    const title = first.property?.code || first.title || ''
-    const msg = fresh.length > 1 ? `${title} 等 ${fresh.length} 个已退房` : `${title} 已退房`
-    showBanner('客人已退房', msg)
-    prependNotice({ type: 'system', title: '客人已退房', summary: msg, content: msg }).catch(() => null)
-  }, [period, renderTasks, user?.role])
+    let cancelled = false
+    ;(async () => {
+      await initNoticesStore().catch(() => null)
+      const existing = new Set(getNoticesSnapshot().items.map(n => n.id))
+      const fresh = checkedOut.filter(t => !notifiedInspectionsRef.current[`co:${t.id}`] && !existing.has(`clean:checked_out:${t.id}`))
+      if (!fresh.length || cancelled) return
+      for (const t of fresh) notifiedInspectionsRef.current[`co:${t.id}`] = true
+      const first = fresh[0]
+      const code = String(first.property?.code || first.title || '').trim()
+      const msg = fresh.length > 1 ? `${code} 等 ${fresh.length} 个已退房` : `${code} 已退房`
+      showBanner('客人已退房', msg)
+      for (const t of fresh) {
+        const code2 = String(t.property?.code || t.title || '').trim()
+        const addr2 = String(t.property?.address || '').trim()
+        const at = String((t as any).checked_out_at || '').trim()
+        const body = [code2 ? `房源：${code2}` : '', addr2 ? `地址：${addr2}` : '', at ? `退房时间：${at}` : '', '事件：客人已退房'].filter(Boolean).join('\n')
+        await prependNotice({
+          id: `clean:checked_out:${t.id}`,
+          type: 'update',
+          title: code2 ? `客人已退房：${code2}` : '客人已退房',
+          summary: '已标记退房',
+          content: body || '事件：客人已退房',
+        })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [period, renderTasks, roleNames.join('|')])
 
   useEffect(() => {
-    const role = String(user?.role || '')
-    const isManager = isManagerRole(role)
-    if (!isManager) return
+    if (!(canManagerMode && mode === 'manager')) return
     if (period !== 'today') return
     const hung = renderTasks.filter(t => t.source_type === 'cleaning_tasks' && t.task_kind === 'inspection' && String(t.status || '').toLowerCase() === 'keys_hung')
-    const fresh = hung.filter(t => !notifiedInspectionsRef.current[`hung:${t.id}`])
-    if (!fresh.length) return
-    for (const t of fresh) notifiedInspectionsRef.current[`hung:${t.id}`] = true
-    const first = fresh[0]
-    const title = first.property?.code || first.title || ''
-    const msg = fresh.length > 1 ? `${title} 等 ${fresh.length} 个已挂钥匙` : `${title} 已挂钥匙`
-    showBanner('已挂钥匙', msg)
-    prependNotice({ type: 'system', title: '已挂钥匙', summary: msg, content: msg }).catch(() => null)
-  }, [period, renderTasks, user?.role])
+    let cancelled = false
+    ;(async () => {
+      await initNoticesStore().catch(() => null)
+      const existing = new Set(getNoticesSnapshot().items.map(n => n.id))
+      const fresh = hung.filter(t => !notifiedInspectionsRef.current[`hung:${t.id}`] && !existing.has(`insp:keys_hung:${t.id}`))
+      if (!fresh.length || cancelled) return
+      for (const t of fresh) notifiedInspectionsRef.current[`hung:${t.id}`] = true
+      const first = fresh[0]
+      const code = String(first.property?.code || first.title || '').trim()
+      const msg = fresh.length > 1 ? `${code} 等 ${fresh.length} 个已挂钥匙` : `${code} 已挂钥匙`
+      showBanner('已挂钥匙', msg)
+      for (const t of fresh) {
+        const code2 = String(t.property?.code || t.title || '').trim()
+        const addr2 = String(t.property?.address || '').trim()
+        const body = [code2 ? `房源：${code2}` : '', addr2 ? `地址：${addr2}` : '', '状态：已挂钥匙'].filter(Boolean).join('\n')
+        await prependNotice({
+          id: `insp:keys_hung:${t.id}`,
+          type: 'key',
+          title: code2 ? `已挂钥匙：${code2}` : '已挂钥匙',
+          summary: '检查完成',
+          content: body || '状态：已挂钥匙',
+        })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [period, renderTasks, canManagerMode, mode])
 
   async function onSaveOrder() {
     if (!token || !user?.id) return
@@ -610,7 +829,7 @@ export default function TasksScreen(props: Props) {
       }
       if (cleanerGroups.length) await reorderCleaningTasks(token, { kind: 'cleaner', date: selectedDate, groups: cleanerGroups })
       if (inspectorGroups.length) await reorderCleaningTasks(token, { kind: 'inspector', date: selectedDate, groups: inspectorGroups })
-      await refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: isManagerRole(String(user.role || '')) ? view : 'mine' })
+      await refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: canManagerMode && mode === 'manager' ? view : 'mine' })
       setReorderMode(false)
       showBanner('已保存', '顺序已保存')
     } catch (e: any) {
@@ -637,7 +856,13 @@ export default function TasksScreen(props: Props) {
           {t('tasks_greeting')} <Text style={styles.helloName}>{greetingName}</Text>
         </Text>
         <View style={styles.avatar}>
-          <View style={styles.avatarInner} />
+          {avatarUrl ? (
+            <Image source={{ uri: avatarUrl }} style={styles.avatarImg} />
+          ) : (
+            <View style={styles.avatarFallback}>
+              <Text style={styles.avatarFallbackText}>{headerInitials}</Text>
+            </View>
+          )}
         </View>
       </View>
 
@@ -725,7 +950,32 @@ export default function TasksScreen(props: Props) {
           </ScrollView>
         )}
 
-        {isManagerRole(String(user?.role || '')) ? (
+        {canManagerMode ? (
+          <View style={[styles.segmentWrap, { marginTop: 10 }]}>
+            <View style={styles.segment}>
+              <Pressable
+                onPress={() => {
+                  setMode('cleaning')
+                  setView('mine')
+                }}
+                style={({ pressed }) => [styles.segmentItem, mode === 'cleaning' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
+              >
+                <Text style={[styles.segmentText, mode === 'cleaning' ? styles.segmentTextActive : null]}>清洁</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  setMode('manager')
+                  setView('all')
+                }}
+                style={({ pressed }) => [styles.segmentItem, mode === 'manager' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
+              >
+                <Text style={[styles.segmentText, mode === 'manager' ? styles.segmentTextActive : null]}>管理</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
+        {canManagerMode && mode === 'manager' ? (
           <View style={styles.searchWrap}>
             <Ionicons name="search-outline" size={moderateScale(16)} color="#9CA3AF" />
             <TextInput
@@ -746,7 +996,7 @@ export default function TasksScreen(props: Props) {
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>{sectionTitle}</Text>
           <View style={styles.sectionRight}>
-            {isManagerRole(String(user?.role || '')) ? (
+            {canManagerMode && mode === 'manager' ? (
               <View style={styles.viewSegment}>
                 <Pressable onPress={() => setView('all')} style={({ pressed }) => [styles.viewSegmentItem, view === 'all' ? styles.viewSegmentItemActive : null, pressed ? styles.segmentPressed : null]}>
                   <Text style={[styles.viewSegmentText, view === 'all' ? styles.viewSegmentTextActive : null]}>{t('common_all')}</Text>
@@ -791,7 +1041,7 @@ export default function TasksScreen(props: Props) {
         ) : (
           <View style={{ marginTop: 10, gap: 12 }}>
             {visibleTasks.map(task => {
-              const meta = statusLabelForTask(task)
+              const meta = statusLabelForTask(task, canManagerMode && mode === 'manager')
               const kind = taskKindLabel(task.task_kind)
               const addr = task.property?.address || ''
               const code = task.property?.code || ''
@@ -802,6 +1052,7 @@ export default function TasksScreen(props: Props) {
               const guideUrl = normalizeHttpUrl(task.property?.access_guide_link)
               const oldCode = String((task as any).old_code || '').trim()
               const newCode = String((task as any).new_code || '').trim()
+              const guestSpecialRequest = String((task as any).guest_special_request || '').trim()
               const showUrgency = (() => {
                 const u = String(task.urgency || '').trim().toLowerCase()
                 if (!u) return false
@@ -815,11 +1066,13 @@ export default function TasksScreen(props: Props) {
               const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
               const taskType = String((task as any).task_type || '').trim().toLowerCase()
               const isCheckoutTask = taskType === 'checkout_clean' || !!checkoutTime
+              const inspectorAssigned = String((task as any).inspector_id || '').trim()
+              const isSelfCompleteEligible = isCleaningTask && isCheckoutTask && !inspectorAssigned
               const checkedOutAt = String((task as any).checked_out_at || '').trim()
               const isCheckedOut = !!checkedOutAt
-              const isCustomerService = String(user?.role || '') === 'customer_service'
-              const isManager = isManagerRole(String(user?.role || ''))
-              const isInspectorUser = String(user?.role || '') === 'cleaning_inspector' || String(user?.role || '') === 'cleaner_inspector'
+              const isCustomerService = roleNames.includes('customer_service')
+              const isManager = canManagerMode && mode === 'manager'
+              const isInspectorUser = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
               const cleanerName = String((task as any).cleaner_name || '').trim()
               const inspectorName = String((task as any).inspector_name || '').trim()
               const cleanerOrderRaw = (task as any).sort_index_cleaner
@@ -834,6 +1087,12 @@ export default function TasksScreen(props: Props) {
               const selectedIdx = orderList.indexOf(task.id)
               const selectedMark = selectedIdx >= 0 ? String(selectedIdx + 1) : ''
               const restockItems = Array.isArray((task as any).restock_items) ? ((task as any).restock_items as any[]) : []
+              const stayedNightsRaw = (task as any).stayed_nights
+              const remainingNightsRaw = (task as any).remaining_nights
+              const stayedNights0 = stayedNightsRaw == null ? null : Number(stayedNightsRaw)
+              const remainingNights0 = remainingNightsRaw == null ? null : Number(remainingNightsRaw)
+              const stayedNights = Number.isFinite(stayedNights0 as any) ? (stayedNights0 as number) : null
+              const remainingNights = Number.isFinite(remainingNights0 as any) ? (remainingNights0 as number) : null
               const restockSummary = (() => {
                 if (!isInspectionTask) return null
                 const parts = restockItems
@@ -877,6 +1136,19 @@ export default function TasksScreen(props: Props) {
                       })
                       return
                     }
+                    const role0 = String(user?.role || '')
+                    const isManager0 = role0 === 'admin' || role0 === 'offline_manager' || role0 === 'customer_service'
+                    const isInspector0 = role0 === 'cleaning_inspector' || role0 === 'cleaner_inspector'
+                    const isInspection0 = task.source_type === 'cleaning_tasks' && task.task_kind === 'inspection'
+                    const isCleaningTask0 = task.source_type === 'cleaning_tasks'
+                    if (isManager0 && isCleaningTask0) {
+                      props.navigation.navigate('ManagerDailyTask', { taskId: task.id })
+                      return
+                    }
+                    if (isInspector0 && isInspection0) {
+                      props.navigation.navigate('InspectionPanel', { taskId: task.id })
+                      return
+                    }
                     props.navigation.navigate('TaskDetail', { id: task.id })
                   }}
                   style={({ pressed }) => [styles.taskCard, pressed ? styles.segmentPressed : null]}
@@ -901,6 +1173,11 @@ export default function TasksScreen(props: Props) {
                     <View style={styles.tag}>
                       <Text style={styles.tagText}>{kind}</Text>
                     </View>
+                      {isSelfCompleteEligible ? (
+                        <View style={styles.tag}>
+                          <Text style={styles.tagText}>自完成</Text>
+                        </View>
+                      ) : null}
                     {showUrgency ? (
                       <View style={styles.tagGray}>
                         <Text style={styles.tagGrayText}>{String(task.urgency).toUpperCase()}</Text>
@@ -926,7 +1203,7 @@ export default function TasksScreen(props: Props) {
                         </View>
                         <View style={styles.execTextWrap}>
                           <Text style={styles.execLabel}>执行人员</Text>
-                          <Text style={styles.execNames} numberOfLines={1}>{`清洁: ${cleanerName || '-'} · 检查: ${inspectorName || '-'}`}</Text>
+                          <Text style={styles.execNames} numberOfLines={1}>{`清洁: ${cleanerName || '-'} · 检查: ${isSelfCompleteEligible ? '无' : (inspectorName || '-')}`}</Text>
                           {isManager || isInspectorUser ? (
                             <Text style={styles.execOrder} numberOfLines={1}>
                               {`清洁顺序：${cleanerOrderN == null ? '-' : String(cleanerOrderN)}  检查顺序：${inspectorOrderN == null ? '-' : String(inspectorOrderN)}`}
@@ -968,6 +1245,21 @@ export default function TasksScreen(props: Props) {
                         </View>
                       </View>
 
+                      {stayedNights != null || remainingNights != null ? (
+                        <View style={styles.timeRow}>
+                          <Ionicons name="moon-outline" size={moderateScale(26)} color="#2563EB" />
+                          <View style={styles.timeCell}>
+                            <Text style={styles.timeLabel}>已住晚数</Text>
+                            <Text style={styles.timeValue}>{stayedNights == null ? '-' : `${stayedNights}`}</Text>
+                          </View>
+                          <View style={styles.timeDivider} />
+                          <View style={styles.timeCell}>
+                            <Text style={styles.timeLabel}>待住晚数</Text>
+                            <Text style={styles.timeValue}>{remainingNights == null ? '-' : `${remainingNights}`}</Text>
+                          </View>
+                        </View>
+                      ) : null}
+
                       <View style={styles.pwRowNew}>
                         <Ionicons name="key-outline" size={moderateScale(22)} color="#F59E0B" />
                         <View style={styles.pwCell}>
@@ -979,6 +1271,20 @@ export default function TasksScreen(props: Props) {
                           <Text style={styles.pwValue}>{newCode || '-'}</Text>
                         </View>
                       </View>
+
+                      {guestSpecialRequest ? (
+                        <View style={styles.guestRow}>
+                          <View style={styles.guestIconWrap}>
+                            <Ionicons name="chatbubble-ellipses-outline" size={moderateScale(20)} color="#2563EB" />
+                          </View>
+                          <View style={styles.guestCell}>
+                            <Text style={styles.guestLabel}>客人需求：</Text>
+                            <Text style={styles.guestValue} numberOfLines={3}>
+                              {guestSpecialRequest}
+                            </Text>
+                          </View>
+                        </View>
+                      ) : null}
 
                       {!isOfflineTask ? (
                         guideUrl ? (
@@ -1055,67 +1361,76 @@ export default function TasksScreen(props: Props) {
                     </Text>
                   ) : null}
 
-                  {isCleaningTask ? (
+                  {isCleaningSource && isManager ? (
                     <View style={styles.actionsRow}>
-                      {isCustomerService ? (
-                        <>
-                          {isCheckoutTask ? (
-                            <Pressable
-                              onPress={async () => {
-                                if (!token || !user?.id) return
-                                try {
-                                  await markGuestCheckedOut(token, String(task.source_id), { action: isCheckedOut ? 'unset' : 'set' })
+                      {isCustomerService && isCheckoutTask ? (
+                        <Pressable
+                          onPress={async () => {
+                            if (!token || !user?.id) return
+                            try {
+                                  const ids0 = Array.isArray((task as any)?.source_ids) && (task as any).source_ids.length ? (task as any).source_ids : [String(task.source_id)]
+                                  const ids = ids0.map((x: any) => String(x || '').trim()).filter(Boolean)
+                                  await markGuestCheckedOutBulk(token, { task_ids: ids, action: isCheckedOut ? 'unset' : 'set' })
                                   showBanner('已标记', isCheckedOut ? '已取消退房' : '已标记已退房')
-                                  prependNotice({ type: 'system', title: isCheckedOut ? '取消已退房' : '标记已退房', summary: `${task.property?.code || task.title || ''} ${isCheckedOut ? '取消已退房' : '已退房'}`, content: `${task.property?.code || task.title || ''} ${isCheckedOut ? '取消已退房' : '已退房'}` }).catch(() => null)
-                                  const effectiveView: WorkTasksView = isManagerRole(String(user.role || '')) ? view : 'mine'
-                                  await refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
-                                } catch (e: any) {
-                                  showBanner('失败', String(e?.message || '提交失败'))
-                                }
-                              }}
-                              disabled={!token}
-                              style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, isCheckedOut ? styles.actionBtnDisabled : null]}
-                            >
-                              <Text style={[styles.actionText, isCheckedOut ? { color: '#6B7280' } : null]}>{isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
-                            </Pressable>
-                          ) : null}
-                          <Pressable
-                            onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                            style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                          >
-                            <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-                          </Pressable>
-                        </>
-                      ) : (
-                        <>
-                          <Pressable
-                            onPress={() => props.navigation.navigate('TaskDetail', { id: task.id, action: 'upload_key' })}
-                            style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                          >
-                            <Text style={styles.actionText}>{t('tasks_btn_upload_key')}</Text>
-                          </Pressable>
-                          <Pressable
-                            onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                            style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                          >
-                            <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-                          </Pressable>
-                          <Pressable
-                            onPress={() => props.navigation.navigate('SuppliesForm', { taskId: task.id })}
-                            style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                          >
-                            <Text style={styles.actionText}>补品填报</Text>
-                          </Pressable>
-                        </>
-                      )}
-                    </View>
-                  ) : isInspectionTask ? (
-                    <View style={styles.actionsRow}>
+                              const effectiveView: WorkTasksView = canManagerMode && mode === 'manager' ? view : 'mine'
+                              await refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
+                            } catch (e: any) {
+                              showBanner('失败', String(e?.message || '提交失败'))
+                            }
+                          }}
+                          disabled={!token}
+                          style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, isCheckedOut ? styles.actionBtnDisabled : null]}
+                        >
+                          <Text style={[styles.actionText, isCheckedOut ? { color: '#6B7280' } : null]}>{isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
+                        </Pressable>
+                      ) : null}
                       <Pressable
                         onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
                         style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
                       >
                         <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
+                      </Pressable>
+                    </View>
+                  ) : isInspectionTask && isInspectorUser ? (
+                    <View style={styles.actionsRow}>
+                      <Pressable
+                        onPress={() => props.navigation.navigate('InspectionPanel', { taskId: task.id })}
+                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={styles.actionText}>检查与补充</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
+                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={styles.actionText}>房源问题反馈</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => props.navigation.navigate('InspectionComplete', { taskId: task.id })}
+                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={styles.actionText}>标记已完成</Text>
+                      </Pressable>
+                    </View>
+                  ) : isCleaningTask ? (
+                    <View style={styles.actionsRow}>
+                      <Pressable
+                        onPress={() => props.navigation.navigate('TaskDetail', { id: task.id, action: 'upload_key' })}
+                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={styles.actionText}>{t('tasks_btn_upload_key')}</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
+                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => props.navigation.navigate(isSelfCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)}
+                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={styles.actionText}>{isSelfCompleteEligible ? '补充与完成' : '补品填报'}</Text>
                       </Pressable>
                     </View>
                   ) : null}
@@ -1150,7 +1465,9 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: '#111827',
   },
-  avatarInner: { flex: 1, backgroundColor: '#0B0F17' },
+  avatarImg: { width: '100%', height: '100%', backgroundColor: '#0B0F17' },
+  avatarFallback: { flex: 1, backgroundColor: '#0B0F17', alignItems: 'center', justifyContent: 'center' },
+  avatarFallbackText: { color: '#FFFFFF', fontWeight: '900', fontSize: 13 },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 16 },
   banner: { marginBottom: 12, backgroundColor: '#FFFFFF', borderRadius: 16, padding: 12, borderWidth: hairline(), borderColor: '#EEF0F6', flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -1283,6 +1600,11 @@ const styles = StyleSheet.create({
   pwCell: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
   pwLabel: { color: '#9CA3AF', fontWeight: '600', fontSize: moderateScale(12) },
   pwValue: { color: '#111827', fontWeight: '600', fontSize: moderateScale(13) },
+  guestRow: { marginTop: 14, flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  guestIconWrap: { width: moderateScale(20), height: moderateScale(20), marginTop: 2, alignItems: 'center', justifyContent: 'center' },
+  guestCell: { flex: 1, flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  guestLabel: { color: '#9CA3AF', fontWeight: '600', fontSize: moderateScale(12), lineHeight: moderateScale(19) },
+  guestValue: { color: '#111827', fontWeight: '600', fontSize: moderateScale(13), flexShrink: 1, lineHeight: moderateScale(19) },
   guideCard: { marginTop: 16, height: 62, borderRadius: 18, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6', paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
   guideText: { flex: 1, minWidth: 0, color: '#2563EB', fontWeight: '600', fontSize: moderateScale(13) },
   pwRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6 },

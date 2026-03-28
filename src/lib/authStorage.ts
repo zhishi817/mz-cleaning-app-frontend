@@ -39,7 +39,7 @@ export async function clearAuthToken() {
   await safeDeleteItem(TOKEN_KEY)
 }
 
-export type StoredUser = { id: string; username: string; role: string; permissions?: string[] }
+export type StoredUser = { id: string; username: string; role: string; roles?: string[]; permissions?: string[] }
 
 export async function setStoredUser(user: StoredUser | null) {
   if (!user) {
@@ -59,8 +59,9 @@ export async function getStoredUser(): Promise<StoredUser | null> {
     const username = String((parsed as any).username || '')
     const role = String((parsed as any).role || '')
     if (!username || !role) return null
+    const roles = Array.isArray((parsed as any).roles) ? (parsed as any).roles.map((v: any) => String(v || '')).filter(Boolean) : undefined
     const permissions = Array.isArray((parsed as any).permissions) ? (parsed as any).permissions.map((v: any) => String(v || '')).filter(Boolean) : undefined
-    return { id: id || `legacy:${username}`, username, role, permissions }
+    return { id: id || `legacy:${username}`, username, role, roles, permissions }
   } catch {
     return null
   }

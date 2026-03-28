@@ -5,9 +5,8 @@ export async function compressImageForUpload(uri: string) {
   if (!u) throw new Error('missing uri')
   const r = await manipulateAsync(
     u,
-    [{ resize: { width: 1280 } }],
-    { compress: 0.65, format: SaveFormat.JPEG },
+    [{ resize: { width: 1920 } }],
+    { compress: 0.82, format: SaveFormat.JPEG },
   )
   return r.uri
 }
-

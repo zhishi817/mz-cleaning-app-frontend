@@ -160,11 +160,12 @@ export async function meApi(token: string) {
   const data = (await parseJsonOrThrow(res)) as Json
   const username = String(data?.username || '')
   const role = String(data?.role || '')
+  const roles = Array.isArray(data?.roles) ? data.roles.map((v: any) => String(v || '')).filter(Boolean) : (Array.isArray(decodeJwtPayload(token)?.roles) ? decodeJwtPayload(token)?.roles : undefined)
   const permissions = Array.isArray(data?.permissions) ? data.permissions.map((v: any) => String(v || '')).filter(Boolean) : undefined
   const payload = decodeJwtPayload(token)
   const id = String(data?.id || payload?.sub || payload?.user_id || payload?.uid || '') || (username ? `legacy:${username}` : '')
   if (!id || !username || !role) throw new Error('用户信息返回不完整')
-  return { id, username, role, permissions }
+  return { id, username, role, roles, permissions }
 }
 
 export async function forgotPasswordApi(params: { email: string }) {
@@ -262,22 +263,32 @@ export type WorkTask = {
   source_type: string
   source_id: string
   source_ids?: string[]
+  cleaning_task_ids?: string[]
+  inspection_task_ids?: string[]
   property_id: string | null
   title: string
   summary: string | null
   scheduled_date: string | null
   start_time: string | null
   end_time: string | null
+  task_type?: string | null
   assignee_id: string | null
+  inspector_id?: string | null
   status: string
+  cleaning_status?: string | null
+  inspection_status?: string | null
   urgency: string
   old_code?: string | null
   new_code?: string | null
+  guest_special_request?: string | null
   checked_out_at?: string | null
   cleaner_name?: string | null
   inspector_name?: string | null
   key_photo_url?: string | null
   lockbox_video_url?: string | null
+  completion_photos_ok?: boolean
+  stayed_nights?: number | null
+  remaining_nights?: number | null
   restock_items?: Array<{
     item_id: string
     label: string
@@ -287,6 +298,40 @@ export type WorkTask = {
     status: string
   }>
   property: WorkTaskProperty | null
+}
+
+export async function updateCleaningTaskManagerFields(
+  token: string,
+  params: {
+    task_ids: string[]
+    checkout_time?: string | null
+    checkin_time?: string | null
+    old_code?: string | null
+    new_code?: string | null
+    guest_special_request?: string | null
+  },
+) {
+  const urls = buildUrlCandidates('mzapp/cleaning-tasks/manager-fields')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  let exhausted = true
+  for (const url of urls) {
+    for (const method of ['PATCH', 'POST'] as const) {
+      lastRes = await fetchWithTimeout(
+        url,
+        { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+        15000,
+      )
+      if (lastRes.status === 404 || lastRes.status === 405) continue
+      exhausted = false
+      break
+    }
+    if (!exhausted) break
+  }
+  const res = lastRes as Response
+  if (exhausted) throw new Error('后端未部署“客服编辑任务”接口，请更新后端 Dev 后重试')
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
 }
 
 export async function listWorkTasks(token: string, params: { date_from: string; date_to: string; view?: 'mine' | 'all' }) {
@@ -521,6 +566,160 @@ export async function uploadLockboxVideo(token: string, cleaningTaskId: string, 
   return (await parseJsonOrThrow(res)) as any
 }
 
+export async function uploadSelfLockboxVideo(token: string, cleaningTaskId: string, params: { media_url: string; captured_at?: string }) {
+  const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/lockbox-video`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      20000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export type InspectionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'unclean'
+
+export async function getInspectionPhotos(token: string, cleaningTaskId: string) {
+  const urls = uniq([
+    ...buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/inspection-photos`),
+    ...buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/inspection-photos`),
+  ])
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as {
+    items: Array<{ area: string; url: string; note?: string | null; captured_at?: string | null; created_at?: string | null }>
+  }
+}
+
+export async function saveInspectionPhotos(
+  token: string,
+  cleaningTaskId: string,
+  params: { items: Array<{ area: InspectionPhotoArea; url: string; note?: string | null; captured_at?: string }> },
+) {
+  const urls = uniq([
+    ...buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/inspection-photos`),
+    ...buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/inspection-photos`),
+  ])
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function getRestockProof(token: string, cleaningTaskId: string) {
+  const urls = uniq([
+    ...buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/restock-proof`),
+    ...buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/restock-proof`),
+  ])
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as {
+    items: Array<{ item_id: string; proof_url: string | null; status?: string | null; qty?: number | null; note?: string | null; created_at?: string | null }>
+  }
+}
+
+export async function saveRestockProof(
+  token: string,
+  cleaningTaskId: string,
+  params: { items: Array<{ item_id: string; status: 'restocked' | 'unavailable'; qty?: number | null; note?: string | null; proof_url: string | null }> },
+) {
+  const urls = uniq([
+    ...buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/restock-proof`),
+    ...buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/restock-proof`),
+  ])
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export type CompletionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen'
+
+export async function getCompletionPhotos(token: string, cleaningTaskId: string) {
+  const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/completion-photos`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as {
+    items: Array<{ area: string; url: string; note?: string | null; captured_at?: string | null; created_at?: string | null }>
+  }
+}
+
+export async function saveCompletionPhotos(
+  token: string,
+  cleaningTaskId: string,
+  params: { items: Array<{ area: CompletionPhotoArea; url: string; note?: string | null; captured_at?: string }> },
+) {
+  const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/completion-photos`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function selfCompleteCleaningTask(token: string, cleaningTaskId: string) {
+  const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/self-complete`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }, 20000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
 export async function markGuestCheckedOut(token: string, cleaningTaskId: string, params?: { action?: 'set' | 'unset' }) {
   const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/guest-checked-out`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -533,6 +732,40 @@ export async function markGuestCheckedOut(token: string, cleaningTaskId: string,
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: params ? JSON.stringify(params) : undefined,
       },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function markGuestCheckedOutBulk(token: string, params: { task_ids: string[]; action?: 'set' | 'unset' }) {
+  const urls = buildUrlCandidates('mzapp/cleaning-tasks/guest-checked-out')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function registerExpoPushToken(token: string, params: { expo_push_token: string; platform?: string; device_id?: string; ua?: string }) {
+  const urls = buildUrlCandidates('notifications/expo/register')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
       15000,
     )
     if (lastRes.status !== 404) break
@@ -581,7 +814,14 @@ export async function listUsers(token: string) {
   }
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as Array<{ id: string; username: string; role: string; phone_au?: string | null }>
+  return (await parseJsonOrThrow(res)) as Array<{
+    id: string
+    username: string
+    role: string
+    phone_au?: string | null
+    display_name?: string | null
+    avatar_url?: string | null
+  }>
 }
 
 export async function listCompanySecretsForApp(token: string) {

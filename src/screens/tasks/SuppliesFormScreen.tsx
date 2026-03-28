@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
@@ -28,12 +28,18 @@ export default function SuppliesFormScreen(props: Props) {
   const [submitting, setSubmitting] = useState(false)
   const [loading, setLoading] = useState(false)
   const [items, setItems] = useState<ItemState[]>([])
+  const [photoUploadingIdx, setPhotoUploadingIdx] = useState<number | null>(null)
+  const [viewerOpen, setViewerOpen] = useState(false)
+  const [viewerUrl, setViewerUrl] = useState<string | null>(null)
 
   useEffect(() => {
     props.navigation.setOptions({ title: '补品填报' })
   }, [props.navigation])
 
   const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
+  const remainingNightsRaw = (task as any)?.remaining_nights
+  const remainingNights0 = remainingNightsRaw == null ? null : Number(remainingNightsRaw)
+  const remainingNights = Number.isFinite(remainingNights0 as any) ? (remainingNights0 as number) : null
 
   function setItem(idx: number, patch: Partial<ItemState>) {
     setItems(prev => prev.map((x, i) => (i === idx ? { ...x, ...patch } : x)))
@@ -71,6 +77,7 @@ export default function SuppliesFormScreen(props: Props) {
   async function onTakeStockPhoto(idx: number) {
     if (!token) return
     try {
+      setPhotoUploadingIdx(idx)
       const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
@@ -83,6 +90,8 @@ export default function SuppliesFormScreen(props: Props) {
       Alert.alert(t('common_ok'), '库存照片已上传')
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '上传失败'))
+    } finally {
+      setPhotoUploadingIdx(null)
     }
   }
 
@@ -134,13 +143,14 @@ export default function SuppliesFormScreen(props: Props) {
   }
 
   return (
-    <ScrollView style={styles.page} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-      {!task ? (
-        <Text style={styles.muted}>{t('common_loading')}</Text>
-      ) : loading ? (
-        <Text style={styles.muted}>{t('common_loading')}</Text>
-      ) : (
-        <View style={styles.card}>
+    <>
+      <ScrollView style={styles.page} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        {!task ? (
+          <Text style={styles.muted}>{t('common_loading')}</Text>
+        ) : loading ? (
+          <Text style={styles.muted}>{t('common_loading')}</Text>
+        ) : (
+          <View style={styles.card}>
           <View style={styles.headRow}>
             <Text style={styles.title}>补品填报</Text>
             <View style={styles.badge}>
@@ -149,6 +159,7 @@ export default function SuppliesFormScreen(props: Props) {
             </View>
           </View>
           {task.property?.address ? <Text style={styles.sub}>{task.property.address}</Text> : null}
+          <Text style={styles.sub}>{`待住晚数：${remainingNights == null ? '-' : String(remainingNights)}`}</Text>
 
           {items.map((it, idx) => (
             <View key={it.id} style={styles.itemBlock}>
@@ -190,14 +201,24 @@ export default function SuppliesFormScreen(props: Props) {
                       placeholderTextColor="#9CA3AF"
                       keyboardType="number-pad"
                     />
-                    <Pressable onPress={() => onTakeStockPhoto(idx)} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
-                      <Text style={styles.photoBtnText}>{it.photo_url ? '已拍照' : '拍照库存'}</Text>
+                    <Pressable
+                      onPress={() => onTakeStockPhoto(idx)}
+                      disabled={photoUploadingIdx === idx}
+                      style={({ pressed }) => [styles.photoBtn, photoUploadingIdx === idx ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
+                    >
+                      <Text style={styles.photoBtnText}>{photoUploadingIdx === idx ? t('common_loading') : it.photo_url ? '已拍照' : '拍照库存'}</Text>
                     </Pressable>
                   </View>
                   {it.photo_url ? (
-                    <View style={styles.photoPreview}>
+                    <Pressable
+                      onPress={() => {
+                        setViewerUrl(it.photo_url)
+                        setViewerOpen(true)
+                      }}
+                      style={({ pressed }) => [styles.photoPreview, pressed ? styles.pressed : null]}
+                    >
                       <Image source={{ uri: it.photo_url }} style={styles.photo} />
-                    </View>
+                    </Pressable>
                   ) : null}
                   <TextInput
                     value={it.note}
@@ -219,9 +240,37 @@ export default function SuppliesFormScreen(props: Props) {
           >
             <Text style={styles.submitText}>{submitting ? t('common_loading') : '提交'}</Text>
           </Pressable>
-        </View>
-      )}
-    </ScrollView>
+          </View>
+        )}
+      </ScrollView>
+
+      <Modal
+        visible={viewerOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setViewerOpen(false)
+          setViewerUrl(null)
+        }}
+      >
+        <Pressable
+          style={styles.viewerMask}
+          onPress={() => {
+            setViewerOpen(false)
+            setViewerUrl(null)
+          }}
+        >
+          <View style={styles.viewerTopRow} pointerEvents="none">
+            <Text style={styles.viewerCloseText}>点击任意位置关闭</Text>
+          </View>
+          {viewerUrl ? (
+            <View style={{ flex: 1 }} pointerEvents="none">
+              <Image source={{ uri: viewerUrl }} style={styles.viewerImg} resizeMode="contain" />
+            </View>
+          ) : null}
+        </Pressable>
+      </Modal>
+    </>
   )
 }
 
@@ -245,6 +294,7 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#FFFFFF' },
   note: { height: 64, paddingTop: 10, textAlignVertical: 'top', marginTop: 8 },
   photoBtn: { height: 38, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  photoBtnDisabled: { backgroundColor: '#E5E7EB' },
   photoBtnText: { fontWeight: '900', color: '#111827' },
   photoPreview: { marginTop: 8, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6' },
   photo: { width: '100%', height: moderateScale(160), backgroundColor: '#F3F4F6' },
@@ -253,4 +303,8 @@ const styles = StyleSheet.create({
   submitText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
   muted: { color: '#6B7280', fontWeight: '700' },
   pressed: { opacity: 0.92 },
+  viewerMask: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)' },
+  viewerTopRow: { position: 'absolute', top: 0, left: 0, right: 0, height: 54, paddingHorizontal: 12, justifyContent: 'center', zIndex: 2 },
+  viewerCloseText: { color: '#FFFFFF', fontWeight: '900' },
+  viewerImg: { flex: 1 },
 })

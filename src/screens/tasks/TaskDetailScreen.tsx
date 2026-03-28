@@ -4,14 +4,13 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
 import * as ImagePicker from 'expo-image-picker'
-import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getWorkTasksSnapshot, subscribeWorkTasks, type WorkTaskItem } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
-import { markGuestCheckedOut, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadCleaningVideo, uploadLockboxVideo, uploadMzappMedia } from '../../lib/api'
+import { markGuestCheckedOutBulk, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadMzappMedia } from '../../lib/api'
 import { enqueueKeyUpload } from '../../lib/keyUploadQueue'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
@@ -20,6 +19,8 @@ function statusLabel(status: string) {
   const s = String(status || '').trim().toLowerCase()
   if (s === 'done' || s === 'completed') return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
   if (s === 'to_inspect') return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+  if (s === 'to_hang_keys') return { text: '待挂钥匙', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+  if (s === 'to_complete') return { text: '待完成', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
   if (s === 'keys_hung') return { text: '已挂钥匙', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
   if (s === 'in_progress') return { text: '进行中', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
   if (s === 'assigned') return { text: '已分配', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
@@ -82,8 +83,9 @@ function stripPhotoLines(text: any) {
   return lines.join('\n').trim()
 }
 
-function pad2(n: number) {
-  return String(n).padStart(2, '0')
+function isManagerRole(role: string) {
+  const r = String(role || '').trim()
+  return r === 'admin' || r === 'offline_manager' || r === 'customer_service'
 }
 
 export default function TaskDetailScreen(props: Props) {
@@ -100,8 +102,7 @@ export default function TaskDetailScreen(props: Props) {
   const [deferReason, setDeferReason] = useState('')
   const [showUnfinished, setShowUnfinished] = useState(false)
   const [localKeyPhotoUrl, setLocalKeyPhotoUrl] = useState<string | null>(null)
-  const [lockboxLocalUrl, setLockboxLocalUrl] = useState<string | null>(null)
-  const [lockboxUploading, setLockboxUploading] = useState(false)
+  const [keyUploading, setKeyUploading] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [autoUploadKeyDone, setAutoUploadKeyDone] = useState(false)
 
@@ -131,6 +132,8 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_error'), '仅清洁/检查任务支持上传钥匙')
       return
     }
+    if (keyUploading) return
+    setKeyUploading(true)
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync()
       if (!perm.granted) {
@@ -193,6 +196,9 @@ export default function TaskDetailScreen(props: Props) {
       } catch (e2: any) {
         Alert.alert(t('common_error'), String(e2?.message || msg))
       }
+    }
+    finally {
+      setKeyUploading(false)
     }
   }
 
@@ -327,6 +333,8 @@ export default function TaskDetailScreen(props: Props) {
   const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
   const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
   const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
+  const inspectorAssigned = String((task as any).inspector_id || '').trim()
+  const isSelfCompleteEligible = isCleaningTask && isCheckoutTask && !inspectorAssigned
   const checkedOutAt = String((task as any).checked_out_at || '').trim()
   const isCheckedOut = !!checkedOutAt
   const isCustomerService = String(user?.role || '') === 'customer_service'
@@ -349,65 +357,7 @@ export default function TaskDetailScreen(props: Props) {
     if (t1 === title2) return null
     return t1
   })()
-  const effectiveLockboxUrl = lockboxLocalUrl || lockboxVideoUrl
-
-  async function onRecordLockboxVideo() {
-    if (!task) return
-    if (!token) {
-      Alert.alert(t('common_error'), '请先登录')
-      return
-    }
-    if (!isInspectionTask) {
-      Alert.alert(t('common_error'), '仅检查任务支持上传挂钥匙视频')
-      return
-    }
-    try {
-      setLockboxUploading(true)
-      const res = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-        videoExportPreset: ImagePicker.VideoExportPreset.HEVC_1920x1080,
-        videoMaxDuration: 30,
-        quality: ImagePicker.UIImagePickerControllerQualityType.High,
-      })
-      if (res.canceled || !res.assets?.length) return
-      const a = res.assets[0] as any
-      const uri = String(a.uri || '').trim()
-      if (!uri) return
-      const name = String(a.fileName || uri.split('/').pop() || `lockbox-${Date.now()}.mov`)
-      const mimeType = String(a.mimeType || 'video/quicktime')
-      const up = await uploadCleaningVideo(token, { uri, name, mimeType })
-      setLockboxLocalUrl(up.url)
-      Alert.alert(t('common_ok'), '视频已上传')
-    } catch (e: any) {
-      Alert.alert(t('common_error'), String(e?.message || '上传失败'))
-    } finally {
-      setLockboxUploading(false)
-    }
-  }
-
-  async function onCompleteInspection() {
-    if (!task) return
-    if (!token) {
-      Alert.alert(t('common_error'), '请先登录')
-      return
-    }
-    if (!isInspectionTask) return
-    const u = String(effectiveLockboxUrl || '').trim()
-    if (!u) {
-      Alert.alert(t('common_error'), '请先上传挂钥匙视频')
-      return
-    }
-    try {
-      setLockboxUploading(true)
-      await uploadLockboxVideo(token, String(task.source_id), { media_url: u })
-      Alert.alert(t('common_ok'), '已挂钥匙')
-      props.navigation.goBack()
-    } catch (e: any) {
-      Alert.alert(t('common_error'), String(e?.message || '提交失败'))
-    } finally {
-      setLockboxUploading(false)
-    }
-  }
+  const effectiveLockboxUrl = lockboxVideoUrl
 
   return (
     <>
@@ -424,6 +374,11 @@ export default function TaskDetailScreen(props: Props) {
           <View style={styles.tag}>
             <Text style={styles.tagText}>{kind}</Text>
           </View>
+          {isSelfCompleteEligible ? (
+            <View style={styles.tag}>
+              <Text style={styles.tagText}>自完成</Text>
+            </View>
+          ) : null}
           {showUrgency ? (
             <View style={styles.tagGray}>
               <Text style={styles.tagGrayText}>{String(task.urgency).toUpperCase()}</Text>
@@ -435,6 +390,13 @@ export default function TaskDetailScreen(props: Props) {
             </View>
           ) : null}
         </View>
+
+        {isSelfCompleteEligible ? (
+          <View style={styles.row}>
+            <Ionicons name="person-outline" size={moderateScale(14)} color="#9CA3AF" />
+            <Text style={styles.rowText}>检查人员：无</Text>
+          </View>
+        ) : null}
 
         {task.property?.address ? (
           <Pressable
@@ -518,71 +480,7 @@ export default function TaskDetailScreen(props: Props) {
           </>
         ) : null}
 
-        {isInspectionTask ? (
-          <>
-            <View style={styles.line} />
-            <Text style={styles.sectionTitle}>待补消耗品</Text>
-            {restockItems.length ? (
-              <View style={styles.restockWrap}>
-                {restockItems.map((it, idx) => (
-                  <View key={`${String(it.item_id || idx)}`} style={styles.restockItem}>
-                    <Text style={styles.restockTitle} numberOfLines={2}>{`${String(it.label || it.item_id || '').trim()}${it.qty ? ` ×${it.qty}` : ''}`}</Text>
-                    {it.note ? <Text style={styles.restockNote} numberOfLines={2}>{String(it.note)}</Text> : null}
-                    {it.photo_url ? (
-                      <Pressable
-                        onPress={() => setPreviewUrl(String(it.photo_url))}
-                        style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
-                      >
-                        <Image source={{ uri: String(it.photo_url) }} style={styles.photo} resizeMode="contain" />
-                      </Pressable>
-                    ) : null}
-                  </View>
-                ))}
-              </View>
-            ) : (
-              <Text style={styles.mutedSmall}>无待补消耗品</Text>
-            )}
-
-            <View style={styles.actionsRow}>
-              <Pressable
-                onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
-              >
-                <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-              </Pressable>
-            </View>
-
-            <View style={styles.line} />
-            <Text style={styles.sectionTitle}>挂钥匙视频</Text>
-            {effectiveLockboxUrl ? (
-              <View style={styles.photoWrap}>
-                <Video
-                  source={{ uri: String(effectiveLockboxUrl) }}
-                  style={styles.videoInline}
-                  resizeMode={ResizeMode.CONTAIN}
-                  shouldPlay={false}
-                  useNativeControls
-                />
-              </View>
-            ) : (
-              <Text style={styles.mutedSmall}>未上传</Text>
-            )}
-            <Pressable
-              onPress={onRecordLockboxVideo}
-              disabled={lockboxUploading}
-              style={({ pressed }) => [styles.markBtn, pressed ? styles.pressed : null, lockboxUploading ? styles.markBtnDisabled : null]}
-            >
-              <Text style={styles.markBtnText}>拍摄并上传挂钥匙视频</Text>
-            </Pressable>
-            <Pressable
-              onPress={onCompleteInspection}
-              disabled={lockboxUploading}
-              style={({ pressed }) => [styles.markPrimary, { marginTop: 12 }, pressed ? styles.pressed : null, lockboxUploading ? styles.markBtnDisabled : null]}
-            >
-              <Text style={styles.markPrimaryText}>标记已挂钥匙</Text>
-            </Pressable>
-          </>
-        ) : isCleaningTask ? (
+        {isCleaningTask ? (
           <View style={styles.actionsRow}>
             {isCustomerService ? (
               <>
@@ -591,7 +489,9 @@ export default function TaskDetailScreen(props: Props) {
                     onPress={async () => {
                       if (!token) return
                       try {
-                        await markGuestCheckedOut(token, String(task.source_id), { action: isCheckedOut ? 'unset' : 'set' })
+                        const ids0 = Array.isArray((task as any)?.source_ids) && (task as any).source_ids.length ? (task as any).source_ids : [String(task.source_id)]
+                        const ids = ids0.map((x: any) => String(x || '').trim()).filter(Boolean)
+                        await markGuestCheckedOutBulk(token, { task_ids: ids, action: isCheckedOut ? 'unset' : 'set' })
                         Alert.alert(t('common_ok'), isCheckedOut ? '已取消退房' : '已标记已退房')
                         props.navigation.goBack()
                       } catch (e: any) {
@@ -613,8 +513,12 @@ export default function TaskDetailScreen(props: Props) {
               </>
             ) : (
               <>
-                <Pressable onPress={onUploadKey} style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}>
-                  <Text style={styles.actionText}>{t('tasks_btn_upload_key')}</Text>
+                <Pressable
+                  onPress={onUploadKey}
+                  disabled={keyUploading}
+                  style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, keyUploading ? styles.actionBtnDisabled : null]}
+                >
+                  <Text style={styles.actionText}>{keyUploading ? t('common_loading') : t('tasks_btn_upload_key')}</Text>
                 </Pressable>
                 <Pressable
                   onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
@@ -623,10 +527,10 @@ export default function TaskDetailScreen(props: Props) {
                   <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => props.navigation.navigate('SuppliesForm', { taskId: task.id })}
+                  onPress={() => props.navigation.navigate(isSelfCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)}
                   style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
                 >
-                  <Text style={styles.actionText}>补品填报</Text>
+                  <Text style={styles.actionText}>{isSelfCompleteEligible ? '补充与完成' : '补品填报'}</Text>
                 </Pressable>
               </>
             )}

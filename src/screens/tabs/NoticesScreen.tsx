@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Alert, FlatList, Linking, Pressable, RefreshControl, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Alert, FlatList, Image, Linking, Pressable, RefreshControl, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
@@ -39,7 +39,8 @@ export default function NoticesScreen(props: Props) {
   const snap = getNoticesSnapshot()
   const hasAnyUnread = Object.keys(snap.unreadIds || {}).length > 0
   const items = useMemo(() => {
-    const base = showUnreadOnly ? snap.items.filter(n => !!snap.unreadIds[n.id]) : snap.items
+    const base0 = snap.items.filter(n => n.type !== 'system')
+    const base = showUnreadOnly ? base0.filter(n => !!snap.unreadIds[n.id]) : base0
     const q = query.trim().toLowerCase()
     if (!q) return base
     return base.filter(n => {
@@ -60,11 +61,7 @@ export default function NoticesScreen(props: Props) {
       unsub2 = subscribeWorkTasks(() => setTick(v => v + 1))
       setTick(v => v + 1)
     })()
-    const timer = setInterval(() => {
-      refreshNotices().catch(() => {})
-    }, 15000)
     return () => {
-      clearInterval(timer)
       if (unsub) unsub()
       if (unsub2) unsub2()
     }
@@ -216,6 +213,14 @@ export default function NoticesScreen(props: Props) {
     const meta = typeMeta(item.type)
     const unread = !!getNoticesSnapshot().unreadIds[item.id]
     const icon = item.type === 'update' ? 'megaphone-outline' : item.type === 'key' ? 'key-outline' : 'clipboard-outline'
+    const img = (() => {
+      const m = String(item.content || '').match(/https?:\/\/\S+/i)
+      if (!m) return null
+      const u = String(m[0] || '').replace(/[),.。；;]$/g, '')
+      const lower = u.toLowerCase()
+      if (lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('.gif')) return u
+      return null
+    })()
     return (
       <Pressable onPress={() => props.navigation.navigate('NoticeDetail', { id: item.id })} style={({ pressed }) => [styles.noticeRow, pressed ? styles.rowPressed : null]}>
         <View style={[styles.noticeIconWrap, { backgroundColor: meta.bg, borderColor: meta.bg }]}>
@@ -229,6 +234,7 @@ export default function NoticesScreen(props: Props) {
             {item.summary}
           </Text>
         </View>
+        {img ? <Image source={{ uri: img }} style={styles.noticeThumb} /> : null}
         <View style={styles.noticeRight}>
           <View style={styles.noticeTimeRow}>
             <Text style={styles.noticeTime}>{formatTime(item.createdAt).split(' ')[1]}</Text>
@@ -408,6 +414,7 @@ const styles = StyleSheet.create({
   noticeTimeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   noticeTime: { color: '#9CA3AF', fontWeight: '700', fontSize: 12 },
   unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#EF4444' },
+  noticeThumb: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#EEF0F6' },
 
   footer: { paddingVertical: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   footerText: { color: '#6B7280', fontWeight: '700' },
