@@ -422,14 +422,22 @@ export default function TaskDetailScreen(props: Props) {
 
         {isCleaningOrInspection ? (
           <>
-            <View style={styles.row}>
+            <Pressable
+              onPress={async () => {
+                if (!wifiPassword) return
+                try {
+                  await Clipboard.setStringAsync(wifiPassword)
+                  Alert.alert(t('common_ok'), 'Wi‑Fi 密码已复制')
+                } catch {
+                  Alert.alert(t('common_error'), '复制失败')
+                }
+              }}
+              style={({ pressed }) => [styles.row, pressed ? styles.pressed : null]}
+            >
               <Ionicons name="wifi-outline" size={moderateScale(14)} color="#9CA3AF" />
               <Text style={styles.rowText}>{`Wi‑Fi：${wifiSsid || '-'}  密码：${wifiPassword || '-'}`}</Text>
-            </View>
-            <View style={styles.row}>
-              <Ionicons name="hardware-chip-outline" size={moderateScale(14)} color="#9CA3AF" />
-              <Text style={styles.rowText}>{`路由器位置：${routerLocation || '-'}`}</Text>
-            </View>
+              {wifiPassword ? <Ionicons name="copy-outline" size={moderateScale(14)} color="#9CA3AF" /> : null}
+            </Pressable>
           </>
         ) : null}
 
