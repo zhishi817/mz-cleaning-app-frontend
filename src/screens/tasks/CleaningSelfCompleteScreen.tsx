@@ -117,11 +117,8 @@ export default function CleaningSelfCompleteScreen(props: Props) {
 
   const [suppliesSubmitted, setSuppliesSubmitted] = useState(false)
   const [supplies, setSupplies] = useState<SupplyItemState[]>([])
-  const [remoteAcEmbedded, setRemoteAcEmbedded] = useState(false)
   const [remoteAcPhotoUrl, setRemoteAcPhotoUrl] = useState<string | null>(null)
-  const [remoteAcNote, setRemoteAcNote] = useState('')
   const [remoteTvPhotoUrl, setRemoteTvPhotoUrl] = useState<string | null>(null)
-  const [remoteTvNote, setRemoteTvNote] = useState('')
 
   const lockboxOk = !!String(lockboxUrl || '').trim()
 
@@ -137,14 +134,9 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         if (!String(it.photo_url || '').trim()) return false
       }
     }
-    if (!remoteAcEmbedded) {
-      if (!String(remoteAcNote || '').trim()) return false
-      if (!String(remoteAcPhotoUrl || '').trim()) return false
-    }
-    if (!String(remoteTvNote || '').trim()) return false
     if (!String(remoteTvPhotoUrl || '').trim()) return false
     return true
-  }, [supplies, remoteAcEmbedded, remoteAcNote, remoteAcPhotoUrl, remoteTvNote, remoteTvPhotoUrl])
+  }, [supplies, remoteAcPhotoUrl, remoteTvPhotoUrl])
 
   const refresh = useCallback(async () => {
     if (!token) return
@@ -264,7 +256,6 @@ export default function CleaningSelfCompleteScreen(props: Props) {
 
   async function onTakeRemotePhoto(kind: 'ac' | 'tv') {
     if (!token) return
-    if (kind === 'ac' && remoteAcEmbedded) return
     try {
       const ok = await ensureCameraPerm()
       if (!ok) {
@@ -298,18 +289,16 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       note: x.note.trim() || undefined,
       photo_url: x.photo_url || undefined,
     }))
-    const acNote = String(remoteAcNote || '').trim()
-    const tvNote = String(remoteTvNote || '').trim()
-    out.push({
-      item_id: 'remote_ac',
-      status: 'ok' as any,
-      note: remoteAcEmbedded ? '嵌在墙上' : acNote,
-      photo_url: remoteAcEmbedded ? undefined : (remoteAcPhotoUrl || undefined),
-    } as any)
+    if (String(remoteAcPhotoUrl || '').trim()) {
+      out.push({
+        item_id: 'remote_ac',
+        status: 'ok' as any,
+        photo_url: remoteAcPhotoUrl || undefined,
+      } as any)
+    }
     out.push({
       item_id: 'remote_tv',
       status: 'ok' as any,
-      note: tvNote,
       photo_url: remoteTvPhotoUrl || undefined,
     } as any)
     try {
@@ -527,68 +516,31 @@ export default function CleaningSelfCompleteScreen(props: Props) {
               ))}
               <View style={styles.supBlock}>
                 <Text style={styles.supLabel}>遥控器拍照</Text>
-                <Text style={styles.mutedSmall}>电视遥控器：拍照+备注。空调遥控器：嵌墙无需拍照/备注；否则拍照+备注。</Text>
+                <Text style={styles.mutedSmall}>请拍照：电视遥控器、空调遥控器。</Text>
+                <Text style={styles.mutedSmall}>备注：空调遥控器嵌在墙上的不用拍照。</Text>
 
                 <Text style={[styles.supLabel, { marginTop: 10 }]}>空调遥控器</Text>
                 <View style={styles.supRow}>
                   <Pressable
-                    onPress={() => {
-                      setRemoteAcEmbedded(false)
-                    }}
-                    style={({ pressed }) => [styles.supChip, !remoteAcEmbedded ? styles.supChipActive : null, pressed ? styles.pressed : null]}
+                    onPress={() => onTakeRemotePhoto('ac')}
+                    disabled={suppliesSubmitting}
+                    style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
                   >
-                    <Text style={[styles.supChipText, !remoteAcEmbedded ? styles.supChipTextActive : null]}>需要拍照</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => {
-                      setRemoteAcEmbedded(true)
-                      setRemoteAcPhotoUrl(null)
-                      setRemoteAcNote('')
-                    }}
-                    style={({ pressed }) => [styles.supChip, remoteAcEmbedded ? styles.supChipActive : null, pressed ? styles.pressed : null]}
-                  >
-                    <Text style={[styles.supChipText, remoteAcEmbedded ? styles.supChipTextActive : null]}>嵌在墙上</Text>
+                    <Text style={styles.supPhotoText}>{remoteAcPhotoUrl ? '已拍照' : '拍照'}</Text>
                   </Pressable>
                 </View>
-
-                {!remoteAcEmbedded ? (
-                  <>
-                    <View style={styles.supRow}>
-                      <Pressable
-                        onPress={() => onTakeRemotePhoto('ac')}
-                        disabled={suppliesSubmitting}
-                        style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
-                      >
-                        <Text style={styles.supPhotoText}>{remoteAcPhotoUrl ? '已拍照' : '拍照'}</Text>
-                      </Pressable>
-                    </View>
-                    {remoteAcPhotoUrl ? (
-                      <Pressable
-                        onPress={() => {
-                          setViewerUrls([toAbsoluteUrl(remoteAcPhotoUrl)])
-                          setViewerIndex(0)
-                          setViewerOpen(true)
-                        }}
-                        style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
-                      >
-                        <Image source={{ uri: toAbsoluteUrl(remoteAcPhotoUrl) }} style={styles.supPreviewImg} />
-                      </Pressable>
-                    ) : null}
-                  </>
+                {remoteAcPhotoUrl ? (
+                  <Pressable
+                    onPress={() => {
+                      setViewerUrls([toAbsoluteUrl(remoteAcPhotoUrl)])
+                      setViewerIndex(0)
+                      setViewerOpen(true)
+                    }}
+                    style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
+                  >
+                    <Image source={{ uri: toAbsoluteUrl(remoteAcPhotoUrl) }} style={styles.supPreviewImg} />
+                  </Pressable>
                 ) : null}
-
-                {remoteAcEmbedded ? (
-                  <Text style={[styles.mutedSmall, { marginTop: 8 }]}>已选择嵌在墙上，无需拍照/备注。</Text>
-                ) : (
-                  <TextInput
-                    value={remoteAcNote}
-                    onChangeText={(v) => setRemoteAcNote(v)}
-                    style={[styles.supInput, styles.supNote]}
-                    placeholder="备注（必填）"
-                    placeholderTextColor="#9CA3AF"
-                    multiline
-                  />
-                )}
 
                 <Text style={[styles.supLabel, { marginTop: 12 }]}>电视遥控器</Text>
                 <View style={styles.supRow}>
@@ -612,14 +564,6 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                     <Image source={{ uri: toAbsoluteUrl(remoteTvPhotoUrl) }} style={styles.supPreviewImg} />
                   </Pressable>
                 ) : null}
-                <TextInput
-                  value={remoteTvNote}
-                  onChangeText={(v) => setRemoteTvNote(v)}
-                  style={[styles.supInput, styles.supNote]}
-                  placeholder="备注（必填）"
-                  placeholderTextColor="#9CA3AF"
-                  multiline
-                />
               </View>
               {supplies.length ? (
                 <Pressable
