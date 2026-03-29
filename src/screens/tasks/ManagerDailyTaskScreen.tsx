@@ -234,21 +234,21 @@ export default function ManagerDailyTaskScreen(props: Props) {
             <TextInput value={checkinTime} onChangeText={setCheckinTime} editable={isCustomerService && !saving} style={styles.input} placeholder="例如 3pm" placeholderTextColor="#9CA3AF" />
           </View>
           <View style={styles.field}>
-            <Text style={styles.label}>钥匙数量</Text>
+            <Text style={styles.label}>需挂钥匙套数</Text>
             <View style={styles.pillsRow}>
               <Pressable
                 onPress={() => setKeysRequired(1)}
                 disabled={!isCustomerService || saving}
                 style={({ pressed }) => [styles.pillBtn, keysRequired === 1 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
               >
-                <Text style={[styles.pillBtnText, keysRequired === 1 ? styles.pillBtnTextOn : null]}>1 把</Text>
+                <Text style={[styles.pillBtnText, keysRequired === 1 ? styles.pillBtnTextOn : null]}>1 套</Text>
               </Pressable>
               <Pressable
                 onPress={() => setKeysRequired(2)}
                 disabled={!isCustomerService || saving}
                 style={({ pressed }) => [styles.pillBtn, keysRequired === 2 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
               >
-                <Text style={[styles.pillBtnText, keysRequired === 2 ? styles.pillBtnTextOn : null]}>2 把</Text>
+                <Text style={[styles.pillBtnText, keysRequired === 2 ? styles.pillBtnTextOn : null]}>2 套</Text>
               </Pressable>
             </View>
           </View>

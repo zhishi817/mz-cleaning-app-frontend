@@ -355,6 +355,9 @@ export default function TaskDetailScreen(props: Props) {
   const keyPhotoUrl = String(localKeyPhotoUrl || (task as any).key_photo_url || '').trim() || null
   const lockboxVideoUrl = String((task as any).lockbox_video_url || '').trim() || null
   const keysRequired = Number((task as any).keys_required ?? 1)
+  const keysSets = Number.isFinite(keysRequired) ? Math.max(1, Math.trunc(keysRequired)) : 1
+  const showKeySets = isCleaningSource && (hasCheckout || hasCheckin)
+  const keySetsText = hasCheckout ? `确认已退${keysSets}套钥匙` : `需挂${keysSets}套钥匙`
   const restockItems = Array.isArray((task as any).restock_items) ? ((task as any).restock_items as any[]) : []
   const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
   const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
@@ -401,9 +404,9 @@ export default function TaskDetailScreen(props: Props) {
           <View style={styles.tag}>
             <Text style={styles.tagText}>{kind}</Text>
           </View>
-          {Number.isFinite(keysRequired) && keysRequired >= 2 ? (
-            <View style={styles.tagGray}>
-              <Text style={styles.tagGrayText}>{`${keysRequired}把钥匙`}</Text>
+          {showKeySets ? (
+            <View style={styles.tagKey}>
+              <Text style={styles.tagKeyText}>{keySetsText}</Text>
             </View>
           ) : null}
           {isSelfCompleteEligible ? (
@@ -738,6 +741,8 @@ const styles = StyleSheet.create({
   tagText: { fontSize: 11, fontWeight: '900', color: '#2563EB' },
   tagGray: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   tagGrayText: { fontSize: 11, fontWeight: '800', color: '#6B7280' },
+  tagKey: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
+  tagKeyText: { fontSize: 11, fontWeight: '900', color: '#B91C1C' },
   row: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 6 },
   rowText: { flex: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600' },
   actionsRow: { marginTop: 14, flexDirection: 'row', gap: 10 },

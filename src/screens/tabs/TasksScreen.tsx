@@ -62,9 +62,14 @@ function daysInMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
 }
 
+function isManagerRoleName(roleName: string) {
+  const r = String(roleName || '').trim()
+  return r === 'admin' || r === 'offline_manager' || r === 'customer_service'
+}
+
 function isManagerRole(roleNames: string[]) {
   const rs = (roleNames || []).map((x) => String(x || '').trim()).filter(Boolean)
-  return rs.includes('admin') || rs.includes('offline_manager') || rs.includes('customer_service')
+  return rs.some(isManagerRoleName)
 }
 
 function urgencyRank(u: string) {
@@ -169,6 +174,10 @@ export default function TasksScreen(props: Props) {
     return Array.from(new Set(ids))
   }, [user])
   const canManagerMode = useMemo(() => isManagerRole(roleNames), [roleNames])
+  const canSwitchMode = useMemo(() => {
+    if (!canManagerMode) return false
+    return roleNames.some((r) => !isManagerRoleName(r))
+  }, [canManagerMode, roleNames])
   const [mode, setMode] = useState<'cleaning' | 'manager'>('cleaning')
   const [period, setPeriod] = useState<Period>('today')
   const [selectedDate, setSelectedDate] = useState<string>(() => ymd(new Date()))
@@ -247,6 +256,11 @@ export default function TasksScreen(props: Props) {
       setView('mine')
       return
     }
+    if (!canSwitchMode) {
+      setMode('manager')
+      setView('all')
+      return
+    }
     ;(async () => {
       try {
         const saved = String((await AsyncStorage.getItem('tasks_mode')) || '').trim()
@@ -263,18 +277,23 @@ export default function TasksScreen(props: Props) {
       if (view !== 'mine') setView('mine')
       return
     }
+    if (!canSwitchMode) {
+      if (mode !== 'manager') setMode('manager')
+      if (view !== 'all') setView('all')
+      return
+    }
     if (mode === 'cleaning' && view !== 'mine') setView('mine')
     if (mode === 'manager' && view !== 'all' && view !== 'mine') setView('all')
-  }, [canManagerMode, mode, view])
+  }, [canManagerMode, canSwitchMode, mode, view])
 
   useEffect(() => {
-    if (!canManagerMode) return
+    if (!canSwitchMode) return
     ;(async () => {
       try {
         await AsyncStorage.setItem('tasks_mode', mode)
       } catch {}
     })()
-  }, [canManagerMode, mode])
+  }, [canSwitchMode, mode])
 
   const range = useMemo(() => {
     if (period === 'month') {
@@ -1010,7 +1029,7 @@ export default function TasksScreen(props: Props) {
           </ScrollView>
         )}
 
-        {canManagerMode ? (
+        {canSwitchMode ? (
           <View style={[styles.segmentWrap, { marginTop: 10 }]}>
             <View style={styles.segment}>
               <Pressable
@@ -1172,6 +1191,10 @@ export default function TasksScreen(props: Props) {
               const hasCheckin = !!checkinTime
               const titleSuffix = hasCheckout || hasCheckin ? `${hasCheckout ? '退房' : ''}${hasCheckout && hasCheckin ? ' ' : ''}${hasCheckin ? '入住' : ''}` : ''
               const title2 = `${code || task.title || '-'}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
+              const keysRequired = Number((task as any)?.keys_required ?? 1)
+              const keysSets = Number.isFinite(keysRequired) ? Math.max(1, Math.trunc(keysRequired)) : 1
+              const showKeySets = isCleaningSource && (hasCheckout || hasCheckin)
+              const keySetsText = hasCheckout ? `确认已退${keysSets}套钥匙` : `需挂${keysSets}套钥匙`
               const offlineDetail = (() => {
                 if (!isOfflineTask) return null
                 const t1 = String(task.title || '').trim()
@@ -1233,6 +1256,11 @@ export default function TasksScreen(props: Props) {
                     <View style={styles.tag}>
                       <Text style={styles.tagText}>{kind}</Text>
                     </View>
+                    {showKeySets ? (
+                      <View style={styles.tagKey}>
+                        <Text style={styles.tagKeyText}>{keySetsText}</Text>
+                      </View>
+                    ) : null}
                       {isSelfCompleteEligible ? (
                         <View style={styles.tag}>
                           <Text style={styles.tagText}>自完成</Text>
@@ -1640,6 +1668,8 @@ const styles = StyleSheet.create({
   tagText: { fontSize: 11, fontWeight: '900', color: '#2563EB' },
   tagGray: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   tagGrayText: { fontSize: 11, fontWeight: '800', color: '#6B7280' },
+  tagKey: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
+  tagKeyText: { fontSize: 11, fontWeight: '900', color: '#B91C1C' },
   row: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6 },
   addr: { flex: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600' },
   linkInline: { flex: 1, color: '#2563EB', fontSize: moderateScale(13), fontWeight: '800' },
