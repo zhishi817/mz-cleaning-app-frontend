@@ -340,6 +340,8 @@ export type WorkTask = {
   new_code?: string | null
   guest_special_request?: string | null
   keys_required?: number | null
+  keys_required_checkout?: number | null
+  keys_required_checkin?: number | null
   checked_out_at?: string | null
   cleaner_name?: string | null
   inspector_name?: string | null

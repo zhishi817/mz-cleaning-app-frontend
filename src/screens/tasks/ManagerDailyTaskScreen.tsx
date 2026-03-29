@@ -9,7 +9,7 @@ import { getInspectionPhotos, markGuestCheckedOutBulk, updateCleaningTaskManager
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
+import { getWorkTasksSnapshot, patchWorkTaskItem } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'ManagerDailyTask'>
@@ -138,6 +138,19 @@ export default function ManagerDailyTaskScreen(props: Props) {
 
       const keys = Object.keys(payload).filter((k) => k !== 'task_ids')
       if (keys.length) await updateCleaningTaskManagerFields(token, payload)
+      if (task?.id) {
+        const patch: any = {}
+        if (payload.checkout_time !== undefined) patch.start_time = payload.checkout_time
+        if (payload.checkin_time !== undefined) patch.end_time = payload.checkin_time
+        if (payload.old_code !== undefined) patch.old_code = payload.old_code
+        if (payload.new_code !== undefined) patch.new_code = payload.new_code
+        if (payload.guest_special_request !== undefined) patch.guest_special_request = payload.guest_special_request
+        if (payload.keys_required !== undefined) {
+          patch.keys_required = payload.keys_required
+          patch.keys_required_checkin = payload.keys_required
+        }
+        if (Object.keys(patch).length) await patchWorkTaskItem(task.id, patch)
+      }
       Alert.alert(t('common_ok'), '已保存')
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
@@ -181,6 +194,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
         const prevKeys = Number((task as any)?.keys_required ?? 1)
         if (Number.isFinite(keysRequired) && keysRequired !== prevKeys) {
           await updateCleaningTaskManagerFields(token, { task_ids: taskIds, keys_required: keysRequired })
+          if (task?.id) await patchWorkTaskItem(task.id, { keys_required: keysRequired, keys_required_checkin: keysRequired } as any)
         }
       }
       await markGuestCheckedOutBulk(token, { task_ids: taskIds, action: checkedOutAt ? 'unset' : 'set' })

@@ -53,6 +53,20 @@ export function getWorkTasksSnapshot() {
   return state
 }
 
+export async function patchWorkTaskItem(id0: string, patch: Partial<WorkTaskItem>) {
+  const id = String(id0 || '').trim()
+  if (!id) return
+  const idx = state.items.findIndex((x) => x.id === id)
+  if (idx < 0) return
+  const prev = state.items[idx]
+  const next = { ...prev, ...patch }
+  const items = state.items.slice()
+  items[idx] = next
+  state = { ...state, items, updatedAt: new Date().toISOString() }
+  await persist()
+  emit()
+}
+
 async function persist() {
   if (!state.bucketKey) return
   await setJson(storageKey(state.bucketKey), state)

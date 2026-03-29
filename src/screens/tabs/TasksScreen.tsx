@@ -1231,9 +1231,15 @@ export default function TasksScreen(props: Props) {
               const titleSuffix = hasCheckout || hasCheckin ? `${hasCheckout ? '退房' : ''}${hasCheckout && hasCheckin ? ' ' : ''}${hasCheckin ? '入住' : ''}` : ''
               const title2 = `${code || task.title || '-'}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
               const keysRequired = Number((task as any)?.keys_required ?? 1)
+              const keysCheckout = Number((task as any)?.keys_required_checkout ?? 0)
+              const keysCheckin = Number((task as any)?.keys_required_checkin ?? 0)
               const keysSets = Number.isFinite(keysRequired) ? Math.max(1, Math.trunc(keysRequired)) : 1
-              const showKeySets = isCleaningSource && (hasCheckout || hasCheckin) && keysSets >= 2
-              const keySetsText = isCheckedOut ? `请确认已退${keysSets}套钥匙` : hasCheckin ? `需挂${keysSets}套钥匙` : `请确认已退${keysSets}套钥匙`
+              const isCheckoutType = taskType === 'checkout_clean'
+              const isNeedHangType = taskType === 'checkin_clean' || taskType === 'turnover'
+              const checkoutSets = Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : (isCheckoutType && keysSets >= 2 ? keysSets : 0)
+              const checkinSets = Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : (isNeedHangType && keysSets >= 2 ? keysSets : 0)
+              const showCheckout = isCleaningSource && (checkoutSets >= 2 || (isCheckedOut && keysSets >= 2))
+              const showCheckin = isCleaningSource && checkinSets >= 2
               const offlineDetail = (() => {
                 if (!isOfflineTask) return null
                 const t1 = String(task.title || '').trim()
@@ -1295,9 +1301,14 @@ export default function TasksScreen(props: Props) {
                     <View style={styles.tag}>
                       <Text style={styles.tagText}>{kind}</Text>
                     </View>
-                    {showKeySets ? (
+                    {showCheckout ? (
                       <View style={styles.tagKey}>
-                        <Text style={styles.tagKeyText}>{keySetsText}</Text>
+                        <Text style={styles.tagKeyText}>{`请确认已退${checkoutSets || keysSets}套钥匙`}</Text>
+                      </View>
+                    ) : null}
+                    {showCheckin ? (
+                      <View style={styles.tagWarn}>
+                        <Text style={styles.tagWarnText}>{`需挂${checkinSets}套钥匙`}</Text>
                       </View>
                     ) : null}
                       {isSelfCompleteEligible ? (
@@ -1716,6 +1727,8 @@ const styles = StyleSheet.create({
   tagGrayText: { fontSize: 11, fontWeight: '800', color: '#6B7280' },
   tagKey: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
   tagKeyText: { fontSize: 11, fontWeight: '900', color: '#B91C1C' },
+  tagWarn: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FFFBEB', borderWidth: hairline(), borderColor: '#FDE68A', alignItems: 'center', justifyContent: 'center' },
+  tagWarnText: { fontSize: 11, fontWeight: '900', color: '#B45309' },
   row: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6 },
   addr: { flex: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600' },
   linkInline: { flex: 1, color: '#2563EB', fontSize: moderateScale(13), fontWeight: '800' },
