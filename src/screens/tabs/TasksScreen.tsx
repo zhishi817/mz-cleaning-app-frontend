@@ -94,11 +94,6 @@ function statusLabelForTask(task: WorkTaskItem, isManager: boolean) {
   const source = String(task.source_type || '').trim().toLowerCase()
   const kind = String(task.task_kind || '').trim().toLowerCase()
   if (source === 'cleaning_tasks' && kind === 'inspection') {
-    const inspectionIds = (task as any).inspection_task_ids
-    const cleaningIds = (task as any).cleaning_task_ids
-    const hasInspection = Array.isArray(inspectionIds) ? inspectionIds.length > 0 : true
-    const hasCleaning = Array.isArray(cleaningIds) ? cleaningIds.length > 0 : false
-    if (hasInspection && !hasCleaning) return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
     return meta
   }
   if (source === 'cleaning_tasks' && kind === 'cleaning') {

@@ -68,6 +68,13 @@ async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: num
 async function parseErrorMessage(res: Response) {
   try {
     const txt = await res.text()
+    const rawTxt = String(txt || '')
+    const cannot = rawTxt.match(/Cannot\s+(GET|POST|PUT|PATCH|DELETE)\s+([^\s<]+)/i)
+    if (cannot) {
+      const method = String(cannot[1] || '').toUpperCase()
+      const path = String(cannot[2] || '')
+      return `后端未部署该接口：${method} ${path}`
+    }
     try {
       const json = JSON.parse(txt) as any
       const msg = json?.message
@@ -87,6 +94,33 @@ async function parseErrorMessage(res: Response) {
         const merged = msg.trim() === 'duplicate' && existingId ? `${merged0}:${existingId}` : merged0
         return merged.slice(0, 240)
       }
+      const firstFromZod = (node: any): string | null => {
+        if (!node) return null
+        if (typeof node === 'string') return node.trim() || null
+        if (Array.isArray(node)) {
+          for (const it of node) {
+            const got = firstFromZod(it)
+            if (got) return got
+          }
+          return null
+        }
+        if (typeof node === 'object') {
+          const errs = (node as any)._errors
+          if (Array.isArray(errs) && errs.length) {
+            const s = String(errs[0] || '').trim()
+            if (s) return s
+          }
+          for (const k of Object.keys(node)) {
+            if (k === '_errors') continue
+            const got = firstFromZod((node as any)[k])
+            if (got) return got
+          }
+          return null
+        }
+        return null
+      }
+      const zodMsg = firstFromZod(json)
+      if (zodMsg) return `参数错误：${zodMsg}`.slice(0, 240)
     } catch {
       const t = String(txt || '').trim()
       const lower = t.toLowerCase()
@@ -356,7 +390,13 @@ export async function updateCleaningTaskManagerFields(
   }
   const res = lastRes as Response
   if (exhausted) throw new Error('后端未部署“客服编辑任务”接口，请更新后端 Dev 后重试')
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) {
+    const msg = await parseErrorMessage(res)
+    if (res.status === 400 && msg.includes('Unrecognized key') && msg.includes('keys_required')) {
+      throw new Error('后端未部署“两把钥匙”字段（keys_required），请更新后端后重试')
+    }
+    throw new Error(msg)
+  }
   return (await parseJsonOrThrow(res)) as any
 }
 
@@ -577,11 +617,22 @@ export async function deleteKeyPhoto(token: string, taskId: string) {
   let lastRes: Response | null = null
   for (const url of urls) {
     lastRes = await fetchWithTimeout(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, 15000)
-    if (lastRes.status !== 404) break
+    if (lastRes.status !== 404 && lastRes.status !== 405) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as any
+  if (res.ok) return (await parseJsonOrThrow(res)) as any
+  if (res.status === 404 || res.status === 405) {
+    const urls2 = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(taskId)}/key-photo/delete`)
+    let lastRes2: Response | null = null
+    for (const url of urls2) {
+      lastRes2 = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }, 15000)
+      if (lastRes2.status !== 404 && lastRes2.status !== 405) break
+    }
+    const res2 = lastRes2 as Response
+    if (!res2.ok) throw new Error(await parseErrorMessage(res2))
+    return (await parseJsonOrThrow(res2)) as any
+  }
+  throw new Error(await parseErrorMessage(res))
 }
 
 export async function listDayEndBackupKeys(token: string, params: { date: string; user_id?: string }) {
