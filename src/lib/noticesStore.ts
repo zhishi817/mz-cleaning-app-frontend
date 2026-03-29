@@ -24,6 +24,8 @@ const listeners = new Set<() => void>()
 let state: StoreState = { items: [], unreadIds: {} }
 let initialized = false
 
+const MAX_ITEMS = 200
+
 function emit() {
   for (const cb of listeners) cb()
 }
@@ -42,8 +44,8 @@ function dedupeLoadedState(input: StoreState) {
   const items: Notice[] = []
   for (const n of input.items || []) {
     const rawId = String(n?.id || '').trim() || nextId()
-    let id = rawId
-    if (seen.has(id)) id = nextId()
+    const id = rawId
+    if (seen.has(id)) continue
     seen.add(id)
     const fixed: Notice = { ...n, id }
     items.push(fixed)
@@ -53,14 +55,20 @@ function dedupeLoadedState(input: StoreState) {
 }
 
 function shouldDropNotice(n: any) {
-  const type = String(n?.type || '').trim().toLowerCase()
-  if (type === 'system') return true
-  const title = String(n?.title || '').trim()
-  if (title === '已退房' || title === '取消已退房' || title === '任务信息更新') return true
-  if (title.startsWith('系统通知')) return true
-  if (title.includes('今日任务有更新')) return true
-  if (title.includes('今日清洁安排已更新')) return true
+  void n
   return false
+}
+
+function normText(v: any) {
+  return String(v ?? '').replace(/\s+/g, ' ').trim()
+}
+
+function noticeSig(n: { type?: any; title?: any; summary?: any; content?: any }) {
+  const type = normText(n.type)
+  const title = normText(n.title).slice(0, 80)
+  const summary = normText(n.summary).slice(0, 80)
+  const content = normText(n.content).slice(0, 160)
+  return `${type}|${title}|${summary}|${content}`
 }
 
 export async function initNoticesStore() {
@@ -112,8 +120,26 @@ export async function prependNotice(input: Omit<Notice, 'id' | 'createdAt'> & { 
     }
     return
   }
+  const sig = noticeSig(input)
+  const recent = state.items.slice(0, 60)
+  const dup = recent.find(n => noticeSig(n) === sig)
+  if (dup) {
+    const did = dup.id
+    if (!state.unreadIds[did]) {
+      state = { ...state, unreadIds: { ...state.unreadIds, [did]: true } }
+      await persist()
+      emit()
+    }
+    return
+  }
   const notice: Notice = { id, createdAt, type: input.type, title: input.title, summary: input.summary, content: input.content }
-  state = { ...state, items: [notice, ...state.items], unreadIds: { ...state.unreadIds, [id]: true } }
+  const items = [notice, ...state.items].slice(0, MAX_ITEMS)
+  const keepIds = new Set(items.map(n => n.id))
+  const unreadIds: Record<string, true> = { ...state.unreadIds, [id]: true }
+  for (const k of Object.keys(unreadIds)) {
+    if (!keepIds.has(k)) delete unreadIds[k]
+  }
+  state = { ...state, items, unreadIds }
   await persist()
   emit()
 }

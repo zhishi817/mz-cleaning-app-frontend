@@ -55,6 +55,9 @@ async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: num
   try {
     const res = await fetch(input, { ...init, signal: controller.signal })
     return res
+  } catch (e: any) {
+    if (e?.name === 'AbortError') throw new Error('网络超时，请检查网络后重试')
+    throw e
   } finally {
     try {
       clearTimeout(timer)
@@ -69,14 +72,32 @@ async function parseErrorMessage(res: Response) {
       const json = JSON.parse(txt) as any
       const msg = json?.message
       if (typeof msg === 'string' && msg.trim()) {
+        const raw = msg.trim()
+        const m = raw.toLowerCase()
+        if (res.status === 401) {
+          if (m.includes('password') || m.includes('credential') || m.includes('invalid') || m.includes('login')) return '账号或密码错误'
+          if (m.includes('expired') || m.includes('token')) return '登录已过期，请重新登录'
+          if (m.includes('revoke') || m.includes('revoked')) return '登录已失效，请重新登录'
+          return '登录已失效，请重新登录'
+        }
+        if (res.status === 403) return '权限不足'
         const existingId = String(json?.existing_id || '').trim()
         const errs = Array.isArray(json?.errors) ? json.errors.map((x: any) => String(x || '').trim()).filter(Boolean) : []
-        const merged0 = errs.length ? `${msg.trim()}: ${errs.join(' | ')}` : msg.trim()
+        const merged0 = errs.length ? `${raw}: ${errs.join(' | ')}` : raw
         const merged = msg.trim() === 'duplicate' && existingId ? `${merged0}:${existingId}` : merged0
         return merged.slice(0, 240)
       }
     } catch {
       const t = String(txt || '').trim()
+      const lower = t.toLowerCase()
+      if (res.status === 401) {
+        if (lower.includes('password') || lower.includes('credential') || lower.includes('invalid') || lower.includes('login')) return '账号或密码错误'
+        if (lower.includes('expired') || lower.includes('token')) return '登录已过期，请重新登录'
+        if (lower.includes('revoke') || lower.includes('revoked')) return '登录已失效，请重新登录'
+        return '登录已失效，请重新登录'
+      }
+      if (res.status === 403) return '权限不足'
+      if (res.status >= 500) return '服务器错误，请稍后重试'
       if (t) return t.slice(0, 180)
     }
   } catch {}
@@ -284,6 +305,7 @@ export type WorkTask = {
   old_code?: string | null
   new_code?: string | null
   guest_special_request?: string | null
+  keys_required?: number | null
   checked_out_at?: string | null
   cleaner_name?: string | null
   inspector_name?: string | null
@@ -312,6 +334,7 @@ export async function updateCleaningTaskManagerFields(
     old_code?: string | null
     new_code?: string | null
     guest_special_request?: string | null
+    keys_required?: number | null
   },
 ) {
   const urls = buildUrlCandidates('mzapp/cleaning-tasks/manager-fields')
@@ -540,6 +563,52 @@ export async function startCleaningTask(token: string, taskId: string, params: {
         body: JSON.stringify(params),
       },
       15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function deleteKeyPhoto(token: string, taskId: string) {
+  const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(taskId)}/key-photo`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function listDayEndBackupKeys(token: string, params: { date: string; user_id?: string }) {
+  const sp = new URLSearchParams()
+  sp.set('date', String(params.date || '').slice(0, 10))
+  if (params.user_id) sp.set('user_id', String(params.user_id))
+  const urls = buildUrlCandidates(`cleaning-app/day-end/backup-keys?${sp.toString()}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { items: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }> }
+}
+
+export async function uploadDayEndBackupKeys(token: string, params: { date: string; items: Array<{ url: string; captured_at?: string }> }) {
+  const urls = buildUrlCandidates('cleaning-app/day-end/backup-keys')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      20000,
     )
     if (lastRes.status !== 404) break
   }

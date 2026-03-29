@@ -11,6 +11,7 @@ import { reorderCleaningTasks } from '../../lib/api'
 import { markGuestCheckedOutBulk } from '../../lib/api'
 import { listMzappAlerts, markMzappAlertRead } from '../../lib/api'
 import { getMyProfile } from '../../lib/api'
+import { listDayEndBackupKeys } from '../../lib/api'
 import { processKeyUploadQueue } from '../../lib/keyUploadQueue'
 import { getNoticesSnapshot, initNoticesStore, prependNotice } from '../../lib/noticesStore'
 import { getProfile, setProfile, type Profile } from '../../lib/profileStore'
@@ -186,6 +187,7 @@ export default function TasksScreen(props: Props) {
   const [, bump] = useState(0)
   const notifiedInspectionsRef = useRef<Record<string, boolean>>({})
   const [banner, setBanner] = useState<{ title: string; message: string } | null>(null)
+  const [dayEndHasUploaded, setDayEndHasUploaded] = useState<boolean | null>(null)
   const bannerTimerRef = useRef<any>(null)
   const [search, setSearch] = useState('')
   const weekRowRef = useRef<ScrollView>(null)
@@ -558,6 +560,57 @@ export default function TasksScreen(props: Props) {
   }, [reorderMode, selectedDate])
 
   const renderTasks = useMemo(() => selectedTasks, [selectedTasks])
+  const dayEndDate = useMemo(() => ymd(new Date()), [])
+  const isCleanerSelf = useMemo(() => {
+    return roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector')
+  }, [roleNames.join('|')])
+  const cleanerTodayTasks = useMemo(() => {
+    if (period !== 'today') return []
+    return renderTasks.filter((t) => {
+      if (t.source_type !== 'cleaning_tasks') return false
+      if (String(t.task_kind || '').trim().toLowerCase() !== 'cleaning') return false
+      const d = String(t.scheduled_date || (t as any).date || '').slice(0, 10)
+      if (d !== dayEndDate) return false
+      const st = String(t.status || '').trim().toLowerCase()
+      if (st === 'cancelled' || st === 'canceled') return false
+      return true
+    })
+  }, [dayEndDate, period, renderTasks])
+  const cleanerAllDone = useMemo(() => {
+    if (!cleanerTodayTasks.length) return false
+    const done = (s: string) => {
+      const x = String(s || '').trim().toLowerCase()
+      return x === 'done' || x === 'completed' || x === 'ready' || x === 'keys_hung' || x === 'cleaned' || x === 'restocked' || x === 'inspected'
+    }
+    return cleanerTodayTasks.every((t) => done(String(t.status || '')))
+  }, [cleanerTodayTasks])
+
+  useEffect(() => {
+    if (!token) return
+    if (!isCleanerSelf) return
+    if (period !== 'today') return
+    if (!cleanerAllDone) return
+    let cancelled = false
+    const load = async () => {
+      try {
+        const r = await listDayEndBackupKeys(token, { date: dayEndDate })
+        if (cancelled) return
+        setDayEndHasUploaded(!!(r?.items?.length))
+      } catch {
+        if (cancelled) return
+        setDayEndHasUploaded(false)
+      }
+    }
+    load()
+    const nav: any = props.navigation as any
+    const unsub = nav && typeof nav.addListener === 'function' ? nav.addListener('focus', load) : null
+    return () => {
+      cancelled = true
+      try {
+        if (typeof unsub === 'function') unsub()
+      } catch {}
+    }
+  }, [dayEndDate, cleanerAllDone, isCleanerSelf, period, props.navigation, token])
   const visibleTasks = useMemo(() => {
     const q = search.trim().toLowerCase()
     const base = canManagerMode && mode === 'manager' && q ? items : renderTasks
@@ -878,6 +931,18 @@ export default function TasksScreen(props: Props) {
               </Text>
             </View>
             <Ionicons name="close" size={moderateScale(16)} color="#6B7280" />
+          </Pressable>
+        ) : null}
+        {isCleanerSelf && period === 'today' && cleanerAllDone && dayEndHasUploaded === false ? (
+          <Pressable
+            onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate })}
+            style={({ pressed }) => [styles.dayEndCard, pressed ? styles.segmentPressed : null]}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.dayEndTitle}>日终：上传备用钥匙照片</Text>
+              <Text style={styles.dayEndMsg}>完成当天任务后，请上传备用钥匙已放回的照片（可多张）。</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={moderateScale(18)} color="#2563EB" />
           </Pressable>
         ) : null}
         <View style={styles.segmentWrap}>
@@ -1474,6 +1539,9 @@ const styles = StyleSheet.create({
   bannerTextWrap: { flex: 1, minWidth: 0 },
   bannerTitle: { fontWeight: '900', color: '#111827' },
   bannerMsg: { marginTop: 2, color: '#6B7280', fontWeight: '700' },
+  dayEndCard: { marginBottom: 12, backgroundColor: '#EFF6FF', borderRadius: 16, padding: 12, borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 10 },
+  dayEndTitle: { fontWeight: '900', color: '#1D4ED8' },
+  dayEndMsg: { marginTop: 2, color: '#1E40AF', fontWeight: '700' },
   searchWrap: { marginTop: 10, height: 44, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#EEF0F6', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
   searchInput: { flex: 1, minWidth: 0, height: 44, color: '#111827', fontWeight: '800' },
   searchClear: { height: 44, width: 34, alignItems: 'center', justifyContent: 'center' },

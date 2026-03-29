@@ -10,7 +10,7 @@ import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getWorkTasksSnapshot, subscribeWorkTasks, type WorkTaskItem } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
-import { markGuestCheckedOutBulk, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadMzappMedia } from '../../lib/api'
+import { deleteKeyPhoto, markGuestCheckedOutBulk, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadMzappMedia } from '../../lib/api'
 import { enqueueKeyUpload } from '../../lib/keyUploadQueue'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
@@ -103,6 +103,7 @@ export default function TaskDetailScreen(props: Props) {
   const [showUnfinished, setShowUnfinished] = useState(false)
   const [localKeyPhotoUrl, setLocalKeyPhotoUrl] = useState<string | null>(null)
   const [keyUploading, setKeyUploading] = useState(false)
+  const [keyDeleting, setKeyDeleting] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [autoUploadKeyDone, setAutoUploadKeyDone] = useState(false)
 
@@ -199,6 +200,26 @@ export default function TaskDetailScreen(props: Props) {
     }
     finally {
       setKeyUploading(false)
+    }
+  }
+
+  async function onDeleteKey() {
+    if (!task) return
+    if (!token) {
+      Alert.alert(t('common_error'), '请先登录')
+      return
+    }
+    if (task.source_type !== 'cleaning_tasks') return
+    if (keyDeleting) return
+    setKeyDeleting(true)
+    try {
+      await deleteKeyPhoto(token, String(task.source_id))
+      setLocalKeyPhotoUrl(null)
+      Alert.alert(t('common_ok'), '已删除钥匙照片')
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '删除失败'))
+    } finally {
+      setKeyDeleting(false)
     }
   }
 
@@ -333,6 +354,7 @@ export default function TaskDetailScreen(props: Props) {
   const title2 = `${title}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
   const keyPhotoUrl = String(localKeyPhotoUrl || (task as any).key_photo_url || '').trim() || null
   const lockboxVideoUrl = String((task as any).lockbox_video_url || '').trim() || null
+  const keysRequired = Number((task as any).keys_required ?? 1)
   const restockItems = Array.isArray((task as any).restock_items) ? ((task as any).restock_items as any[]) : []
   const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
   const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
@@ -342,6 +364,7 @@ export default function TaskDetailScreen(props: Props) {
   const checkedOutAt = String((task as any).checked_out_at || '').trim()
   const isCheckedOut = !!checkedOutAt
   const isCustomerService = String(user?.role || '') === 'customer_service'
+  const canDeleteKeyPhoto = (String(user?.role || '') === 'cleaner' || String(user?.role || '') === 'cleaner_inspector') && isCleaningTask
   const showSummary = !!(task.summary && task.source_type !== 'cleaning_tasks' && !isOfflineTask)
   const isAlreadyDone = (() => {
     const s = String(task.status || '').trim().toLowerCase()
@@ -378,6 +401,11 @@ export default function TaskDetailScreen(props: Props) {
           <View style={styles.tag}>
             <Text style={styles.tagText}>{kind}</Text>
           </View>
+          {Number.isFinite(keysRequired) && keysRequired >= 2 ? (
+            <View style={styles.tagGray}>
+              <Text style={styles.tagGrayText}>{`${keysRequired}把钥匙`}</Text>
+            </View>
+          ) : null}
           {isSelfCompleteEligible ? (
             <View style={styles.tag}>
               <Text style={styles.tagText}>自完成</Text>
@@ -492,7 +520,7 @@ export default function TaskDetailScreen(props: Props) {
           </View>
         )}
 
-        {isCleaningTask && keyPhotoUrl ? (
+        {isCleaningSource && keyPhotoUrl ? (
           <>
             <View style={styles.line} />
             <Text style={styles.sectionTitle}>钥匙照片</Text>
@@ -502,6 +530,20 @@ export default function TaskDetailScreen(props: Props) {
             >
               <Image source={{ uri: keyPhotoUrl }} style={styles.photo} resizeMode="contain" />
             </Pressable>
+            {canDeleteKeyPhoto ? (
+              <Pressable
+                onPress={() =>
+                  Alert.alert('确认删除？', '删除后需要重新上传钥匙照片。', [
+                    { text: '取消', style: 'cancel' },
+                    { text: '删除', style: 'destructive', onPress: onDeleteKey },
+                  ])
+                }
+                disabled={keyDeleting}
+                style={({ pressed }) => [styles.dangerBtn, pressed ? styles.pressed : null, keyDeleting ? styles.actionBtnDisabled : null]}
+              >
+                <Text style={styles.dangerText}>{keyDeleting ? '删除中...' : '删除钥匙照片'}</Text>
+              </Pressable>
+            ) : null}
           </>
         ) : null}
 
@@ -702,6 +744,8 @@ const styles = StyleSheet.create({
   actionBtn: { flex: 1, height: 36, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   actionBtnDisabled: { backgroundColor: '#E5E7EB' },
   actionText: { fontWeight: '900', color: '#FFFFFF', fontSize: 13 },
+  dangerBtn: { marginTop: 10, height: 36, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
+  dangerText: { fontWeight: '900', color: '#B91C1C', fontSize: 13 },
   line: { marginTop: 14, height: hairline(), backgroundColor: '#EEF0F6' },
   sectionTitle: { marginTop: 14, fontSize: 13, fontWeight: '900', color: '#111827' },
   summary: { marginTop: 8, color: '#374151', fontWeight: '700', lineHeight: 18 },

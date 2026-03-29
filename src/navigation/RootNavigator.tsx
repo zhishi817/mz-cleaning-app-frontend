@@ -29,6 +29,7 @@ import InspectionPanelScreen from '../screens/tasks/InspectionPanelScreen'
 import InspectionCompleteScreen from '../screens/tasks/InspectionCompleteScreen'
 import CleaningSelfCompleteScreen from '../screens/tasks/CleaningSelfCompleteScreen'
 import ManagerDailyTaskScreen from '../screens/tasks/ManagerDailyTaskScreen'
+import DayEndBackupKeysScreen from '../screens/tasks/DayEndBackupKeysScreen'
 
 export type AuthStackParamList = {
   Login: undefined
@@ -56,6 +57,7 @@ export type TasksStackParamList = {
   InspectionComplete: { taskId: string }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
+  DayEndBackupKeys: { date: string }
   FeedbackForm: { taskId: string }
   SuppliesForm: { taskId: string }
 }
@@ -105,6 +107,7 @@ function TasksStackNavigator() {
       <TasksStack.Screen name="InspectionComplete" component={InspectionCompleteScreen} options={{ title: '标记已完成' }} />
       <TasksStack.Screen name="CleaningSelfComplete" component={CleaningSelfCompleteScreen} options={{ title: '补充与完成' }} />
       <TasksStack.Screen name="ManagerDailyTask" component={ManagerDailyTaskScreen} options={{ title: '每日清洁' }} />
+      <TasksStack.Screen name="DayEndBackupKeys" component={DayEndBackupKeysScreen} options={{ title: '备用钥匙' }} />
       <TasksStack.Screen name="FeedbackForm" component={FeedbackFormScreen} options={{ title: t('tasks_btn_repair') }} />
       <TasksStack.Screen name="SuppliesForm" component={SuppliesFormScreen} options={{ title: '补品填报' }} />
     </TasksStack.Navigator>

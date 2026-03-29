@@ -57,6 +57,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const [oldCode, setOldCode] = useState('')
   const [newCode, setNewCode] = useState('')
   const [guestNote, setGuestNote] = useState('')
+  const [keysRequired, setKeysRequired] = useState(1)
 
   const [photosLoading, setPhotosLoading] = useState(false)
   const [inspectionItems, setInspectionItems] = useState<Array<{ area: string; url: string; note?: string | null }>>([])
@@ -69,6 +70,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
     setOldCode(String((task as any)?.old_code || '').trim())
     setNewCode(String((task as any)?.new_code || '').trim())
     setGuestNote(String((task as any)?.guest_special_request || '').trim())
+    const k = Number((task as any)?.keys_required ?? 1)
+    setKeysRequired(Number.isFinite(k) && k >= 2 ? 2 : 1)
   }, [task])
 
   const inspectionTaskId = useMemo(() => {
@@ -113,6 +116,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
         old_code: oldCode.trim() || null,
         new_code: newCode.trim() || null,
         guest_special_request: guestNote.trim() || null,
+        keys_required: keysRequired,
       })
       Alert.alert(t('common_ok'), '已保存')
     } catch (e: any) {
@@ -153,6 +157,9 @@ export default function ManagerDailyTaskScreen(props: Props) {
     if (!taskIds.length) return Alert.alert(t('common_error'), '缺少任务ID')
     try {
       setMarking(true)
+      if (!checkedOutAt) {
+        await updateCleaningTaskManagerFields(token, { task_ids: taskIds, keys_required: keysRequired })
+      }
       await markGuestCheckedOutBulk(token, { task_ids: taskIds, action: checkedOutAt ? 'unset' : 'set' })
       Alert.alert(t('common_ok'), checkedOutAt ? '已取消退房' : '已标记退房，已通知清洁人员')
     } catch (e: any) {
@@ -225,6 +232,25 @@ export default function ManagerDailyTaskScreen(props: Props) {
           <View style={styles.field}>
             <Text style={styles.label}>入住时间</Text>
             <TextInput value={checkinTime} onChangeText={setCheckinTime} editable={isCustomerService && !saving} style={styles.input} placeholder="例如 3pm" placeholderTextColor="#9CA3AF" />
+          </View>
+          <View style={styles.field}>
+            <Text style={styles.label}>钥匙数量</Text>
+            <View style={styles.pillsRow}>
+              <Pressable
+                onPress={() => setKeysRequired(1)}
+                disabled={!isCustomerService || saving}
+                style={({ pressed }) => [styles.pillBtn, keysRequired === 1 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
+              >
+                <Text style={[styles.pillBtnText, keysRequired === 1 ? styles.pillBtnTextOn : null]}>1 把</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setKeysRequired(2)}
+                disabled={!isCustomerService || saving}
+                style={({ pressed }) => [styles.pillBtn, keysRequired === 2 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
+              >
+                <Text style={[styles.pillBtnText, keysRequired === 2 ? styles.pillBtnTextOn : null]}>2 把</Text>
+              </Pressable>
+            </View>
           </View>
           <View style={styles.row2}>
             <View style={{ flex: 1 }}>
@@ -395,6 +421,11 @@ const styles = StyleSheet.create({
   input: { height: 44, borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, fontWeight: '800', color: '#111827' },
   textarea: { height: 84, paddingTop: 12, textAlignVertical: 'top' },
   row2: { marginTop: 10, flexDirection: 'row', gap: 10 },
+  pillsRow: { flexDirection: 'row', gap: 10 },
+  pillBtn: { flex: 1, height: 40, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  pillBtnOn: { backgroundColor: '#EFF6FF', borderColor: '#DBEAFE' },
+  pillBtnText: { color: '#6B7280', fontWeight: '900' },
+  pillBtnTextOn: { color: '#2563EB' },
 
   checkoutBtn: { marginTop: 10, height: 40, borderRadius: 12, backgroundColor: '#E0F2FE', borderWidth: hairline(), borderColor: '#BAE6FD', alignItems: 'center', justifyContent: 'center' },
   checkoutBtnDisabled: { backgroundColor: '#BAE6FD' },
