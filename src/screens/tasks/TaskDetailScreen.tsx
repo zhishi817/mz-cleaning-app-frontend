@@ -356,16 +356,16 @@ export default function TaskDetailScreen(props: Props) {
   const lockboxVideoUrl = String((task as any).lockbox_video_url || '').trim() || null
   const keysRequired = Number((task as any).keys_required ?? 1)
   const keysSets = Number.isFinite(keysRequired) ? Math.max(1, Math.trunc(keysRequired)) : 1
-  const showKeySets = isCleaningSource && (hasCheckout || hasCheckin)
-  const keySetsText = hasCheckout ? `确认已退${keysSets}套钥匙` : `需挂${keysSets}套钥匙`
+  const checkedOutAt = String((task as any).checked_out_at || '').trim()
+  const isCheckedOut = !!checkedOutAt
+  const showKeySets = isCleaningSource && (hasCheckout || hasCheckin) && keysSets >= 2
+  const keySetsText = isCheckedOut ? `请确认已退${keysSets}套钥匙` : hasCheckin ? `需挂${keysSets}套钥匙` : `请确认已退${keysSets}套钥匙`
   const restockItems = Array.isArray((task as any).restock_items) ? ((task as any).restock_items as any[]) : []
   const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
   const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
   const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
   const inspectorAssigned = String((task as any).inspector_id || '').trim()
   const isSelfCompleteEligible = isCleaningTask && isCheckoutTask && !inspectorAssigned
-  const checkedOutAt = String((task as any).checked_out_at || '').trim()
-  const isCheckedOut = !!checkedOutAt
   const isCustomerService = String(user?.role || '') === 'customer_service'
   const canDeleteKeyPhoto = (String(user?.role || '') === 'cleaner' || String(user?.role || '') === 'cleaner_inspector') && isCleaningTask
   const showSummary = !!(task.summary && task.source_type !== 'cleaning_tasks' && !isOfflineTask)

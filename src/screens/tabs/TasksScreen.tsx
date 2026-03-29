@@ -295,18 +295,25 @@ export default function TasksScreen(props: Props) {
     })()
   }, [canSwitchMode, mode])
 
+  const selected = useMemo(() => {
+    const raw = String(selectedDate || '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return new Date()
+    const d = parseYmd(raw)
+    return Number.isFinite(d.getTime()) ? d : new Date()
+  }, [selectedDate])
+
   const range = useMemo(() => {
     if (period === 'month') {
-      const base = new Date()
+      const base = selected
       const start = new Date(base.getFullYear(), base.getMonth(), 1)
-      const end = new Date(base.getFullYear(), base.getMonth(), daysInMonth(base))
+      const end = new Date(base.getFullYear(), base.getMonth(), daysInMonth(start))
       return { date_from: ymd(start), date_to: ymd(end) }
     }
-    const base = period === 'today' ? new Date() : parseYmd(selectedDate)
+    const base = period === 'today' ? new Date() : selected
     const start = startOfWeekMonday(base)
     const end = addDays(start, 6)
     return { date_from: ymd(start), date_to: ymd(end) }
-  }, [period, selectedDate])
+  }, [period, selected])
 
   useEffect(() => {
     let cancelled = false
@@ -463,8 +470,6 @@ export default function TasksScreen(props: Props) {
     )
   }
 
-  const selected = useMemo(() => parseYmd(selectedDate), [selectedDate])
-
   const weekDays = useMemo(() => {
     const base = period === 'today' ? new Date() : selected
     const start = startOfWeekMonday(base)
@@ -493,12 +498,12 @@ export default function TasksScreen(props: Props) {
   }, [period, selectedDate])
 
   const monthGrid = useMemo(() => {
-    const base = new Date()
+    const base = selected
     const monthStart = new Date(base.getFullYear(), base.getMonth(), 1)
     const start = startOfWeekMonday(monthStart)
     const total = 42
-    const month = base.getMonth()
-    const days = daysInMonth(base)
+    const month = monthStart.getMonth()
+    const days = daysInMonth(monthStart)
     const labelsZh = ['一', '二', '三', '四', '五', '六', '日']
     const labelsEn = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
     const header = locale === 'en' ? labelsEn : labelsZh
@@ -511,7 +516,28 @@ export default function TasksScreen(props: Props) {
       return { key, date, day: date.getDate(), inMonth, hasTask, isSelected }
     })
     return { header, cells }
-  }, [locale, selectedDate, tasksByDate])
+  }, [locale, selected, selectedDate, tasksByDate])
+
+  const monthTitle = useMemo(() => {
+    const y = selected.getFullYear()
+    const m = selected.getMonth()
+    const m2 = m + 1
+    if (locale === 'en') {
+      const names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+      return `${names[m] || m2} ${y}`
+    }
+    return `${y}年${m2}月`
+  }, [locale, selected])
+
+  const gotoPrevMonth = () => {
+    const d = new Date(selected.getFullYear(), selected.getMonth() - 1, 1)
+    setSelectedDate(ymd(d))
+  }
+
+  const gotoNextMonth = () => {
+    const d = new Date(selected.getFullYear(), selected.getMonth() + 1, 1)
+    setSelectedDate(ymd(d))
+  }
 
   const selectedTasks = useMemo(() => {
     const list = (tasksByDate.get(selectedDate) || []).slice()
@@ -993,6 +1019,17 @@ export default function TasksScreen(props: Props) {
 
         {period === 'month' ? (
           <View style={styles.monthWrap}>
+            <View style={styles.monthNavRow}>
+              <Pressable onPress={gotoPrevMonth} style={({ pressed }) => [styles.monthNavBtn, pressed ? styles.segmentPressed : null]}>
+                <Ionicons name="chevron-back" size={moderateScale(18)} color="#111827" />
+                <Text style={styles.monthNavBtnText}>上个月</Text>
+              </Pressable>
+              <Text style={styles.monthTitle}>{monthTitle}</Text>
+              <Pressable onPress={gotoNextMonth} style={({ pressed }) => [styles.monthNavBtn, pressed ? styles.segmentPressed : null]}>
+                <Text style={styles.monthNavBtnText}>下个月</Text>
+                <Ionicons name="chevron-forward" size={moderateScale(18)} color="#111827" />
+              </Pressable>
+            </View>
             <View style={styles.monthHeader}>
               {monthGrid.header.map(h => (
                 <Text key={h} style={styles.monthHeaderText}>
@@ -1001,18 +1038,20 @@ export default function TasksScreen(props: Props) {
               ))}
             </View>
             <View style={styles.monthGrid}>
-              {monthGrid.cells.map(c =>
-                !c.inMonth ? (
-                  <View key={c.key} style={styles.monthCell} />
-                ) : (
-                  <Pressable key={c.key} onPress={() => setSelectedDate(c.key)} style={({ pressed }) => [styles.monthCell, pressed ? styles.segmentPressed : null]}>
-                    <View style={[styles.monthCellInner, c.isSelected ? styles.monthCellSelected : null]}>
-                      <Text style={[styles.monthDay, c.isSelected ? styles.monthDaySelected : null]}>{c.day}</Text>
-                      <View style={[styles.monthDot, c.isSelected ? styles.monthDotSelected : c.hasTask ? styles.monthDotOn : styles.monthDotHidden]} />
-                    </View>
-                  </Pressable>
-                ),
-              )}
+              {monthGrid.cells.map(c => (
+                <Pressable key={c.key} onPress={() => setSelectedDate(c.key)} style={({ pressed }) => [styles.monthCell, pressed ? styles.segmentPressed : null]}>
+                  <View style={[styles.monthCellInner, !c.inMonth ? styles.monthCellOut : null, c.isSelected ? styles.monthCellSelected : null]}>
+                    <Text style={[styles.monthDay, !c.inMonth ? styles.monthDayOut : null, c.isSelected ? styles.monthDaySelected : null]}>{c.day}</Text>
+                    <View
+                      style={[
+                        styles.monthDot,
+                        c.isSelected ? styles.monthDotSelected : null,
+                        !c.isSelected && c.hasTask ? (c.inMonth ? styles.monthDotOn : styles.monthDotOut) : styles.monthDotHidden,
+                      ]}
+                    />
+                  </View>
+                </Pressable>
+              ))}
             </View>
           </View>
         ) : (
@@ -1193,8 +1232,8 @@ export default function TasksScreen(props: Props) {
               const title2 = `${code || task.title || '-'}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
               const keysRequired = Number((task as any)?.keys_required ?? 1)
               const keysSets = Number.isFinite(keysRequired) ? Math.max(1, Math.trunc(keysRequired)) : 1
-              const showKeySets = isCleaningSource && (hasCheckout || hasCheckin)
-              const keySetsText = hasCheckout ? `确认已退${keysSets}套钥匙` : `需挂${keysSets}套钥匙`
+              const showKeySets = isCleaningSource && (hasCheckout || hasCheckin) && keysSets >= 2
+              const keySetsText = isCheckedOut ? `请确认已退${keysSets}套钥匙` : hasCheckin ? `需挂${keysSets}套钥匙` : `请确认已退${keysSets}套钥匙`
               const offlineDetail = (() => {
                 if (!isOfflineTask) return null
                 const t1 = String(task.title || '').trim()
@@ -1606,6 +1645,10 @@ const styles = StyleSheet.create({
   dateDotHidden: { opacity: 0 },
 
   monthWrap: { marginTop: 14 },
+  monthNavRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 10 },
+  monthNavBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingHorizontal: 8, height: 32, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#EEF0F6' },
+  monthNavBtnText: { fontWeight: '900', color: '#111827', fontSize: 12 },
+  monthTitle: { fontWeight: '900', color: '#111827' },
   monthHeader: { flexDirection: 'row', paddingHorizontal: 4, marginBottom: 8 },
   monthHeaderText: { width: '14.2857%', textAlign: 'center', color: '#9CA3AF', fontWeight: '900', fontSize: 11 },
   monthGrid: { flexDirection: 'row', flexWrap: 'wrap' },
@@ -1619,12 +1662,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  monthCellOut: { backgroundColor: '#F9FAFB', borderColor: '#EEF0F6' },
   monthCellSelected: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
   monthDay: { fontSize: 13, fontWeight: '900', color: '#111827' },
   monthDaySelected: { color: '#FFFFFF' },
+  monthDayOut: { color: '#9CA3AF' },
   monthDot: { marginTop: 4, width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#2563EB' },
   monthDotSelected: { backgroundColor: '#FFFFFF' },
   monthDotOn: { backgroundColor: '#2563EB' },
+  monthDotOut: { backgroundColor: '#9CA3AF' },
   monthDotHidden: { opacity: 0 },
 
   sectionHeader: { marginTop: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },

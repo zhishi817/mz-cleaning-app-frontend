@@ -109,15 +109,35 @@ export default function ManagerDailyTaskScreen(props: Props) {
     if (!taskIds.length) return Alert.alert(t('common_error'), '缺少任务ID')
     try {
       setSaving(true)
-      await updateCleaningTaskManagerFields(token, {
-        task_ids: taskIds,
-        checkout_time: checkoutTime.trim() || null,
-        checkin_time: checkinTime.trim() || null,
-        old_code: oldCode.trim() || null,
-        new_code: newCode.trim() || null,
-        guest_special_request: guestNote.trim() || null,
-        keys_required: keysRequired,
-      })
+      const norm = (v: any) => String(v ?? '').replace(/\s+/g, ' ').trim()
+      const toNull = (v: any) => {
+        const s = norm(v)
+        return s ? s : null
+      }
+      const prevCheckout = toNull((task as any)?.start_time || (task as any)?.checkout_time)
+      const prevCheckin = toNull((task as any)?.end_time || (task as any)?.checkin_time)
+      const prevOldCode = toNull((task as any)?.old_code)
+      const prevNewCode = toNull((task as any)?.new_code)
+      const prevGuest = toNull((task as any)?.guest_special_request)
+      const prevKeys = Number((task as any)?.keys_required ?? 1)
+
+      const nextCheckout = toNull(checkoutTime)
+      const nextCheckin = toNull(checkinTime)
+      const nextOldCode = toNull(oldCode)
+      const nextNewCode = toNull(newCode)
+      const nextGuest = toNull(guestNote)
+      const nextKeys = keysRequired
+
+      const payload: any = { task_ids: taskIds }
+      if (norm(nextCheckout) !== norm(prevCheckout)) payload.checkout_time = nextCheckout
+      if (norm(nextCheckin) !== norm(prevCheckin)) payload.checkin_time = nextCheckin
+      if (norm(nextOldCode) !== norm(prevOldCode)) payload.old_code = nextOldCode
+      if (norm(nextNewCode) !== norm(prevNewCode)) payload.new_code = nextNewCode
+      if (norm(nextGuest) !== norm(prevGuest)) payload.guest_special_request = nextGuest
+      if (Number.isFinite(nextKeys) && nextKeys !== prevKeys) payload.keys_required = nextKeys
+
+      const keys = Object.keys(payload).filter((k) => k !== 'task_ids')
+      if (keys.length) await updateCleaningTaskManagerFields(token, payload)
       Alert.alert(t('common_ok'), '已保存')
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
@@ -158,7 +178,10 @@ export default function ManagerDailyTaskScreen(props: Props) {
     try {
       setMarking(true)
       if (!checkedOutAt) {
-        await updateCleaningTaskManagerFields(token, { task_ids: taskIds, keys_required: keysRequired })
+        const prevKeys = Number((task as any)?.keys_required ?? 1)
+        if (Number.isFinite(keysRequired) && keysRequired !== prevKeys) {
+          await updateCleaningTaskManagerFields(token, { task_ids: taskIds, keys_required: keysRequired })
+        }
       }
       await markGuestCheckedOutBulk(token, { task_ids: taskIds, action: checkedOutAt ? 'unset' : 'set' })
       Alert.alert(t('common_ok'), checkedOutAt ? '已取消退房' : '已标记退房，已通知清洁人员')
