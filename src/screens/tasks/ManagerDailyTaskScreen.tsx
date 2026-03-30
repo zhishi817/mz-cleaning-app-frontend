@@ -58,6 +58,11 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const [newCode, setNewCode] = useState('')
   const [guestNote, setGuestNote] = useState('')
   const [keysRequired, setKeysRequired] = useState(1)
+  const [keysDirty, setKeysDirty] = useState(false)
+  const [keysRequiredCheckin, setKeysRequiredCheckin] = useState(1)
+  const [keysDirtyCheckin, setKeysDirtyCheckin] = useState(false)
+  const [keysRequiredCheckout, setKeysRequiredCheckout] = useState(1)
+  const [keysDirtyCheckout, setKeysDirtyCheckout] = useState(false)
 
   const [photosLoading, setPhotosLoading] = useState(false)
   const [inspectionItems, setInspectionItems] = useState<Array<{ area: string; url: string; note?: string | null }>>([])
@@ -70,8 +75,18 @@ export default function ManagerDailyTaskScreen(props: Props) {
     setOldCode(String((task as any)?.old_code || '').trim())
     setNewCode(String((task as any)?.new_code || '').trim())
     setGuestNote(String((task as any)?.guest_special_request || '').trim())
-    const k = Number((task as any)?.keys_required ?? 1)
-    setKeysRequired(Number.isFinite(k) && k >= 2 ? 2 : 1)
+    const k0 = Number((task as any)?.keys_required ?? 1)
+    const k = Number.isFinite(k0) && k0 >= 2 ? 2 : 1
+    const kc0 = Number((task as any)?.keys_required_checkin ?? k)
+    const kk0 = Number((task as any)?.keys_required_checkout ?? k)
+    const kc = Number.isFinite(kc0) && kc0 >= 2 ? 2 : 1
+    const kk = Number.isFinite(kk0) && kk0 >= 2 ? 2 : 1
+    setKeysRequired(k)
+    setKeysRequiredCheckin(kc)
+    setKeysRequiredCheckout(kk)
+    setKeysDirty(false)
+    setKeysDirtyCheckin(false)
+    setKeysDirtyCheckout(false)
   }, [task])
 
   const inspectionTaskId = useMemo(() => {
@@ -104,6 +119,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!task) return
     if (!isCustomerService) return
+    const taskType = String((task as any)?.task_type || '').trim().toLowerCase()
+    const isTurnover = taskType === 'turnover'
     const ids = Array.isArray((task as any)?.source_ids) && (task as any).source_ids.length ? (task as any).source_ids : [String((task as any)?.source_id || '')]
     const taskIds = ids.map((x: any) => String(x || '').trim()).filter(Boolean)
     if (!taskIds.length) return Alert.alert(t('common_error'), '缺少任务ID')
@@ -120,6 +137,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
       const prevNewCode = toNull((task as any)?.new_code)
       const prevGuest = toNull((task as any)?.guest_special_request)
       const prevKeys = Number((task as any)?.keys_required ?? 1)
+      const prevKeysCheckin = Number((task as any)?.keys_required_checkin ?? prevKeys)
+      const prevKeysCheckout = Number((task as any)?.keys_required_checkout ?? prevKeys)
 
       const nextCheckout = toNull(checkoutTime)
       const nextCheckin = toNull(checkinTime)
@@ -127,31 +146,61 @@ export default function ManagerDailyTaskScreen(props: Props) {
       const nextNewCode = toNull(newCode)
       const nextGuest = toNull(guestNote)
       const nextKeys = keysRequired
+      const nextKeysCheckin = keysRequiredCheckin
+      const nextKeysCheckout = keysRequiredCheckout
 
-      const payload: any = { task_ids: taskIds }
-      if (norm(nextCheckout) !== norm(prevCheckout)) payload.checkout_time = nextCheckout
-      if (norm(nextCheckin) !== norm(prevCheckin)) payload.checkin_time = nextCheckin
-      if (norm(nextOldCode) !== norm(prevOldCode)) payload.old_code = nextOldCode
-      if (norm(nextNewCode) !== norm(prevNewCode)) payload.new_code = nextNewCode
-      if (norm(nextGuest) !== norm(prevGuest)) payload.guest_special_request = nextGuest
-      if (Number.isFinite(nextKeys) && nextKeys !== prevKeys) payload.keys_required = nextKeys
+      const payloadCommon: any = { task_ids: taskIds }
+      if (norm(nextCheckout) !== norm(prevCheckout)) payloadCommon.checkout_time = nextCheckout
+      if (norm(nextCheckin) !== norm(prevCheckin)) payloadCommon.checkin_time = nextCheckin
+      if (norm(nextOldCode) !== norm(prevOldCode)) payloadCommon.old_code = nextOldCode
+      if (norm(nextNewCode) !== norm(prevNewCode)) payloadCommon.new_code = nextNewCode
+      if (norm(nextGuest) !== norm(prevGuest)) payloadCommon.guest_special_request = nextGuest
+      if (!isTurnover) {
+        if (keysDirty && Number.isFinite(nextKeys)) payloadCommon.keys_required = nextKeys
+        else if (!keysDirty && Number.isFinite(nextKeys) && nextKeys !== prevKeys) payloadCommon.keys_required = nextKeys
+      }
 
-      const keys = Object.keys(payload).filter((k) => k !== 'task_ids')
-      if (keys.length) await updateCleaningTaskManagerFields(token, payload)
+      const saveCommonKeys = Object.keys(payloadCommon).filter((k) => k !== 'task_ids')
+      const saveCommonResult = saveCommonKeys.length ? await updateCleaningTaskManagerFields(token, payloadCommon) : null
+
+      const checkoutTaskId = String((task as any)?.source_id || '').trim() || (taskIds[0] || '')
+      const checkinTaskId = isTurnover ? (taskIds.find((x: string) => x !== checkoutTaskId) || '') : ''
+      const keyResults: any[] = []
+      if (isTurnover) {
+        if (checkinTaskId && ((keysDirtyCheckin && Number.isFinite(nextKeysCheckin)) || (!keysDirtyCheckin && Number.isFinite(nextKeysCheckin) && nextKeysCheckin !== prevKeysCheckin))) {
+          keyResults.push(await updateCleaningTaskManagerFields(token, { task_ids: [checkinTaskId], keys_required: nextKeysCheckin }))
+        }
+        if (checkoutTaskId && ((keysDirtyCheckout && Number.isFinite(nextKeysCheckout)) || (!keysDirtyCheckout && Number.isFinite(nextKeysCheckout) && nextKeysCheckout !== prevKeysCheckout))) {
+          keyResults.push(await updateCleaningTaskManagerFields(token, { task_ids: [checkoutTaskId], keys_required: nextKeysCheckout }))
+        }
+      }
       if (task?.id) {
         const patch: any = {}
-        if (payload.checkout_time !== undefined) patch.start_time = payload.checkout_time
-        if (payload.checkin_time !== undefined) patch.end_time = payload.checkin_time
-        if (payload.old_code !== undefined) patch.old_code = payload.old_code
-        if (payload.new_code !== undefined) patch.new_code = payload.new_code
-        if (payload.guest_special_request !== undefined) patch.guest_special_request = payload.guest_special_request
-        if (payload.keys_required !== undefined) {
-          patch.keys_required = payload.keys_required
-          patch.keys_required_checkin = payload.keys_required
+        if (payloadCommon.checkout_time !== undefined) patch.start_time = payloadCommon.checkout_time
+        if (payloadCommon.checkin_time !== undefined) patch.end_time = payloadCommon.checkin_time
+        if (payloadCommon.old_code !== undefined) patch.old_code = payloadCommon.old_code
+        if (payloadCommon.new_code !== undefined) patch.new_code = payloadCommon.new_code
+        if (payloadCommon.guest_special_request !== undefined) patch.guest_special_request = payloadCommon.guest_special_request
+        if (!isTurnover && payloadCommon.keys_required !== undefined) {
+          patch.keys_required = payloadCommon.keys_required
+          patch.keys_required_checkin = payloadCommon.keys_required
+        }
+        if (isTurnover) {
+          if (checkinTaskId && ((keysDirtyCheckin && Number.isFinite(nextKeysCheckin)) || (!keysDirtyCheckin && Number.isFinite(nextKeysCheckin) && nextKeysCheckin !== prevKeysCheckin))) {
+            patch.keys_required_checkin = nextKeysCheckin
+          }
+          if (checkoutTaskId && ((keysDirtyCheckout && Number.isFinite(nextKeysCheckout)) || (!keysDirtyCheckout && Number.isFinite(nextKeysCheckout) && nextKeysCheckout !== prevKeysCheckout))) {
+            patch.keys_required_checkout = nextKeysCheckout
+          }
         }
         if (Object.keys(patch).length) await patchWorkTaskItem(task.id, patch)
       }
-      Alert.alert(t('common_ok'), '已保存')
+      setKeysDirty(false)
+      setKeysDirtyCheckin(false)
+      setKeysDirtyCheckout(false)
+      const allResults = [saveCommonResult, ...keyResults].filter(Boolean)
+      const anyChanged = allResults.some((r: any) => !r?.skipped)
+      Alert.alert(t('common_ok'), anyChanged ? '已保存' : '已保存（无变化）')
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
     } finally {
@@ -186,15 +235,24 @@ export default function ManagerDailyTaskScreen(props: Props) {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!isCustomerService) return
     const ids = Array.isArray((task as any)?.source_ids) && (task as any).source_ids.length ? (task as any).source_ids : [String((task as any)?.source_id || '')]
-    const taskIds = ids.map((x: any) => String(x || '').trim()).filter(Boolean)
+    const taskIds0 = ids.map((x: any) => String(x || '').trim()).filter(Boolean)
+    const checkoutTaskId = String((task as any)?.source_id || '').trim() || (taskIds0[0] || '')
+    const taskIds = taskType === 'turnover' && checkoutTaskId ? [checkoutTaskId] : taskIds0
     if (!taskIds.length) return Alert.alert(t('common_error'), '缺少任务ID')
     try {
       setMarking(true)
       if (!checkedOutAt) {
-        const prevKeys = Number((task as any)?.keys_required ?? 1)
-        if (Number.isFinite(keysRequired) && keysRequired !== prevKeys) {
-          await updateCleaningTaskManagerFields(token, { task_ids: taskIds, keys_required: keysRequired })
-          if (task?.id) await patchWorkTaskItem(task.id, { keys_required: keysRequired, keys_required_checkin: keysRequired } as any)
+        const prevKeys = taskType === 'turnover' ? Number((task as any)?.keys_required_checkout ?? (task as any)?.keys_required ?? 1) : Number((task as any)?.keys_required ?? 1)
+        const nextK = taskType === 'turnover' ? keysRequiredCheckout : keysRequired
+        const dirty = taskType === 'turnover' ? keysDirtyCheckout : keysDirty
+        if (Number.isFinite(nextK) && (dirty || nextK !== prevKeys)) {
+          await updateCleaningTaskManagerFields(token, { task_ids: taskIds, keys_required: nextK })
+          if (task?.id) {
+            const patch: any = taskType === 'turnover' ? { keys_required_checkout: nextK } : { keys_required: nextK, keys_required_checkin: nextK }
+            await patchWorkTaskItem(task.id, patch)
+          }
+          if (taskType === 'turnover') setKeysDirtyCheckout(false)
+          else setKeysDirty(false)
         }
       }
       await markGuestCheckedOutBulk(token, { task_ids: taskIds, action: checkedOutAt ? 'unset' : 'set' })
@@ -271,23 +329,83 @@ export default function ManagerDailyTaskScreen(props: Props) {
             <TextInput value={checkinTime} onChangeText={setCheckinTime} editable={isCustomerService && !saving} style={styles.input} placeholder="例如 3pm" placeholderTextColor="#9CA3AF" />
           </View>
           <View style={styles.field}>
-            <Text style={styles.label}>需挂钥匙套数</Text>
-            <View style={styles.pillsRow}>
-              <Pressable
-                onPress={() => setKeysRequired(1)}
-                disabled={!isCustomerService || saving}
-                style={({ pressed }) => [styles.pillBtn, keysRequired === 1 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
-              >
-                <Text style={[styles.pillBtnText, keysRequired === 1 ? styles.pillBtnTextOn : null]}>1 套</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setKeysRequired(2)}
-                disabled={!isCustomerService || saving}
-                style={({ pressed }) => [styles.pillBtn, keysRequired === 2 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
-              >
-                <Text style={[styles.pillBtnText, keysRequired === 2 ? styles.pillBtnTextOn : null]}>2 套</Text>
-              </Pressable>
-            </View>
+            {taskType === 'turnover' ? (
+              <>
+                <Text style={styles.label}>入住需挂钥匙套数</Text>
+                <View style={styles.pillsRow}>
+                  <Pressable
+                    onPress={() => {
+                      setKeysRequiredCheckin(1)
+                      setKeysDirtyCheckin(true)
+                    }}
+                    disabled={!isCustomerService || saving}
+                    style={({ pressed }) => [styles.pillBtn, keysRequiredCheckin === 1 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={[styles.pillBtnText, keysRequiredCheckin === 1 ? styles.pillBtnTextOn : null]}>1 套</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      setKeysRequiredCheckin(2)
+                      setKeysDirtyCheckin(true)
+                    }}
+                    disabled={!isCustomerService || saving}
+                    style={({ pressed }) => [styles.pillBtn, keysRequiredCheckin === 2 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={[styles.pillBtnText, keysRequiredCheckin === 2 ? styles.pillBtnTextOn : null]}>2 套</Text>
+                  </Pressable>
+                </View>
+                <View style={{ height: 10 }} />
+                <Text style={styles.label}>退房需退钥匙套数</Text>
+                <View style={styles.pillsRow}>
+                  <Pressable
+                    onPress={() => {
+                      setKeysRequiredCheckout(1)
+                      setKeysDirtyCheckout(true)
+                    }}
+                    disabled={!isCustomerService || saving}
+                    style={({ pressed }) => [styles.pillBtn, keysRequiredCheckout === 1 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={[styles.pillBtnText, keysRequiredCheckout === 1 ? styles.pillBtnTextOn : null]}>1 套</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      setKeysRequiredCheckout(2)
+                      setKeysDirtyCheckout(true)
+                    }}
+                    disabled={!isCustomerService || saving}
+                    style={({ pressed }) => [styles.pillBtn, keysRequiredCheckout === 2 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={[styles.pillBtnText, keysRequiredCheckout === 2 ? styles.pillBtnTextOn : null]}>2 套</Text>
+                  </Pressable>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.label}>需挂钥匙套数</Text>
+                <View style={styles.pillsRow}>
+                  <Pressable
+                    onPress={() => {
+                      setKeysRequired(1)
+                      setKeysDirty(true)
+                    }}
+                    disabled={!isCustomerService || saving}
+                    style={({ pressed }) => [styles.pillBtn, keysRequired === 1 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={[styles.pillBtnText, keysRequired === 1 ? styles.pillBtnTextOn : null]}>1 套</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      setKeysRequired(2)
+                      setKeysDirty(true)
+                    }}
+                    disabled={!isCustomerService || saving}
+                    style={({ pressed }) => [styles.pillBtn, keysRequired === 2 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={[styles.pillBtnText, keysRequired === 2 ? styles.pillBtnTextOn : null]}>2 套</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
           </View>
           <View style={styles.row2}>
             <View style={{ flex: 1 }}>

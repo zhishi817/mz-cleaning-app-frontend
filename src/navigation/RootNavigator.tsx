@@ -249,7 +249,6 @@ export default function RootNavigator() {
       }),
     })
     const { status } = await Notifications.requestPermissionsAsync()
-    console.log('通知权限:', status)
     if (status !== 'granted') return
     const projectId =
       String((Constants as any)?.expoConfig?.extra?.eas?.projectId || '') ||
@@ -273,6 +272,7 @@ export default function RootNavigator() {
   useEffect(() => {
     if (pushAskedRef.current) return
     if (status !== 'signedIn') return
+    if (!token) return
     pushAskedRef.current = true
     registerForPush().catch(() => null)
   }, [status, token, user?.id])

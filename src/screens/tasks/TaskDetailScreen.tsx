@@ -364,7 +364,7 @@ export default function TaskDetailScreen(props: Props) {
   const isNeedHangType = taskType === 'checkin_clean' || taskType === 'turnover'
   const checkoutSets = Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : (isCheckoutType && keysSets >= 2 ? keysSets : 0)
   const checkinSets = Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : (isNeedHangType && keysSets >= 2 ? keysSets : 0)
-  const showCheckout = isCleaningSource && (checkoutSets >= 2 || (isCheckedOut && keysSets >= 2))
+  const showCheckout = isCleaningSource && !isCheckedOut && checkoutSets >= 2
   const showCheckin = isCleaningSource && checkinSets >= 2
   const restockItems = Array.isArray((task as any).restock_items) ? ((task as any).restock_items as any[]) : []
   const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'

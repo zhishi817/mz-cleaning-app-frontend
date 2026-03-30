@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Image, Linking, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Image, Linking, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
@@ -166,6 +166,7 @@ function initialsOf(name: string) {
 export default function TasksScreen(props: Props) {
   const { user, token } = useAuth()
   const { locale, t } = useI18n()
+  const { width: windowWidth } = useWindowDimensions()
   const roleNames = useMemo(() => {
     const arr = Array.isArray((user as any)?.roles) ? ((user as any).roles as any[]) : []
     const ids = arr.map((x) => String(x || '').trim()).filter(Boolean)
@@ -195,6 +196,8 @@ export default function TasksScreen(props: Props) {
   const bannerTimerRef = useRef<any>(null)
   const [search, setSearch] = useState('')
   const weekRowRef = useRef<ScrollView>(null)
+  const weekPagerRef = useRef<ScrollView>(null)
+  const weekPagerAdjustingRef = useRef(false)
   const lastAlertsFetchRef = useRef(0)
   const shownAlertIdsRef = useRef<Record<string, boolean>>({})
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
@@ -486,7 +489,7 @@ export default function TasksScreen(props: Props) {
   }, [locale, period, selected, selectedDate, tasksByDate])
 
   useEffect(() => {
-    if (period === 'month') return
+    if (period !== 'today') return
     const d = parseYmd(selectedDate)
     const dow = d.getDay()
     const isWeekend = dow === 0 || dow === 6
@@ -496,6 +499,52 @@ export default function TasksScreen(props: Props) {
     }, 0)
     return () => clearTimeout(id)
   }, [period, selectedDate])
+
+  const weekPagerWidth = useMemo(() => Math.max(1, Number(windowWidth || 0) - 32), [windowWidth])
+  const weekPagerCenterIndex = 2
+
+  const weekPagerPages = useMemo(() => {
+    if (period !== 'week') return []
+    const base = selected
+    const start = startOfWeekMonday(base)
+    const labelsZh = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+    const labelsEn = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    const labels = locale === 'en' ? labelsEn : labelsZh
+    return Array.from({ length: 5 }).map((_, pageIdx) => {
+      const weekStart = addDays(start, (pageIdx - weekPagerCenterIndex) * 7)
+      const days = Array.from({ length: 7 }).map((__, idx) => {
+        const date = addDays(weekStart, idx)
+        const key = ymd(date)
+        const hasTask = (tasksByDate.get(key) || []).length > 0
+        const isSelected = key === selectedDate
+        return { key, dow: labels[idx], day: date.getDate(), hasTask, isSelected }
+      })
+      return { key: ymd(weekStart), days }
+    })
+  }, [locale, period, selected, selectedDate, tasksByDate])
+
+  useEffect(() => {
+    if (period !== 'week') return
+    const id = setTimeout(() => {
+      weekPagerAdjustingRef.current = true
+      weekPagerRef.current?.scrollTo({ x: weekPagerWidth * weekPagerCenterIndex, y: 0, animated: false })
+      setTimeout(() => {
+        weekPagerAdjustingRef.current = false
+      }, 0)
+    }, 0)
+    return () => clearTimeout(id)
+  }, [period, selectedDate, weekPagerWidth])
+
+  const onWeekPagerMomentumEnd = (e: any) => {
+    if (period !== 'week') return
+    if (weekPagerAdjustingRef.current) return
+    const x = Number(e?.nativeEvent?.contentOffset?.x || 0)
+    const idx = Math.round(x / weekPagerWidth)
+    const delta = idx - weekPagerCenterIndex
+    if (!delta) return
+    const next = addDays(selected, delta * 7)
+    setSelectedDate(ymd(next))
+  }
 
   const monthGrid = useMemo(() => {
     const base = selected
@@ -578,10 +627,9 @@ export default function TasksScreen(props: Props) {
   }, [period, selectedDate, tasksByDate])
 
   const canReorder = useMemo(() => {
-    if (period === 'month') return false
     if (roleNames.includes('cleaner') || roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')) return true
     return false
-  }, [period, roleNames.join('|')])
+  }, [roleNames.join('|')])
 
   const isReorderableTask = useMemo(() => {
     return (task: WorkTaskItem) => {
@@ -1055,17 +1103,47 @@ export default function TasksScreen(props: Props) {
             </View>
           </View>
         ) : (
-          <ScrollView ref={weekRowRef} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.weekRow}>
-            {weekDays.map(d => (
-              <Pressable key={d.key} onPress={() => setSelectedDate(d.key)} style={({ pressed }) => [styles.weekCard, pressed ? styles.segmentPressed : null]}>
-                <View style={[styles.weekCardInner, d.isSelected ? styles.dateCardSelected : null]}>
-                  <Text style={[styles.dateDow, d.isSelected ? styles.dateDowSelected : null]}>{d.dow}</Text>
-                  <Text style={[styles.dateDay, d.isSelected ? styles.dateDaySelected : null]}>{d.day}</Text>
-                  <View style={[styles.dateDot, d.isSelected ? styles.dateDotSelected : d.hasTask ? styles.dateDotOn : styles.dateDotHidden]} />
+          period === 'week' ? (
+            <ScrollView
+              ref={weekPagerRef}
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              onMomentumScrollEnd={onWeekPagerMomentumEnd}
+              contentOffset={{ x: weekPagerWidth * weekPagerCenterIndex, y: 0 }}
+              style={styles.weekPager}
+            >
+              {weekPagerPages.map((p) => (
+                <View key={p.key} style={[styles.weekPage, { width: weekPagerWidth }]}>
+                  {p.days.map((d) => (
+                    <Pressable
+                      key={d.key}
+                      onPress={() => setSelectedDate(d.key)}
+                      style={({ pressed }) => [styles.weekCard, styles.weekCardFlex, pressed ? styles.segmentPressed : null]}
+                    >
+                      <View style={[styles.weekCardInner, d.isSelected ? styles.dateCardSelected : null]}>
+                        <Text style={[styles.dateDow, d.isSelected ? styles.dateDowSelected : null]}>{d.dow}</Text>
+                        <Text style={[styles.dateDay, d.isSelected ? styles.dateDaySelected : null]}>{d.day}</Text>
+                        <View style={[styles.dateDot, d.isSelected ? styles.dateDotSelected : d.hasTask ? styles.dateDotOn : styles.dateDotHidden]} />
+                      </View>
+                    </Pressable>
+                  ))}
                 </View>
-              </Pressable>
-            ))}
-          </ScrollView>
+              ))}
+            </ScrollView>
+          ) : (
+            <ScrollView ref={weekRowRef} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.weekRow}>
+              {weekDays.map(d => (
+                <Pressable key={d.key} onPress={() => setSelectedDate(d.key)} style={({ pressed }) => [styles.weekCard, pressed ? styles.segmentPressed : null]}>
+                  <View style={[styles.weekCardInner, d.isSelected ? styles.dateCardSelected : null]}>
+                    <Text style={[styles.dateDow, d.isSelected ? styles.dateDowSelected : null]}>{d.dow}</Text>
+                    <Text style={[styles.dateDay, d.isSelected ? styles.dateDaySelected : null]}>{d.day}</Text>
+                    <View style={[styles.dateDot, d.isSelected ? styles.dateDotSelected : d.hasTask ? styles.dateDotOn : styles.dateDotHidden]} />
+                  </View>
+                </Pressable>
+              ))}
+            </ScrollView>
+          )
         )}
 
         {canSwitchMode ? (
@@ -1238,7 +1316,7 @@ export default function TasksScreen(props: Props) {
               const isNeedHangType = taskType === 'checkin_clean' || taskType === 'turnover'
               const checkoutSets = Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : (isCheckoutType && keysSets >= 2 ? keysSets : 0)
               const checkinSets = Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : (isNeedHangType && keysSets >= 2 ? keysSets : 0)
-              const showCheckout = isCleaningSource && (checkoutSets >= 2 || (isCheckedOut && keysSets >= 2))
+              const showCheckout = isCleaningSource && !isCheckedOut && checkoutSets >= 2
               const showCheckin = isCleaningSource && checkinSets >= 2
               const offlineDetail = (() => {
                 if (!isOfflineTask) return null
@@ -1634,8 +1712,11 @@ const styles = StyleSheet.create({
   segmentText: { fontSize: moderateScale(14), fontWeight: '700', color: '#9CA3AF' },
   segmentTextActive: { color: '#111827' },
 
+  weekPager: { marginTop: 14 },
+  weekPage: { flexDirection: 'row', gap: 10, paddingRight: 2 },
   weekRow: { gap: 10, marginTop: 14, paddingRight: 2 },
   weekCard: { width: moderateScale(64) },
+  weekCardFlex: { flex: 1, width: 0 },
   weekCardInner: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
