@@ -323,6 +323,9 @@ export type WorkTask = {
   source_ids?: string[]
   cleaning_task_ids?: string[]
   inspection_task_ids?: string[]
+  order_id?: string | null
+  order_id_checkin?: string | null
+  order_id_checkout?: string | null
   property_id: string | null
   title: string
   summary: string | null
@@ -370,7 +373,6 @@ export async function updateCleaningTaskManagerFields(
     old_code?: string | null
     new_code?: string | null
     guest_special_request?: string | null
-    keys_required?: number | null
   },
 ) {
   const urls = buildUrlCandidates('mzapp/cleaning-tasks/manager-fields')
@@ -399,6 +401,40 @@ export async function updateCleaningTaskManagerFields(
     }
     throw new Error(msg)
   }
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function updateCleaningOrderKeysRequired(token: string, params: { order_id: string; keys_required: 1 | 2 }) {
+  const urls = buildUrlCandidates('mzapp/cleaning-tasks/order-keys-required')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function markGuestCheckedOutByOrder(token: string, params: { order_id: string; action?: 'set' | 'unset' }) {
+  const urls = buildUrlCandidates('mzapp/cleaning-tasks/order-checked-out')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as any
 }
 
@@ -463,22 +499,25 @@ export type PropertyFeedback = {
   id: string
   property_id: string
   source_task_id?: string | null
-  kind: 'maintenance' | 'deep_cleaning'
+  kind: 'maintenance' | 'deep_cleaning' | 'daily_necessities'
   area?: string | null
   areas?: string[] | null
   category?: string | null
   detail: string
+  item_name?: string | null
+  quantity?: number | null
+  note?: string | null
   media_urls?: string[] | null
   created_by?: string | null
   created_by_name?: string | null
   created_at: string
-  status: 'open' | 'in_progress' | 'resolved' | 'cancelled'
+  status: 'open' | 'in_progress' | 'resolved' | 'cancelled' | 'need_replace' | 'replaced' | 'no_action'
   resolved_at?: string | null
 }
 
 export async function listPropertyFeedbacks(
   token: string,
-  params: { property_id?: string; property_code?: string; status?: Array<PropertyFeedback['status']>; limit?: number },
+  params: { property_id?: string; property_code?: string; status?: string[]; limit?: number },
 ) {
   const sp = new URLSearchParams()
   if (params.property_id) sp.set('property_id', params.property_id)
@@ -499,16 +538,35 @@ export async function listPropertyFeedbacks(
 
 export async function createPropertyFeedback(
   token: string,
-  params: {
-    kind: PropertyFeedback['kind']
-    property_id: string
-    source_task_id?: string
-    area?: string
-    areas?: string[]
-    category?: string
-    detail: string
-    media_urls?: string[]
-  },
+  params:
+    | {
+        kind: 'maintenance'
+        property_id: string
+        source_task_id?: string
+        area?: string
+        category?: string
+        detail?: string
+        media_urls?: string[]
+        items?: Array<{ area: string; category: string; detail: string; media_urls?: string[] }>
+      }
+    | {
+        kind: 'deep_cleaning'
+        property_id: string
+        source_task_id?: string
+        areas?: string[]
+        detail?: string
+        media_urls?: string[]
+      }
+    | {
+        kind: 'daily_necessities'
+        property_id: string
+        source_task_id?: string
+        status: 'need_replace' | 'in_progress' | 'replaced' | 'no_action'
+        item_name: string
+        quantity: number
+        note?: string
+        media_urls?: string[]
+      },
 ) {
   const urls = buildUrlCandidates('mzapp/property-feedbacks')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -520,7 +578,7 @@ export async function createPropertyFeedback(
       body: JSON.stringify(params),
     })
     lastRes = res
-    if (res.ok) return (await res.json()) as PropertyFeedback
+    if (res.ok) return (await res.json()) as any
   }
   const msg = lastRes ? await parseErrorMessage(lastRes) : ''
   throw new Error(msg || '提交失败')

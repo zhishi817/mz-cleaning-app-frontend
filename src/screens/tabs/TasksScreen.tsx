@@ -8,7 +8,7 @@ import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { reorderCleaningTasks } from '../../lib/api'
-import { markGuestCheckedOutBulk } from '../../lib/api'
+import { markGuestCheckedOutByOrder } from '../../lib/api'
 import { listMzappAlerts, markMzappAlertRead } from '../../lib/api'
 import { getMyProfile } from '../../lib/api'
 import { listDayEndBackupKeys } from '../../lib/api'
@@ -1312,10 +1312,16 @@ export default function TasksScreen(props: Props) {
               const keysCheckout = Number((task as any)?.keys_required_checkout ?? 0)
               const keysCheckin = Number((task as any)?.keys_required_checkin ?? 0)
               const keysSets = Number.isFinite(keysRequired) ? Math.max(1, Math.trunc(keysRequired)) : 1
+              const isTurnoverType = taskType === 'turnover'
+              const orderIdCheckout = String((task as any)?.order_id_checkout || '').trim()
               const isCheckoutType = taskType === 'checkout_clean'
               const isNeedHangType = taskType === 'checkin_clean' || taskType === 'turnover'
-              const checkoutSets = Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : (isCheckoutType && keysSets >= 2 ? keysSets : 0)
-              const checkinSets = Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : (isNeedHangType && keysSets >= 2 ? keysSets : 0)
+              const checkoutSets = isTurnoverType
+                ? (Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : (orderIdCheckout && keysSets >= 2 ? keysSets : 0))
+                : (Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : (isCheckoutType && keysSets >= 2 ? keysSets : 0))
+              const checkinSets = isTurnoverType
+                ? (Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : 0)
+                : (Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : (isNeedHangType && keysSets >= 2 ? keysSets : 0))
               const showCheckout = isCleaningSource && !isCheckedOut && checkoutSets >= 2
               const showCheckin = isCleaningSource && checkinSets >= 2
               const offlineDetail = (() => {
@@ -1584,9 +1590,9 @@ export default function TasksScreen(props: Props) {
                           onPress={async () => {
                             if (!token || !user?.id) return
                             try {
-                                  const ids0 = Array.isArray((task as any)?.source_ids) && (task as any).source_ids.length ? (task as any).source_ids : [String(task.source_id)]
-                                  const ids = ids0.map((x: any) => String(x || '').trim()).filter(Boolean)
-                                  await markGuestCheckedOutBulk(token, { task_ids: ids, action: isCheckedOut ? 'unset' : 'set' })
+                                  const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
+                                  if (!orderId) throw new Error('缺少订单ID')
+                                  await markGuestCheckedOutByOrder(token, { order_id: orderId, action: isCheckedOut ? 'unset' : 'set' })
                                   showBanner('已标记', isCheckedOut ? '已取消退房' : '已标记已退房')
                               const effectiveView: WorkTasksView = canManagerMode && mode === 'manager' ? view : 'mine'
                               await refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })

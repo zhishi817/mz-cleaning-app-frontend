@@ -15,10 +15,25 @@ import { API_BASE_URL } from '../../config/env'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'FeedbackForm'>
 
-type Kind = 'maintenance' | 'deep_cleaning'
+type Kind = 'maintenance' | 'deep_cleaning' | 'daily_necessities'
 
 const AREA_OPTIONS = ['入户走廊', '客厅', '厨房', '卧室', '阳台', '浴室', '其他'] as const
 const CATEGORY_OPTIONS = ['电器', '家具', '其他'] as const
+const DAILY_STATUS_OPTIONS = [
+  { value: 'need_replace', label: '需更换' },
+  { value: 'in_progress', label: '处理中' },
+  { value: 'replaced', label: '已更换' },
+  { value: 'no_action', label: '无需处理' },
+] as const
+
+function dailyStatusLabel(v: any) {
+  const s = String(v || '').trim()
+  if (s === 'need_replace') return '需更换'
+  if (s === 'in_progress') return '处理中'
+  if (s === 'replaced') return '已更换'
+  if (s === 'no_action') return '无需处理'
+  return s || '-'
+}
 
 function fmtTime(s: string) {
   const d = new Date(String(s || ''))
@@ -125,6 +140,13 @@ export default function FeedbackFormScreen(props: Props) {
   const [category, setCategory] = useState<(typeof CATEGORY_OPTIONS)[number] | null>(null)
   const [detail, setDetail] = useState('')
   const [media, setMedia] = useState<string[]>([])
+  const [maintenanceItems, setMaintenanceItems] = useState<Array<{ area: string; category: string; detail: string; media_urls: string[] }>>([])
+  const [maintenanceEditIndex, setMaintenanceEditIndex] = useState<number | null>(null)
+  const [showAllAdded, setShowAllAdded] = useState(false)
+  const [dailyStatus, setDailyStatus] = useState<(typeof DAILY_STATUS_OPTIONS)[number]['value']>('need_replace')
+  const [dailyItemName, setDailyItemName] = useState('')
+  const [dailyQty, setDailyQty] = useState('1')
+  const [dailyNote, setDailyNote] = useState('')
 
   const [loadingList, setLoadingList] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -142,8 +164,9 @@ export default function FeedbackFormScreen(props: Props) {
   const propertyCode = String(task?.property?.code || '').trim()
 
   useEffect(() => {
-    props.navigation.setOptions({ title: t('tasks_btn_repair') })
-  }, [props.navigation, t])
+    const title = kind === 'maintenance' ? '房源维修' : kind === 'deep_cleaning' ? '深度清洁' : '日用品反馈'
+    props.navigation.setOptions({ title })
+  }, [props.navigation, kind])
 
   async function refreshPending() {
     if (!token) return
@@ -151,7 +174,8 @@ export default function FeedbackFormScreen(props: Props) {
     try {
       setLoadingList(true)
       setPendingError(null)
-      const list = await listPropertyFeedbacks(token, { property_id: propertyId || undefined, property_code: propertyCode || undefined, status: ['open', 'in_progress'], limit: 20 })
+      const status = ['open', 'in_progress']
+      const list = await listPropertyFeedbacks(token, { property_id: propertyId || undefined, property_code: propertyCode || undefined, status, limit: 50 })
       setPending(Array.isArray(list) ? list : [])
     } catch (e: any) {
       setPendingError(String(e?.message || '加载失败'))
@@ -163,7 +187,7 @@ export default function FeedbackFormScreen(props: Props) {
 
   useEffect(() => {
     refreshPending()
-  }, [token, propertyId, propertyCode])
+  }, [token, propertyId, propertyCode, kind])
 
   function resetForm(nextKind: Kind) {
     setKind(nextKind)
@@ -172,6 +196,13 @@ export default function FeedbackFormScreen(props: Props) {
     setCategory(null)
     setDetail('')
     setMedia([])
+    setMaintenanceItems([])
+    setMaintenanceEditIndex(null)
+    setShowAllAdded(false)
+    setDailyStatus('need_replace')
+    setDailyItemName('')
+    setDailyQty('1')
+    setDailyNote('')
   }
 
   async function ensureCameraPerm() {
@@ -257,13 +288,67 @@ export default function FeedbackFormScreen(props: Props) {
 
   const canSubmit = useMemo(() => {
     if (!propertyId) return false
-    const d = detail.trim()
-    if (!d) return false
     if (kind === 'maintenance') {
-      return !!area && !!category
+      const hasItems = maintenanceItems.length > 0
+      const curOk = !!area && !!category && !!detail.trim()
+      return hasItems || curOk
     }
-    return areas.length > 0 && media.length > 0
-  }, [area, areas.length, category, detail, kind, media.length, propertyId])
+    if (kind === 'deep_cleaning') return areas.length > 0 && media.length > 0 && !!detail.trim()
+    const qty = Number(dailyQty)
+    const okQty = Number.isFinite(qty) && qty >= 1
+    return !!dailyItemName.trim() && okQty && (!!dailyNote.trim() || media.length > 0)
+  }, [area, areas.length, category, detail, kind, media.length, propertyId, maintenanceItems.length, dailyItemName, dailyQty, dailyNote])
+
+  function addMaintenanceItemFromCurrent() {
+    const a = String(area || '').trim()
+    const c = String(category || '').trim()
+    const d = detail.trim()
+    if (maintenanceEditIndex != null && maintenanceEditIndex >= 0) {
+      if (!a || !c || !d) {
+        Alert.alert('内容为空', '是否删除该条问题？', [
+          { text: '取消' },
+          {
+            text: '删除',
+            onPress: () => {
+              setMaintenanceItems((prev) => prev.filter((_, i) => i !== maintenanceEditIndex))
+              cancelEditMaintenanceItem()
+            },
+          },
+        ])
+        return
+      }
+      setMaintenanceItems((prev) => prev.map((x, i) => (i === maintenanceEditIndex ? { area: a, category: c, detail: d, media_urls: media } : x)))
+      setMaintenanceEditIndex(null)
+    } else {
+      if (!a || !c || !d) {
+        Alert.alert(t('common_error'), '当前问题未填写完整')
+        return
+      }
+      setMaintenanceItems((prev) => [...prev, { area: a, category: c, detail: d, media_urls: media }])
+    }
+    setArea(null)
+    setCategory(null)
+    setDetail('')
+    setMedia([])
+  }
+
+  function startEditMaintenanceItem(index: number) {
+    const it = maintenanceItems[index]
+    if (!it) return
+    setArea((it.area as any) || null)
+    setCategory((it.category as any) || null)
+    setDetail(String(it.detail || ''))
+    setMedia(Array.isArray(it.media_urls) ? it.media_urls : [])
+    setMaintenanceEditIndex(index)
+  }
+
+  function cancelEditMaintenanceItem() {
+    setMaintenanceEditIndex(null)
+    setArea(null)
+    setCategory(null)
+    setDetail('')
+    setMedia([])
+  }
 
   async function onSubmit(force?: boolean) {
     if (!token) {
@@ -275,16 +360,23 @@ export default function FeedbackFormScreen(props: Props) {
       return
     }
     const d = detail.trim()
-    if (!d) {
-      Alert.alert(t('common_error'), '请填写详情')
-      return
-    }
     if (kind === 'maintenance') {
-      if (!area) return Alert.alert(t('common_error'), '请选择问题区域')
-      if (!category) return Alert.alert(t('common_error'), '请选择问题类型')
-    } else {
+      if (maintenanceEditIndex != null) return Alert.alert(t('common_error'), '请先保存或取消当前编辑')
+      const curOk = !!area && !!category && !!d
+      if (!maintenanceItems.length && !curOk) return Alert.alert(t('common_error'), '请至少填写一条维修问题')
+      if (curOk === false && (area || category || d || media.length)) return Alert.alert(t('common_error'), '当前问题未填写完整')
+    } else if (kind === 'deep_cleaning') {
       if (!areas.length) return Alert.alert(t('common_error'), '请选择需要清洁的区域')
       if (!media.length) return Alert.alert(t('common_error'), '请拍照上传')
+      if (!d) return Alert.alert(t('common_error'), '请填写说明')
+    } else {
+      const st = String(dailyStatus || '').trim()
+      const it = dailyItemName.trim()
+      const qty = Number(dailyQty)
+      if (!st) return Alert.alert(t('common_error'), '请选择状态')
+      if (!it) return Alert.alert(t('common_error'), '请输入物品名称')
+      if (!Number.isFinite(qty) || qty < 1) return Alert.alert(t('common_error'), '请输入正确数量')
+      if (!dailyNote.trim() && !media.length) return Alert.alert(t('common_error'), '请填写备注或上传照片')
     }
 
     if (!force) {
@@ -292,28 +384,35 @@ export default function FeedbackFormScreen(props: Props) {
       const winMs = 24 * 3600 * 1000
       const detailNorm = normalizeForFingerprint(d).slice(0, 160)
       if (kind === 'maintenance') {
-        const a0 = String(area || '').trim()
-        const c0 = String(category || '').trim()
-        const dup = pending.find((x: any) => {
-          if (String(x?.kind || '') !== 'maintenance') return false
-          const xa = String(x?.area || x?.category || '').trim()
-          const xc = String(x?.category_detail || '').trim()
-          if (xa !== a0) return false
-          if (xc !== c0) return false
-          const xt = normalizeForFingerprint(extractContentText(x?.detail)).slice(0, 160)
-          if (!xt) return false
-          if (xt !== detailNorm && !xt.startsWith(detailNorm.slice(0, 24))) return false
-          const ct = new Date(String(x?.created_at || '')).getTime()
-          return Number.isFinite(ct) ? now - ct <= winMs : true
+        const itemsAll = [
+          ...maintenanceItems,
+          ...(area && category && d ? [{ area: String(area), category: String(category), detail: d, media_urls: media }] : []),
+        ]
+        const hit = itemsAll.find((it) => {
+          const a0 = String(it.area || '').trim()
+          const c0 = String(it.category || '').trim()
+          const dn = normalizeForFingerprint(it.detail).slice(0, 160)
+          return pending.some((x: any) => {
+            if (String(x?.kind || '') !== 'maintenance') return false
+            const xa = String(x?.area || x?.category || '').trim()
+            const xc = String(x?.category_detail || '').trim()
+            if (xa !== a0) return false
+            if (xc !== c0) return false
+            const xt = normalizeForFingerprint(extractContentText(x?.detail)).slice(0, 160)
+            if (!xt) return false
+            if (xt !== dn && !xt.startsWith(dn.slice(0, 24))) return false
+            const ct = new Date(String(x?.created_at || '')).getTime()
+            return Number.isFinite(ct) ? now - ct <= winMs : true
+          })
         })
-        if (dup) {
+        if (hit) {
           Alert.alert('可能重复提交', '该房源同区域同类型在 24 小时内已有类似问题。', [
-            { text: '查看已有', onPress: () => setDetailItem(dup as any) },
+            { text: '查看已有', onPress: () => refreshPending() },
             { text: '仍然提交', onPress: () => onSubmit(true) },
           ])
           return
         }
-      } else {
+      } else if (kind === 'deep_cleaning') {
         const as0 = [...areas].map((s) => String(s || '').trim()).filter(Boolean).sort().join('、')
         const dup = pending.find((x: any) => {
           if (String(x?.kind || '') !== 'deep_cleaning') return false
@@ -332,21 +431,65 @@ export default function FeedbackFormScreen(props: Props) {
           ])
           return
         }
+      } else {
+        const st = String(dailyStatus || '').trim()
+        const it = dailyItemName.trim()
+        const qty = Number(dailyQty)
+        const dn = normalizeForFingerprint(dailyNote.trim() || '').slice(0, 160)
+        const dup = pending.find((x: any) => {
+          if (String(x?.kind || '') !== 'daily_necessities') return false
+          if (String(x?.status || '').trim() !== st) return false
+          if (String(x?.item_name || '').trim() !== it) return false
+          if (Number(x?.quantity || 0) !== (Number.isFinite(qty) ? Math.trunc(qty) : 0)) return false
+          const xt = normalizeForFingerprint(String(x?.note || x?.detail || '').trim()).slice(0, 160)
+          if (dn && xt && xt !== dn && !xt.startsWith(dn.slice(0, 24))) return false
+          const ct = new Date(String(x?.created_at || '')).getTime()
+          return Number.isFinite(ct) ? now - ct <= winMs : true
+        })
+        if (dup) {
+          Alert.alert('可能重复提交', '该房源在 24 小时内已有类似日用品反馈。', [
+            { text: '查看已有', onPress: () => setDetailItem(dup as any) },
+            { text: '仍然提交', onPress: () => onSubmit(true) },
+          ])
+          return
+        }
       }
     }
 
     try {
       setSubmitting(true)
-      await createPropertyFeedback(token, {
-        kind,
-        property_id: propertyId,
-        source_task_id: task?.id ? String(task.id) : undefined,
-        area: kind === 'maintenance' ? String(area) : undefined,
-        areas: kind === 'deep_cleaning' ? areas : undefined,
-        category: kind === 'maintenance' ? String(category) : undefined,
-        detail: d,
-        media_urls: media,
-      })
+      if (kind === 'maintenance') {
+        const itemsAll = [
+          ...maintenanceItems,
+          ...(area && category && d ? [{ area: String(area), category: String(category), detail: d, media_urls: media }] : []),
+        ]
+        await createPropertyFeedback(token, {
+          kind,
+          property_id: propertyId,
+          source_task_id: task?.id ? String(task.id) : undefined,
+          items: itemsAll,
+        } as any)
+      } else if (kind === 'deep_cleaning') {
+        await createPropertyFeedback(token, {
+          kind,
+          property_id: propertyId,
+          source_task_id: task?.id ? String(task.id) : undefined,
+          areas,
+          detail: d,
+          media_urls: media,
+        } as any)
+      } else {
+        await createPropertyFeedback(token, {
+          kind,
+          property_id: propertyId,
+          source_task_id: task?.id ? String(task.id) : undefined,
+          status: dailyStatus,
+          item_name: dailyItemName.trim(),
+          quantity: Math.trunc(Number(dailyQty)),
+          note: dailyNote.trim(),
+          media_urls: media,
+        } as any)
+      }
       Alert.alert(t('common_ok'), '提交成功')
       resetForm(kind)
       await refreshPending()
@@ -370,7 +513,8 @@ export default function FeedbackFormScreen(props: Props) {
   const grouped = useMemo(() => {
     const m = pending.filter(x => String(x.kind || '') === 'maintenance')
     const d = pending.filter(x => String(x.kind || '') === 'deep_cleaning')
-    return { m, d }
+    const dn = pending.filter(x => String(x.kind || '') === 'daily_necessities')
+    return { m, d, dn }
   }, [pending])
 
   const screen = useMemo(() => Dimensions.get('window'), [])
@@ -479,10 +623,81 @@ export default function FeedbackFormScreen(props: Props) {
             >
               <Text style={[styles.segmentText, kind === 'deep_cleaning' ? styles.segmentTextActive : null]}>深度清洁</Text>
             </Pressable>
+            <Pressable
+              onPress={() => resetForm('daily_necessities')}
+              style={({ pressed }) => [styles.segment, kind === 'daily_necessities' ? styles.segmentActive : null, pressed ? styles.pressed : null]}
+            >
+              <Text style={[styles.segmentText, kind === 'daily_necessities' ? styles.segmentTextActive : null]}>日用品反馈</Text>
+            </Pressable>
           </View>
 
           {kind === 'maintenance' ? (
             <>
+              {maintenanceItems.length ? (
+                <>
+                  <Text style={styles.label}>{`已添加问题 (${maintenanceItems.length})`}</Text>
+                  {(showAllAdded ? maintenanceItems : maintenanceItems.slice(0, 3)).map((it, idx) => (
+                    <View key={`${it.area}:${it.category}:${idx}`} style={styles.itemCard}>
+                      <View style={styles.itemCardTop}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.itemCardTitle}>{`问题 ${idx + 1}`}</Text>
+                          <Text style={styles.itemCardMeta}>{`${it.area} · ${it.category}`}</Text>
+                        </View>
+                        <View style={styles.itemCardActions}>
+                          <Pressable
+                            onPress={() => startEditMaintenanceItem(idx)}
+                            style={({ pressed }) => [styles.itemCardBtn, pressed ? styles.pressed : null]}
+                          >
+                            <Text style={styles.itemCardBtnText}>编辑</Text>
+                          </Pressable>
+                          <Pressable
+                            onPress={() => {
+                              if (maintenanceEditIndex === idx) cancelEditMaintenanceItem()
+                              setMaintenanceItems((prev) => prev.filter((_, i) => i !== idx))
+                            }}
+                            style={({ pressed }) => [styles.itemCardBtnDanger, pressed ? styles.pressed : null]}
+                          >
+                            <Text style={styles.itemCardBtnDangerText}>删除</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                      <Text style={styles.itemCardDetail} numberOfLines={3}>{it.detail}</Text>
+                      {Array.isArray(it.media_urls) && it.media_urls.length ? (
+                        <View style={[styles.thumbRow, { marginTop: 10 }]}>
+                          {it.media_urls
+                            .slice(0, 3)
+                            .map((u, i) => (
+                              <Pressable
+                                key={`${u}-${i}`}
+                                onPress={() => openViewerAt(it.media_urls, i)}
+                                style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}
+                              >
+                                <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.thumb} resizeMode="contain" />
+                              </Pressable>
+                            ))}
+                        </View>
+                      ) : (
+                        <Text style={[styles.pendingMeta, { marginTop: 8 }]}>无附件</Text>
+                      )}
+                    </View>
+                  ))}
+                  {maintenanceItems.length > 3 ? (
+                    <Pressable onPress={() => setShowAllAdded(v => !v)} style={({ pressed }) => [styles.pendingToggle, { alignSelf: 'flex-start', marginTop: 10 }, pressed ? styles.pressed : null]}>
+                      <Text style={styles.pendingToggleText}>{showAllAdded ? '收起' : '展开更多'}</Text>
+                    </Pressable>
+                  ) : null}
+                </>
+              ) : null}
+
+              {maintenanceEditIndex != null ? (
+                <View style={styles.editHintRow}>
+                  <Text style={styles.editHintText}>{`正在编辑：问题 ${maintenanceEditIndex + 1}`}</Text>
+                  <Pressable onPress={cancelEditMaintenanceItem} style={({ pressed }) => [styles.pendingToggle, pressed ? styles.pressed : null]}>
+                    <Text style={styles.pendingToggleText}>取消编辑</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+
               <Text style={styles.label}>问题区域</Text>
               <View style={styles.chipsRow}>
                 {AREA_OPTIONS.map(a => (
@@ -508,8 +723,50 @@ export default function FeedbackFormScreen(props: Props) {
                   </Pressable>
                 ))}
               </View>
+
+              <Text style={styles.label}>问题详情</Text>
+              <TextInput
+                value={detail}
+                onChangeText={v => (v.length <= 800 ? setDetail(v) : setDetail(v.slice(0, 800)))}
+                style={[styles.input, styles.textarea]}
+                placeholder={'请详细描述问题'}
+                placeholderTextColor="#9CA3AF"
+                multiline
+              />
+
+              <Text style={styles.label}>上传附件（可选）</Text>
+              <View style={styles.row}>
+                <Pressable onPress={onTakePhoto} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
+                  <Text style={styles.photoBtnText}>拍照上传</Text>
+                </Pressable>
+                <Pressable onPress={onPickFromAlbum} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
+                  <Text style={styles.photoBtnText}>相册选择</Text>
+                </Pressable>
+                <Text style={styles.photoHint}>{media.length ? `已上传 ${media.length} 张` : '支持相机/相册'}</Text>
+              </View>
+              {media.length ? (
+                <View style={{ marginTop: 10 }}>
+                  <View style={styles.thumbRow}>
+                    {media.map((u, idx) => (
+                      <Pressable key={`${u}-${idx}`} onPress={() => openViewerAt(media, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
+                        <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.thumb} resizeMode="contain" />
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+
+              <View style={[styles.row, { marginTop: 10 }]}>
+                <Pressable
+                  onPress={addMaintenanceItemFromCurrent}
+                  style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}
+                >
+                  <Text style={styles.photoBtnText}>{maintenanceEditIndex != null ? '保存修改' : '加入列表'}</Text>
+                </Pressable>
+                <Text style={styles.photoHint}>多个区域/多个问题可分条加入</Text>
+              </View>
             </>
-          ) : (
+          ) : kind === 'deep_cleaning' ? (
             <>
               <Text style={styles.label}>需要清洁的区域</Text>
               <View style={styles.chipsRow}>
@@ -523,40 +780,106 @@ export default function FeedbackFormScreen(props: Props) {
                   </Pressable>
                 ))}
               </View>
+
+              <Text style={styles.label}>说明</Text>
+              <TextInput
+                value={detail}
+                onChangeText={v => (v.length <= 800 ? setDetail(v) : setDetail(v.slice(0, 800)))}
+                style={[styles.input, styles.textarea]}
+                placeholder={'请描述需要深清的内容'}
+                placeholderTextColor="#9CA3AF"
+                multiline
+              />
+
+              <Text style={styles.label}>上传照片（必填）</Text>
+              <View style={styles.row}>
+                <Pressable onPress={onTakePhoto} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
+                  <Text style={styles.photoBtnText}>拍照上传</Text>
+                </Pressable>
+                <Pressable onPress={onPickFromAlbum} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
+                  <Text style={styles.photoBtnText}>相册选择</Text>
+                </Pressable>
+                <Text style={styles.photoHint}>{media.length ? `已上传 ${media.length} 张` : '支持相机/相册'}</Text>
+              </View>
+              {media.length ? (
+                <View style={{ marginTop: 10 }}>
+                  <View style={styles.thumbRow}>
+                    {media.map((u, idx) => (
+                      <Pressable key={`${u}-${idx}`} onPress={() => openViewerAt(media, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
+                        <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.thumb} resizeMode="contain" />
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
             </>
-          )}
-
-          <Text style={styles.label}>{kind === 'maintenance' ? '问题详情' : '说明（可选）'}</Text>
-          <TextInput
-            value={detail}
-            onChangeText={v => (v.length <= 800 ? setDetail(v) : setDetail(v.slice(0, 800)))}
-            style={[styles.input, styles.textarea]}
-            placeholder={kind === 'maintenance' ? '请详细描述问题' : '请描述需要深清的内容'}
-            placeholderTextColor="#9CA3AF"
-            multiline
-          />
-
-          <Text style={styles.label}>{kind === 'maintenance' ? '上传附件（拍照）' : '上传照片（必填）'}</Text>
-          <View style={styles.row}>
-            <Pressable onPress={onTakePhoto} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
-              <Text style={styles.photoBtnText}>拍照上传</Text>
-            </Pressable>
-            <Pressable onPress={onPickFromAlbum} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
-              <Text style={styles.photoBtnText}>相册选择</Text>
-            </Pressable>
-            <Text style={styles.photoHint}>{media.length ? `已上传 ${media.length} 张` : '支持相机/相册'}</Text>
-          </View>
-          {media.length ? (
-            <View style={{ marginTop: 10 }}>
-              <View style={styles.thumbRow}>
-                  {media.map((u, idx) => (
-                    <Pressable key={`${u}-${idx}`} onPress={() => openViewerAt(media, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
-                    <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.thumb} resizeMode="contain" />
+          ) : (
+            <>
+              <Text style={styles.label}>状态</Text>
+              <View style={styles.chipsRow}>
+                {DAILY_STATUS_OPTIONS.map((x) => (
+                  <Pressable
+                    key={x.value}
+                    onPress={() => setDailyStatus(x.value)}
+                    style={({ pressed }) => [styles.chip, dailyStatus === x.value ? styles.chipActive : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={[styles.chipText, dailyStatus === x.value ? styles.chipTextActive : null]}>{x.label}</Text>
                   </Pressable>
                 ))}
               </View>
-            </View>
-          ) : null}
+
+              <Text style={styles.label}>物品名称</Text>
+              <TextInput
+                value={dailyItemName}
+                onChangeText={v => (v.length <= 120 ? setDailyItemName(v) : setDailyItemName(v.slice(0, 120)))}
+                style={[styles.input, { height: 42 }]}
+                placeholder={'例如：洗发水'}
+                placeholderTextColor="#9CA3AF"
+              />
+
+              <Text style={styles.label}>数量</Text>
+              <TextInput
+                value={dailyQty}
+                onChangeText={v => setDailyQty(String(v || '').replace(/[^\d]/g, '').slice(0, 6) || '')}
+                style={[styles.input, { height: 42 }]}
+                placeholder={'例如：2'}
+                placeholderTextColor="#9CA3AF"
+                keyboardType="number-pad"
+              />
+
+              <Text style={styles.label}>备注</Text>
+              <TextInput
+                value={dailyNote}
+                onChangeText={v => (v.length <= 800 ? setDailyNote(v) : setDailyNote(v.slice(0, 800)))}
+                style={[styles.input, styles.textarea]}
+                placeholder={'可填写补充说明（备注或照片至少填一个）'}
+                placeholderTextColor="#9CA3AF"
+                multiline
+              />
+
+              <Text style={styles.label}>上传照片（可选）</Text>
+              <View style={styles.row}>
+                <Pressable onPress={onTakePhoto} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
+                  <Text style={styles.photoBtnText}>拍照上传</Text>
+                </Pressable>
+                <Pressable onPress={onPickFromAlbum} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
+                  <Text style={styles.photoBtnText}>相册选择</Text>
+                </Pressable>
+                <Text style={styles.photoHint}>{media.length ? `已上传 ${media.length} 张` : '支持相机/相册'}</Text>
+              </View>
+              {media.length ? (
+                <View style={{ marginTop: 10 }}>
+                  <View style={styles.thumbRow}>
+                    {media.map((u, idx) => (
+                      <Pressable key={`${u}-${idx}`} onPress={() => openViewerAt(media, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
+                        <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.thumb} resizeMode="contain" />
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+            </>
+          )}
 
           <Pressable
             onPress={() => onSubmit()}
@@ -636,6 +959,30 @@ export default function FeedbackFormScreen(props: Props) {
                   <Text style={styles.pendingMeta}>{`${String(x.created_by_name || '').trim() || 'unknown'}  ${fmtTime(String(x.created_at || ''))}`}</Text>
                 </Pressable>
               ))}
+              <Text style={[styles.groupTitle, { marginTop: 10 }]}>{`日用品 (${grouped.dn.length})`}</Text>
+              {(expanded ? grouped.dn : grouped.dn.slice(0, 3)).map((x, idx) => (
+                <Pressable key={`${String((x as any).kind || 'daily_necessities')}:${String(x.id)}:${idx}`} onPress={() => setDetailItem(x)} style={({ pressed }) => [styles.pendingItem, pressed ? styles.pressed : null]}>
+                  <Text style={styles.pendingLine} numberOfLines={2}>
+                    {`[${dailyStatusLabel((x as any).status)}] ${String((x as any).item_name || '').trim() || '-'}${(x as any).quantity != null ? ` x${String((x as any).quantity)}` : ''} ${String((x as any).note || '').trim()}`}
+                  </Text>
+                  {normalizeUrls((x as any).media_urls).length ? (
+                    <View style={[styles.thumbRow, { marginTop: 8 }]}>
+                      {normalizeUrls((x as any).media_urls)
+                        .slice(0, 3)
+                        .map((u, i) => (
+                          <Pressable
+                            key={`${u}-${i}`}
+                            onPress={() => openViewerAt(normalizeUrls((x as any).media_urls), i)}
+                            style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}
+                          >
+                            <Image source={{ uri: u }} style={styles.thumb} resizeMode="contain" />
+                          </Pressable>
+                        ))}
+                    </View>
+                  ) : null}
+                  <Text style={styles.pendingMeta}>{`${String(x.created_by_name || '').trim() || 'unknown'}  ${fmtTime(String(x.created_at || ''))}`}</Text>
+                </Pressable>
+              ))}
             </View>
           )}
         </View>
@@ -652,7 +999,15 @@ export default function FeedbackFormScreen(props: Props) {
               </Pressable>
             </View>
             <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12 }} keyboardShouldPersistTaps="handled">
-              <Text style={styles.detailText}>{detailText || '-'}</Text>
+              {String((detailItem as any)?.kind || '') === 'daily_necessities' ? (
+                <>
+                  <Text style={styles.detailText}>{`状态：${dailyStatusLabel((detailItem as any)?.status)}`}</Text>
+                  <Text style={[styles.detailText, { marginTop: 10 }]}>{`物品：${String((detailItem as any)?.item_name || '').trim() || '-'}${(detailItem as any)?.quantity != null ? `  数量：${String((detailItem as any)?.quantity)}` : ''}`}</Text>
+                  <Text style={[styles.detailText, { marginTop: 10 }]}>{`备注：${String((detailItem as any)?.note || '').trim() || '-'}`}</Text>
+                </>
+              ) : (
+                <Text style={styles.detailText}>{detailText || '-'}</Text>
+              )}
               {detailMedia.length ? (
                 <View style={{ marginTop: 12 }}>
                   <Text style={styles.detailSubTitle}>{`照片 (${detailMedia.length})`}</Text>
@@ -822,6 +1177,8 @@ const styles = StyleSheet.create({
   pendingMeta: { marginTop: 6, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   muted: { color: '#6B7280', fontWeight: '700' },
   pressed: { opacity: 0.92 },
+  editHintRow: { marginTop: 12, paddingVertical: 10, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  editHintText: { fontWeight: '900', color: '#1D4ED8' },
   detailModalRoot: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
   detailCardWrap: { flex: 1, padding: 14, justifyContent: 'center' },
   detailCard: { width: '100%', flex: 1, maxHeight: '85%', borderRadius: 16, overflow: 'hidden', backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#EEF0F6' },
@@ -834,6 +1191,16 @@ const styles = StyleSheet.create({
   thumbRow: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   thumbWrap: { width: 92, height: 92, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   thumb: { width: '100%', height: '100%' },
+  itemCard: { marginTop: 10, padding: 12, borderRadius: 14, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6' },
+  itemCardTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  itemCardTitle: { fontWeight: '900', color: '#111827' },
+  itemCardMeta: { marginTop: 4, color: '#6B7280', fontWeight: '800' },
+  itemCardDetail: { marginTop: 10, fontWeight: '800', color: '#111827', lineHeight: 20 },
+  itemCardActions: { flexDirection: 'row', gap: 8 },
+  itemCardBtn: { height: 30, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  itemCardBtnText: { fontWeight: '900', color: '#111827', fontSize: 12 },
+  itemCardBtnDanger: { height: 30, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FECACA', alignItems: 'center', justifyContent: 'center' },
+  itemCardBtnDangerText: { fontWeight: '900', color: '#B91C1C', fontSize: 12 },
   viewerOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#000000' },
   viewerTopRow: { position: 'absolute', left: 0, right: 0, top: 0, minHeight: 52, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 12 },
   viewerIndex: { color: '#FFFFFF', fontWeight: '900', marginTop: 10 },
