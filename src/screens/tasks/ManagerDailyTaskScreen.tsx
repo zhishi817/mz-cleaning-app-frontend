@@ -146,8 +146,12 @@ export default function ManagerDailyTaskScreen(props: Props) {
 
       const needKeysUpdate = Number.isFinite(nextKeys) && (keysDirty || nextKeys !== prevKeys)
       if (needKeysUpdate) {
-        const orderId = String((task as any)?.order_id_checkin || (task as any)?.order_id || '').trim()
-        if (!orderId) throw new Error('缺少订单ID')
+        const taskType0 = String((task as any)?.task_type || '').trim().toLowerCase()
+        const orderId =
+          taskType0 === 'checkin_clean'
+            ? String((task as any)?.order_id || '').trim()
+            : String((task as any)?.order_id_checkin || '').trim()
+        if (!orderId) throw new Error(taskType0 === 'checkin_clean' ? '缺少订单ID' : '缺少入住订单ID')
         await updateCleaningOrderKeysRequired(token, { order_id: orderId, keys_required: nextKeys >= 2 ? 2 : 1 })
       }
 

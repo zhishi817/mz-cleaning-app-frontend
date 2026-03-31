@@ -1317,7 +1317,7 @@ export default function TasksScreen(props: Props) {
               const isCheckoutType = taskType === 'checkout_clean'
               const isNeedHangType = taskType === 'checkin_clean' || taskType === 'turnover'
               const checkoutSets = isTurnoverType
-                ? (Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : (orderIdCheckout && keysSets >= 2 ? keysSets : 0))
+                ? (Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : 0)
                 : (Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : (isCheckoutType && keysSets >= 2 ? keysSets : 0))
               const checkinSets = isTurnoverType
                 ? (Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : 0)

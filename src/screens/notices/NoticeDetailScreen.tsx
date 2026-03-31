@@ -14,6 +14,7 @@ type Props = NativeStackScreenProps<NoticesStackParamList, 'NoticeDetail'>
 
 function formatTime(iso: string) {
   const d = new Date(iso)
+  if (!Number.isFinite(d.getTime())) return '--/-- --:--'
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
@@ -78,10 +79,11 @@ export default function NoticeDetailScreen(props: Props) {
       await markNoticeRead(id)
       try {
         const token = await getAuthToken()
-        if (token) await markInboxNotificationsRead(String(token), { ids: [id] })
+        const serverId = String((notice as any)?.data?._server_id || '').trim()
+        if (token && serverId) await markInboxNotificationsRead(String(token), { ids: [serverId] })
       } catch {}
     })()
-  }, [id])
+  }, [id, notice])
 
   if (!notice) {
     return (

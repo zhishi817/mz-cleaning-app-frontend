@@ -15,8 +15,18 @@ type Props = NativeStackScreenProps<NoticesStackParamList, 'NoticesList'>
 
 function formatTime(iso: string) {
   const d = new Date(iso)
+  if (!Number.isFinite(d.getTime())) return '--/-- --:--'
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function safeIso(raw: any) {
+  const s = String(raw ?? '').trim()
+  if (!s) return null
+  if (s === 'null' || s === 'undefined') return null
+  const d = new Date(s)
+  if (!Number.isFinite(d.getTime())) return null
+  return d.toISOString()
 }
 
 function typeMeta(type: Notice['type']) {
@@ -103,19 +113,19 @@ export default function NoticesScreen(props: Props) {
   }
 
   function inboxToNotice(it: InboxNotificationItem) {
-    const createdAt = String(it.created_at || '').trim() || new Date().toISOString()
+    const createdAt = safeIso(it.created_at) || new Date().toISOString()
     const body = String(it.body || '').trim()
     const title = String(it.title || '').trim() || '通知'
     const unread = !it.read_at
     const data = it.data && typeof it.data === 'object' ? it.data : {}
     const content = body || ''
     return {
-      id: String(it.id || '').trim(),
+      id: String(it.event_id || it.id || '').trim(),
       type: inboxNoticeType(it),
       title,
       summary: body,
       content,
-      data,
+      data: { ...data, _server_id: String(it.id || '').trim(), event_id: String(it.event_id || '').trim() },
       createdAt,
       unread,
     }

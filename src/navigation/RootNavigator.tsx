@@ -308,12 +308,12 @@ export default function RootNavigator() {
                 const ch = Array.isArray(it?.changes) ? it.changes.map((v: any) => String(v || '').toLowerCase()) : []
                 const type: 'key' | 'update' = String(it?.type || '').toUpperCase().includes('KEY') || ch.includes('keys') ? 'key' : 'update'
                 return {
-                  id: String(it?.id || ''),
+                  id: String(it?.event_id || it?.id || ''),
                   type,
                   title: String(it?.title || '通知'),
                   summary: String(it?.body || ''),
                   content: String(it?.body || ''),
-                  data: it?.data && typeof it.data === 'object' ? it.data : {},
+                  data: { ...(it?.data && typeof it.data === 'object' ? it.data : {}), _server_id: String(it?.id || ''), event_id: String(it?.event_id || '') },
                   createdAt: String(it?.created_at || '') || new Date().toISOString(),
                   unread: !it?.read_at,
                 }
@@ -354,12 +354,12 @@ export default function RootNavigator() {
                 const ch = Array.isArray(it?.changes) ? it.changes.map((v: any) => String(v || '').toLowerCase()) : []
                 const type: 'key' | 'update' = String(it?.type || '').toUpperCase().includes('KEY') || ch.includes('keys') ? 'key' : 'update'
                 return {
-                  id: String(it?.id || ''),
+                  id: String(it?.event_id || it?.id || ''),
                   type,
                   title: String(it?.title || '通知'),
                   summary: String(it?.body || ''),
                   content: String(it?.body || ''),
-                  data: it?.data && typeof it.data === 'object' ? it.data : {},
+                  data: { ...(it?.data && typeof it.data === 'object' ? it.data : {}), _server_id: String(it?.id || ''), event_id: String(it?.event_id || '') },
                   createdAt: String(it?.created_at || '') || new Date().toISOString(),
                   unread: !it?.read_at,
                 }
