@@ -354,24 +354,20 @@ export default function TaskDetailScreen(props: Props) {
   const title2 = `${title}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
   const keyPhotoUrl = String(localKeyPhotoUrl || (task as any).key_photo_url || '').trim() || null
   const lockboxVideoUrl = String((task as any).lockbox_video_url || '').trim() || null
-  const keysRequired = Number((task as any).keys_required ?? 1)
-  const keysCheckout = Number((task as any).keys_required_checkout ?? 0)
-  const keysCheckin = Number((task as any).keys_required_checkin ?? 0)
-  const keysSets = Number.isFinite(keysRequired) ? Math.max(1, Math.trunc(keysRequired)) : 1
   const checkedOutAt = String((task as any).checked_out_at || '').trim()
   const isCheckedOut = !!checkedOutAt
-  const isTurnoverType = taskType === 'turnover'
-  const orderIdCheckout = String((task as any)?.order_id_checkout || '').trim()
-  const isCheckoutType = taskType === 'checkout_clean'
-  const isNeedHangType = taskType === 'checkin_clean' || taskType === 'turnover'
-  const checkoutSets = isTurnoverType
-    ? (Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : 0)
-    : (Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : (isCheckoutType && keysSets >= 2 ? keysSets : 0))
-  const checkinSets = isTurnoverType
-    ? (Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : 0)
-    : (Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : (isNeedHangType && keysSets >= 2 ? keysSets : 0))
-  const showCheckout = isCleaningSource && !isCheckedOut && checkoutSets >= 2
-  const showCheckin = isCleaningSource && checkinSets >= 2
+  const keyTagsRaw = (task as any)?.key_tags
+  const keyTags = keyTagsRaw && typeof keyTagsRaw === 'object' ? keyTagsRaw : null
+  const keysCheckout = Number((task as any).keys_required_checkout ?? 0)
+  const keysCheckin = Number((task as any).keys_required_checkin ?? 0)
+  const checkoutSets = keyTags
+    ? (keyTags.checkout_sets == null ? 0 : Number(keyTags.checkout_sets))
+    : (Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : 0)
+  const checkinSets = keyTags
+    ? (keyTags.checkin_sets == null ? 0 : Number(keyTags.checkin_sets))
+    : (Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : 0)
+  const showCheckout = keyTags ? keyTags.show_checkout === true : (isCleaningSource && !isCheckedOut && checkoutSets >= 2)
+  const showCheckin = keyTags ? keyTags.show_checkin === true : (isCleaningSource && checkinSets >= 2)
   const restockItems = Array.isArray((task as any).restock_items) ? ((task as any).restock_items as any[]) : []
   const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
   const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
@@ -418,7 +414,7 @@ export default function TaskDetailScreen(props: Props) {
           </View>
           {showCheckout ? (
             <View style={styles.tagKey}>
-              <Text style={styles.tagKeyText}>{`请确认已退${checkoutSets || keysSets}套钥匙`}</Text>
+              <Text style={styles.tagKeyText}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
             </View>
           ) : null}
           {showCheckin ? (

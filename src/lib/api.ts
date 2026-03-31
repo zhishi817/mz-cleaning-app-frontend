@@ -345,6 +345,12 @@ export type WorkTask = {
   keys_required?: number | null
   keys_required_checkout?: number | null
   keys_required_checkin?: number | null
+  key_tags?: {
+    checkout_sets: number | null
+    checkin_sets: number | null
+    show_checkout: boolean
+    show_checkin: boolean
+  } | null
   checked_out_at?: string | null
   cleaner_name?: string | null
   inspector_name?: string | null
