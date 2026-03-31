@@ -6,9 +6,9 @@ import * as Clipboard from 'expo-clipboard'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { getNoticesSnapshot, initNoticesStore, loadMoreNotices, refreshNotices, subscribeNotices, type Notice } from '../../lib/noticesStore'
+import { getNoticesSnapshot, initNoticesStore, refreshNotices, subscribeNotices, type Notice, upsertNotices } from '../../lib/noticesStore'
 import { getWorkTasksSnapshot, subscribeWorkTasks } from '../../lib/workTasksStore'
-import { listCompanySecretsForApp, logCopyCompanySecretForApp } from '../../lib/api'
+import { listCompanySecretsForApp, listInboxNotifications, logCopyCompanySecretForApp, type InboxNotificationItem } from '../../lib/api'
 import type { NoticesStackParamList } from '../../navigation/RootNavigator'
 
 type Props = NativeStackScreenProps<NoticesStackParamList, 'NoticesList'>
@@ -35,6 +35,8 @@ export default function NoticesScreen(props: Props) {
   const [showUnreadOnly, setShowUnreadOnly] = useState(false)
   const [query, setQuery] = useState('')
   const [secrets, setSecrets] = useState<Array<{ id: string; title: string; username?: string | null; note?: string | null; secret?: string | null; updated_at?: string | null }>>([])
+  const [cursor, setCursor] = useState<string | null>(null)
+  const [hasMoreRemote, setHasMoreRemote] = useState(true)
 
   const snap = getNoticesSnapshot()
   const hasAnyUnread = Object.keys(snap.unreadIds || {}).length > 0
@@ -82,10 +84,63 @@ export default function NoticesScreen(props: Props) {
     }
   }, [token])
 
+  useEffect(() => {
+    ;(async () => {
+      if (!token) return
+      if (!hasInit) return
+      try {
+        await syncInbox(true)
+      } catch {}
+    })()
+    return () => {}
+  }, [token, hasInit])
+
+  function inboxNoticeType(it: InboxNotificationItem): Notice['type'] {
+    const t = String(it.type || '').toUpperCase()
+    const ch = Array.isArray(it.changes) ? it.changes.map(v => String(v || '').toLowerCase()) : []
+    if (t.includes('KEY') || ch.includes('keys')) return 'key'
+    return 'update'
+  }
+
+  function inboxToNotice(it: InboxNotificationItem) {
+    const createdAt = String(it.created_at || '').trim() || new Date().toISOString()
+    const body = String(it.body || '').trim()
+    const title = String(it.title || '').trim() || '通知'
+    const unread = !it.read_at
+    const data = it.data && typeof it.data === 'object' ? it.data : {}
+    const content = body || ''
+    return {
+      id: String(it.id || '').trim(),
+      type: inboxNoticeType(it),
+      title,
+      summary: body,
+      content,
+      data,
+      createdAt,
+      unread,
+    }
+  }
+
+  async function syncInbox(reset: boolean) {
+    if (!token) return
+    if (!hasMoreRemote && !reset) return
+    const cur = reset ? null : cursor
+    const { items: rows, next_cursor } = await listInboxNotifications(token, { limit: 50, cursor: cur })
+    const list = (rows || [])
+      .map(inboxToNotice)
+      .filter(n => !!n.id)
+    await upsertNotices(list)
+    setCursor(next_cursor)
+    setHasMoreRemote(!!next_cursor)
+  }
+
   async function onRefresh() {
     try {
       setRefreshing(true)
       await refreshNotices()
+      try {
+        await syncInbox(true)
+      } catch {}
     } finally {
       setRefreshing(false)
     }
@@ -96,7 +151,9 @@ export default function NoticesScreen(props: Props) {
     if (loadingMore) return
     try {
       setLoadingMore(true)
-      await loadMoreNotices(8)
+      try {
+        await syncInbox(false)
+      } catch {}
     } finally {
       setLoadingMore(false)
     }
@@ -222,7 +279,21 @@ export default function NoticesScreen(props: Props) {
       return null
     })()
     return (
-      <Pressable onPress={() => props.navigation.navigate('NoticeDetail', { id: item.id })} style={({ pressed }) => [styles.noticeRow, pressed ? styles.rowPressed : null]}>
+      <Pressable
+        onPress={() => {
+          const data = (item as any)?.data && typeof (item as any).data === 'object' ? (item as any).data : {}
+          const entity = String((data as any).entity || '').trim()
+          const entityId = String((data as any).entityId || (data as any).entity_id || '').trim()
+          if (entity === 'cleaning_task' && entityId) {
+            try {
+              props.navigation.getParent()?.navigate('Tasks' as any, { screen: 'TaskDetail', params: { id: entityId } })
+              return
+            } catch {}
+          }
+          props.navigation.navigate('NoticeDetail', { id: item.id })
+        }}
+        style={({ pressed }) => [styles.noticeRow, pressed ? styles.rowPressed : null]}
+      >
         <View style={[styles.noticeIconWrap, { backgroundColor: meta.bg, borderColor: meta.bg }]}>
           <Ionicons name={icon as any} size={moderateScale(18)} color={meta.fg} />
         </View>

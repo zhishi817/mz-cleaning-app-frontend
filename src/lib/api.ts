@@ -958,6 +958,77 @@ export async function registerExpoPushToken(token: string, params: { expo_push_t
   return (await parseJsonOrThrow(res)) as any
 }
 
+export type InboxNotificationItem = {
+  id: string
+  event_id: string
+  type: string
+  entity: string
+  entity_id: string
+  changes: string[]
+  title: string
+  body: string
+  data: any
+  priority: 'high' | 'medium' | 'low' | string
+  created_at: string | null
+  read_at: string | null
+}
+
+export async function listInboxNotifications(token: string, params?: { limit?: number; cursor?: string | null; unread_only?: boolean }) {
+  const urls = buildUrlCandidates('notifications/inbox')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+
+  const qs = new URLSearchParams()
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  if (params?.cursor) qs.set('cursor', String(params.cursor))
+  if (params?.unread_only) qs.set('unread_only', 'true')
+
+  let lastRes: Response | null = null
+  for (const url0 of urls) {
+    const url = qs.toString() ? `${url0}?${qs.toString()}` : url0
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 30000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  const data = (await parseJsonOrThrow(res)) as any
+  const items = Array.isArray(data?.items) ? (data.items as any[]) : []
+  const next_cursor = data?.next_cursor == null ? null : String(data.next_cursor)
+  return { items: items as InboxNotificationItem[], next_cursor }
+}
+
+export async function getInboxUnreadCount(token: string) {
+  const urls = buildUrlCandidates('notifications/unread-count')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 30000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  const data = (await parseJsonOrThrow(res)) as any
+  return { unread: Number(data?.unread || 0) }
+}
+
+export async function markInboxNotificationsRead(token: string, params: { ids?: string[]; all?: boolean }) {
+  const urls = buildUrlCandidates('notifications/mark-read')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      30000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  await parseJsonOrThrow(res)
+  return { ok: true }
+}
+
 export async function submitCleaningConsumables(
   token: string,
   taskId: string,

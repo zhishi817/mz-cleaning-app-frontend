@@ -8,8 +8,8 @@ import * as Notifications from 'expo-notifications'
 import Constants from 'expo-constants'
 import { useAuth } from '../lib/auth'
 import { useI18n } from '../lib/i18n'
-import { getNoticesSnapshot, initNoticesStore, prependNotice, subscribeNotices } from '../lib/noticesStore'
-import { registerExpoPushToken } from '../lib/api'
+import { getNoticesSnapshot, initNoticesStore, prependNotice, subscribeNotices, upsertNotices } from '../lib/noticesStore'
+import { listInboxNotifications, registerExpoPushToken } from '../lib/api'
 import LoginScreen from '../screens/LoginScreen'
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen'
 import TasksScreen from '../screens/tabs/TasksScreen'
@@ -301,6 +301,26 @@ export default function RootNavigator() {
                   ? `manager_fields:${propertyCode}:${fieldsKey}`
                   : eventId || reqId || `${Date.now()}`
           await prependNotice({ id: String(id0), type: 'update', title, summary: body.split('\n')[0]?.slice(0, 60) || body.slice(0, 60) || '通知', content: body || title })
+          try {
+            if (token) {
+              const { items } = await listInboxNotifications(token, { limit: 30 })
+              const list = (items || []).map((it: any) => {
+                const ch = Array.isArray(it?.changes) ? it.changes.map((v: any) => String(v || '').toLowerCase()) : []
+                const type: 'key' | 'update' = String(it?.type || '').toUpperCase().includes('KEY') || ch.includes('keys') ? 'key' : 'update'
+                return {
+                  id: String(it?.id || ''),
+                  type,
+                  title: String(it?.title || '通知'),
+                  summary: String(it?.body || ''),
+                  content: String(it?.body || ''),
+                  data: it?.data && typeof it.data === 'object' ? it.data : {},
+                  createdAt: String(it?.created_at || '') || new Date().toISOString(),
+                  unread: !it?.read_at,
+                }
+              })
+              await upsertNotices(list)
+            }
+          } catch {}
         } catch {}
       })()
     })
@@ -327,6 +347,26 @@ export default function RootNavigator() {
                   ? `manager_fields:${propertyCode}:${fieldsKey}`
                   : eventId || reqId || `${Date.now()}`
           await prependNotice({ id: String(id0), type: 'update', title, summary: body.split('\n')[0]?.slice(0, 60) || body.slice(0, 60) || '通知', content: body || title })
+          try {
+            if (token) {
+              const { items } = await listInboxNotifications(token, { limit: 30 })
+              const list = (items || []).map((it: any) => {
+                const ch = Array.isArray(it?.changes) ? it.changes.map((v: any) => String(v || '').toLowerCase()) : []
+                const type: 'key' | 'update' = String(it?.type || '').toUpperCase().includes('KEY') || ch.includes('keys') ? 'key' : 'update'
+                return {
+                  id: String(it?.id || ''),
+                  type,
+                  title: String(it?.title || '通知'),
+                  summary: String(it?.body || ''),
+                  content: String(it?.body || ''),
+                  data: it?.data && typeof it.data === 'object' ? it.data : {},
+                  createdAt: String(it?.created_at || '') || new Date().toISOString(),
+                  unread: !it?.read_at,
+                }
+              })
+              await upsertNotices(list)
+            }
+          } catch {}
           if (navRef.isReady()) {
             navRef.navigate('Notices', { screen: 'NoticeDetail', params: { id: String(id0) } })
           }

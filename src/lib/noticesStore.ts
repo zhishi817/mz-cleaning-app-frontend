@@ -8,6 +8,7 @@ export type Notice = {
   title: string
   summary: string
   content: string
+  data?: any
   createdAt: string
 }
 
@@ -132,7 +133,7 @@ export async function prependNotice(input: Omit<Notice, 'id' | 'createdAt'> & { 
     }
     return
   }
-  const notice: Notice = { id, createdAt, type: input.type, title: input.title, summary: input.summary, content: input.content }
+  const notice: Notice = { id, createdAt, type: input.type, title: input.title, summary: input.summary, content: input.content, data: (input as any).data }
   const items = [notice, ...state.items].slice(0, MAX_ITEMS)
   const keepIds = new Set(items.map(n => n.id))
   const unreadIds: Record<string, true> = { ...state.unreadIds, [id]: true }
@@ -140,6 +141,48 @@ export async function prependNotice(input: Omit<Notice, 'id' | 'createdAt'> & { 
     if (!keepIds.has(k)) delete unreadIds[k]
   }
   state = { ...state, items, unreadIds }
+  await persist()
+  emit()
+}
+
+export async function upsertNotices(inputs: Array<Omit<Notice, 'createdAt'> & { createdAt: string; unread?: boolean }>) {
+  await initNoticesStore()
+  const map = new Map<string, Notice>()
+  for (const n of state.items) map.set(String(n.id), n)
+
+  const unreadIds: Record<string, true> = { ...state.unreadIds }
+
+  for (const raw of inputs || []) {
+    const id = String((raw as any)?.id || '').trim()
+    if (!id) continue
+    const createdAt = String((raw as any)?.createdAt || '').trim() || isoNow()
+    const type = (String((raw as any)?.type || 'update') as NoticeType) || 'update'
+    const title = String((raw as any)?.title || '').trim() || '通知'
+    const summary = String((raw as any)?.summary || '').trim()
+    const content = String((raw as any)?.content || '').trim()
+    const data = (raw as any)?.data
+    map.set(id, { id, createdAt, type, title, summary, content, data })
+    const unread = (raw as any)?.unread === true
+    if (unread) unreadIds[id] = true
+    else if (unreadIds[id]) delete unreadIds[id]
+  }
+
+  const items = Array.from(map.values())
+    .filter(n => !shouldDropNotice(n))
+    .sort((a, b) => {
+      const ta = String(a.createdAt || '')
+      const tb = String(b.createdAt || '')
+      if (ta === tb) return String(b.id).localeCompare(String(a.id))
+      return String(tb).localeCompare(String(ta))
+    })
+    .slice(0, MAX_ITEMS)
+
+  const keepIds = new Set(items.map(n => n.id))
+  for (const k of Object.keys(unreadIds)) {
+    if (!keepIds.has(k)) delete unreadIds[k]
+  }
+
+  state = { items, unreadIds }
   await persist()
   emit()
 }

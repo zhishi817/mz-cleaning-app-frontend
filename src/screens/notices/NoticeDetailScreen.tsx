@@ -7,6 +7,8 @@ import { getNoticesSnapshot, initNoticesStore, markNoticeRead } from '../../lib/
 import type { NoticesStackParamList } from '../../navigation/RootNavigator'
 import { useI18n } from '../../lib/i18n'
 import { API_BASE_URL } from '../../config/env'
+import { getAuthToken } from '../../lib/authStorage'
+import { markInboxNotificationsRead } from '../../lib/api'
 
 type Props = NativeStackScreenProps<NoticesStackParamList, 'NoticeDetail'>
 
@@ -74,6 +76,10 @@ export default function NoticeDetailScreen(props: Props) {
     ;(async () => {
       await initNoticesStore()
       await markNoticeRead(id)
+      try {
+        const token = await getAuthToken()
+        if (token) await markInboxNotificationsRead(String(token), { ids: [id] })
+      } catch {}
     })()
   }, [id])
 
