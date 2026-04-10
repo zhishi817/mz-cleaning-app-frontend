@@ -18,6 +18,7 @@ const STORAGE_PREFIX = 'mzstay.work_tasks.store.v1:'
 const listeners = new Set<() => void>()
 let state: StoreState = { items: [], bucketKey: null, updatedAt: null }
 let initializedKey: string | null = null
+const hydratedBuckets = new Set<string>()
 
 function emit() {
   for (const cb of listeners) cb()
@@ -51,6 +52,32 @@ export function subscribeWorkTasks(cb: () => void) {
 
 export function getWorkTasksSnapshot() {
   return state
+}
+
+function matchTaskIds(task: WorkTaskItem, ids: string[]) {
+  const directId = String(task.id || '').trim()
+  if (directId && ids.includes(directId)) return true
+  const relatedIds = [
+    task.source_id,
+    ...(Array.isArray(task.source_ids) ? task.source_ids : []),
+    ...(Array.isArray(task.cleaning_task_ids) ? task.cleaning_task_ids : []),
+    ...(Array.isArray(task.inspection_task_ids) ? task.inspection_task_ids : []),
+  ]
+    .map((v) => String(v || '').trim())
+    .filter(Boolean)
+  return relatedIds.some((v) => ids.includes(v))
+}
+
+export function findWorkTaskItemByAnyId(id0: string) {
+  const id = String(id0 || '').trim()
+  if (!id) return null
+  return state.items.find((task) => matchTaskIds(task, [id])) || null
+}
+
+export function findWorkTaskItemByAnyIds(ids0: any[]) {
+  const ids = Array.from(new Set((Array.isArray(ids0) ? ids0 : []).map((v) => String(v || '').trim()).filter(Boolean)))
+  if (!ids.length) return null
+  return state.items.find((task) => matchTaskIds(task, ids)) || null
 }
 
 export async function patchWorkTaskItem(id0: string, patch: Partial<WorkTaskItem>) {
@@ -137,65 +164,102 @@ export async function refreshWorkTasksFromServer(params: {
   const bucketKey = makeWorkTasksBucketKey({ userId: params.userId, date_from: params.date_from, date_to: params.date_to, view: params.view })
   await initWorkTasksStore({ bucketKey })
   const prevItems = state.items || []
+  const shouldEmitDiffNotices = hydratedBuckets.has(bucketKey)
   const remote = await listWorkTasks(params.token, { date_from: params.date_from, date_to: params.date_to, view: params.view })
   const items = remote.map(mapRemoteTask).filter(t => t.date !== 'unknown')
 
   try {
-    const prevById = new Map(prevItems.map((x) => [x.id, x]))
-    for (const it of items) {
-      const prev = prevById.get(it.id) || null
-      if (!prev) continue
-      if (String(it.source_type || '').toLowerCase() !== 'cleaning_tasks') continue
-      const code = titleForTask(it)
-      const addr = String(it?.property?.address || '').trim()
+    if (shouldEmitDiffNotices) {
+      const prevById = new Map(prevItems.map((x) => [x.id, x]))
+      for (const it of items) {
+        const prev = prevById.get(it.id) || null
+        if (!prev) continue
+        if (String(it.source_type || '').toLowerCase() !== 'cleaning_tasks') continue
+        const code = titleForTask(it)
+        const addr = String(it?.property?.address || '').trim()
 
-      const prevCheckedOut = String((prev as any)?.checked_out_at || '').trim()
-      const nextCheckedOut = String((it as any)?.checked_out_at || '').trim()
-      if (!prevCheckedOut && nextCheckedOut) {
-        const body = [code ? `房源：${code}` : '', addr ? `地址：${addr}` : '', '状态：已退房'].filter(Boolean).join('\n')
-        await prependNotice({ id: `guest_checked_out:${code}:${nextCheckedOut}`, type: 'update', title: `已退房：${code}`, summary: '已退房', content: body || '已退房' })
-      }
-      if (prevCheckedOut && !nextCheckedOut) {
-        const body = [code ? `房源：${code}` : '', addr ? `地址：${addr}` : '', '状态：已取消退房'].filter(Boolean).join('\n')
-        await prependNotice({ id: `guest_checked_out_cancelled:${code}:${prevCheckedOut}`, type: 'update', title: `取消退房：${code}`, summary: '已取消退房', content: body || '已取消退房' })
-      }
+        const prevCheckedOut = String((prev as any)?.checked_out_at || '').trim()
+        const nextCheckedOut = String((it as any)?.checked_out_at || '').trim()
+        if (!prevCheckedOut && nextCheckedOut) {
+          const body = [code ? `房源：${code}` : '', addr ? `地址：${addr}` : '', '状态：已退房'].filter(Boolean).join('\n')
+          await prependNotice({
+            id: `guest_checked_out:${code}:${nextCheckedOut}`,
+            type: 'update',
+            title: `已退房：${code}`,
+            summary: '已退房',
+            content: body || '已退房',
+            data: {
+              kind: 'guest_checked_out',
+              task_ids: Array.isArray((it as any)?.source_ids) ? (it as any).source_ids : [],
+              property_code: code,
+              checked_out_at: nextCheckedOut,
+            },
+          })
+        }
+        if (prevCheckedOut && !nextCheckedOut) {
+          const body = [code ? `房源：${code}` : '', addr ? `地址：${addr}` : '', '状态：房源还未退房，待退房'].filter(Boolean).join('\n')
+          await prependNotice({
+            id: `guest_checked_out_cancelled:${code}:${prevCheckedOut}`,
+            type: 'update',
+            title: `待退房：${code}`,
+            summary: '房源还未退房，待退房',
+            content: body || '房源还未退房，待退房',
+            data: {
+              kind: 'guest_checked_out_cancelled',
+              task_ids: Array.isArray((it as any)?.source_ids) ? (it as any).source_ids : [],
+              property_code: code,
+              checked_out_at: prevCheckedOut,
+            },
+          })
+        }
 
-      const prevFields = JSON.stringify({
-        checkout_time: String((prev as any)?.start_time || ''),
-        checkin_time: String((prev as any)?.end_time || ''),
-        old_code: String((prev as any)?.old_code || ''),
-        new_code: String((prev as any)?.new_code || ''),
-        guest_special_request: String((prev as any)?.guest_special_request || ''),
-      })
-      const nextFields = JSON.stringify({
-        checkout_time: String((it as any)?.start_time || ''),
-        checkin_time: String((it as any)?.end_time || ''),
-        old_code: String((it as any)?.old_code || ''),
-        new_code: String((it as any)?.new_code || ''),
-        guest_special_request: String((it as any)?.guest_special_request || ''),
-      })
-      if (prevFields !== nextFields) {
-        const detail = formatUpdatedFields(prev as any, it as any)
-        const body = [
-          code ? `房源：${code}` : '',
-          addr ? `地址：${addr}` : '',
-          '任务信息已更新：',
-          ...(detail.lines.length ? detail.lines : ['时间/密码/客需（已更新）']),
-        ]
-          .filter(Boolean)
-          .join('\n')
-        await prependNotice({
-          id: `manager_fields:${code}:${detail.nextFieldsKey}`,
-          type: 'update',
-          title: `任务信息更新：${code}`,
-          summary: detail.lines[0] ? detail.lines[0].slice(0, 30) : '信息已更新',
-          content: body,
+        const prevFields = JSON.stringify({
+          checkout_time: String((prev as any)?.start_time || ''),
+          checkin_time: String((prev as any)?.end_time || ''),
+          old_code: String((prev as any)?.old_code || ''),
+          new_code: String((prev as any)?.new_code || ''),
+          guest_special_request: String((prev as any)?.guest_special_request || ''),
         })
+        const nextFields = JSON.stringify({
+          checkout_time: String((it as any)?.start_time || ''),
+          checkin_time: String((it as any)?.end_time || ''),
+          old_code: String((it as any)?.old_code || ''),
+          new_code: String((it as any)?.new_code || ''),
+          guest_special_request: String((it as any)?.guest_special_request || ''),
+        })
+        if (prevFields !== nextFields) {
+          const detail = formatUpdatedFields(prev as any, it as any)
+          const body = [
+            code ? `房源：${code}` : '',
+            addr ? `地址：${addr}` : '',
+            '任务信息已更新：',
+            ...(detail.lines.length ? detail.lines : ['时间/密码/客需（已更新）']),
+          ]
+            .filter(Boolean)
+            .join('\n')
+          await prependNotice({
+            id: `manager_fields:${code}:${detail.nextFieldsKey}`,
+            type: 'update',
+            title: `任务信息更新：${code}`,
+            summary: detail.lines[0] ? detail.lines[0].slice(0, 30) : '信息已更新',
+            content: body,
+            data: {
+              kind: 'cleaning_task_manager_fields_updated',
+              entity: 'cleaning_task',
+              entityId: String((it as any)?.source_id || it.id || ''),
+              task_ids: Array.isArray((it as any)?.source_ids) ? (it as any).source_ids : [],
+              property_code: code,
+              fields_key: detail.nextFieldsKey,
+              event_id: `manager_fields:${code}:${detail.nextFieldsKey}`,
+            },
+          })
+        }
       }
     }
   } catch {}
 
   state = { items, bucketKey, updatedAt: new Date().toISOString() }
   await persist()
+  hydratedBuckets.add(bucketKey)
   emit()
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
@@ -70,6 +70,29 @@ export default function NoticeDetailScreen(props: Props) {
   const id = props.route.params.id
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
+
+  useLayoutEffect(() => {
+    props.navigation.setOptions({
+      headerLeft: () => (
+        <Pressable
+          onPress={() => {
+            try {
+              const parentNav: any = props.navigation.getParent?.()
+              parentNav?.navigate?.('Notices', { screen: 'NoticesList' })
+            } catch {
+              if (props.navigation.canGoBack()) props.navigation.goBack()
+              else props.navigation.navigate('NoticesList')
+            }
+          }}
+          style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingRight: 10, opacity: pressed ? 0.7 : 1 }]}
+          hitSlop={8}
+        >
+          <Ionicons name="chevron-back" size={moderateScale(20)} color="#111827" />
+          <Text style={{ color: '#111827', fontWeight: '700', fontSize: 14 }}>返回</Text>
+        </Pressable>
+      ),
+    })
+  }, [props.navigation])
 
   const notice = useMemo(() => getNoticesSnapshot().items.find(n => n.id === id) || null, [id])
 

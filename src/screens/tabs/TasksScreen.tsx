@@ -49,6 +49,12 @@ function addDays(d: Date, days: number) {
   return nd
 }
 
+function isBeforeToday(taskDate0: any) {
+  const taskDate = String(taskDate0 || '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(taskDate)) return false
+  return taskDate < ymd(new Date())
+}
+
 function startOfWeekMonday(d: Date) {
   const nd = new Date(d)
   const day = nd.getDay()
@@ -201,6 +207,47 @@ export default function TasksScreen(props: Props) {
   const lastAlertsFetchRef = useRef(0)
   const shownAlertIdsRef = useRef<Record<string, boolean>>({})
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
+  const [taskNoticeArmed, setTaskNoticeArmed] = useState(false)
+  const allowDerivedTaskNotices = String(token || '').startsWith('local:')
+
+  function seedTaskNoticeBaseline(list: WorkTaskItem[]) {
+    const next = { ...notifiedInspectionsRef.current }
+    const isInspector = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
+    if (isInspector && period === 'today') {
+      for (const t of list) {
+        if (t.source_type === 'cleaning_tasks' && t.task_kind === 'inspection' && String(t.status || '').toLowerCase() === 'to_inspect') next[t.id] = true
+      }
+    }
+    const role = String(user?.role || '')
+    if (role === 'cleaning_inspector' || role === 'cleaner_inspector') {
+      for (const t of list) {
+        if (
+          t.source_type === 'cleaning_tasks' &&
+          t.task_kind === 'inspection' &&
+          String(t.status || '').toLowerCase() === 'in_progress' &&
+          !!String((t as any).key_photo_url || '').trim()
+        ) {
+          next[`key:${t.id}`] = true
+        }
+      }
+    }
+    if ((role === 'cleaner' || role === 'cleaner_inspector') && period === 'today') {
+      for (const t of list) {
+        if (!(t.source_type === 'cleaning_tasks' && t.task_kind === 'cleaning')) continue
+        const raw = String((t as any).checked_out_at || '').trim()
+        const ms = Date.parse(raw)
+        if (raw && Number.isFinite(ms) && Date.now() - ms < 6 * 60 * 60 * 1000) next[`co:${t.id}`] = true
+      }
+    }
+    if (canManagerMode && mode === 'manager' && period === 'today') {
+      for (const t of list) {
+        if (t.source_type === 'cleaning_tasks' && t.task_kind === 'inspection' && String(t.status || '').toLowerCase() === 'keys_hung') {
+          next[`hung:${t.id}`] = true
+        }
+      }
+    }
+    notifiedInspectionsRef.current = next
+  }
 
   const greetingName = useMemo(() => {
     const raw = String(user?.username || '').trim()
@@ -322,6 +369,7 @@ export default function TasksScreen(props: Props) {
     let cancelled = false
     ;(async () => {
       if (!user?.id || !token) return
+      setTaskNoticeArmed(false)
       await initNoticesStore().catch(() => null)
       const effectiveView: WorkTasksView = canManagerMode && mode === 'manager' ? view : 'mine'
       const bucketKey = makeWorkTasksBucketKey({ userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
@@ -331,6 +379,10 @@ export default function TasksScreen(props: Props) {
       setLoadError(null)
       try {
         await refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
+        if (!cancelled) {
+          seedTaskNoticeBaseline(getWorkTasksSnapshot().items || [])
+          setTaskNoticeArmed(true)
+        }
       } catch (e: any) {
         if (!cancelled) setLoadError(String(e?.message || '加载失败'))
       }
@@ -788,6 +840,8 @@ export default function TasksScreen(props: Props) {
   }
 
   useEffect(() => {
+    if (!allowDerivedTaskNotices) return
+    if (!taskNoticeArmed) return
     const isInspector = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
     if (!isInspector) return
     if (period !== 'today') return
@@ -819,9 +873,11 @@ export default function TasksScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [period, renderTasks, user?.role])
+  }, [allowDerivedTaskNotices, taskNoticeArmed, period, renderTasks, user?.role])
 
   useEffect(() => {
+    if (!allowDerivedTaskNotices) return
+    if (!taskNoticeArmed) return
     const role = String(user?.role || '')
     const isInspector = role === 'cleaning_inspector' || role === 'cleaner_inspector'
     if (!isInspector) return
@@ -861,9 +917,11 @@ export default function TasksScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [period, renderTasks, user?.role])
+  }, [allowDerivedTaskNotices, taskNoticeArmed, period, renderTasks, user?.role])
 
   useEffect(() => {
+    if (!allowDerivedTaskNotices) return
+    if (!taskNoticeArmed) return
     const role = String(user?.role || '')
     if (role !== 'cleaner' && role !== 'cleaner_inspector') return
     if (period !== 'today') return
@@ -905,9 +963,11 @@ export default function TasksScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [period, renderTasks, roleNames.join('|')])
+  }, [allowDerivedTaskNotices, taskNoticeArmed, period, renderTasks, roleNames.join('|')])
 
   useEffect(() => {
+    if (!allowDerivedTaskNotices) return
+    if (!taskNoticeArmed) return
     if (!(canManagerMode && mode === 'manager')) return
     if (period !== 'today') return
     const hung = renderTasks.filter(t => t.source_type === 'cleaning_tasks' && t.task_kind === 'inspection' && String(t.status || '').toLowerCase() === 'keys_hung')
@@ -938,7 +998,7 @@ export default function TasksScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [period, renderTasks, canManagerMode, mode])
+  }, [allowDerivedTaskNotices, taskNoticeArmed, period, renderTasks, canManagerMode, mode])
 
   async function onSaveOrder() {
     if (!token || !user?.id) return
@@ -1266,6 +1326,7 @@ export default function TasksScreen(props: Props) {
               const isSelfCompleteEligible = isCleaningTask && isCheckoutTask && !inspectorAssigned
               const checkedOutAt = String((task as any).checked_out_at || '').trim()
               const isCheckedOut = !!checkedOutAt
+              const isHistoricalTask = isBeforeToday(String(task.scheduled_date || (task as any).date || ''))
               const isCustomerService = roleNames.includes('customer_service')
               const isManager = canManagerMode && mode === 'manager'
               const isInspectorUser = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
@@ -1584,6 +1645,7 @@ export default function TasksScreen(props: Props) {
                       {isCustomerService && isCheckoutTask ? (
                         <Pressable
                           onPress={async () => {
+                            if (isHistoricalTask) return
                             if (!token || !user?.id) return
                             try {
                                   const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
@@ -1596,10 +1658,10 @@ export default function TasksScreen(props: Props) {
                               showBanner('失败', String(e?.message || '提交失败'))
                             }
                           }}
-                          disabled={!token}
-                          style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, isCheckedOut ? styles.actionBtnDisabled : null]}
+                          disabled={!token || isHistoricalTask}
+                          style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, isCheckedOut || isHistoricalTask ? styles.actionBtnDisabled : null]}
                         >
-                          <Text style={[styles.actionText, isCheckedOut ? { color: '#6B7280' } : null]}>{isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
+                          <Text style={[styles.actionText, isCheckedOut || isHistoricalTask ? { color: '#6B7280' } : null]}>{isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
                         </Pressable>
                       ) : null}
                       <Pressable

@@ -6,9 +6,10 @@ import * as Clipboard from 'expo-clipboard'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { getNoticesSnapshot, initNoticesStore, refreshNotices, subscribeNotices, type Notice, upsertNotices } from '../../lib/noticesStore'
-import { getWorkTasksSnapshot, subscribeWorkTasks } from '../../lib/workTasksStore'
-import { listCompanySecretsForApp, listInboxNotifications, logCopyCompanySecretForApp, type InboxNotificationItem } from '../../lib/api'
+import { getNoticesSnapshot, initNoticesStore, markNoticeRead, refreshNotices, subscribeNotices, type Notice, upsertNotices } from '../../lib/noticesStore'
+import { resolveNoticeCreatedAt } from '../../lib/noticeTime'
+import { findWorkTaskItemByAnyId, findWorkTaskItemByAnyIds, getWorkTasksSnapshot, subscribeWorkTasks } from '../../lib/workTasksStore'
+import { listCompanySecretsForApp, listInboxNotifications, listWorkTasks, logCopyCompanySecretForApp, markInboxNotificationsRead, type InboxNotificationItem, type WorkTask } from '../../lib/api'
 import type { NoticesStackParamList } from '../../navigation/RootNavigator'
 
 type Props = NativeStackScreenProps<NoticesStackParamList, 'NoticesList'>
@@ -20,15 +21,6 @@ function formatTime(iso: string) {
   return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-function safeIso(raw: any) {
-  const s = String(raw ?? '').trim()
-  if (!s) return null
-  if (s === 'null' || s === 'undefined') return null
-  const d = new Date(s)
-  if (!Number.isFinite(d.getTime())) return null
-  return d.toISOString()
-}
-
 function typeMeta(type: Notice['type']) {
   if (type === 'update') return { labelKey: 'notices_type_update' as const, bg: '#EFF6FF', fg: '#2563EB' }
   if (type === 'key') return { labelKey: 'notices_type_key' as const, bg: '#DCFCE7', fg: '#16A34A' }
@@ -37,7 +29,7 @@ function typeMeta(type: Notice['type']) {
 
 export default function NoticesScreen(props: Props) {
   const { t } = useI18n()
-  const { token } = useAuth()
+  const { token, user } = useAuth()
   const [hasInit, setHasInit] = useState(false)
   const [, setTick] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
@@ -45,8 +37,11 @@ export default function NoticesScreen(props: Props) {
   const [showUnreadOnly, setShowUnreadOnly] = useState(false)
   const [query, setQuery] = useState('')
   const [secrets, setSecrets] = useState<Array<{ id: string; title: string; username?: string | null; note?: string | null; secret?: string | null; updated_at?: string | null }>>([])
+  const [historyTasks, setHistoryTasks] = useState<WorkTask[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
   const [hasMoreRemote, setHasMoreRemote] = useState(true)
+  const role = String(user?.role || '').trim()
+  const canSearchAllTaskHistory = role === 'admin' || role === 'offline_manager' || role === 'customer_service'
 
   const snap = getNoticesSnapshot()
   const hasAnyUnread = Object.keys(snap.unreadIds || {}).length > 0
@@ -95,6 +90,36 @@ export default function NoticesScreen(props: Props) {
   }, [token])
 
   useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      if (!token) return
+      if (!user?.id) return
+      try {
+        const pad2 = (n: number) => String(n).padStart(2, '0')
+        const ymd = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+        const now = new Date()
+        const from = new Date(now)
+        from.setDate(from.getDate() - 365)
+        const to = new Date(now)
+        to.setDate(to.getDate() + 60)
+        const rows = await listWorkTasks(token, {
+          date_from: ymd(from),
+          date_to: ymd(to),
+          view: canSearchAllTaskHistory ? 'all' : 'mine',
+        })
+        if (cancelled) return
+        setHistoryTasks(Array.isArray(rows) ? rows : [])
+      } catch {
+        if (cancelled) return
+        setHistoryTasks([])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [token, user?.id, canSearchAllTaskHistory])
+
+  useEffect(() => {
     ;(async () => {
       if (!token) return
       if (!hasInit) return
@@ -105,6 +130,23 @@ export default function NoticesScreen(props: Props) {
     return () => {}
   }, [token, hasInit])
 
+  useEffect(() => {
+    const nav: any = props.navigation as any
+    if (!nav || typeof nav.addListener !== 'function') return
+    const unsub = nav.addListener('focus', () => {
+      ;(async () => {
+        if (!token) return
+        if (!hasInit) return
+        try {
+          await syncInbox(true)
+        } catch {}
+      })().catch(() => null)
+    })
+    return () => {
+      unsub()
+    }
+  }, [props.navigation, token, hasInit])
+
   function inboxNoticeType(it: InboxNotificationItem): Notice['type'] {
     const t = String(it.type || '').toUpperCase()
     const ch = Array.isArray(it.changes) ? it.changes.map(v => String(v || '').toLowerCase()) : []
@@ -113,7 +155,7 @@ export default function NoticesScreen(props: Props) {
   }
 
   function inboxToNotice(it: InboxNotificationItem) {
-    const createdAt = safeIso(it.created_at) || new Date().toISOString()
+    const createdAt = resolveNoticeCreatedAt(it.created_at, it.event_id, it.id) || new Date().toISOString()
     const body = String(it.body || '').trim()
     const title = String(it.title || '').trim() || '通知'
     const unread = !it.read_at
@@ -139,7 +181,7 @@ export default function NoticesScreen(props: Props) {
     const list = (rows || [])
       .map(inboxToNotice)
       .filter(n => !!n.id)
-    await upsertNotices(list)
+    await upsertNotices(list, { replace: reset })
     setCursor(next_cursor)
     setHasMoreRemote(!!next_cursor)
   }
@@ -169,11 +211,85 @@ export default function NoticesScreen(props: Props) {
     }
   }
 
+  function openTaskFromNoticeData(data0: any) {
+    const data = data0 && typeof data0 === 'object' ? data0 : {}
+    const kind = String((data as any).kind || '').trim()
+    if (kind === 'cleaning_task_manager_fields_updated') return false
+    const entity = String((data as any).entity || '').trim()
+    const entityId = String((data as any).entityId || (data as any).entity_id || '').trim()
+    const task =
+      findWorkTaskItemByAnyIds(Array.isArray((data as any).task_ids) ? (data as any).task_ids : []) ||
+      findWorkTaskItemByAnyId(String((data as any).task_id || '')) ||
+      findWorkTaskItemByAnyId(entity === 'cleaning_task' || entity === 'work_task' ? entityId : '')
+    if (!task) return false
+    const role = String(user?.role || '').trim()
+    const isCleaningTask = String(task?.source_type || '').trim() === 'cleaning_tasks'
+    const isInspection = isCleaningTask && String(task?.task_kind || '').trim() === 'inspection'
+    const isManager = role === 'admin' || role === 'offline_manager' || role === 'customer_service'
+    const isInspector = role === 'cleaning_inspector' || role === 'cleaner_inspector'
+    try {
+      if (isManager && isCleaningTask) {
+        props.navigation.getParent()?.navigate('Tasks' as any, { screen: 'ManagerDailyTask', params: { taskId: task.id } })
+        return true
+      }
+      if (isInspector && isInspection) {
+        props.navigation.getParent()?.navigate('Tasks' as any, { screen: 'InspectionPanel', params: { taskId: task.id } })
+        return true
+      }
+      props.navigation.getParent()?.navigate('Tasks' as any, { screen: 'TaskDetail', params: { id: task.id } })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  async function markNoticeOpened(item: Notice) {
+    await markNoticeRead(item.id)
+    try {
+      const serverId = String((item as any)?.data?._server_id || '').trim()
+      if (token && serverId) await markInboxNotificationsRead(String(token), { ids: [serverId] })
+    } catch {}
+  }
+
   function normalizeHttpUrl(raw: string | null | undefined) {
     const u = String(raw || '').trim()
     if (!u) return null
     if (/^https?:\/\//i.test(u)) return u
     return `https://${u}`
+  }
+
+  function taskStatusLabel(task: WorkTask) {
+    const s = String(task.status || '').trim()
+    return s || 'unknown'
+  }
+
+  function taskHistorySubtitle(task: WorkTask) {
+    const code = String(task.property?.code || task.title || '').trim() || '任务'
+    const date = String(task.scheduled_date || (task as any).date || '').trim()
+    const type = String((task as any).task_type || task.task_kind || '').trim()
+    return [code, date, type].filter(Boolean).join(' · ')
+  }
+
+  function taskHistoryBody(task: WorkTask) {
+    const lines: string[] = []
+    const code = String(task.property?.code || '').trim()
+    const addr = String(task.property?.address || '').trim()
+    const date = String(task.scheduled_date || (task as any).date || '').trim()
+    const start = String((task as any).start_time || '').trim()
+    const end = String((task as any).end_time || '').trim()
+    const oldCode = String((task as any).old_code || '').trim()
+    const newCode = String((task as any).new_code || '').trim()
+    const guest = String((task as any).guest_special_request || '').trim()
+    const summary = String(task.summary || '').trim()
+    if (code) lines.push(`房源：${code}`)
+    if (addr) lines.push(`地址：${addr}`)
+    if (date) lines.push(`日期：${date}`)
+    lines.push(`状态：${taskStatusLabel(task)}`)
+    if (start || end) lines.push(`时间：${[start ? `退房 ${start}` : '', end ? `入住 ${end}` : ''].filter(Boolean).join('  ')}`)
+    if (oldCode || newCode) lines.push(`密码：${[oldCode ? `旧 ${oldCode}` : '', newCode ? `新 ${newCode}` : ''].filter(Boolean).join('  ')}`)
+    if (guest) lines.push(`客需：${guest}`)
+    if (summary) lines.push(`说明：${summary}`)
+    return lines.join('\n')
   }
 
   const searchResults = useMemo(() => {
@@ -182,11 +298,14 @@ export default function NoticesScreen(props: Props) {
     const workItems = getWorkTasksSnapshot().items || []
     const results: Array<{
       id: string
-      kind: 'property' | 'secret'
+      kind: 'property' | 'secret' | 'task'
       title: string
       subtitle: string
       body: string
       icon: any
+      taskId?: string | null
+      taskKind?: string | null
+      taskSourceType?: string | null
       url?: string | null
       copyText?: string | null
       secretId?: string
@@ -217,6 +336,34 @@ export default function NoticesScreen(props: Props) {
       if (results.length >= 6) break
     }
 
+    for (const it of historyTasks) {
+      const code = String(it.property?.code || '').trim()
+      const addr = String(it.property?.address || '').trim()
+      const summary = String(it.summary || '').trim()
+      const taskType = String((it as any).task_type || it.task_kind || '').trim()
+      const oldCode = String((it as any).old_code || '').trim()
+      const newCode = String((it as any).new_code || '').trim()
+      const guest = String((it as any).guest_special_request || '').trim()
+      const date = String(it.scheduled_date || (it as any).date || '').trim()
+      const hay = `${code} ${addr} ${summary} ${taskType} ${oldCode} ${newCode} ${guest} ${date}`.toLowerCase()
+      if (!hay.includes(q)) continue
+      const taskId = String(it.id || '').trim()
+      if (!taskId || seen.has(`task:${taskId}`)) continue
+      seen.add(`task:${taskId}`)
+      results.push({
+        id: `task:${taskId}`,
+        kind: 'task',
+        title: code ? `任务：${code}` : '任务记录',
+        subtitle: taskHistorySubtitle(it),
+        body: taskHistoryBody(it),
+        icon: 'time-outline',
+        taskId,
+        taskKind: String(it.task_kind || ''),
+        taskSourceType: String(it.source_type || ''),
+      })
+      if (results.length >= 8) break
+    }
+
     for (const it of workItems) {
       const code = String(it.property?.code || '').trim()
       const addr = String(it.property?.address || '').trim()
@@ -241,13 +388,29 @@ export default function NoticesScreen(props: Props) {
       if (results.length >= 6) break
     }
     return results
-  }, [query, secrets])
+  }, [query, secrets, historyTasks])
 
   function renderSearchResult(it: (typeof searchResults)[number]) {
     return (
       <Pressable
         key={it.id}
-        onPress={() =>
+        onPress={() => {
+          if (it.kind === 'task' && it.taskId) {
+            const isCleaningTask = String(it.taskSourceType || '').trim() === 'cleaning_tasks'
+            const isInspection = isCleaningTask && String(it.taskKind || '').trim() === 'inspection'
+            const isManager = role === 'admin' || role === 'offline_manager' || role === 'customer_service'
+            const isInspector = role === 'cleaning_inspector' || role === 'cleaner_inspector'
+            if (isManager && isCleaningTask) {
+              props.navigation.navigate('ManagerDailyTask', { taskId: it.taskId })
+              return
+            }
+            if (isInspector && isInspection) {
+              props.navigation.navigate('InspectionPanel', { taskId: it.taskId })
+              return
+            }
+            props.navigation.navigate('TaskDetail', { id: it.taskId })
+            return
+          }
           props.navigation.navigate('InfoCenterDetail', {
             kind: it.kind,
             title: it.title,
@@ -257,7 +420,7 @@ export default function NoticesScreen(props: Props) {
             copyText: it.copyText || null,
             secretId: it.secretId,
           })
-        }
+        }}
         style={({ pressed }) => [styles.searchResultRow, pressed ? styles.rowPressed : null]}
       >
         <View style={styles.searchResultIcon}>
@@ -291,16 +454,12 @@ export default function NoticesScreen(props: Props) {
     return (
       <Pressable
         onPress={() => {
-          const data = (item as any)?.data && typeof (item as any).data === 'object' ? (item as any).data : {}
-          const entity = String((data as any).entity || '').trim()
-          const entityId = String((data as any).entityId || (data as any).entity_id || '').trim()
-          if (entity === 'cleaning_task' && entityId) {
-            try {
-              props.navigation.getParent()?.navigate('Tasks' as any, { screen: 'TaskDetail', params: { id: entityId } })
-              return
-            } catch {}
-          }
-          props.navigation.navigate('NoticeDetail', { id: item.id })
+          ;(async () => {
+            await markNoticeOpened(item)
+            const data = (item as any)?.data && typeof (item as any).data === 'object' ? (item as any).data : {}
+            if (openTaskFromNoticeData(data)) return
+            props.navigation.navigate('NoticeDetail', { id: item.id })
+          })().catch(() => null)
         }}
         style={({ pressed }) => [styles.noticeRow, pressed ? styles.rowPressed : null]}
       >

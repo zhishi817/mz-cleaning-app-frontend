@@ -8,8 +8,10 @@ import * as Notifications from 'expo-notifications'
 import Constants from 'expo-constants'
 import { useAuth } from '../lib/auth'
 import { useI18n } from '../lib/i18n'
+import { findWorkTaskItemByAnyId } from '../lib/workTasksStore'
 import { getNoticesSnapshot, initNoticesStore, prependNotice, subscribeNotices, upsertNotices } from '../lib/noticesStore'
 import { listInboxNotifications, registerExpoPushToken } from '../lib/api'
+import { resolveNoticeCreatedAt } from '../lib/noticeTime'
 import LoginScreen from '../screens/LoginScreen'
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen'
 import TasksScreen from '../screens/tabs/TasksScreen'
@@ -65,7 +67,15 @@ export type TasksStackParamList = {
 export type NoticesStackParamList = {
   NoticesList: undefined
   NoticeDetail: { id: string }
-  InfoCenterDetail: { kind: 'property' | 'secret'; title: string; subtitle?: string; body?: string; url?: string | null; copyText?: string | null; secretId?: string }
+  InfoCenterDetail: { kind: 'property' | 'secret' | 'task'; title: string; subtitle?: string; body?: string; url?: string | null; copyText?: string | null; secretId?: string }
+  TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
+  InspectionPanel: { taskId: string }
+  InspectionComplete: { taskId: string }
+  CleaningSelfComplete: { taskId: string }
+  ManagerDailyTask: { taskId: string }
+  DayEndBackupKeys: { date: string }
+  FeedbackForm: { taskId: string }
+  SuppliesForm: { taskId: string }
 }
 
 export type ContactsStackParamList = {
@@ -78,6 +88,31 @@ export type MeStackParamList = {
   ProfileEdit: undefined
   Account: undefined
   ChangePassword: undefined
+}
+
+function pickTaskRouteIdFromNoticeData(data0: any) {
+  const data = data0 && typeof data0 === 'object' ? data0 : {}
+  const taskIds = Array.isArray((data as any).task_ids) ? (data as any).task_ids : []
+  const firstTaskId = String(taskIds[0] || '').trim()
+  if (firstTaskId) return firstTaskId
+  const taskId = String((data as any).task_id || '').trim()
+  if (taskId) return taskId
+  const entity = String((data as any).entity || '').trim()
+  const entityId = String((data as any).entityId || (data as any).entity_id || '').trim()
+  if ((entity === 'cleaning_task' || entity === 'work_task') && entityId) return entityId
+  return ''
+}
+
+function resolveTaskNoticeNavigation(params: { taskRouteId: string; role: string }) {
+  const role = String(params.role || '').trim()
+  const task = findWorkTaskItemByAnyId(params.taskRouteId)
+  const isCleaningTask = String(task?.source_type || '').trim() === 'cleaning_tasks'
+  const isInspection = isCleaningTask && String(task?.task_kind || '').trim() === 'inspection'
+  const isManager = role === 'admin' || role === 'offline_manager' || role === 'customer_service'
+  const isInspector = role === 'cleaning_inspector' || role === 'cleaner_inspector'
+  if (isManager && isCleaningTask) return { screen: 'ManagerDailyTask', params: { taskId: params.taskRouteId } }
+  if (isInspector && isInspection) return { screen: 'InspectionPanel', params: { taskId: params.taskRouteId } }
+  return { screen: 'TaskDetail', params: { id: params.taskRouteId } }
 }
 
 function BootScreen() {
@@ -121,6 +156,14 @@ function NoticesStackNavigator() {
       <NoticesStack.Screen name="NoticesList" component={NoticesScreen} options={{ headerShown: false, title: t('notices_title') }} />
       <NoticesStack.Screen name="NoticeDetail" component={NoticeDetailScreen} options={{ title: t('notices_title') }} />
       <NoticesStack.Screen name="InfoCenterDetail" component={InfoCenterDetailScreen} options={{ title: t('notices_title') }} />
+      <NoticesStack.Screen name="TaskDetail" component={TaskDetailScreen} options={{ title: t('task_detail_title') }} />
+      <NoticesStack.Screen name="InspectionPanel" component={InspectionPanelScreen} options={{ title: '检查与补充' }} />
+      <NoticesStack.Screen name="InspectionComplete" component={InspectionCompleteScreen} options={{ title: '标记已完成' }} />
+      <NoticesStack.Screen name="CleaningSelfComplete" component={CleaningSelfCompleteScreen} options={{ title: '补充与完成' }} />
+      <NoticesStack.Screen name="ManagerDailyTask" component={ManagerDailyTaskScreen} options={{ title: '每日清洁' }} />
+      <NoticesStack.Screen name="DayEndBackupKeys" component={DayEndBackupKeysScreen} options={{ title: '备用钥匙' }} />
+      <NoticesStack.Screen name="FeedbackForm" component={FeedbackFormScreen} options={{ title: t('tasks_btn_repair') }} />
+      <NoticesStack.Screen name="SuppliesForm" component={SuppliesFormScreen} options={{ title: '补品填报' }} />
     </NoticesStack.Navigator>
   )
 }
@@ -300,7 +343,14 @@ export default function RootNavigator() {
                 : kind === 'cleaning_task_manager_fields_updated' && propertyCode && fieldsKey
                   ? `manager_fields:${propertyCode}:${fieldsKey}`
                   : eventId || reqId || `${Date.now()}`
-          await prependNotice({ id: String(id0), type: 'update', title, summary: body.split('\n')[0]?.slice(0, 60) || body.slice(0, 60) || '通知', content: body || title })
+          await prependNotice({
+            id: String(id0),
+            type: 'update',
+            title,
+            summary: body.split('\n')[0]?.slice(0, 60) || body.slice(0, 60) || '通知',
+            content: body || title,
+            data,
+          })
           try {
             if (token) {
               const { items } = await listInboxNotifications(token, { limit: 30 })
@@ -314,11 +364,11 @@ export default function RootNavigator() {
                   summary: String(it?.body || ''),
                   content: String(it?.body || ''),
                   data: { ...(it?.data && typeof it.data === 'object' ? it.data : {}), _server_id: String(it?.id || ''), event_id: String(it?.event_id || '') },
-                  createdAt: String(it?.created_at || '') || new Date().toISOString(),
+                  createdAt: resolveNoticeCreatedAt(it?.created_at, it?.event_id, it?.id) || new Date().toISOString(),
                   unread: !it?.read_at,
                 }
               })
-              await upsertNotices(list)
+              await upsertNotices(list, { replace: true })
             }
           } catch {}
         } catch {}
@@ -346,7 +396,14 @@ export default function RootNavigator() {
                 : kind === 'cleaning_task_manager_fields_updated' && propertyCode && fieldsKey
                   ? `manager_fields:${propertyCode}:${fieldsKey}`
                   : eventId || reqId || `${Date.now()}`
-          await prependNotice({ id: String(id0), type: 'update', title, summary: body.split('\n')[0]?.slice(0, 60) || body.slice(0, 60) || '通知', content: body || title })
+          await prependNotice({
+            id: String(id0),
+            type: 'update',
+            title,
+            summary: body.split('\n')[0]?.slice(0, 60) || body.slice(0, 60) || '通知',
+            content: body || title,
+            data,
+          })
           try {
             if (token) {
               const { items } = await listInboxNotifications(token, { limit: 30 })
@@ -360,15 +417,28 @@ export default function RootNavigator() {
                   summary: String(it?.body || ''),
                   content: String(it?.body || ''),
                   data: { ...(it?.data && typeof it.data === 'object' ? it.data : {}), _server_id: String(it?.id || ''), event_id: String(it?.event_id || '') },
-                  createdAt: String(it?.created_at || '') || new Date().toISOString(),
+                  createdAt: resolveNoticeCreatedAt(it?.created_at, it?.event_id, it?.id) || new Date().toISOString(),
                   unread: !it?.read_at,
                 }
               })
-              await upsertNotices(list)
+              await upsertNotices(list, { replace: true })
             }
           } catch {}
           if (navRef.isReady()) {
-            navRef.navigate('Notices', { screen: 'NoticeDetail', params: { id: String(id0) } })
+            const shouldOpenNoticeDetail = kind === 'cleaning_task_manager_fields_updated'
+            const taskRouteId = shouldOpenNoticeDetail ? '' : pickTaskRouteIdFromNoticeData(data)
+            if (taskRouteId) {
+              const target = resolveTaskNoticeNavigation({ taskRouteId, role: String(user?.role || '') })
+              navRef.navigate('Tasks', target as any)
+            }
+            else {
+              navRef.navigate('Notices', { screen: 'NoticesList' } as any)
+              setTimeout(() => {
+                try {
+                  navRef.navigate('Notices', { screen: 'NoticeDetail', params: { id: String(id0) } } as any)
+                } catch {}
+              }, 0)
+            }
           }
         } catch {}
       })()

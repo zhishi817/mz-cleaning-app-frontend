@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { getWorkTasksSnapshot, subscribeWorkTasks, type WorkTaskItem } from '../../lib/workTasksStore'
+import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, refreshWorkTasksFromServer, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import { deleteKeyPhoto, markGuestCheckedOutByOrder, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadMzappMedia } from '../../lib/api'
 import { enqueueKeyUpload } from '../../lib/keyUploadQueue'
@@ -88,11 +88,29 @@ function isManagerRole(role: string) {
   return r === 'admin' || r === 'offline_manager' || r === 'customer_service'
 }
 
+function ymd(d: Date) {
+  const pad2 = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+
+function addDays(d: Date, days: number) {
+  const nd = new Date(d)
+  nd.setDate(nd.getDate() + days)
+  return nd
+}
+
+function isBeforeToday(taskDate0: any) {
+  const taskDate = String(taskDate0 || '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(taskDate)) return false
+  return taskDate < ymd(new Date())
+}
+
 export default function TaskDetailScreen(props: Props) {
   const { t } = useI18n()
   const { user, token } = useAuth()
   const insets = useSafeAreaInsets()
   const [hasInit, setHasInit] = useState(false)
+  const [resolvingRemote, setResolvingRemote] = useState(false)
   const [, bump] = useState(0)
   const id = props.route.params.id
   const action = props.route.params.action
@@ -117,11 +135,31 @@ export default function TaskDetailScreen(props: Props) {
   }, [])
 
   const items = getWorkTasksSnapshot().items
-  const task = useMemo<WorkTaskItem | null>(() => items.find(x => x.id === id) || null, [id, items])
+  const task = useMemo<WorkTaskItem | null>(() => findWorkTaskItemByAnyId(id), [id, items])
   const previewSize = useMemo(() => {
     const { width, height } = Dimensions.get('window')
     return { width, height }
   }, [])
+
+  useEffect(() => {
+    if (!hasInit) return
+    if (task) return
+    if (!token || !user?.id) return
+    let cancelled = false
+    const view: WorkTasksView = isManagerRole(String(user?.role || '')) ? 'all' : 'mine'
+    const now = new Date()
+    const date_from = ymd(addDays(now, -45))
+    const date_to = ymd(addDays(now, 45))
+    setResolvingRemote(true)
+    refreshWorkTasksFromServer({ token, userId: String(user.id), date_from, date_to, view })
+      .catch(() => null)
+      .finally(() => {
+        if (!cancelled) setResolvingRemote(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [hasInit, id, task, token, user?.id, user?.role])
 
   async function onUploadKey() {
     if (!task) return
@@ -319,7 +357,7 @@ export default function TaskDetailScreen(props: Props) {
   if (!task) {
     return (
       <View style={styles.page}>
-        <Text style={styles.muted}>{t('common_error')}</Text>
+        <Text style={styles.muted}>{resolvingRemote ? t('common_loading') : t('common_error')}</Text>
       </View>
     )
   }
@@ -356,6 +394,8 @@ export default function TaskDetailScreen(props: Props) {
   const lockboxVideoUrl = String((task as any).lockbox_video_url || '').trim() || null
   const checkedOutAt = String((task as any).checked_out_at || '').trim()
   const isCheckedOut = !!checkedOutAt
+  const taskDate = String(task.scheduled_date || task.date || '').trim()
+  const isHistoricalTask = isBeforeToday(taskDate)
   const keyTagsRaw = (task as any)?.key_tags
   const keyTags = keyTagsRaw && typeof keyTagsRaw === 'object' ? keyTagsRaw : null
   const keysCheckout = Number((task as any).keys_required_checkout ?? 0)
@@ -570,6 +610,7 @@ export default function TaskDetailScreen(props: Props) {
                 {isCheckoutTask ? (
                   <Pressable
                     onPress={async () => {
+                      if (isHistoricalTask) return
                       if (!token) return
                       try {
                         const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
@@ -581,10 +622,10 @@ export default function TaskDetailScreen(props: Props) {
                         Alert.alert(t('common_error'), String(e?.message || '提交失败'))
                       }
                     }}
-                    disabled={!token}
-                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, isCheckedOut ? styles.actionBtnDisabled : null]}
+                    disabled={!token || isHistoricalTask}
+                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, isCheckedOut || isHistoricalTask ? styles.actionBtnDisabled : null]}
                   >
-                    <Text style={[styles.actionText, isCheckedOut ? { color: '#6B7280' } : null]}>{isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
+                    <Text style={[styles.actionText, isCheckedOut || isHistoricalTask ? { color: '#6B7280' } : null]}>{isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
                   </Pressable>
                 ) : null}
                 <Pressable

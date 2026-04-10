@@ -1,4 +1,5 @@
 import { getJson, setJson } from './storage'
+import { reconcileNoticeCreatedAt } from './noticeTime'
 
 export type NoticeType = 'system' | 'update' | 'key'
 
@@ -15,6 +16,7 @@ export type Notice = {
 type StoreState = {
   items: Notice[]
   unreadIds: Record<string, true>
+  readIds: Record<string, true>
 }
 
 const STORAGE_KEY = 'mzstay.notices.store.v1'
@@ -22,7 +24,7 @@ export const NOTICES_STORAGE_KEY = STORAGE_KEY
 
 const listeners = new Set<() => void>()
 
-let state: StoreState = { items: [], unreadIds: {} }
+let state: StoreState = { items: [], unreadIds: {}, readIds: {} }
 let initialized = false
 
 const MAX_ITEMS = 200
@@ -35,6 +37,10 @@ function isoNow() {
   return new Date().toISOString()
 }
 
+function normalizeCreatedAt(...candidates: any[]) {
+  return reconcileNoticeCreatedAt(...candidates) || isoNow()
+}
+
 async function persist() {
   await setJson(STORAGE_KEY, state)
 }
@@ -42,6 +48,7 @@ async function persist() {
 function dedupeLoadedState(input: StoreState) {
   const seen = new Set<string>()
   const unreadIds: Record<string, true> = {}
+  const readIds: Record<string, true> = {}
   const items: Notice[] = []
   for (const n of input.items || []) {
     const rawId = String(n?.id || '').trim() || nextId()
@@ -51,13 +58,14 @@ function dedupeLoadedState(input: StoreState) {
     const fixed: Notice = { ...n, id }
     items.push(fixed)
     if (input.unreadIds && (input.unreadIds as any)[rawId]) unreadIds[id] = true
+    if (input.readIds && (input.readIds as any)[rawId]) readIds[id] = true
   }
-  return { items, unreadIds }
+  return { items, unreadIds, readIds }
 }
 
 function shouldDropNotice(n: any) {
-  void n
-  return false
+  const type = String(n?.type || '').trim().toLowerCase()
+  return type === 'system'
 }
 
 function normText(v: any) {
@@ -72,17 +80,30 @@ function noticeSig(n: { type?: any; title?: any; summary?: any; content?: any })
   return `${type}|${title}|${summary}|${content}`
 }
 
+function isLocalOnlyNotice(n: Notice | null | undefined) {
+  if (!n) return false
+  const data = (n as any).data
+  const serverId = String(data?._server_id || '').trim()
+  const kind = String(data?.kind || '').trim()
+  if (serverId) return false
+  return kind === 'cleaning_task_manager_fields_updated' || kind === 'guest_checked_out' || kind === 'guest_checked_out_cancelled'
+}
+
 export async function initNoticesStore() {
   if (initialized) return
   initialized = true
   const saved = await getJson<StoreState>(STORAGE_KEY)
-  const loaded = saved?.items?.length ? dedupeLoadedState({ items: saved.items, unreadIds: saved.unreadIds || {} }) : { items: [], unreadIds: {} as Record<string, true> }
+  const loaded = saved?.items?.length
+    ? dedupeLoadedState({ items: saved.items, unreadIds: saved.unreadIds || {}, readIds: saved.readIds || {} })
+    : { items: [], unreadIds: {} as Record<string, true>, readIds: {} as Record<string, true> }
   const keptItems = loaded.items.filter(n => !shouldDropNotice(n))
   const keptUnreadIds: Record<string, true> = {}
+  const keptReadIds: Record<string, true> = {}
   for (const n of keptItems) {
     if (loaded.unreadIds[n.id]) keptUnreadIds[n.id] = true
+    if (loaded.readIds[n.id]) keptReadIds[n.id] = true
   }
-  state = { items: keptItems, unreadIds: keptUnreadIds }
+  state = { items: keptItems, unreadIds: keptUnreadIds, readIds: keptReadIds }
   await persist()
 }
 
@@ -96,10 +117,9 @@ export function getNoticesSnapshot() {
 }
 
 export async function markNoticeRead(id: string) {
-  if (!state.unreadIds[id]) return
   const unreadIds = { ...state.unreadIds }
   delete unreadIds[id]
-  state = { ...state, unreadIds }
+  state = { ...state, unreadIds, readIds: { ...state.readIds, [id]: true } }
   await persist()
   emit()
 }
@@ -111,10 +131,11 @@ function nextId() {
 
 export async function prependNotice(input: Omit<Notice, 'id' | 'createdAt'> & { id?: string; createdAt?: string }) {
   const id = input.id || nextId()
-  const createdAt = input.createdAt || isoNow()
+  const existing = state.items.find(n => n.id === id) || null
+  const createdAt = normalizeCreatedAt(input.createdAt, id, (input as any)?.data?.event_id, existing?.createdAt)
   const exists = state.items.some(n => n.id === id)
   if (exists) {
-    if (!state.unreadIds[id]) {
+    if (!state.unreadIds[id] && !state.readIds[id]) {
       state = { ...state, unreadIds: { ...state.unreadIds, [id]: true } }
       await persist()
       emit()
@@ -126,7 +147,7 @@ export async function prependNotice(input: Omit<Notice, 'id' | 'createdAt'> & { 
   const dup = recent.find(n => noticeSig(n) === sig)
   if (dup) {
     const did = dup.id
-    if (!state.unreadIds[did]) {
+    if (!state.unreadIds[did] && !state.readIds[did]) {
       state = { ...state, unreadIds: { ...state.unreadIds, [did]: true } }
       await persist()
       emit()
@@ -137,25 +158,39 @@ export async function prependNotice(input: Omit<Notice, 'id' | 'createdAt'> & { 
   const items = [notice, ...state.items].slice(0, MAX_ITEMS)
   const keepIds = new Set(items.map(n => n.id))
   const unreadIds: Record<string, true> = { ...state.unreadIds, [id]: true }
+  const readIds: Record<string, true> = { ...state.readIds }
+  delete readIds[id]
   for (const k of Object.keys(unreadIds)) {
     if (!keepIds.has(k)) delete unreadIds[k]
   }
-  state = { ...state, items, unreadIds }
+  for (const k of Object.keys(readIds)) {
+    if (!keepIds.has(k)) delete readIds[k]
+  }
+  state = { ...state, items, unreadIds, readIds }
   await persist()
   emit()
 }
 
-export async function upsertNotices(inputs: Array<Omit<Notice, 'createdAt'> & { createdAt: string; unread?: boolean }>) {
+export async function upsertNotices(inputs: Array<Omit<Notice, 'createdAt'> & { createdAt: string; unread?: boolean }>, options?: { replace?: boolean }) {
   await initNoticesStore()
+  const replace = options?.replace === true
   const map = new Map<string, Notice>()
-  for (const n of state.items) map.set(String(n.id), n)
+  if (!replace) {
+    for (const n of state.items) map.set(String(n.id), n)
+  } else {
+    for (const n of state.items) {
+      if (isLocalOnlyNotice(n)) map.set(String(n.id), n)
+    }
+  }
 
-  const unreadIds: Record<string, true> = { ...state.unreadIds }
+  const unreadIds: Record<string, true> = replace ? {} : { ...state.unreadIds }
+  const readIds: Record<string, true> = { ...state.readIds }
 
   for (const raw of inputs || []) {
     const id = String((raw as any)?.id || '').trim()
     if (!id) continue
-    const createdAt = String((raw as any)?.createdAt || '').trim() || isoNow()
+    const existing = map.get(id) || null
+    const createdAt = normalizeCreatedAt((raw as any)?.createdAt, id, (raw as any)?.data?.event_id, existing?.createdAt)
     const type = (String((raw as any)?.type || 'update') as NoticeType) || 'update'
     const title = String((raw as any)?.title || '').trim() || '通知'
     const summary = String((raw as any)?.summary || '').trim()
@@ -163,8 +198,13 @@ export async function upsertNotices(inputs: Array<Omit<Notice, 'createdAt'> & { 
     const data = (raw as any)?.data
     map.set(id, { id, createdAt, type, title, summary, content, data })
     const unread = (raw as any)?.unread === true
-    if (unread) unreadIds[id] = true
-    else if (unreadIds[id]) delete unreadIds[id]
+    if (unread) {
+      if (!readIds[id]) unreadIds[id] = true
+      else delete unreadIds[id]
+    } else {
+      delete unreadIds[id]
+      delete readIds[id]
+    }
   }
 
   const items = Array.from(map.values())
@@ -181,8 +221,11 @@ export async function upsertNotices(inputs: Array<Omit<Notice, 'createdAt'> & { 
   for (const k of Object.keys(unreadIds)) {
     if (!keepIds.has(k)) delete unreadIds[k]
   }
+  for (const k of Object.keys(readIds)) {
+    if (!keepIds.has(k)) delete readIds[k]
+  }
 
-  state = { items, unreadIds }
+  state = { items, unreadIds, readIds }
   await persist()
   emit()
 }

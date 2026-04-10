@@ -29,30 +29,32 @@ jest.mock('../../lib/auth', () => {
 })
 
 jest.mock('../../lib/workTasksStore', () => {
+  const snapshot = {
+    items: [
+      {
+        id: 'w1',
+        task_kind: 'cleaning',
+        source_type: 'cleaning_tasks',
+        source_id: 'ct1',
+        title: 'T',
+        summary: null,
+        scheduled_date: '2026-01-01',
+        start_time: '10am',
+        end_time: '3pm',
+        assignee_id: null,
+        status: 'assigned',
+        urgency: 'medium',
+        property: { id: 'p1', code: 'X', region: '', address: '', unit_type: '', access_guide_link: '' },
+        date: '2026-01-01',
+      },
+    ],
+    bucketKey: 'k',
+    updatedAt: null,
+  }
   return {
     subscribeWorkTasks: () => () => {},
-    getWorkTasksSnapshot: () => ({
-      items: [
-        {
-          id: 'w1',
-          task_kind: 'cleaning',
-          source_type: 'cleaning_tasks',
-          source_id: 'ct1',
-          title: 'T',
-          summary: null,
-          scheduled_date: '2026-01-01',
-          start_time: '10am',
-          end_time: '3pm',
-          assignee_id: null,
-          status: 'assigned',
-          urgency: 'medium',
-          property: { id: 'p1', code: 'X', region: '', address: '', unit_type: '', access_guide_link: '' },
-          date: '2026-01-01',
-        },
-      ],
-      bucketKey: 'k',
-      updatedAt: null,
-    }),
+    getWorkTasksSnapshot: () => snapshot,
+    findWorkTaskItemByAnyId: (id: string) => snapshot.items.find((item) => item.id === id || item.source_id === id) || null,
   }
 })
 
@@ -82,5 +84,20 @@ test('uploading key photo updates task status to cleaning', async () => {
 
   await waitFor(() => {
     expect((Alert.alert as any).mock.calls.length).toBeGreaterThan(0)
+  })
+})
+
+test('task detail can resolve cleaning task id from notice route', async () => {
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k2', name: 'TaskDetail', params: { id: 'ct1' } } as any} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.queryByText('出错了')).toBeNull()
+    expect(ui.getByText(/upload key|上传钥匙/i)).toBeTruthy()
   })
 })

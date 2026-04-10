@@ -379,6 +379,7 @@ export async function updateCleaningTaskManagerFields(
     old_code?: string | null
     new_code?: string | null
     guest_special_request?: string | null
+    keys_required?: 1 | 2 | null
   },
 ) {
   const urls = buildUrlCandidates('mzapp/cleaning-tasks/manager-fields')
@@ -567,7 +568,7 @@ export async function createPropertyFeedback(
         kind: 'daily_necessities'
         property_id: string
         source_task_id?: string
-        status: 'need_replace' | 'in_progress' | 'replaced' | 'no_action'
+        status: 'need_replace' | 'replaced' | 'no_action'
         item_name: string
         quantity: number
         note?: string
