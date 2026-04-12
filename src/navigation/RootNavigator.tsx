@@ -59,7 +59,7 @@ export type TasksStackParamList = {
   InspectionComplete: { taskId: string }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
-  DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty'; taskRoomCodes?: string[] }
+  DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; overviewMode?: boolean; overviewUsers?: Array<{ userId: string; userName: string; roles: string[]; roomCodes: string[]; complete: boolean | null }> }
   FeedbackForm: { taskId: string }
   SuppliesForm: { taskId: string }
 }
@@ -73,7 +73,7 @@ export type NoticesStackParamList = {
   InspectionComplete: { taskId: string }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
-  DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty'; taskRoomCodes?: string[] }
+  DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; overviewMode?: boolean; overviewUsers?: Array<{ userId: string; userName: string; roles: string[]; roomCodes: string[]; complete: boolean | null }> }
   FeedbackForm: { taskId: string }
   SuppliesForm: { taskId: string }
 }

@@ -167,17 +167,20 @@ export default function DayEndBackupKeysScreen(props: Props) {
   const { token, user } = useAuth()
   const insets = useSafeAreaInsets()
   const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [keyItems, setKeyItems] = useState<PhotoItem[]>([])
   const [returnWashItems, setReturnWashItems] = useState<PhotoItem[]>([])
+  const [consumableItems, setConsumableItems] = useState<PhotoItem[]>([])
   const [rejectItems, setRejectItems] = useState<RejectItemState[]>([])
   const [linenTypeOptions, setLinenTypeOptions] = useState<LinenTypeOption[]>(FALLBACK_LINEN_TYPES)
   const [propertyCodeOptions, setPropertyCodeOptions] = useState<Array<{ id: string; code: string }>>([])
   const [draftReady, setDraftReady] = useState(false)
   const persistEnabledRef = useRef(false)
+  const lastLoadAlertRef = useRef('')
   const scrollRef = useRef<ScrollView>(null)
-  const [anchorY, setAnchorY] = useState<{ key: number; returnWash: number; reject: number }>({ key: 0, returnWash: 0, reject: 0 })
+  const [anchorY, setAnchorY] = useState<{ key: number; returnWash: number; consumable: number; reject: number }>({ key: 0, returnWash: 0, consumable: 0, reject: 0 })
   const currentUserId = String((user as any)?.id || '').trim()
   const username = String((user as any)?.username || (user as any)?.email || '').trim()
   const date = String(props.route.params.date || '').slice(0, 10)
@@ -185,23 +188,33 @@ export default function DayEndBackupKeysScreen(props: Props) {
   const targetUserName = String(props.route.params.userName || '').trim()
   const focus = props.route.params.focus
   const taskRoomCodes = Array.isArray(props.route.params.taskRoomCodes) ? props.route.params.taskRoomCodes : []
+  const overviewMode = props.route.params.overviewMode === true
+  const overviewUsers = Array.isArray(props.route.params.overviewUsers) ? props.route.params.overviewUsers : []
+  const overviewUsersPending = useMemo(
+    () => overviewUsers.map((entry) => ({ ...entry, complete: null as boolean | null })),
+    [overviewUsers],
+  )
 
   const roleNames = useMemo(() => roleNamesOf(user), [user])
   const isCleanerSelf = useMemo(() => roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector'), [roleNames])
   const isInspectorSelf = useMemo(() => roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector'), [roleNames])
+  const isInspectorOnlySelf = useMemo(() => roleNames.includes('cleaning_inspector') && !roleNames.includes('cleaner') && !roleNames.includes('cleaner_inspector'), [roleNames])
   const isManagerViewer = useMemo(() => canManageDayEnd(roleNames), [roleNames])
   const viewingOtherUser = !!targetUserId && targetUserId !== currentUserId
+  const isOverviewMode = isManagerViewer && overviewMode && !targetUserId
   const canEdit = (isCleanerSelf || isInspectorSelf) && !viewingOtherUser
   const canView = canEdit || isManagerViewer
-  const canSubmit = canEdit && keyItems.length > 0 && returnWashItems.length > 0 && rejectItems.every(rejectItemComplete)
+  const canSubmit = canEdit && (isInspectorOnlySelf ? consumableItems.length > 0 : (keyItems.length > 0 && returnWashItems.length > 0)) && rejectItems.every(rejectItemComplete)
+  const [overviewRows, setOverviewRows] = useState(() => overviewUsersPending)
 
   const buildDraft = useCallback(
-    (params?: { pendingSubmit?: boolean; nextKeyItems?: PhotoItem[]; nextReturnWashItems?: PhotoItem[]; nextRejectItems?: RejectItemState[] }): DayEndHandoverDraft => ({
+    (params?: { pendingSubmit?: boolean; nextKeyItems?: PhotoItem[]; nextReturnWashItems?: PhotoItem[]; nextConsumableItems?: PhotoItem[]; nextRejectItems?: RejectItemState[] }): DayEndHandoverDraft => ({
       user_id: currentUserId,
       date,
       pending_submit: !!params?.pendingSubmit,
       key_items: (params?.nextKeyItems || keyItems).map((x) => ({ ...x })),
       return_wash_items: (params?.nextReturnWashItems || returnWashItems).map((x) => ({ ...x })),
+      consumable_items: (params?.nextConsumableItems || consumableItems).map((x) => ({ ...x })),
       reject_items: (params?.nextRejectItems || rejectItems).map((item) => ({
         id: item.id,
         linen_type: item.linen_type,
@@ -211,11 +224,11 @@ export default function DayEndBackupKeysScreen(props: Props) {
       })),
       updated_at: new Date().toISOString(),
     }),
-    [currentUserId, date, keyItems, rejectItems, returnWashItems],
+    [consumableItems, currentUserId, date, keyItems, rejectItems, returnWashItems],
   )
 
   const saveDraftSnapshot = useCallback(
-    async (params?: { pendingSubmit?: boolean; nextKeyItems?: PhotoItem[]; nextReturnWashItems?: PhotoItem[]; nextRejectItems?: RejectItemState[] }) => {
+    async (params?: { pendingSubmit?: boolean; nextKeyItems?: PhotoItem[]; nextReturnWashItems?: PhotoItem[]; nextConsumableItems?: PhotoItem[]; nextRejectItems?: RejectItemState[] }) => {
       if (!canEdit || !currentUserId) return
       await saveDayEndHandoverDraft(buildDraft(params))
     },
@@ -224,8 +237,15 @@ export default function DayEndBackupKeysScreen(props: Props) {
 
   const load = useCallback(async () => {
     if (!token || !canView) return
+    if (isOverviewMode) {
+      setDraftReady(true)
+      setLoading(false)
+      setLoadError(null)
+      return
+    }
     try {
       setLoading(true)
+      setLoadError(null)
       try {
         const list = await listCleaningAppLinenTypes(token)
         const next = filterRejectLinenTypeOptions((list || []).map((x) => ({ code: String(x.code || ''), name: String(x.name || '') })).filter((x) => !!x.name))
@@ -268,11 +288,13 @@ export default function DayEndBackupKeysScreen(props: Props) {
       }
       let remoteKeyItems: PhotoItem[] = []
       let remoteReturnWashItems: PhotoItem[] = []
+      let remoteConsumableItems: PhotoItem[] = []
       let remoteRejectItems: RejectItemState[] = []
       try {
         const r = await listDayEndHandover(token, { date, user_id: targetUserId || undefined })
         remoteKeyItems = toPhotoItems(r?.key_photos || [], 'key')
         remoteReturnWashItems = toPhotoItems((r as any)?.return_wash_photos || r?.dirty_linen_photos || [], 'return_wash')
+        remoteConsumableItems = toPhotoItems((r as any)?.consumable_photos || [], 'consumable')
         remoteRejectItems = toRejectItems((r as any)?.reject_items || [])
       } catch (e: any) {
         const msg = String(e?.message || '')
@@ -288,6 +310,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
           persistEnabledRef.current = true
           setKeyItems(mergePhotoItems(remoteKeyItems, draft.key_items || []))
           setReturnWashItems(mergePhotoItems(remoteReturnWashItems, draft.return_wash_items || []))
+          setConsumableItems(mergePhotoItems(remoteConsumableItems, draft.consumable_items || []))
           setRejectItems(mergeRejectItems(remoteRejectItems, (draft.reject_items || []).map((item: DayEndRejectDraftItem) => ({
             id: item.id,
             linen_type: item.linen_type,
@@ -298,29 +321,71 @@ export default function DayEndBackupKeysScreen(props: Props) {
         } else {
           setKeyItems(remoteKeyItems)
           setReturnWashItems(remoteReturnWashItems)
+          setConsumableItems(remoteConsumableItems)
           setRejectItems(remoteRejectItems)
         }
       } else {
         setKeyItems(remoteKeyItems)
         setReturnWashItems(remoteReturnWashItems)
+        setConsumableItems(remoteConsumableItems)
         setRejectItems(remoteRejectItems)
       }
     } catch (e: any) {
-      Alert.alert(t('common_error'), String(e?.message || '加载失败'))
+      const message = String(e?.message || '加载失败')
+      if (isNetworkishError(e)) {
+        setLoadError(message)
+      } else {
+        setLoadError(message)
+        if (lastLoadAlertRef.current !== message) {
+          lastLoadAlertRef.current = message
+          Alert.alert(t('common_error'), message)
+        }
+      }
     } finally {
       setDraftReady(true)
       setLoading(false)
     }
-  }, [canEdit, canView, currentUserId, date, t, targetUserId, taskRoomCodes, token])
+  }, [canEdit, canView, currentUserId, date, isOverviewMode, t, targetUserId, taskRoomCodes, token])
 
   useEffect(() => {
     load()
   }, [load])
 
   useEffect(() => {
+    if (isOverviewMode) setOverviewRows(overviewUsersPending)
+    if (!token || !isOverviewMode || !overviewUsers.length) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const rows = await Promise.all(overviewUsers.map(async (entry) => {
+          try {
+            const r = await listDayEndHandover(token, { date, user_id: entry.userId })
+            const complete = !!(r as any)?.submitted_at
+            return { ...entry, complete }
+          } catch {
+            return { ...entry, complete: null }
+          }
+        }))
+        if (!cancelled) setOverviewRows(rows.sort((a, b) => Number(a.complete) - Number(b.complete) || String(a.userName || '').localeCompare(String(b.userName || ''), 'en')))
+      } catch {}
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [date, isOverviewMode, overviewUsers, token])
+
+  useEffect(() => {
     if (!focus) return
     const key = focus === 'dirty' ? 'returnWash' : focus
-    const y = key === 'key' ? anchorY.key : key === 'returnWash' ? anchorY.returnWash : anchorY.key
+    const y = key === 'key'
+      ? anchorY.key
+      : key === 'returnWash'
+        ? anchorY.returnWash
+        : key === 'consumable'
+          ? anchorY.consumable
+          : key === 'reject'
+            ? anchorY.reject
+            : anchorY.key
     const timer = setTimeout(() => {
       scrollRef.current?.scrollTo({ y: Math.max(0, y - 12), animated: true })
     }, 80)
@@ -330,13 +395,13 @@ export default function DayEndBackupKeysScreen(props: Props) {
   useEffect(() => {
     if (!draftReady || !canEdit || !currentUserId || !persistEnabledRef.current) return
     saveDraftSnapshot().catch(() => {})
-  }, [canEdit, currentUserId, draftReady, keyItems, rejectItems, returnWashItems, saveDraftSnapshot])
+  }, [canEdit, consumableItems, currentUserId, draftReady, keyItems, rejectItems, returnWashItems, saveDraftSnapshot])
 
-  function buildWatermarkText(kind: 'key' | 'return_wash' | 'reject', capturedAt: string) {
+  function buildWatermarkText(kind: 'key' | 'return_wash' | 'consumable' | 'reject', capturedAt: string) {
     const d = new Date(capturedAt)
     const pad2 = (n: number) => String(n).padStart(2, '0')
     const stamp = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
-    const label = kind === 'key' ? '日终交接-备用钥匙' : kind === 'return_wash' ? '日终交接-退洗床品' : '日终交接-Reject床品'
+    const label = kind === 'key' ? '日终交接-备用钥匙' : kind === 'return_wash' ? '日终交接-退洗床品' : kind === 'consumable' ? '日终交接-剩余消耗品' : '日终交接-Reject床品'
     return `${username || '未知用户'}  ${label}\n${stamp}`
   }
 
@@ -350,7 +415,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
     )
   }
 
-  async function captureAndUpload(kind: 'key' | 'return_wash' | 'reject', rejectItemId?: string) {
+  async function captureAndUpload(kind: 'key' | 'return_wash' | 'consumable' | 'reject', rejectItemId?: string) {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!canEdit) return
     if (uploading || submitting) return
@@ -379,16 +444,18 @@ export default function DayEndBackupKeysScreen(props: Props) {
     persistEnabledRef.current = true
     if (kind === 'key') setKeyItems((prev) => [tempItem, ...prev])
     else if (kind === 'return_wash') setReturnWashItems((prev) => [tempItem, ...prev])
+    else if (kind === 'consumable') setConsumableItems((prev) => [tempItem, ...prev])
     else if (rejectItemId) updateRejectPhotos(rejectItemId, (photos) => [tempItem, ...photos])
 
     setUploading(true)
     try {
       const name = String(a.fileName || uri.split('/').pop() || `${kind}-${Date.now()}.jpg`)
       const mimeType = String(a.mimeType || 'image/jpeg')
-      const purpose = kind === 'key' ? 'backup_key_return' : kind === 'return_wash' ? 'return_wash_linen' : 'reject_linen_return'
+      const purpose = kind === 'key' ? 'backup_key_return' : kind === 'return_wash' ? 'return_wash_linen' : kind === 'consumable' ? 'remaining_consumables' : 'reject_linen_return'
       const up = await uploadCleaningMedia(token, { uri, name, mimeType }, { purpose, captured_at: capturedAt, watermark: '1', watermark_text: watermarkText })
       if (kind === 'key') setKeyItems((prev) => prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: up.url } : x)))
       else if (kind === 'return_wash') setReturnWashItems((prev) => prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: up.url } : x)))
+      else if (kind === 'consumable') setConsumableItems((prev) => prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: up.url } : x)))
       else if (rejectItemId) {
         updateRejectPhotos(rejectItemId, (photos) => photos.map((x) => (x.id === tempId ? { ...x, uploaded_url: up.url } : x)))
       }
@@ -396,6 +463,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
       if (!isNetworkishError(e)) {
         if (kind === 'key') setKeyItems((prev) => prev.filter((x) => x.id !== tempId))
         else if (kind === 'return_wash') setReturnWashItems((prev) => prev.filter((x) => x.id !== tempId))
+        else if (kind === 'consumable') setConsumableItems((prev) => prev.filter((x) => x.id !== tempId))
         else if (rejectItemId) updateRejectPhotos(rejectItemId, (photos) => photos.filter((x) => x.id !== tempId))
         Alert.alert(t('common_error'), String(e?.message || '上传失败'))
         return
@@ -404,6 +472,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
         const queued = await persistDayEndDraftPhoto({ user_id: currentUserId, date, bucket: kind, source_uri: uri, captured_at: capturedAt, watermark_text: watermarkText })
         if (kind === 'key') setKeyItems((prev) => prev.map((x) => (x.id === tempId ? queued : x)))
         else if (kind === 'return_wash') setReturnWashItems((prev) => prev.map((x) => (x.id === tempId ? queued : x)))
+        else if (kind === 'consumable') setConsumableItems((prev) => prev.map((x) => (x.id === tempId ? queued : x)))
         else if (rejectItemId) {
           updateRejectPhotos(rejectItemId, (photos) => photos.map((x) => (x.id === tempId ? queued : x)))
         }
@@ -418,12 +487,12 @@ export default function DayEndBackupKeysScreen(props: Props) {
 
   async function onSubmit() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
-    if (!canSubmit) return Alert.alert(t('common_error'), '请先上传备用钥匙照片、退洗床品照片，并补全 Reject 床品登记')
+    if (!canSubmit) return Alert.alert(t('common_error'), isInspectorOnlySelf ? '请先上传剩余消耗品照片，并补全 Reject 床品登记' : '请先上传备用钥匙照片、退洗床品照片，并补全 Reject 床品登记')
     if (uploading || submitting) return
     setSubmitting(true)
     try {
       const hasPendingReject = rejectItems.some((item) => item.photos.some((x) => !x.uploaded_url))
-      const hasPending = keyItems.some((x) => !x.uploaded_url) || returnWashItems.some((x) => !x.uploaded_url) || hasPendingReject
+      const hasPending = keyItems.some((x) => !x.uploaded_url) || returnWashItems.some((x) => !x.uploaded_url) || consumableItems.some((x) => !x.uploaded_url) || hasPendingReject
       if (hasPending) {
         persistEnabledRef.current = true
         await saveDraftSnapshot({ pendingSubmit: true })
@@ -443,6 +512,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
           key_photos: keyItems.map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
           return_wash_photos: returnWashItems.map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
           dirty_linen_photos: returnWashItems.map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
+          consumable_photos: consumableItems.map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
           reject_items: rejectItems.map((item) => ({
             linen_type: item.linen_type,
             quantity: Math.max(1, Number(item.quantity || 0) || 1),
@@ -453,7 +523,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
       } catch (e: any) {
         const msg = String(e?.message || '')
         if (msg.includes('后端未部署该接口')) {
-          throw new Error('后端还没部署新版日终交接接口，当前页面只能先查看/拍照暂存，暂时无法正式提交退洗床品和 Reject 床品登记。')
+          throw new Error(isInspectorOnlySelf ? '后端还没部署新版检查员日终交接接口，当前页面只能先查看/拍照暂存，暂时无法正式提交剩余消耗品和 Reject 床品登记。' : '后端还没部署新版日终交接接口，当前页面只能先查看/拍照暂存，暂时无法正式提交退洗床品和 Reject 床品登记。')
         }
         throw e
       }
@@ -502,51 +572,106 @@ export default function DayEndBackupKeysScreen(props: Props) {
 
   return (
     <ScrollView ref={scrollRef} style={styles.page} contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 16) + 12 }]}>
+      {isOverviewMode ? (
+        <>
+          <View style={styles.card}>
+            <Text style={styles.title}>今日日终交接总览</Text>
+            <Text style={styles.mutedSmall}>{`日期：${date || '-'}`}</Text>
+            <Text style={styles.mutedSmall}>查看今天清洁员和检查员的日终交接提交状态，点进可查看具体内容。</Text>
+          </View>
+
+          <View style={styles.card}>
+            {!overviewRows.length ? <Text style={styles.muted}>加载中...</Text> : null}
+            <View style={styles.overviewList}>
+              {overviewRows.map((item) => (
+                <Pressable
+                  key={item.userId}
+                  onPress={() => props.navigation.push('DayEndBackupKeys', { date, userId: item.userId, userName: item.userName, taskRoomCodes: item.roomCodes })}
+                  style={({ pressed }) => [styles.overviewItem, pressed ? styles.pressed : null]}
+                >
+                  <View style={styles.overviewMain}>
+                    <Text style={styles.overviewName}>{item.userName || item.userId}</Text>
+                    <Text style={styles.overviewMeta}>{item.roles.includes('cleaning') && item.roles.includes('inspection') ? '清洁 + 检查' : item.roles.includes('inspection') ? '检查' : '清洁'}</Text>
+                    {item.roomCodes.length ? <Text style={styles.overviewRooms} numberOfLines={2}>{`房号：${item.roomCodes.join('、')}`}</Text> : null}
+                  </View>
+                  <View style={[styles.overviewStatusPill, item.complete == null ? styles.overviewStatusGray : (item.complete ? styles.overviewStatusGreen : styles.overviewStatusAmber)]}>
+                    <Text style={[styles.overviewStatusText, item.complete == null ? styles.overviewStatusTextGray : (item.complete ? styles.overviewStatusTextGreen : styles.overviewStatusTextAmber)]}>{item.complete == null ? '加载中' : (item.complete ? '已提交' : '未提交')}</Text>
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        </>
+      ) : (
+        <>
       <View style={styles.card}>
         <Text style={styles.title}>日终交接</Text>
         <Text style={styles.mutedSmall}>{`日期：${date || '-'}`}</Text>
         {targetUserName ? <Text style={styles.mutedSmall}>{`人员：${targetUserName}`}</Text> : null}
-        <Text style={styles.mutedSmall}>完成当天清洁任务后，请提交备用钥匙照片、退洗床品照片，以及 Reject 床品登记。</Text>
+        <Text style={styles.mutedSmall}>{isInspectorOnlySelf ? '完成当天检查任务后，请提交自己剩余消耗品照片，并完成 Reject 床品登记。' : '完成当天清洁任务后，请提交备用钥匙照片、退洗床品照片，以及 Reject 床品登记。'}</Text>
         {taskRoomCodes.length ? <Text style={styles.mutedSmall}>{`今日任务房号：${taskRoomCodes.join('、')}`}</Text> : null}
         {!canEdit ? <Text style={styles.mutedSmall}>当前为查看模式。</Text> : null}
         {loading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
+        {loadError ? <Text style={styles.errorText}>{loadError}</Text> : null}
       </View>
 
-      <View
-        style={styles.card}
-        onLayout={(e) => {
-          const y = e?.nativeEvent?.layout?.y
-          setAnchorY((prev) => ({ ...prev, key: typeof y === 'number' ? y : prev.key }))
-        }}
-      >
-        <Text style={styles.sectionTitle}>1. 备用钥匙照片</Text>
-        <Text style={styles.mutedSmall}>至少上传 1 张，作为当天钥匙已放回的凭证。</Text>
-        {canEdit ? (
-          <Pressable onPress={() => captureAndUpload('key')} style={({ pressed }) => [styles.sectionBtn, pressed ? styles.pressed : null]} disabled={uploading || submitting}>
-            <Ionicons name="camera-outline" size={moderateScale(16)} color="#2563EB" />
-            <Text style={styles.sectionBtnText}>拍备用钥匙</Text>
-          </Pressable>
-        ) : null}
-        {renderPhotoGrid(keyItems, (id) => setKeyItems((prev) => prev.filter((x) => x.id !== id)))}
-      </View>
+      {isInspectorOnlySelf ? (
+        <View
+          style={styles.card}
+          onLayout={(e) => {
+            const y = e?.nativeEvent?.layout?.y
+            setAnchorY((prev) => ({ ...prev, consumable: typeof y === 'number' ? y : prev.consumable }))
+          }}
+        >
+          <Text style={styles.sectionTitle}>1. 剩余消耗品照片</Text>
+          <Text style={styles.mutedSmall}>至少上传 1 张，拍当天检查结束后自己剩余的消耗品。</Text>
+          {canEdit ? (
+            <Pressable onPress={() => captureAndUpload('consumable')} style={({ pressed }) => [styles.sectionBtn, pressed ? styles.pressed : null]} disabled={uploading || submitting}>
+              <Ionicons name="camera-outline" size={moderateScale(16)} color="#2563EB" />
+              <Text style={styles.sectionBtnText}>拍剩余消耗品</Text>
+            </Pressable>
+          ) : null}
+          {renderPhotoGrid(consumableItems, (id) => setConsumableItems((prev) => prev.filter((x) => x.id !== id)))}
+        </View>
+      ) : (
+        <>
+          <View
+            style={styles.card}
+            onLayout={(e) => {
+              const y = e?.nativeEvent?.layout?.y
+              setAnchorY((prev) => ({ ...prev, key: typeof y === 'number' ? y : prev.key }))
+            }}
+          >
+            <Text style={styles.sectionTitle}>1. 备用钥匙照片</Text>
+            <Text style={styles.mutedSmall}>至少上传 1 张，作为当天钥匙已放回的凭证。</Text>
+            {canEdit ? (
+              <Pressable onPress={() => captureAndUpload('key')} style={({ pressed }) => [styles.sectionBtn, pressed ? styles.pressed : null]} disabled={uploading || submitting}>
+                <Ionicons name="camera-outline" size={moderateScale(16)} color="#2563EB" />
+                <Text style={styles.sectionBtnText}>拍备用钥匙</Text>
+              </Pressable>
+            ) : null}
+            {renderPhotoGrid(keyItems, (id) => setKeyItems((prev) => prev.filter((x) => x.id !== id)))}
+          </View>
 
-      <View
-        style={styles.card}
-        onLayout={(e) => {
-          const y = e?.nativeEvent?.layout?.y
-          setAnchorY((prev) => ({ ...prev, returnWash: typeof y === 'number' ? y : prev.returnWash }))
-        }}
-      >
-        <Text style={styles.sectionTitle}>2. 退洗床品照片</Text>
-        <Text style={styles.mutedSmall}>正常使用后的脏床品，退回工厂清洗时在仓库现场拍照留存。</Text>
-        {canEdit ? (
-          <Pressable onPress={() => captureAndUpload('return_wash')} style={({ pressed }) => [styles.sectionBtn, pressed ? styles.pressed : null]} disabled={uploading || submitting}>
-            <Ionicons name="camera-outline" size={moderateScale(16)} color="#2563EB" />
-            <Text style={styles.sectionBtnText}>拍退洗床品</Text>
-          </Pressable>
-        ) : null}
-        {renderPhotoGrid(returnWashItems, (id) => setReturnWashItems((prev) => prev.filter((x) => x.id !== id)))}
-      </View>
+          <View
+            style={styles.card}
+            onLayout={(e) => {
+              const y = e?.nativeEvent?.layout?.y
+              setAnchorY((prev) => ({ ...prev, returnWash: typeof y === 'number' ? y : prev.returnWash }))
+            }}
+          >
+            <Text style={styles.sectionTitle}>2. 退洗床品照片</Text>
+            <Text style={styles.mutedSmall}>正常使用后的脏床品，退回工厂清洗时在仓库现场拍照留存。</Text>
+            {canEdit ? (
+              <Pressable onPress={() => captureAndUpload('return_wash')} style={({ pressed }) => [styles.sectionBtn, pressed ? styles.pressed : null]} disabled={uploading || submitting}>
+                <Ionicons name="camera-outline" size={moderateScale(16)} color="#2563EB" />
+                <Text style={styles.sectionBtnText}>拍退洗床品</Text>
+              </Pressable>
+            ) : null}
+            {renderPhotoGrid(returnWashItems, (id) => setReturnWashItems((prev) => prev.filter((x) => x.id !== id)))}
+          </View>
+        </>
+      )}
 
       <View
         style={styles.card}
@@ -555,7 +680,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
           setAnchorY((prev) => ({ ...prev, reject: typeof y === 'number' ? y : prev.reject }))
         }}
       >
-        <Text style={styles.sectionTitle}>3. Reject 床品登记</Text>
+        <Text style={styles.sectionTitle}>{isInspectorOnlySelf ? '2. Reject 床品登记' : '3. Reject 床品登记'}</Text>
         <Text style={styles.mutedSmall}>不合格床品要退给工厂退款时，在仓库登记床品类型、数量、使用房号，并上传不合格床品退回照片。</Text>
         {canEdit ? (
           <Pressable
@@ -642,7 +767,8 @@ export default function DayEndBackupKeysScreen(props: Props) {
           <Text style={styles.submitText}>{submitting ? t('common_loading') : '提交日终交接'}</Text>
         </Pressable>
       ) : null}
-
+        </>
+      )}
     </ScrollView>
   )
 }
@@ -656,6 +782,7 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 15, fontWeight: '900', color: '#111827' },
   muted: { marginTop: 10, color: '#6B7280', fontWeight: '700' },
   mutedSmall: { marginTop: 8, color: '#6B7280', fontWeight: '700', fontSize: 12 },
+  errorText: { marginTop: 8, color: '#B91C1C', fontWeight: '800', fontSize: 12 },
   sectionBtn: { marginTop: 12, height: 40, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
   sectionBtnText: { color: '#2563EB', fontWeight: '900' },
   grid: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
@@ -687,6 +814,20 @@ const styles = StyleSheet.create({
   submitBtn: { marginTop: 4, height: 44, borderRadius: 12, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
   submitBtnDisabled: { backgroundColor: '#A7F3D0' },
   submitText: { color: '#FFFFFF', fontWeight: '900' },
+  overviewList: { gap: 10 },
+  overviewItem: { borderRadius: 14, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F9FAFB', padding: 12, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  overviewMain: { flex: 1, minWidth: 0 },
+  overviewName: { color: '#111827', fontWeight: '900', fontSize: 14 },
+  overviewMeta: { marginTop: 4, color: '#2563EB', fontWeight: '800', fontSize: 12 },
+  overviewRooms: { marginTop: 6, color: '#6B7280', fontWeight: '700', fontSize: 12, lineHeight: 18 },
+  overviewStatusPill: { minWidth: 64, height: 28, borderRadius: 14, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  overviewStatusGray: { backgroundColor: '#E5E7EB' },
+  overviewStatusGreen: { backgroundColor: '#DCFCE7' },
+  overviewStatusAmber: { backgroundColor: '#FEF3C7' },
+  overviewStatusText: { fontWeight: '900', fontSize: 12 },
+  overviewStatusTextGray: { color: '#4B5563' },
+  overviewStatusTextGreen: { color: '#15803D' },
+  overviewStatusTextAmber: { color: '#B45309' },
   searchInput: { flex: 1, minWidth: 0, height: 44, color: '#111827', fontWeight: '800' },
   pressed: { opacity: 0.92 },
 })

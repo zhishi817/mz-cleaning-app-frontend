@@ -12,6 +12,7 @@ import { markGuestCheckedOutByOrder } from '../../lib/api'
 import { listMzappAlerts, markMzappAlertRead } from '../../lib/api'
 import { getMyProfile } from '../../lib/api'
 import { listDayEndHandover } from '../../lib/api'
+import { listCleaningAppTasks } from '../../lib/api'
 import { processDayEndHandoverQueue } from '../../lib/dayEndHandoverQueue'
 import { processKeyUploadQueue } from '../../lib/keyUploadQueue'
 import { getNoticesSnapshot, initNoticesStore, prependNotice } from '../../lib/noticesStore'
@@ -84,6 +85,83 @@ function isManagerRole(roleNames: string[]) {
 function isCleanerRole(roleNames: string[]) {
   const rs = (roleNames || []).map((x) => String(x || '').trim()).filter(Boolean)
   return rs.includes('cleaner') || rs.includes('cleaner_inspector')
+}
+
+function isInspectorOnlyRole(roleNames: string[]) {
+  const rs = (roleNames || []).map((x) => String(x || '').trim()).filter(Boolean)
+  return rs.includes('cleaning_inspector') && !rs.includes('cleaner') && !rs.includes('cleaner_inspector')
+}
+
+function buildDayEndOverviewBaseUsers(tasks: WorkTaskItem[]) {
+  const map = new Map<string, { userId: string; userName: string; roles: Set<string>; roomCodes: Set<string> }>()
+  for (const task of tasks || []) {
+    if (task.source_type !== 'cleaning_tasks') continue
+    const kind = String(task.task_kind || '').trim().toLowerCase()
+    const st = String(task.status || '').trim().toLowerCase()
+    if (st === 'cancelled' || st === 'canceled') continue
+    const code = String(task.property?.code || '').trim()
+    if (kind === 'cleaning') {
+      const userId = String((task as any).cleaner_id || task.assignee_id || '').trim()
+      if (userId) {
+        const entry = map.get(userId) || { userId, userName: String((task as any).cleaner_name || '').trim(), roles: new Set<string>(), roomCodes: new Set<string>() }
+        entry.roles.add('cleaning')
+        if (!entry.userName) entry.userName = String((task as any).cleaner_name || '').trim()
+        if (code) entry.roomCodes.add(code)
+        map.set(userId, entry)
+      }
+    }
+    if (kind === 'inspection') {
+      const userId = String((task as any).inspector_id || '').trim()
+      if (userId) {
+        const entry = map.get(userId) || { userId, userName: String((task as any).inspector_name || '').trim(), roles: new Set<string>(), roomCodes: new Set<string>() }
+        entry.roles.add('inspection')
+        if (!entry.userName) entry.userName = String((task as any).inspector_name || '').trim()
+        if (code) entry.roomCodes.add(code)
+        map.set(userId, entry)
+      }
+    }
+  }
+  return Array.from(map.values())
+    .map((entry) => ({
+      userId: entry.userId,
+      userName: entry.userName || entry.userId,
+      roles: Array.from(entry.roles.values()).sort(),
+      roomCodes: Array.from(entry.roomCodes.values()).sort((a, b) => a.localeCompare(b, 'en')),
+      complete: null,
+    }))
+    .sort((a, b) => a.userName.localeCompare(b.userName, 'en'))
+}
+
+function buildDayEndOverviewBaseUsersFromCleaningTasks(tasks: Array<any>) {
+  const map = new Map<string, { userId: string; userName: string; roles: Set<string>; roomCodes: Set<string> }>()
+  for (const task of tasks || []) {
+    const status = String(task?.status || '').trim().toLowerCase()
+    if (status === 'cancelled' || status === 'canceled') continue
+    const code = String(task?.property?.code || '').trim()
+    const cleanerId = String(task?.cleaner_id || task?.assignee_id || '').trim()
+    const inspectorId = String(task?.inspector_id || '').trim()
+    if (cleanerId) {
+      const entry = map.get(cleanerId) || { userId: cleanerId, userName: String(task?.cleaner_name || '').trim(), roles: new Set<string>(), roomCodes: new Set<string>() }
+      entry.roles.add('cleaning')
+      if (!entry.userName) entry.userName = String(task?.cleaner_name || '').trim()
+      if (code) entry.roomCodes.add(code)
+      map.set(cleanerId, entry)
+    }
+    if (inspectorId) {
+      const entry = map.get(inspectorId) || { userId: inspectorId, userName: String(task?.inspector_name || '').trim(), roles: new Set<string>(), roomCodes: new Set<string>() }
+      entry.roles.add('inspection')
+      if (!entry.userName) entry.userName = String(task?.inspector_name || '').trim()
+      if (code) entry.roomCodes.add(code)
+      map.set(inspectorId, entry)
+    }
+  }
+  return Array.from(map.values()).map((entry) => ({
+    userId: entry.userId,
+    userName: entry.userName || entry.userId,
+    roles: Array.from(entry.roles.values()).sort(),
+    roomCodes: Array.from(entry.roomCodes.values()).sort((a, b) => a.localeCompare(b, 'en')),
+    complete: false,
+  })).sort((a, b) => a.userName.localeCompare(b.userName, 'en'))
 }
 
 function isCleaningWorkSubmitted(status0: any) {
@@ -224,6 +302,7 @@ export default function TasksScreen(props: Props) {
   const notifiedInspectionsRef = useRef<Record<string, boolean>>({})
   const [banner, setBanner] = useState<{ title: string; message: string } | null>(null)
   const [dayEndComplete, setDayEndComplete] = useState<boolean | null>(null)
+  const [dayEndOverviewUsers, setDayEndOverviewUsers] = useState<Array<{ userId: string; userName: string; roles: string[]; roomCodes: string[]; complete: boolean | null }>>([])
   const bannerTimerRef = useRef<any>(null)
   const [search, setSearch] = useState('')
   const weekRowRef = useRef<ScrollView>(null)
@@ -740,6 +819,7 @@ export default function TasksScreen(props: Props) {
   const isInspectorSelf = useMemo(() => {
     return roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
   }, [roleNames.join('|')])
+  const isInspectorOnlySelf = useMemo(() => isInspectorOnlyRole(roleNames), [roleNames])
   const cleanerTodayTasks = useMemo(() => {
     if (period !== 'today') return []
     return renderTasks.filter((t) => {
@@ -795,16 +875,17 @@ export default function TasksScreen(props: Props) {
       setDayEndComplete(null)
       return
     }
+    setDayEndComplete(null)
     let cancelled = false
     const load = async () => {
       try {
         const r = await listDayEndHandover(token, { date: dayEndDate, user_id: isCleanerSelf || isInspectorSelf ? undefined : dayEndViewerTarget.userId })
         if (cancelled) return
-        const complete = !!(r?.key_photos?.length) && (!!r?.no_dirty_linen || !!r?.dirty_linen_photos?.length)
+        const complete = !!(r as any)?.submitted_at
         setDayEndComplete(complete)
       } catch {
         if (cancelled) return
-        setDayEndComplete(false)
+        setDayEndComplete(null)
       }
     }
     load()
@@ -816,7 +897,37 @@ export default function TasksScreen(props: Props) {
         if (typeof unsub === 'function') unsub()
       } catch {}
     }
-  }, [canManagerMode, cleanerTodayTasks.length, dayEndDate, dayEndViewerTarget.userId, isCleanerSelf, isInspectorSelf, period, props.navigation, selfDayEndTasks.length, token])
+  }, [canManagerMode, cleanerTodayTasks.length, dayEndDate, dayEndViewerTarget.userId, isCleanerSelf, isInspectorOnlySelf, isInspectorSelf, period, props.navigation, selfDayEndTasks.length, token])
+  useEffect(() => {
+    if (!token || !(canManagerMode && mode === 'manager') || period !== 'today') {
+      setDayEndOverviewUsers([])
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const cleaningTasks = await listCleaningAppTasks(token, { date_from: dayEndDate, date_to: dayEndDate })
+        const baseUsers = buildDayEndOverviewBaseUsersFromCleaningTasks(cleaningTasks)
+        if (cancelled) return
+        if (!baseUsers.length) {
+          setDayEndOverviewUsers([])
+          return
+        }
+        setDayEndOverviewUsers(baseUsers)
+        const rows = await Promise.all(baseUsers.map(async (entry) => {
+          const r = await listDayEndHandover(token, { date: dayEndDate, user_id: entry.userId })
+          const complete = !!(r as any)?.submitted_at
+          return { ...entry, complete }
+        }))
+        if (!cancelled) setDayEndOverviewUsers(rows.sort((a, b) => Number(a.complete) - Number(b.complete) || a.userName.localeCompare(b.userName, 'en')))
+      } catch {
+        if (!cancelled) setDayEndOverviewUsers((prev) => prev.map((entry) => ({ ...entry, complete: null })))
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [canManagerMode, dayEndDate, mode, period, token])
   const visibleTasks = useMemo(() => {
     const q = search.trim().toLowerCase()
     const base = canManagerMode && mode === 'manager' && q ? items : renderTasks
@@ -901,14 +1012,22 @@ export default function TasksScreen(props: Props) {
   const showDayEndCard = period === 'today' && (isCleanerSelf || isInspectorSelf ? selfDayEndTasks.length > 0 : cleanerTodayTasks.length > 0) && !!dayEndViewerTarget.userId
   const dayEndInsertIndex = useMemo(() => {
     if (!showDayEndCard) return -1
-    const cleaningIndexes = visibleTasks
+    const eligibleIndexes = visibleTasks
       .map((task, index) => ({ task, index }))
-      .filter(({ task }) => task.source_type === 'cleaning_tasks' && String(task.task_kind || '').trim().toLowerCase() === 'cleaning')
-    if (!cleaningIndexes.length) return -1
-    const firstDone = cleaningIndexes.find(({ task }) => isDoneLikeStatus(String(task.status || '')))
+      .filter(({ task }) => {
+        if (task.source_type !== 'cleaning_tasks') return false
+        const kind = String(task.task_kind || '').trim().toLowerCase()
+        if (canManagerMode && !isCleanerSelf && !isInspectorSelf) return kind === 'cleaning'
+        if (roleNames.includes('cleaner_inspector')) return kind === 'cleaning' || kind === 'inspection'
+        if (roleNames.includes('cleaning_inspector')) return kind === 'inspection'
+        if (roleNames.includes('cleaner')) return kind === 'cleaning'
+        return false
+      })
+    if (!eligibleIndexes.length) return -1
+    const firstDone = eligibleIndexes.find(({ task }) => isDoneLikeStatus(String(task.status || '')))
     if (firstDone) return firstDone.index
-    return cleaningIndexes[cleaningIndexes.length - 1].index + 1
-  }, [showDayEndCard, visibleTasks])
+    return eligibleIndexes[eligibleIndexes.length - 1].index + 1
+  }, [canManagerMode, isCleanerSelf, isInspectorSelf, roleNames, showDayEndCard, visibleTasks])
 
   function showBanner(title: string, message: string) {
     setBanner({ title, message })
@@ -1314,6 +1433,26 @@ export default function TasksScreen(props: Props) {
           </View>
         ) : null}
 
+        {canManagerMode && mode === 'manager' && period === 'today' ? (
+          <Pressable
+            onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, overviewMode: true, overviewUsers: dayEndOverviewUsers.map((entry) => ({ ...entry, complete: null })) })}
+            style={({ pressed }) => [styles.dayEndOverviewCard, pressed ? styles.segmentPressed : null]}
+          >
+            <View style={styles.dayEndOverviewIcon}>
+              <Ionicons name="albums-outline" size={moderateScale(18)} color="#1D4ED8" />
+            </View>
+            <View style={styles.dayEndOverviewBody}>
+              <Text style={styles.dayEndOverviewTitle}>今日日终交接总览</Text>
+              <Text style={styles.dayEndOverviewMsg} numberOfLines={2}>
+                {dayEndOverviewUsers.length
+                  ? `查看今天 ${dayEndOverviewUsers.length} 位清洁/检查人员的提交状态与内容。`
+                  : '查看今天清洁和检查人员的日终交接提交状态。'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={moderateScale(18)} color="#93C5FD" />
+          </Pressable>
+        ) : null}
+
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>{sectionTitle}</Text>
           <View style={styles.sectionRight}>
@@ -1449,6 +1588,7 @@ export default function TasksScreen(props: Props) {
                 : (Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : 0)
               const showCheckout = keyTags ? keyTags.show_checkout === true : (isCleaningSource && !isCheckedOut && checkoutSets >= 2)
               const showCheckin = keyTags ? keyTags.show_checkin === true : (isCleaningSource && checkinSets >= 2)
+              const selfInspectorOnlyUser = isInspectorOnlyRole(roleNames)
               const offlineDetail = (() => {
                 if (!isOfflineTask) return null
                 const t1 = String(task.title || '').trim()
@@ -1480,23 +1620,25 @@ export default function TasksScreen(props: Props) {
                       </View>
                       <Text style={styles.summary} numberOfLines={2}>
                         {isCleanerSelf || isInspectorSelf
-                          ? (dayEndComplete ? '今天的日终交接已提交，可进入查看详情。' : '请根据今天实际任务完成日终交接。')
+                          ? (dayEndComplete
+                            ? '今天的日终交接已提交，可进入查看详情。'
+                            : (selfInspectorOnlyUser ? '请拍剩余消耗品并完成 Reject 床品登记。' : '请根据今天实际任务完成日终交接。'))
                           : (dayEndViewerTarget.userName
                             ? `查看 ${dayEndViewerTarget.userName} 今日的钥匙与脏床品交接记录。`
                             : '查看今日的钥匙与脏床品交接记录。')}
                       </Text>
                       <View style={styles.actionsRow}>
                         <Pressable
-                          onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, focus: 'key', taskRoomCodes: dayEndTaskRoomCodes, ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }) })}
+                          onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, focus: selfInspectorOnlyUser ? 'consumable' : 'key', taskRoomCodes: dayEndTaskRoomCodes, ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }) })}
                           style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
                         >
-                          <Text style={styles.actionText}>上传备用钥匙</Text>
+                          <Text style={styles.actionText}>{selfInspectorOnlyUser ? '上传剩余消耗品' : '上传备用钥匙'}</Text>
                         </Pressable>
                         <Pressable
-                          onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, focus: 'dirty', taskRoomCodes: dayEndTaskRoomCodes, ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }) })}
+                          onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, focus: selfInspectorOnlyUser ? 'reject' : 'dirty', taskRoomCodes: dayEndTaskRoomCodes, ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }) })}
                           style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
                         >
-                          <Text style={styles.actionText}>上传脏床品照片</Text>
+                          <Text style={styles.actionText}>{selfInspectorOnlyUser ? '登记 Reject床品' : '上传脏床品照片'}</Text>
                         </Pressable>
                       </View>
                     </Pressable>
@@ -1853,23 +1995,25 @@ export default function TasksScreen(props: Props) {
                 </View>
                 <Text style={styles.summary} numberOfLines={2}>
                   {isCleanerSelf || isInspectorSelf
-                    ? (dayEndComplete ? '今天的日终交接已提交，可进入查看详情。' : '请根据今天实际任务完成日终交接。')
+                    ? (dayEndComplete
+                      ? '今天的日终交接已提交，可进入查看详情。'
+                      : (isInspectorOnlySelf ? '请拍剩余消耗品并完成 Reject 床品登记。' : '请根据今天实际任务完成日终交接。'))
                     : (dayEndViewerTarget.userName
                       ? `查看 ${dayEndViewerTarget.userName} 今日的钥匙与脏床品交接记录。`
                       : '查看今日的钥匙与脏床品交接记录。')}
                 </Text>
                 <View style={styles.actionsRow}>
                   <Pressable
-                    onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, focus: 'key', taskRoomCodes: dayEndTaskRoomCodes, ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }) })}
+                    onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, focus: isInspectorOnlySelf ? 'consumable' : 'key', taskRoomCodes: dayEndTaskRoomCodes, ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }) })}
                     style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
                   >
-                    <Text style={styles.actionText}>上传备用钥匙</Text>
+                    <Text style={styles.actionText}>{isInspectorOnlySelf ? '上传剩余消耗品' : '上传备用钥匙'}</Text>
                   </Pressable>
                   <Pressable
-                    onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, focus: 'dirty', taskRoomCodes: dayEndTaskRoomCodes, ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }) })}
+                    onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, focus: isInspectorOnlySelf ? 'reject' : 'dirty', taskRoomCodes: dayEndTaskRoomCodes, ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }) })}
                     style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
                   >
-                    <Text style={styles.actionText}>上传脏床品照片</Text>
+                    <Text style={styles.actionText}>{isInspectorOnlySelf ? '登记 Reject床品' : '上传脏床品照片'}</Text>
                   </Pressable>
                 </View>
               </Pressable>
@@ -1911,6 +2055,11 @@ const styles = StyleSheet.create({
   bannerTextWrap: { flex: 1, minWidth: 0 },
   bannerTitle: { fontWeight: '900', color: '#111827' },
   bannerMsg: { marginTop: 2, color: '#6B7280', fontWeight: '700' },
+  dayEndOverviewCard: { marginTop: 10, backgroundColor: '#EFF6FF', borderRadius: 16, padding: 12, borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 10 },
+  dayEndOverviewIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
+  dayEndOverviewBody: { flex: 1, minWidth: 0 },
+  dayEndOverviewTitle: { fontWeight: '900', color: '#1D4ED8' },
+  dayEndOverviewMsg: { marginTop: 2, color: '#1E40AF', fontWeight: '700' },
   dayEndCard: { marginBottom: 12, backgroundColor: '#EFF6FF', borderRadius: 16, padding: 12, borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 10 },
   dayEndTitle: { fontWeight: '900', color: '#1D4ED8' },
   dayEndTaskCard: { backgroundColor: '#EFF6FF', borderColor: '#DBEAFE' },

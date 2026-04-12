@@ -138,6 +138,11 @@ export default function NoticeDetailScreen(props: Props) {
   const imagesAtBottom = notice.type === 'key'
   const bodyText = stripUrlLines(notice.content) || notice.content
   const details = parseNoticeDetails(bodyText)
+  const action = String((notice as any)?.data?.action || '').trim()
+  const targetDate = String((notice as any)?.data?.date || '').trim()
+  const targetUserId = String((notice as any)?.data?.target_user_id || '').trim()
+  const targetUserName = String((notice as any)?.data?.target_user_name || '').trim()
+  const canOpenDayEnd = action === 'open_day_end_handover' && !!targetDate
 
   return (
     <>
@@ -188,6 +193,16 @@ export default function NoticeDetailScreen(props: Props) {
               <Text style={styles.noteLabel}>说明</Text>
               <Text style={styles.body}>{details.notes}</Text>
             </View>
+          ) : null}
+
+          {canOpenDayEnd ? (
+            <Pressable
+              onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: targetDate, ...(targetUserId ? { userId: targetUserId } : {}), ...(targetUserName ? { userName: targetUserName } : {}) })}
+              style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
+            >
+              <Ionicons name="open-outline" size={moderateScale(16)} color="#2563EB" />
+              <Text style={styles.actionText}>查看日终交接</Text>
+            </Pressable>
           ) : null}
 
           {imagesAtBottom && imgs.length ? (
@@ -266,6 +281,8 @@ const styles = StyleSheet.create({
   infoLabel: { color: '#64748B', fontSize: 12, fontWeight: '800' },
   infoValue: { marginTop: 6, color: '#111827', fontSize: 15, fontWeight: '900' },
   noteCard: { marginTop: 14, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E5E7EB', padding: 12 },
+  actionBtn: { marginTop: 14, height: 42, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  actionText: { color: '#2563EB', fontWeight: '900' },
   noteLabel: { color: '#6B7280', fontSize: 12, fontWeight: '900' },
   photoSection: { marginTop: 14 },
   imagesWrap: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },

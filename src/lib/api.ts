@@ -261,7 +261,10 @@ export type CleaningAppTask = {
   task_date: string
   status: string
   assignee_id: string | null
+  cleaner_id?: string | null
   inspector_id: string | null
+  cleaner_name?: string | null
+  inspector_name?: string | null
   checkout_time: string | null
   checkin_time: string | null
   old_code: string | null
@@ -752,6 +755,7 @@ export async function listDayEndHandover(token: string, params: { date: string; 
     key_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
     dirty_linen_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
     return_wash_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
+    consumable_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
     reject_items: Array<{
       id: string
       linen_type: string
@@ -802,6 +806,7 @@ export async function uploadDayEndHandover(
     key_photos: Array<{ url: string; captured_at?: string }>
     dirty_linen_photos: Array<{ url: string; captured_at?: string }>
     return_wash_photos?: Array<{ url: string; captured_at?: string }>
+    consumable_photos?: Array<{ url: string; captured_at?: string }>
     reject_items?: Array<{
       linen_type: string
       quantity: number
