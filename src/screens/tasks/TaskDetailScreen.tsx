@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, refreshWorkTasksFromServer, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
+import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, refreshWorkTasksFromServer, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import { deleteKeyPhoto, markGuestCheckedOutByOrder, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadMzappMedia } from '../../lib/api'
 import { enqueueKeyUpload } from '../../lib/keyUploadQueue'
@@ -28,16 +28,30 @@ function statusLabel(status: string) {
   return { text: '待处理', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
 }
 
-function statusLabelForTask(task: WorkTaskItem) {
+function statusLabelForTask(task: WorkTaskItem, roleNames: string[]) {
   const s = String(task.status || '').trim().toLowerCase()
   const meta = statusLabel(s)
   const source = String(task.source_type || '').trim().toLowerCase()
   const kind = String(task.task_kind || '').trim().toLowerCase()
   if (source === 'cleaning_tasks' && kind === 'cleaning') {
+    const isCleanerView = isCleanerRole(roleNames)
+    const inspectionStatus = String((task as any).inspection_status || '').trim().toLowerCase()
+    const hasInspection = Array.isArray((task as any).inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
+    if (isCleaningWorkSubmitted(s)) {
+      if (isCleanerView) return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
+      if (hasInspection || inspectionStatus) {
+        if (inspectionStatus === 'keys_hung' || inspectionStatus === 'done' || inspectionStatus === 'completed') {
+          return { text: '已挂钥匙', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
+        }
+        return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+      }
+      return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
+    }
     const checkedOutAt = String((task as any).checked_out_at || '').trim()
-    if (s !== 'in_progress' && s !== 'done' && s !== 'completed' && s !== 'cancelled' && s !== 'canceled') {
+    if (s === 'in_progress' || s === 'cleaning') return { text: '进行中', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
+    if (s !== 'cancelled' && s !== 'canceled') {
       if (checkedOutAt) return { text: '已退房', pill: styles.statusPurple, textStyle: styles.statusTextPurple }
-      return { text: '待清洁', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+      return { text: '已分配', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
     }
   }
   return meta
@@ -88,6 +102,18 @@ function isManagerRole(role: string) {
   return r === 'admin' || r === 'offline_manager' || r === 'customer_service'
 }
 
+function roleNamesOf(user: any) {
+  const values = Array.isArray(user?.roles) ? user.roles : []
+  const ids: string[] = values.map((x: any) => String(x || '').trim()).filter(Boolean)
+  const primary = String(user?.role || '').trim()
+  if (primary) ids.unshift(primary)
+  return Array.from(new Set(ids))
+}
+
+function isCleanerRole(roleNames: string[]) {
+  return roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector')
+}
+
 function ymd(d: Date) {
   const pad2 = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
@@ -105,9 +131,15 @@ function isBeforeToday(taskDate0: any) {
   return taskDate < ymd(new Date())
 }
 
+function isCleaningWorkSubmitted(status0: any) {
+  const s = String(status0 || '').trim().toLowerCase()
+  return ['cleaned', 'restock_pending', 'restocked', 'to_inspect', 'to_hang_keys', 'keys_hung', 'done', 'completed', 'ready'].includes(s)
+}
+
 export default function TaskDetailScreen(props: Props) {
   const { t } = useI18n()
   const { user, token } = useAuth()
+  const roleNames = useMemo(() => roleNamesOf(user), [user])
   const insets = useSafeAreaInsets()
   const [hasInit, setHasInit] = useState(false)
   const [resolvingRemote, setResolvingRemote] = useState(false)
@@ -124,6 +156,7 @@ export default function TaskDetailScreen(props: Props) {
   const [keyDeleting, setKeyDeleting] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [autoUploadKeyDone, setAutoUploadKeyDone] = useState(false)
+  const [checkedOutPending, setCheckedOutPending] = useState(false)
 
   useEffect(() => {
     setHasInit(true)
@@ -186,7 +219,7 @@ export default function TaskDetailScreen(props: Props) {
 
     let res: ImagePicker.ImagePickerResult
     try {
-      res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.9 })
+      res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
     } catch (e: any) {
       Alert.alert(t('common_error'), '无法打开相机（模拟器不支持相机拍照，请用真机测试）')
       return
@@ -269,7 +302,7 @@ export default function TaskDetailScreen(props: Props) {
     }
     try {
       setMarking(true)
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -362,7 +395,7 @@ export default function TaskDetailScreen(props: Props) {
     )
   }
 
-  const meta = statusLabelForTask(task)
+  const meta = statusLabelForTask(task, roleNames)
   const kind = taskKindLabel(task.task_kind)
   const region = String(task.property?.region || '').trim()
   const code = String(task.property?.code || '').trim()
@@ -398,8 +431,9 @@ export default function TaskDetailScreen(props: Props) {
   const isHistoricalTask = isBeforeToday(taskDate)
   const keyTagsRaw = (task as any)?.key_tags
   const keyTags = keyTagsRaw && typeof keyTagsRaw === 'object' ? keyTagsRaw : null
-  const keysCheckout = Number((task as any).keys_required_checkout ?? 0)
-  const keysCheckin = Number((task as any).keys_required_checkin ?? 0)
+  const keysRequiredBase = Number((task as any).keys_required ?? 0)
+  const keysCheckout = Number((task as any).keys_required_checkout ?? keysRequiredBase)
+  const keysCheckin = Number((task as any).keys_required_checkin ?? keysRequiredBase)
   const checkoutSets = keyTags
     ? (keyTags.checkout_sets == null ? 0 : Number(keyTags.checkout_sets))
     : (Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : 0)
@@ -416,6 +450,7 @@ export default function TaskDetailScreen(props: Props) {
   const isSelfCompleteEligible = isCleaningTask && isCheckoutTask && !inspectorAssigned
   const isCustomerService = String(user?.role || '') === 'customer_service'
   const canDeleteKeyPhoto = (String(user?.role || '') === 'cleaner' || String(user?.role || '') === 'cleaner_inspector') && isCleaningTask
+  const isCleaningSubmitted = isCleaningTask && isCleaningWorkSubmitted(task.status)
   const showSummary = !!(task.summary && task.source_type !== 'cleaning_tasks' && !isOfflineTask)
   const isAlreadyDone = (() => {
     const s = String(task.status || '').trim().toLowerCase()
@@ -612,20 +647,26 @@ export default function TaskDetailScreen(props: Props) {
                     onPress={async () => {
                       if (isHistoricalTask) return
                       if (!token) return
+                      const nextCheckedOutAt = isCheckedOut ? null : new Date().toISOString()
                       try {
+                        setCheckedOutPending(true)
                         const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
                         if (!orderId) throw new Error('缺少订单ID')
+                        await patchWorkTaskItem(String(task.id), { checked_out_at: nextCheckedOutAt } as any)
                         await markGuestCheckedOutByOrder(token, { order_id: orderId, action: isCheckedOut ? 'unset' : 'set' })
                         Alert.alert(t('common_ok'), isCheckedOut ? '已取消退房' : '已标记已退房')
                         props.navigation.goBack()
                       } catch (e: any) {
+                        await patchWorkTaskItem(String(task.id), { checked_out_at: checkedOutAt || null } as any)
                         Alert.alert(t('common_error'), String(e?.message || '提交失败'))
+                      } finally {
+                        setCheckedOutPending(false)
                       }
                     }}
-                    disabled={!token || isHistoricalTask}
-                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, isCheckedOut || isHistoricalTask ? styles.actionBtnDisabled : null]}
+                    disabled={!token || isHistoricalTask || checkedOutPending}
+                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, isCheckedOut || isHistoricalTask || checkedOutPending ? styles.actionBtnDisabled : null]}
                   >
-                    <Text style={[styles.actionText, isCheckedOut || isHistoricalTask ? { color: '#6B7280' } : null]}>{isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
+                    <Text style={[styles.actionText, isCheckedOut || isHistoricalTask || checkedOutPending ? { color: '#6B7280' } : null]}>{checkedOutPending ? '提交中...' : isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
                   </Pressable>
                 ) : null}
                 <Pressable
@@ -639,10 +680,10 @@ export default function TaskDetailScreen(props: Props) {
               <>
                 <Pressable
                   onPress={onUploadKey}
-                  disabled={keyUploading}
+                  disabled={keyUploading || isCleaningSubmitted}
                   style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, keyUploading ? styles.actionBtnDisabled : null]}
                 >
-                  <Text style={styles.actionText}>{keyUploading ? t('common_loading') : t('tasks_btn_upload_key')}</Text>
+                  <Text style={styles.actionText}>{keyUploading ? t('common_loading') : (isCleaningSubmitted ? '钥匙记录' : t('tasks_btn_upload_key'))}</Text>
                 </Pressable>
                 <Pressable
                   onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
@@ -654,7 +695,7 @@ export default function TaskDetailScreen(props: Props) {
                   onPress={() => props.navigation.navigate(isSelfCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)}
                   style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
                 >
-                  <Text style={styles.actionText}>{isSelfCompleteEligible ? '补充与完成' : '补品填报'}</Text>
+                  <Text style={styles.actionText}>{isCleaningSubmitted ? '补品记录' : (isSelfCompleteEligible ? '补充与完成' : '补品填报')}</Text>
                 </Pressable>
               </>
             )}

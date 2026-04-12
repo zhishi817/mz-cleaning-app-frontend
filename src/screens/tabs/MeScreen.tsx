@@ -41,6 +41,12 @@ export default function MeScreen(props: Props) {
               avatar_url: remote.avatar_url || null,
               display_name: String(remote.display_name || remote.username || ''),
               phone_au: String(remote.phone_au || ''),
+              legal_name: String(remote.legal_name || ''),
+              bank_account_name: String(remote.bank_account_name || ''),
+              bank_bsb: String(remote.bank_bsb || ''),
+              bank_account_number: String(remote.bank_account_number || ''),
+              personal_abn: String(remote.personal_abn || ''),
+              photo_id_url: remote.photo_id_url || null,
             }
             setProfile(merged)
           } catch {}

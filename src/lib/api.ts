@@ -735,6 +735,98 @@ export async function uploadDayEndBackupKeys(token: string, params: { date: stri
   return (await parseJsonOrThrow(res)) as any
 }
 
+export async function listDayEndHandover(token: string, params: { date: string; user_id?: string }) {
+  const sp = new URLSearchParams()
+  sp.set('date', String(params.date || '').slice(0, 10))
+  if (params.user_id) sp.set('user_id', String(params.user_id))
+  const urls = buildUrlCandidates(`cleaning-app/day-end/handover?${sp.toString()}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as {
+    key_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
+    dirty_linen_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
+    return_wash_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
+    reject_items: Array<{
+      id: string
+      linen_type: string
+      quantity: number
+      used_room: string
+      photos: Array<{ id?: string; url: string; captured_at?: string | null }>
+      created_at?: string | null
+      updated_at?: string | null
+    }>
+    no_dirty_linen: boolean
+    submitted_at?: string | null
+    updated_at?: string | null
+  }
+}
+
+export async function listCleaningAppLinenTypes(token: string) {
+  const urls = buildUrlCandidates('cleaning-app/linen-types')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as Array<{ code: string; name: string; sort_order?: number }>
+}
+
+export async function listCleaningAppPropertyCodes(token: string, params?: { q?: string }) {
+  const sp = new URLSearchParams()
+  if (params?.q) sp.set('q', String(params.q || '').trim())
+  const urls = buildUrlCandidates(`cleaning-app/property-codes${sp.toString() ? `?${sp.toString()}` : ''}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as Array<{ id: string; code: string }>
+}
+
+export async function uploadDayEndHandover(
+  token: string,
+  params: {
+    date: string
+    key_photos: Array<{ url: string; captured_at?: string }>
+    dirty_linen_photos: Array<{ url: string; captured_at?: string }>
+    return_wash_photos?: Array<{ url: string; captured_at?: string }>
+    reject_items?: Array<{
+      linen_type: string
+      quantity: number
+      used_room: string
+      photos: Array<{ url: string; captured_at?: string }>
+    }>
+    no_dirty_linen?: boolean
+  },
+) {
+  const urls = buildUrlCandidates('cleaning-app/day-end/handover')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      20000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
 export async function uploadLockboxVideo(token: string, cleaningTaskId: string, params: { media_url: string }) {
   const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/lockbox-video`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -773,7 +865,7 @@ export async function uploadSelfLockboxVideo(token: string, cleaningTaskId: stri
   return (await parseJsonOrThrow(res)) as any
 }
 
-export type InspectionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'unclean'
+export type InspectionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'shower_drain' | 'unclean'
 
 export async function getInspectionPhotos(token: string, cleaningTaskId: string) {
   const urls = uniq([
@@ -1061,6 +1153,31 @@ export async function submitCleaningConsumables(
   return (await parseJsonOrThrow(res)) as any
 }
 
+export async function getCleaningConsumables(
+  token: string,
+  taskId: string,
+) {
+  const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(taskId)}/consumables`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as {
+    items: Array<{ id: string; item_id: string; qty: number; need_restock: boolean; note?: string | null; status?: string | null; photo_url?: string | null; item_label?: string | null; created_at?: string | null }>
+  }
+}
+
 export async function listUsers(token: string) {
   const urls = buildUrlCandidates('users/contacts')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -1102,6 +1219,63 @@ export async function listCompanySecretsForApp(token: string) {
   return (await parseJsonOrThrow(res)) as Array<{ id: string; title: string; username?: string | null; note?: string | null; secret?: string | null; updated_at?: string | null }>
 }
 
+export type CompanyContentAudienceScope = 'all_staff' | 'cleaners' | 'warehouse_staff' | 'maintenance_staff' | 'managers'
+export type CompanyContentPageType = 'announce' | 'doc' | 'warehouse'
+export type CompanyContentCategory = 'company_rule' | 'work_guide'
+
+export type CompanyContentItem = {
+  id: string
+  title?: string | null
+  content?: string | null
+  published_at?: string | null
+  updated_at?: string | null
+  pinned?: boolean | null
+  urgent?: boolean | null
+  audience_scope?: CompanyContentAudienceScope | null
+  page_type?: CompanyContentPageType | null
+  category?: CompanyContentCategory | null
+  expires_at?: string | null
+  created_at?: string | null
+}
+
+export type CompanyAnnouncement = CompanyContentItem & { page_type?: 'announce' | null }
+export type CompanyGuide = CompanyContentItem & { page_type?: 'doc' | null; category?: 'work_guide' | null }
+export type WarehouseGuide = CompanyContentItem & { page_type?: 'warehouse' | null }
+
+async function listCompanyContentForApp(
+  token: string,
+  params: { type: CompanyContentPageType; category?: CompanyContentCategory },
+) {
+  const query = new URLSearchParams({ type: params.type })
+  if (params.category) query.set('category', params.category)
+  const urls = buildUrlCandidates(`cms/company/pages/app-list?${query.toString()}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as CompanyContentItem[]
+}
+
+export async function listCompanyAnnouncementsForApp(token: string) {
+  return (await listCompanyContentForApp(token, { type: 'announce' })) as CompanyAnnouncement[]
+}
+
+export async function listWorkGuidesForApp(token: string) {
+  return (await listCompanyContentForApp(token, { type: 'doc', category: 'work_guide' })) as CompanyGuide[]
+}
+
+export async function listWarehouseGuidesForApp(token: string) {
+  return (await listCompanyContentForApp(token, { type: 'warehouse' })) as WarehouseGuide[]
+}
+
 export async function logCopyCompanySecretForApp(token: string, secretId: string) {
   const urls = buildUrlCandidates(`cms/company/secrets/${encodeURIComponent(secretId)}/log-copy-app`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -1129,12 +1303,35 @@ export async function getMyProfile(token: string) {
   }
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as { id: string; username: string; role: string; phone_au?: string | null; display_name?: string | null; avatar_url?: string | null }
+  return (await parseJsonOrThrow(res)) as {
+    id: string
+    username: string
+    role: string
+    phone_au?: string | null
+    display_name?: string | null
+    avatar_url?: string | null
+    legal_name?: string | null
+    bank_account_name?: string | null
+    bank_bsb?: string | null
+    bank_account_number?: string | null
+    personal_abn?: string | null
+    photo_id_url?: string | null
+  }
 }
 
 export async function updateMyProfile(
   token: string,
-  params: { phone_au?: string | null; display_name?: string; avatar_url?: string | null },
+  params: {
+    phone_au?: string | null
+    display_name?: string
+    avatar_url?: string | null
+    legal_name?: string | null
+    bank_account_name?: string | null
+    bank_bsb?: string | null
+    bank_account_number?: string | null
+    personal_abn?: string | null
+    photo_id_url?: string | null
+  },
 ) {
   const urls = buildUrlCandidates('users/me')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -1149,7 +1346,20 @@ export async function updateMyProfile(
   }
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as { id: string; username: string; role: string; phone_au?: string | null; display_name?: string | null; avatar_url?: string | null }
+  return (await parseJsonOrThrow(res)) as {
+    id: string
+    username: string
+    role: string
+    phone_au?: string | null
+    display_name?: string | null
+    avatar_url?: string | null
+    legal_name?: string | null
+    bank_account_name?: string | null
+    bank_bsb?: string | null
+    bank_account_number?: string | null
+    personal_abn?: string | null
+    photo_id_url?: string | null
+  }
 }
 
 export async function changeMyPassword(token: string, params: { old_password: string; new_password: string }) {
@@ -1235,12 +1445,22 @@ export async function reorderCleaningTasks(
   return (await parseJsonOrThrow(res)) as any
 }
 
-export async function uploadMzappMedia(token: string, file: { uri: string; name: string; mimeType: string }) {
+export async function uploadMzappMedia(
+  token: string,
+  file: { uri: string; name: string; mimeType: string },
+  meta?: Record<string, string | undefined | null>,
+) {
   const urls = buildUrlCandidates('mzapp/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   const { compressImageForUpload } = await import('./imageCompression')
   const compressedUri = await compressImageForUpload(file.uri)
   const form = new FormData()
+  if (meta) {
+    for (const [k, v] of Object.entries(meta)) {
+      const vv = String(v ?? '').trim()
+      if (vv) form.append(k, vv)
+    }
+  }
   form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
   let lastRes: Response | null = null
   for (const url of urls) {

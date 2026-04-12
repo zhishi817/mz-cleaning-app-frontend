@@ -64,7 +64,7 @@ export default function InspectionCompleteScreen(props: Props) {
       const [p, r] = await Promise.all([getInspectionPhotos(token, cleaningTaskId).catch(() => null), getRestockProof(token, cleaningTaskId).catch(() => null)])
       const needs: string[] = []
 
-      const requiredAreas = ['toilet', 'living', 'sofa', 'bedroom', 'kitchen']
+      const requiredAreas = ['toilet', 'living', 'sofa', 'bedroom', 'kitchen', 'shower_drain']
       const gotAreas = new Set<string>()
       for (const it of p?.items || []) {
         const a = String(it.area || '').trim()

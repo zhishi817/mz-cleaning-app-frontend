@@ -5,8 +5,9 @@ function env(name: string) {
 const DEFAULT_API_BASE_DEV = 'https://mz-property-system-v3-2.onrender.com'
 const DEFAULT_API_BASE_PROD = 'https://mz-property-system-v3-docker.onrender.com'
 
-const apiBaseDev = env('EXPO_PUBLIC_API_BASE_URL_DEV') || DEFAULT_API_BASE_DEV
-const apiBaseProd = env('EXPO_PUBLIC_API_BASE_URL_PROD') || env('EXPO_PUBLIC_API_BASE_URL') || DEFAULT_API_BASE_PROD
+const apiBaseOverride = env('EXPO_PUBLIC_API_BASE_URL')
+const apiBaseDev = apiBaseOverride || env('EXPO_PUBLIC_API_BASE_URL_DEV') || DEFAULT_API_BASE_DEV
+const apiBaseProd = apiBaseOverride || env('EXPO_PUBLIC_API_BASE_URL_PROD') || DEFAULT_API_BASE_PROD
 
 const appEnv = env('EXPO_PUBLIC_APP_ENV')
 

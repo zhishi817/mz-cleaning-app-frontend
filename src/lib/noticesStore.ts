@@ -73,11 +73,22 @@ function normText(v: any) {
 }
 
 function noticeSig(n: { type?: any; title?: any; summary?: any; content?: any }) {
-  const type = normText(n.type)
   const title = normText(n.title).slice(0, 80)
   const summary = normText(n.summary).slice(0, 80)
   const content = normText(n.content).slice(0, 160)
-  return `${type}|${title}|${summary}|${content}`
+  return `${title}|${summary}|${content}`
+}
+
+function noticeSemanticKey(n: { id?: any; title?: any; summary?: any; content?: any; data?: any }) {
+  const data = n && typeof n === 'object' ? (n as any).data : null
+  const kind = String(data?.kind || '').trim()
+  const propertyCode = normText(data?.property_code)
+  const checkedOutAt = normText(data?.checked_out_at)
+  const fieldsKey = normText(data?.fields_key)
+  if (kind === 'guest_checked_out' && propertyCode && checkedOutAt) return `guest_checked_out:${propertyCode}:${checkedOutAt}`
+  if (kind === 'guest_checked_out_cancelled' && propertyCode) return `guest_checked_out_cancelled:${propertyCode}:${checkedOutAt}`
+  if (kind === 'cleaning_task_manager_fields_updated' && propertyCode && fieldsKey) return `manager_fields:${propertyCode}:${fieldsKey}`
+  return noticeSig(n)
 }
 
 function isLocalOnlyNotice(n: Notice | null | undefined) {
@@ -142,9 +153,9 @@ export async function prependNotice(input: Omit<Notice, 'id' | 'createdAt'> & { 
     }
     return
   }
-  const sig = noticeSig(input)
+  const semanticKey = noticeSemanticKey(input)
   const recent = state.items.slice(0, 60)
-  const dup = recent.find(n => noticeSig(n) === sig)
+  const dup = recent.find(n => noticeSemanticKey(n) === semanticKey)
   if (dup) {
     const did = dup.id
     if (!state.unreadIds[did] && !state.readIds[did]) {
@@ -175,11 +186,20 @@ export async function upsertNotices(inputs: Array<Omit<Notice, 'createdAt'> & { 
   await initNoticesStore()
   const replace = options?.replace === true
   const map = new Map<string, Notice>()
+  const semanticIdMap = new Map<string, string>()
   if (!replace) {
-    for (const n of state.items) map.set(String(n.id), n)
+    for (const n of state.items) {
+      const id = String(n.id)
+      map.set(id, n)
+      semanticIdMap.set(noticeSemanticKey(n), id)
+    }
   } else {
     for (const n of state.items) {
-      if (isLocalOnlyNotice(n)) map.set(String(n.id), n)
+      if (isLocalOnlyNotice(n)) {
+        const id = String(n.id)
+        map.set(id, n)
+        semanticIdMap.set(noticeSemanticKey(n), id)
+      }
     }
   }
 
@@ -187,8 +207,11 @@ export async function upsertNotices(inputs: Array<Omit<Notice, 'createdAt'> & { 
   const readIds: Record<string, true> = { ...state.readIds }
 
   for (const raw of inputs || []) {
-    const id = String((raw as any)?.id || '').trim()
-    if (!id) continue
+    const rawId = String((raw as any)?.id || '').trim()
+    if (!rawId) continue
+    const semanticKey = noticeSemanticKey(raw as any)
+    const semanticExistingId = semanticIdMap.get(semanticKey) || ''
+    const id = semanticExistingId || rawId
     const existing = map.get(id) || null
     const createdAt = normalizeCreatedAt((raw as any)?.createdAt, id, (raw as any)?.data?.event_id, existing?.createdAt)
     const type = (String((raw as any)?.type || 'update') as NoticeType) || 'update'
@@ -196,7 +219,12 @@ export async function upsertNotices(inputs: Array<Omit<Notice, 'createdAt'> & { 
     const summary = String((raw as any)?.summary || '').trim()
     const content = String((raw as any)?.content || '').trim()
     const data = (raw as any)?.data
+    if (semanticExistingId && semanticExistingId !== rawId) {
+      map.delete(semanticExistingId)
+      delete unreadIds[semanticExistingId]
+    }
     map.set(id, { id, createdAt, type, title, summary, content, data })
+    semanticIdMap.set(semanticKey, id)
     const unread = (raw as any)?.unread === true
     if (unread) {
       if (!readIds[id]) unreadIds[id] = true

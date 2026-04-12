@@ -4,6 +4,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getNoticesSnapshot, initNoticesStore, markNoticeRead } from '../../lib/noticesStore'
+import { getPresentedNotice } from '../../lib/noticePresentation'
 import type { NoticesStackParamList } from '../../navigation/RootNavigator'
 import { useI18n } from '../../lib/i18n'
 import { API_BASE_URL } from '../../config/env'
@@ -37,24 +38,6 @@ function toAbsoluteUrl(rawUrl: any) {
   return s0
 }
 
-function extractImageUrls(text: string) {
-  const urls: string[] = []
-  const lines = String(text || '').split('\n')
-  for (const line of lines) {
-    const m = line.match(/https?:\/\/\S+/g)
-    if (!m) continue
-    for (const u0 of m) {
-      const u = u0.replace(/[),.。；;]$/g, '')
-      if (!u) continue
-      const lower = u.toLowerCase()
-      if (lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('.gif')) {
-        urls.push(u)
-      }
-    }
-  }
-  return Array.from(new Set(urls))
-}
-
 function stripUrlLines(text: string) {
   const lines = String(text || '').split('\n')
   const kept: string[] = []
@@ -63,6 +46,29 @@ function stripUrlLines(text: string) {
     kept.push(line)
   }
   return kept.join('\n').trim()
+}
+
+function parseNoticeDetails(text: string) {
+  const lines = String(text || '')
+    .split('\n')
+    .map((line) => String(line || '').trim())
+    .filter(Boolean)
+
+  const fields: Array<{ label: string; value: string }> = []
+  const notes: string[] = []
+
+  for (const line of lines) {
+    const photoMatch = line.match(/^照片\s*[:：]\s*(.+)$/i)
+    if (photoMatch) continue
+    const pair = line.match(/^([^:：]{1,12})\s*[:：]\s*(.+)$/)
+    if (pair) {
+      fields.push({ label: String(pair[1] || '').trim(), value: String(pair[2] || '').trim() })
+      continue
+    }
+    notes.push(line)
+  }
+
+  return { fields, notes: notes.join('\n').trim() }
 }
 
 export default function NoticeDetailScreen(props: Props) {
@@ -76,12 +82,15 @@ export default function NoticeDetailScreen(props: Props) {
       headerLeft: () => (
         <Pressable
           onPress={() => {
+            if (props.navigation.canGoBack()) {
+              props.navigation.goBack()
+              return
+            }
             try {
+              props.navigation.navigate('NoticesList')
+            } catch {
               const parentNav: any = props.navigation.getParent?.()
               parentNav?.navigate?.('Notices', { screen: 'NoticesList' })
-            } catch {
-              if (props.navigation.canGoBack()) props.navigation.goBack()
-              else props.navigation.navigate('NoticesList')
             }
           }}
           style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingRight: 10, opacity: pressed ? 0.7 : 1 }]}
@@ -94,7 +103,10 @@ export default function NoticeDetailScreen(props: Props) {
     })
   }, [props.navigation])
 
-  const notice = useMemo(() => getNoticesSnapshot().items.find(n => n.id === id) || null, [id])
+  const notice = useMemo(() => {
+    const raw = getNoticesSnapshot().items.find(n => n.id === id) || null
+    return raw ? getPresentedNotice(raw) : null
+  }, [id])
 
   useEffect(() => {
     ;(async () => {
@@ -122,9 +134,10 @@ export default function NoticeDetailScreen(props: Props) {
       : notice.type === 'key'
         ? { bg: '#DCFCE7', fg: '#16A34A' }
         : { bg: '#F3F4F6', fg: '#374151' }
-  const imgs = extractImageUrls(notice.content).slice(0, 3)
+  const imgs = Array.from(new Set(notice.images || [])).slice(0, 3)
   const imagesAtBottom = notice.type === 'key'
   const bodyText = stripUrlLines(notice.content) || notice.content
+  const details = parseNoticeDetails(bodyText)
 
   return (
     <>
@@ -141,6 +154,17 @@ export default function NoticeDetailScreen(props: Props) {
           </View>
 
           <Text style={styles.title}>{notice.title}</Text>
+
+          {details.fields.length ? (
+            <View style={styles.infoGrid}>
+              {details.fields.map((field) => (
+                <View key={`${field.label}:${field.value}`} style={styles.infoCard}>
+                  <Text style={styles.infoLabel}>{field.label}</Text>
+                  <Text style={styles.infoValue}>{field.value}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
 
           {!imagesAtBottom && imgs.length ? (
             <View style={styles.imagesWrap}>
@@ -159,10 +183,17 @@ export default function NoticeDetailScreen(props: Props) {
             </View>
           ) : null}
 
-          <Text style={styles.body}>{bodyText}</Text>
+          {details.notes ? (
+            <View style={styles.noteCard}>
+              <Text style={styles.noteLabel}>说明</Text>
+              <Text style={styles.body}>{details.notes}</Text>
+            </View>
+          ) : null}
 
           {imagesAtBottom && imgs.length ? (
-            <View style={styles.imagesWrap}>
+            <View style={styles.photoSection}>
+              <Text style={styles.noteLabel}>照片</Text>
+              <View style={styles.imagesWrap}>
               {imgs.map((u) => (
                 <Pressable
                   key={u}
@@ -175,6 +206,7 @@ export default function NoticeDetailScreen(props: Props) {
                   <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.image} />
                 </Pressable>
               ))}
+            </View>
             </View>
           ) : null}
         </View>
@@ -226,9 +258,16 @@ const styles = StyleSheet.create({
   timeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   time: { color: '#9CA3AF', fontSize: 12, fontWeight: '700' },
   title: { marginTop: 12, fontSize: moderateScale(18), fontWeight: '900', color: '#111827' },
-  body: { marginTop: 10, color: '#374151', fontSize: 14, fontWeight: '600', lineHeight: 20 },
+  body: { marginTop: 8, color: '#374151', fontSize: 14, fontWeight: '600', lineHeight: 20 },
   errorText: { padding: 16, color: '#6B7280', fontWeight: '700' },
   pressed: { opacity: 0.92 },
+  infoGrid: { marginTop: 14, gap: 10 },
+  infoCard: { borderRadius: 14, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#E2E8F0', padding: 12 },
+  infoLabel: { color: '#64748B', fontSize: 12, fontWeight: '800' },
+  infoValue: { marginTop: 6, color: '#111827', fontSize: 15, fontWeight: '900' },
+  noteCard: { marginTop: 14, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E5E7EB', padding: 12 },
+  noteLabel: { color: '#6B7280', fontSize: 12, fontWeight: '900' },
+  photoSection: { marginTop: 14 },
   imagesWrap: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   imagePress: { width: '48%', borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   image: { width: '100%', height: 160, backgroundColor: '#F3F4F6' },

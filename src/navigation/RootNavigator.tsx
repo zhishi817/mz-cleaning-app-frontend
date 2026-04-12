@@ -59,7 +59,7 @@ export type TasksStackParamList = {
   InspectionComplete: { taskId: string }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
-  DayEndBackupKeys: { date: string }
+  DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty'; taskRoomCodes?: string[] }
   FeedbackForm: { taskId: string }
   SuppliesForm: { taskId: string }
 }
@@ -67,13 +67,13 @@ export type TasksStackParamList = {
 export type NoticesStackParamList = {
   NoticesList: undefined
   NoticeDetail: { id: string }
-  InfoCenterDetail: { kind: 'property' | 'secret' | 'task'; title: string; subtitle?: string; body?: string; url?: string | null; copyText?: string | null; secretId?: string }
+  InfoCenterDetail: { kind: 'property' | 'secret' | 'task' | 'announcement' | 'guide' | 'warehouse_guide'; title: string; subtitle?: string; body?: string; url?: string | null; copyText?: string | null; secretId?: string }
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
   InspectionPanel: { taskId: string }
   InspectionComplete: { taskId: string }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
-  DayEndBackupKeys: { date: string }
+  DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty'; taskRoomCodes?: string[] }
   FeedbackForm: { taskId: string }
   SuppliesForm: { taskId: string }
 }
@@ -115,6 +115,28 @@ function resolveTaskNoticeNavigation(params: { taskRouteId: string; role: string
   return { screen: 'TaskDetail', params: { id: params.taskRouteId } }
 }
 
+function formatIncomingNotice(title0: string, body0: string, data0: any) {
+  const data = data0 && typeof data0 === 'object' ? data0 : {}
+  const kind = String(data?.kind || '').trim()
+  const propertyCode = String(data?.property_code || '').trim()
+  const photoUrl = String(data?.photo_url || '').trim()
+  if (kind !== 'key_photo_uploaded') {
+    return {
+      title: title0 || '通知',
+      summary: body0.split('\n')[0]?.slice(0, 60) || body0.slice(0, 60) || '通知',
+      content: body0 || title0 || '通知',
+    }
+  }
+  const title = propertyCode ? `钥匙已上传：${propertyCode}` : (title0 || '钥匙已上传')
+  const lines = [propertyCode ? `房源：${propertyCode}` : '', body0 || '清洁员已上传钥匙照片', photoUrl ? `照片：${photoUrl}` : ''].filter(Boolean)
+  const content = lines.join('\n')
+  return {
+    title,
+    summary: propertyCode ? `房源：${propertyCode}` : (body0 || '清洁员已上传钥匙照片'),
+    content,
+  }
+}
+
 function BootScreen() {
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -142,7 +164,7 @@ function TasksStackNavigator() {
       <TasksStack.Screen name="InspectionComplete" component={InspectionCompleteScreen} options={{ title: '标记已完成' }} />
       <TasksStack.Screen name="CleaningSelfComplete" component={CleaningSelfCompleteScreen} options={{ title: '补充与完成' }} />
       <TasksStack.Screen name="ManagerDailyTask" component={ManagerDailyTaskScreen} options={{ title: '每日清洁' }} />
-      <TasksStack.Screen name="DayEndBackupKeys" component={DayEndBackupKeysScreen} options={{ title: '备用钥匙' }} />
+      <TasksStack.Screen name="DayEndBackupKeys" component={DayEndBackupKeysScreen} options={{ title: '日终交接' }} />
       <TasksStack.Screen name="FeedbackForm" component={FeedbackFormScreen} options={{ title: t('tasks_btn_repair') }} />
       <TasksStack.Screen name="SuppliesForm" component={SuppliesFormScreen} options={{ title: '补品填报' }} />
     </TasksStack.Navigator>
@@ -154,16 +176,16 @@ function NoticesStackNavigator() {
   return (
     <NoticesStack.Navigator screenOptions={{ headerTitleAlign: 'center' }}>
       <NoticesStack.Screen name="NoticesList" component={NoticesScreen} options={{ headerShown: false, title: t('notices_title') }} />
-      <NoticesStack.Screen name="NoticeDetail" component={NoticeDetailScreen} options={{ title: t('notices_title') }} />
-      <NoticesStack.Screen name="InfoCenterDetail" component={InfoCenterDetailScreen} options={{ title: t('notices_title') }} />
-      <NoticesStack.Screen name="TaskDetail" component={TaskDetailScreen} options={{ title: t('task_detail_title') }} />
-      <NoticesStack.Screen name="InspectionPanel" component={InspectionPanelScreen} options={{ title: '检查与补充' }} />
-      <NoticesStack.Screen name="InspectionComplete" component={InspectionCompleteScreen} options={{ title: '标记已完成' }} />
-      <NoticesStack.Screen name="CleaningSelfComplete" component={CleaningSelfCompleteScreen} options={{ title: '补充与完成' }} />
-      <NoticesStack.Screen name="ManagerDailyTask" component={ManagerDailyTaskScreen} options={{ title: '每日清洁' }} />
-      <NoticesStack.Screen name="DayEndBackupKeys" component={DayEndBackupKeysScreen} options={{ title: '备用钥匙' }} />
-      <NoticesStack.Screen name="FeedbackForm" component={FeedbackFormScreen} options={{ title: t('tasks_btn_repair') }} />
-      <NoticesStack.Screen name="SuppliesForm" component={SuppliesFormScreen} options={{ title: '补品填报' }} />
+      <NoticesStack.Screen name="NoticeDetail" component={NoticeDetailScreen} options={{ title: t('notices_title'), animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="InfoCenterDetail" component={InfoCenterDetailScreen} options={{ title: t('notices_title'), animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="TaskDetail" component={TaskDetailScreen} options={{ title: t('task_detail_title'), animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="InspectionPanel" component={InspectionPanelScreen} options={{ title: '检查与补充', animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="InspectionComplete" component={InspectionCompleteScreen} options={{ title: '标记已完成', animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="CleaningSelfComplete" component={CleaningSelfCompleteScreen} options={{ title: '补充与完成', animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="ManagerDailyTask" component={ManagerDailyTaskScreen} options={{ title: '每日清洁', animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="DayEndBackupKeys" component={DayEndBackupKeysScreen} options={{ title: '日终交接', animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="FeedbackForm" component={FeedbackFormScreen} options={{ title: t('tasks_btn_repair'), animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="SuppliesForm" component={SuppliesFormScreen} options={{ title: '补品填报', animation: 'slide_from_right' }} />
     </NoticesStack.Navigator>
   )
 }
@@ -335,6 +357,7 @@ export default function RootNavigator() {
           const eventId = String(data?.event_id || '').trim()
           const fieldsKey = String(data?.fields_key || '').trim()
           const reqId = String((n as any)?.request?.identifier || '').trim()
+          const formatted = formatIncomingNotice(title, body, data)
           const id0 =
             kind === 'guest_checked_out' && propertyCode && checkedOutAt
               ? `guest_checked_out:${propertyCode}:${checkedOutAt}`
@@ -346,9 +369,9 @@ export default function RootNavigator() {
           await prependNotice({
             id: String(id0),
             type: 'update',
-            title,
-            summary: body.split('\n')[0]?.slice(0, 60) || body.slice(0, 60) || '通知',
-            content: body || title,
+            title: formatted.title,
+            summary: formatted.summary,
+            content: formatted.content,
             data,
           })
           try {
@@ -388,6 +411,7 @@ export default function RootNavigator() {
           const eventId = String(data?.event_id || '').trim()
           const fieldsKey = String(data?.fields_key || '').trim()
           const reqId = String(n?.request?.identifier || '').trim()
+          const formatted = formatIncomingNotice(title, body, data)
           const id0 =
             kind === 'guest_checked_out' && propertyCode && checkedOutAt
               ? `guest_checked_out:${propertyCode}:${checkedOutAt}`
@@ -399,9 +423,9 @@ export default function RootNavigator() {
           await prependNotice({
             id: String(id0),
             type: 'update',
-            title,
-            summary: body.split('\n')[0]?.slice(0, 60) || body.slice(0, 60) || '通知',
-            content: body || title,
+            title: formatted.title,
+            summary: formatted.summary,
+            content: formatted.content,
             data,
           })
           try {
@@ -422,23 +446,15 @@ export default function RootNavigator() {
                 }
               })
               await upsertNotices(list, { replace: true })
-            }
+          }
           } catch {}
           if (navRef.isReady()) {
-            const shouldOpenNoticeDetail = kind === 'cleaning_task_manager_fields_updated'
-            const taskRouteId = shouldOpenNoticeDetail ? '' : pickTaskRouteIdFromNoticeData(data)
-            if (taskRouteId) {
-              const target = resolveTaskNoticeNavigation({ taskRouteId, role: String(user?.role || '') })
-              navRef.navigate('Tasks', target as any)
-            }
-            else {
-              navRef.navigate('Notices', { screen: 'NoticesList' } as any)
-              setTimeout(() => {
-                try {
-                  navRef.navigate('Notices', { screen: 'NoticeDetail', params: { id: String(id0) } } as any)
-                } catch {}
-              }, 0)
-            }
+            navRef.navigate('Notices', { screen: 'NoticesList' } as any)
+            setTimeout(() => {
+              try {
+                navRef.navigate('Notices', { screen: 'NoticeDetail', params: { id: String(id0) } } as any)
+              } catch {}
+            }, 0)
           }
         } catch {}
       })()

@@ -7,7 +7,7 @@ import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
-import { listChecklistItems, submitCleaningConsumables, uploadCleaningMedia, type ChecklistItem } from '../../lib/api'
+import { getCleaningConsumables, listChecklistItems, submitCleaningConsumables, uploadCleaningMedia, type ChecklistItem } from '../../lib/api'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'SuppliesForm'>
@@ -33,12 +33,14 @@ export default function SuppliesFormScreen(props: Props) {
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const [remoteAcPhotoUrl, setRemoteAcPhotoUrl] = useState<string | null>(null)
   const [remoteTvPhotoUrl, setRemoteTvPhotoUrl] = useState<string | null>(null)
+  const [hasExistingRecord, setHasExistingRecord] = useState(false)
 
   useEffect(() => {
-    props.navigation.setOptions({ title: '补品填报' })
-  }, [props.navigation])
+    props.navigation.setOptions({ title: hasExistingRecord ? '补品记录' : '补品填报' })
+  }, [hasExistingRecord, props.navigation])
 
   const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
+  const cleaningTaskId = useMemo(() => String(task?.source_id || props.route.params.taskId || '').trim(), [props.route.params.taskId, task?.source_id])
   const remainingNightsRaw = (task as any)?.remaining_nights
   const remainingNights0 = remainingNightsRaw == null ? null : Number(remainingNightsRaw)
   const remainingNights = Number.isFinite(remainingNights0 as any) ? (remainingNights0 as number) : null
@@ -55,7 +57,7 @@ export default function SuppliesFormScreen(props: Props) {
         setLoading(true)
         const list = await listChecklistItems(token)
         if (cancelled) return
-        const mapped = (list || []).map((it: ChecklistItem) => ({
+        const baseMapped = (list || []).map((it: ChecklistItem) => ({
           id: it.id,
           label: it.label,
           required: !!it.required,
@@ -64,6 +66,32 @@ export default function SuppliesFormScreen(props: Props) {
           note: '',
           photo_url: null,
         }))
+        let existingItems: any[] = []
+        try {
+          if (!cleaningTaskId) throw new Error('缺少清洁任务ID')
+          const existing = await getCleaningConsumables(token, cleaningTaskId)
+          existingItems = Array.isArray(existing?.items) ? existing.items : []
+        } catch {}
+        const byId = new Map(existingItems.map((x: any) => [String(x.item_id || ''), x]))
+        const mapped: ItemState[] = baseMapped.map((it) => {
+          const prev = byId.get(it.id)
+          if (!prev) return it
+          if (it.id === 'other') {
+            return { ...it, note: String(prev.note || '') }
+          }
+          return {
+            ...it,
+            status: String(prev.status || '').trim() === 'low' ? 'low' : 'ok',
+            qty: prev.qty != null ? String(prev.qty) : '1',
+            note: String(prev.note || ''),
+            photo_url: String(prev.photo_url || '').trim() || null,
+          }
+        })
+        const acRemote = byId.get('remote_ac')
+        const tvRemote = byId.get('remote_tv')
+        setHasExistingRecord(existingItems.length > 0)
+        setRemoteAcPhotoUrl(String(acRemote?.photo_url || '').trim() || null)
+        setRemoteTvPhotoUrl(String(tvRemote?.photo_url || '').trim() || null)
         setItems(mapped)
       } catch (e: any) {
         if (!cancelled) Alert.alert(t('common_error'), String(e?.message || '加载失败'))
@@ -74,13 +102,13 @@ export default function SuppliesFormScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [token])
+  }, [cleaningTaskId, t, token])
 
   async function onTakeStockPhoto(idx: number) {
     if (!token) return
     try {
       setPhotoUploadingIdx(idx)
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -100,7 +128,7 @@ export default function SuppliesFormScreen(props: Props) {
   async function onTakeRemotePhoto(kind: 'ac' | 'tv') {
     if (!token) return
     try {
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -166,8 +194,8 @@ export default function SuppliesFormScreen(props: Props) {
     } as any)
     try {
       setSubmitting(true)
-      await submitCleaningConsumables(token, String(task.source_id), { items: out })
-      Alert.alert(t('common_ok'), '提交成功')
+      await submitCleaningConsumables(token, cleaningTaskId, { items: out })
+      Alert.alert(t('common_ok'), hasExistingRecord ? '补品记录已更新' : '提交成功')
       props.navigation.goBack()
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '提交失败'))
@@ -186,7 +214,7 @@ export default function SuppliesFormScreen(props: Props) {
         ) : (
           <View style={styles.card}>
           <View style={styles.headRow}>
-            <Text style={styles.title}>补品填报</Text>
+            <Text style={styles.title}>{hasExistingRecord ? '补品记录' : '补品填报'}</Text>
             <View style={styles.badge}>
               <Ionicons name="home-outline" size={moderateScale(14)} color="#2563EB" />
               <Text style={styles.badgeText}>{task.title}</Text>
@@ -322,7 +350,7 @@ export default function SuppliesFormScreen(props: Props) {
             disabled={submitting || !canSubmit}
             style={({ pressed }) => [styles.submitBtn, submitting || !canSubmit ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
           >
-            <Text style={styles.submitText}>{submitting ? t('common_loading') : '提交'}</Text>
+            <Text style={styles.submitText}>{submitting ? t('common_loading') : (hasExistingRecord ? '保存修改' : '提交')}</Text>
           </Pressable>
           </View>
         )}

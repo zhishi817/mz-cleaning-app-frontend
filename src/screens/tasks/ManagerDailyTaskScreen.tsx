@@ -40,6 +40,7 @@ const AREA_LABEL: Record<string, string> = {
   sofa: '沙发',
   bedroom: '卧室',
   kitchen: '厨房',
+  shower_drain: '淋浴房下水口',
 }
 
 function ymd(d: Date) {
@@ -219,7 +220,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
       const nextKeysValue = nextKeys >= 2 ? 2 : 1
       if (needKeysUpdate) {
         const orderIdForKeys = String((task as any)?.order_id_checkin || (task as any)?.order_id || '').trim()
-        if (!orderIdForKeys) throw new Error('缺少订单ID，暂时无法更新钥匙套数')
+        if (!orderIdForKeys) throw new Error('当前任务还没有入住订单，暂时无法设置需挂钥匙套数')
         keysResult = await updateCleaningOrderKeysRequired(token, { order_id: orderIdForKeys, keys_required: nextKeysValue as 1 | 2 })
       }
 
@@ -332,18 +333,23 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const canEditKeysOnly = isCustomerService && !saving
 
   const uncleanPhotos = inspectionItems.filter((x) => x.area === 'unclean')
-  const roomPhotosByArea = (['toilet', 'living', 'sofa', 'bedroom', 'kitchen'] as const).map((a) => ({ area: a, items: inspectionItems.filter((x) => x.area === a) }))
+  const roomPhotosByArea = (['toilet', 'living', 'sofa', 'bedroom', 'kitchen', 'shower_drain'] as const).map((a) => ({ area: a, items: inspectionItems.filter((x) => x.area === a) }))
 
   async function onToggleCheckedOut() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!isCustomerService) return
+    if (!task) return
+    const taskId = String(task.id)
+    const nextCheckedOutAt = checkedOutAt ? null : new Date().toISOString()
     try {
       setMarking(true)
       const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
       if (!orderId) throw new Error('缺少订单ID')
+      await patchWorkTaskItem(taskId, { checked_out_at: nextCheckedOutAt } as any)
       await markGuestCheckedOutByOrder(token, { order_id: orderId, action: checkedOutAt ? 'unset' : 'set' })
       Alert.alert(t('common_ok'), checkedOutAt ? '已取消退房' : '已标记退房，已通知清洁人员')
     } catch (e: any) {
+      await patchWorkTaskItem(taskId, { checked_out_at: checkedOutAt || null } as any)
       Alert.alert(t('common_error'), String(e?.message || '操作失败'))
     } finally {
       setMarking(false)

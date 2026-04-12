@@ -91,7 +91,7 @@ export default function InspectionPanelScreen(props: Props) {
   const [restockPickerOpen, setRestockPickerOpen] = useState(false)
   const [restockPickerQuery, setRestockPickerQuery] = useState('')
   const areaLimits: Record<Exclude<InspectionPhotoArea, 'unclean'>, number> = useMemo(
-    () => ({ toilet: 9, living: 3, sofa: 2, bedroom: 8, kitchen: 2 }),
+    () => ({ toilet: 9, shower_drain: 3, living: 3, sofa: 2, bedroom: 8, kitchen: 2 }),
     [],
   )
   const [roomPhotos, setRoomPhotos] = useState<Record<Exclude<InspectionPhotoArea, 'unclean'>, string[]>>({
@@ -100,6 +100,7 @@ export default function InspectionPanelScreen(props: Props) {
     sofa: [],
     bedroom: [],
     kitchen: [],
+    shower_drain: [],
   })
   const [cleaningIssue, setCleaningIssue] = useState<UncleanPhoto[]>([])
   const [viewerOpen, setViewerOpen] = useState(false)
@@ -185,7 +186,7 @@ export default function InspectionPanelScreen(props: Props) {
         const [r1, r2] = await Promise.all([getInspectionPhotos(token, cleaningTaskId).catch(() => null), getRestockProof(token, cleaningTaskId).catch(() => null)])
         if (cancelled) return
         if (r1?.items?.length) {
-          const nextRoom: Record<Exclude<InspectionPhotoArea, 'unclean'>, string[]> = { toilet: [], living: [], sofa: [], bedroom: [], kitchen: [] }
+          const nextRoom: Record<Exclude<InspectionPhotoArea, 'unclean'>, string[]> = { toilet: [], living: [], sofa: [], bedroom: [], kitchen: [], shower_drain: [] }
           const uncleanList: UncleanPhoto[] = []
           for (const it of r1.items) {
             const area = String(it.area || '').trim() as any
@@ -254,7 +255,7 @@ export default function InspectionPanelScreen(props: Props) {
     if (!token) throw new Error('请先登录')
     const ok = await ensureCameraPerm()
     if (!ok) throw new Error('需要相机权限')
-    const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85, allowsEditing: true, aspect: [4, 3] })
+    const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
     if (res.canceled || !res.assets?.length) return null
     const a = res.assets[0] as any
     const uri = String(a.uri || '').trim()
@@ -269,7 +270,7 @@ export default function InspectionPanelScreen(props: Props) {
   async function persistInspectionMedia(nextRoom: Record<Exclude<InspectionPhotoArea, 'unclean'>, string[]>, nextUnclean: UncleanPhoto[]) {
     await saveInspectionPhotos(token as string, cleaningTaskId, {
       items: [
-        ...(['toilet', 'living', 'sofa', 'bedroom', 'kitchen'] as const).flatMap((a) => nextRoom[a].map((u) => ({ area: a, url: u, note: null }))),
+        ...(['toilet', 'living', 'sofa', 'bedroom', 'kitchen', 'shower_drain'] as const).flatMap((a) => nextRoom[a].map((u) => ({ area: a, url: u, note: null }))),
         ...nextUnclean.map((x) => ({ area: 'unclean' as const, url: x.url, note: x.note || null })),
       ],
     })
@@ -392,7 +393,7 @@ export default function InspectionPanelScreen(props: Props) {
   }
 
   function photosReady() {
-    return !!roomPhotos.toilet.length && !!roomPhotos.living.length && !!roomPhotos.sofa.length && !!roomPhotos.bedroom.length && !!roomPhotos.kitchen.length
+    return !!roomPhotos.toilet.length && !!roomPhotos.living.length && !!roomPhotos.sofa.length && !!roomPhotos.bedroom.length && !!roomPhotos.kitchen.length && !!roomPhotos.shower_drain.length
   }
 
   function cleaningIssueReady() {
@@ -403,6 +404,18 @@ export default function InspectionPanelScreen(props: Props) {
     if (!restock.length) return true
     return restock.every((x) => !!x.status && (x.status === 'unavailable' ? true : !!String(x.proof_url || '').trim()))
   }
+
+  function completeReady() {
+    return !guestSpecialRequest || guestNeedDone
+  }
+
+  const progressSteps = [
+    { key: 'restock', label: '消耗品', done: restockReady() },
+    { key: 'cleaning', label: '清洁反馈', done: cleaningIssueReady() },
+    { key: 'property', label: '房源反馈', done: true },
+    { key: 'photos', label: '检查照片', done: photosReady() },
+    { key: 'complete', label: '标记完成', done: completeReady() },
+  ]
 
   if (!task) {
     return (
@@ -426,17 +439,24 @@ export default function InspectionPanelScreen(props: Props) {
           {propertyAddr ? <Text style={styles.sub}>{propertyAddr}</Text> : null}
 
           <View style={styles.progressRow}>
-            <View style={[styles.progressDot, restockReady() ? styles.progressDotOn : null]} />
-            <Text style={[styles.progressText, restockReady() ? styles.progressTextOn : null]}>消耗品</Text>
-            <View style={styles.progressLine} />
-            <View style={[styles.progressDot, cleaningIssueReady() ? styles.progressDotOn : null]} />
-            <Text style={[styles.progressText, cleaningIssueReady() ? styles.progressTextOn : null]}>清洁反馈</Text>
-            <View style={styles.progressLine} />
-            <View style={[styles.progressDot, styles.progressDotOn]} />
-            <Text style={[styles.progressText, styles.progressTextOn]}>房源反馈</Text>
-            <View style={styles.progressLine} />
-            <View style={[styles.progressDot, photosReady() ? styles.progressDotOn : null]} />
-            <Text style={[styles.progressText, photosReady() ? styles.progressTextOn : null]}>检查照片</Text>
+            {progressSteps.map((step, index) => (
+              <React.Fragment key={step.key}>
+                <View style={styles.progressItem}>
+                  <View style={[styles.progressDot, step.done ? styles.progressDotOn : null]} />
+                  <Text
+                    style={[styles.progressText, step.done ? styles.progressTextOn : null]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.75}
+                  >
+                    {step.label}
+                  </Text>
+                </View>
+                {index < progressSteps.length - 1 ? (
+                  <View style={[styles.progressLine, step.done ? styles.progressLineOn : null]} />
+                ) : null}
+              </React.Fragment>
+            ))}
           </View>
         </View>
 
@@ -608,6 +628,7 @@ export default function InspectionPanelScreen(props: Props) {
               <View style={styles.grid}>
                 {([
                   { key: 'toilet', label: '马桶', max: areaLimits.toilet },
+                  { key: 'shower_drain', label: '淋浴房下水口', max: areaLimits.shower_drain },
                   { key: 'living', label: '客厅', max: areaLimits.living },
                   { key: 'sofa', label: '沙发', max: areaLimits.sofa },
                   { key: 'bedroom', label: '卧室', max: areaLimits.bedroom },
@@ -781,11 +802,13 @@ const styles = StyleSheet.create({
   guestNeedCheckText: { color: '#111827', fontWeight: '900' },
 
   progressRow: { marginTop: 12, flexDirection: 'row', alignItems: 'center' },
+  progressItem: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   progressDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#E5E7EB' },
   progressDotOn: { backgroundColor: '#16A34A' },
-  progressText: { marginLeft: 6, marginRight: 10, fontSize: 12, fontWeight: '900', color: '#9CA3AF' },
+  progressText: { marginLeft: 4, flexShrink: 1, minWidth: 0, fontSize: 10, fontWeight: '900', color: '#9CA3AF', textAlign: 'center' },
   progressTextOn: { color: '#16A34A' },
-  progressLine: { width: 18, height: hairline(), backgroundColor: '#E5E7EB', marginRight: 10 },
+  progressLine: { width: 8, height: hairline(), backgroundColor: '#E5E7EB', marginHorizontal: 2, flexShrink: 0 },
+  progressLineOn: { backgroundColor: '#16A34A' },
 
   sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },

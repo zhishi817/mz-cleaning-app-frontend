@@ -213,7 +213,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     if (!token) throw new Error('请先登录')
     const ok = await ensureCameraPerm()
     if (!ok) throw new Error('需要相机权限')
-    const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85, allowsEditing: true, aspect: [4, 3] })
+    const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
     if (res.canceled || !res.assets?.length) return null
     const a = res.assets[0] as any
     const uri = String(a.uri || '').trim()
@@ -239,7 +239,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         Alert.alert(t('common_error'), '需要相机权限')
         return
       }
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -262,7 +262,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         Alert.alert(t('common_error'), '需要相机权限')
         return
       }
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()

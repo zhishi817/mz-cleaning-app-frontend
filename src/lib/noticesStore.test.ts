@@ -165,6 +165,45 @@ test('replace sync keeps local-only notices that are not yet on server', async (
   expect(snap.unreadIds['remote-1']).toBe(true)
 })
 
+test('replace sync merges same semantic notice even when remote id and type differ', async () => {
+  jest.resetModules()
+  const AsyncStorage = require('@react-native-async-storage/async-storage')
+  await (AsyncStorage as any).clear()
+  const mod = require('./noticesStore') as typeof import('./noticesStore')
+
+  await mod.initNoticesStore()
+  await mod.prependNotice({
+    id: 'local-mf-1',
+    type: 'update',
+    title: '已退房：MQ3915',
+    summary: '已退房',
+    content: '房源：MQ3915\n状态：已退房',
+    data: { kind: 'guest_checked_out', property_code: 'MQ3915', checked_out_at: '2026-04-11T23:02:00.000Z' },
+  } as any)
+
+  await mod.upsertNotices(
+    [
+      {
+        id: 'remote-mf-1',
+        type: 'key',
+        title: '已退房：MQ3915',
+        summary: '已退房',
+        content: '房源：MQ3915\n状态：已退房',
+        createdAt: '2026-04-11T23:02:10.000Z',
+        unread: true,
+        data: { kind: 'guest_checked_out', property_code: 'MQ3915', checked_out_at: '2026-04-11T23:02:00.000Z', _server_id: 'server-1' },
+      },
+    ],
+    { replace: true },
+  )
+
+  const snap = mod.getNoticesSnapshot()
+  expect(snap.items.length).toBe(1)
+  expect(snap.items[0]?.id).toBe('local-mf-1')
+  expect(snap.items[0]?.type).toBe('key')
+  expect(snap.unreadIds['local-mf-1']).toBe(true)
+})
+
 test('notices store drops system notices from legacy state', async () => {
   jest.resetModules()
   const AsyncStorage = require('@react-native-async-storage/async-storage')
