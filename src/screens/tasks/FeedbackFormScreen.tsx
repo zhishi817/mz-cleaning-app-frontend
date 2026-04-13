@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Dimensions, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
+import { useIsFocused } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import * as FileSystem from 'expo-file-system/legacy'
 import * as ImagePicker from 'expo-image-picker'
@@ -131,6 +132,7 @@ export default function FeedbackFormScreen(props: Props) {
   const { t } = useI18n()
   const { token, user } = useAuth()
   const insets = useSafeAreaInsets()
+  const isFocused = useIsFocused()
 
   const [kind, setKind] = useState<Kind>('maintenance')
   const [area, setArea] = useState<(typeof AREA_OPTIONS)[number] | null>(null)
@@ -186,6 +188,11 @@ export default function FeedbackFormScreen(props: Props) {
   useEffect(() => {
     refreshPending()
   }, [token, propertyId, propertyCode, kind])
+
+  useEffect(() => {
+    if (!isFocused) return
+    refreshPending()
+  }, [isFocused, token, propertyId, propertyCode])
 
   function resetForm(nextKind: Kind) {
     setKind(nextKind)

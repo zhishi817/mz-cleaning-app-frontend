@@ -8,10 +8,11 @@ import * as Notifications from 'expo-notifications'
 import Constants from 'expo-constants'
 import { useAuth } from '../lib/auth'
 import { useI18n } from '../lib/i18n'
-import { findWorkTaskItemByAnyId } from '../lib/workTasksStore'
+import { findWorkTaskItemByAnyId, getWorkTasksSnapshot } from '../lib/workTasksStore'
 import { getNoticesSnapshot, initNoticesStore, prependNotice, subscribeNotices, upsertNotices } from '../lib/noticesStore'
 import { listInboxNotifications, registerExpoPushToken } from '../lib/api'
 import { resolveNoticeCreatedAt } from '../lib/noticeTime'
+import { setRegisteredExpoPushToken } from '../lib/pushTokenStorage'
 import LoginScreen from '../screens/LoginScreen'
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen'
 import TasksScreen from '../screens/tabs/TasksScreen'
@@ -120,11 +121,18 @@ function formatIncomingNotice(title0: string, body0: string, data0: any) {
   const kind = String(data?.kind || '').trim()
   const propertyCode = String(data?.property_code || '').trim()
   const photoUrl = String(data?.photo_url || '').trim()
+  const photoUrls = Array.isArray(data?.photo_urls) ? data.photo_urls.map((item: any) => String(item || '').trim()).filter(Boolean) : []
   if (kind !== 'key_photo_uploaded') {
+    const summary = body0.split('\n')[0]?.slice(0, 60) || body0.slice(0, 60) || '通知'
+    const contentLines = [body0 || title0 || '通知']
+    if (kind === 'inspection_complete' && propertyCode && !/^房源[:：]/.test(contentLines[0] || '')) contentLines.unshift(`房源：${propertyCode}`)
+    if ((photoUrl || photoUrls.length) && kind === 'inspection_complete') {
+      contentLines.push(`照片数：${photoUrls.length || 1}`)
+    }
     return {
       title: title0 || '通知',
-      summary: body0.split('\n')[0]?.slice(0, 60) || body0.slice(0, 60) || '通知',
-      content: body0 || title0 || '通知',
+      summary,
+      content: contentLines.filter(Boolean).join('\n'),
     }
   }
   const title = propertyCode ? `钥匙已上传：${propertyCode}` : (title0 || '钥匙已上传')
@@ -169,6 +177,42 @@ function TasksStackNavigator() {
       <TasksStack.Screen name="SuppliesForm" component={SuppliesFormScreen} options={{ title: '补品填报' }} />
     </TasksStack.Navigator>
   )
+}
+
+function shouldShowTaskNoticeForCurrentUser(data: any, user: any) {
+  const role = String(user?.role || '').trim()
+  if (role === 'admin' || role === 'offline_manager' || role === 'customer_service') return true
+  const uid = String(user?.id || '').trim()
+  if (!uid) return true
+  const kind = String(data?.kind || '').trim()
+  const taskIds = Array.from(
+    new Set(
+      [
+        ...(Array.isArray(data?.task_ids) ? data.task_ids : []),
+        data?.task_id,
+        data?.entityId,
+        data?.entity_id,
+      ]
+        .map((x) => String(x || '').trim())
+        .filter(Boolean),
+    ),
+  )
+  if (!taskIds.length) return true
+  if (!['guest_checked_out', 'guest_checked_out_cancelled', 'key_photo_uploaded', 'cleaning_task_manager_fields_updated', 'key_photo_deleted'].includes(kind)) return true
+  const items = getWorkTasksSnapshot().items || []
+  const matches = taskIds
+    .map((id) => findWorkTaskItemByAnyId(id) || items.find((it: any) => String(it?.source_id || '').trim() === id) || null)
+    .filter(Boolean) as any[]
+  if (!matches.length) return false
+  return matches.some((task) => {
+    const taskKind = String(task?.task_kind || '').trim().toLowerCase()
+    const assigneeId = String(task?.assignee_id || '').trim()
+    const cleanerId = String(task?.cleaner_id || '').trim()
+    const inspectorId = String(task?.inspector_id || '').trim()
+    if (taskKind === 'inspection') return assigneeId === uid || inspectorId === uid
+    if (taskKind === 'cleaning') return assigneeId === uid || cleanerId === uid
+    return assigneeId === uid
+  })
 }
 
 function NoticesStackNavigator() {
@@ -303,6 +347,16 @@ export default function RootNavigator() {
   const pushAskedRef = useRef(false)
   const pushListenerRef = useRef<any>(null)
   const pushResponseListenerRef = useRef<any>(null)
+  const statusRef = useRef(status)
+  const tokenRef = useRef(token)
+  const userRef = useRef(user)
+
+  useEffect(() => {
+    statusRef.current = status
+    tokenRef.current = token
+    userRef.current = user
+    if (status !== 'signedIn') pushAskedRef.current = false
+  }, [status, token, user])
 
   async function registerForPush() {
     Notifications.setNotificationHandler({
@@ -331,6 +385,7 @@ export default function RootNavigator() {
     try {
       if (!token) return
       await registerExpoPushToken(token, { expo_push_token: expoPushToken, platform: Platform.OS, ua: `mzstay/${String((Constants as any)?.expoConfig?.version || '')}` })
+      await setRegisteredExpoPushToken(expoPushToken)
     } catch {}
   }
 
@@ -347,6 +402,7 @@ export default function RootNavigator() {
     pushListenerRef.current = Notifications.addNotificationReceivedListener((n) => {
       ;(async () => {
         try {
+          if (statusRef.current !== 'signedIn' || !tokenRef.current || !String(userRef.current?.id || '').trim()) return
           await initNoticesStore()
           const title = String(n?.request?.content?.title || '').trim() || '通知'
           const body = String(n?.request?.content?.body || '').trim()
@@ -358,6 +414,7 @@ export default function RootNavigator() {
           const fieldsKey = String(data?.fields_key || '').trim()
           const reqId = String((n as any)?.request?.identifier || '').trim()
           const formatted = formatIncomingNotice(title, body, data)
+          if (!shouldShowTaskNoticeForCurrentUser(data, userRef.current)) return
           const id0 =
             kind === 'guest_checked_out' && propertyCode && checkedOutAt
               ? `guest_checked_out:${propertyCode}:${checkedOutAt}`
@@ -375,8 +432,8 @@ export default function RootNavigator() {
             data,
           })
           try {
-            if (token) {
-              const { items } = await listInboxNotifications(token, { limit: 30 })
+            if (tokenRef.current) {
+              const { items } = await listInboxNotifications(tokenRef.current, { limit: 30 })
               const list = (items || []).map((it: any) => {
                 const ch = Array.isArray(it?.changes) ? it.changes.map((v: any) => String(v || '').toLowerCase()) : []
                 const type: 'key' | 'update' = String(it?.type || '').toUpperCase().includes('KEY') || ch.includes('keys') ? 'key' : 'update'
@@ -390,7 +447,7 @@ export default function RootNavigator() {
                   createdAt: resolveNoticeCreatedAt(it?.created_at, it?.event_id, it?.id) || new Date().toISOString(),
                   unread: !it?.read_at,
                 }
-              })
+              }).filter((it: any) => shouldShowTaskNoticeForCurrentUser(it?.data || {}, userRef.current))
               await upsertNotices(list, { replace: true })
             }
           } catch {}
@@ -400,6 +457,7 @@ export default function RootNavigator() {
     pushResponseListenerRef.current = Notifications.addNotificationResponseReceivedListener((r) => {
       ;(async () => {
         try {
+          if (statusRef.current !== 'signedIn' || !tokenRef.current || !String(userRef.current?.id || '').trim()) return
           await initNoticesStore()
           const n: any = r?.notification
           const title = String(n?.request?.content?.title || '').trim() || '通知'
@@ -412,6 +470,7 @@ export default function RootNavigator() {
           const fieldsKey = String(data?.fields_key || '').trim()
           const reqId = String(n?.request?.identifier || '').trim()
           const formatted = formatIncomingNotice(title, body, data)
+          if (!shouldShowTaskNoticeForCurrentUser(data, userRef.current)) return
           const id0 =
             kind === 'guest_checked_out' && propertyCode && checkedOutAt
               ? `guest_checked_out:${propertyCode}:${checkedOutAt}`
@@ -429,8 +488,8 @@ export default function RootNavigator() {
             data,
           })
           try {
-            if (token) {
-              const { items } = await listInboxNotifications(token, { limit: 30 })
+            if (tokenRef.current) {
+              const { items } = await listInboxNotifications(tokenRef.current, { limit: 30 })
               const list = (items || []).map((it: any) => {
                 const ch = Array.isArray(it?.changes) ? it.changes.map((v: any) => String(v || '').toLowerCase()) : []
                 const type: 'key' | 'update' = String(it?.type || '').toUpperCase().includes('KEY') || ch.includes('keys') ? 'key' : 'update'
@@ -444,9 +503,9 @@ export default function RootNavigator() {
                   createdAt: resolveNoticeCreatedAt(it?.created_at, it?.event_id, it?.id) || new Date().toISOString(),
                   unread: !it?.read_at,
                 }
-              })
+              }).filter((it: any) => shouldShowTaskNoticeForCurrentUser(it?.data || {}, userRef.current))
               await upsertNotices(list, { replace: true })
-          }
+            }
           } catch {}
           if (navRef.isReady()) {
             navRef.navigate('Notices', { screen: 'NoticesList' } as any)

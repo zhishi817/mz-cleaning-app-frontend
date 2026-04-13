@@ -134,7 +134,7 @@ export default function NoticeDetailScreen(props: Props) {
       : notice.type === 'key'
         ? { bg: '#DCFCE7', fg: '#16A34A' }
         : { bg: '#F3F4F6', fg: '#374151' }
-  const imgs = Array.from(new Set(notice.images || [])).slice(0, 3)
+  const imgs = Array.from(new Set(notice.images || []))
   const imagesAtBottom = notice.type === 'key'
   const bodyText = stripUrlLines(notice.content) || notice.content
   const details = parseNoticeDetails(bodyText)
