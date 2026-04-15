@@ -16,11 +16,11 @@ export async function compressImageForUpload(uri: string) {
   if (!u) throw new Error('missing uri')
   const size = await getImageSize(u)
   const width = Number(size?.width || 0)
-  const actions = width > 2048 ? [{ resize: { width: 2048 } }] : []
+  const actions = width > 2560 ? [{ resize: { width: 2560 } }] : []
   const r = await manipulateAsync(
     u,
     actions,
-    { compress: 0.88, format: SaveFormat.JPEG },
+    { compress: 0.92, format: SaveFormat.JPEG },
   )
   return r.uri
 }

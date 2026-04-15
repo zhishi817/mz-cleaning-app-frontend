@@ -19,12 +19,14 @@ type RestockState = {
   label: string
   qty: number | null
   status: 'restocked' | 'unavailable' | null
+  source_photo_url: string | null
   proof_url: string | null
   note: string
   origin: 'task' | 'manual'
 }
 
 type UncleanPhoto = { url: string; note: string }
+type RoomPhotoArea = 'living' | 'sofa' | 'bedroom' | 'kitchen'
 
 function normalizeBase(base: string) {
   return String(base || '').trim().replace(/\/+$/g, '')
@@ -63,7 +65,7 @@ export default function InspectionPanelScreen(props: Props) {
   const [expanded, setExpanded] = useState<{ restock: boolean; cleaningIssue: boolean; propertyIssue: boolean; photos: boolean }>({
     restock: true,
     cleaningIssue: true,
-    propertyIssue: false,
+    propertyIssue: true,
     photos: true,
   })
 
@@ -81,32 +83,33 @@ export default function InspectionPanelScreen(props: Props) {
         const label = String(x?.label || item_id).trim()
         const qty0 = x?.qty == null ? null : Number(x.qty)
         const qty = Number.isFinite(qty0 as any) ? (qty0 as number) : null
-        return { item_id, label, qty }
+        const source_photo_url = String(x?.photo_url || '').trim() || null
+        return { item_id, label, qty, source_photo_url }
       })
-      .filter(Boolean) as Array<{ item_id: string; label: string; qty: number | null }>
+      .filter(Boolean) as Array<{ item_id: string; label: string; qty: number | null; source_photo_url: string | null }>
   }, [task])
 
   const [restock, setRestock] = useState<RestockState[]>([])
   const [checklist, setChecklist] = useState<ChecklistItem[]>([])
   const [restockPickerOpen, setRestockPickerOpen] = useState(false)
   const [restockPickerQuery, setRestockPickerQuery] = useState('')
-  const areaLimits: Record<Exclude<InspectionPhotoArea, 'unclean'>, number> = useMemo(
-    () => ({ toilet: 9, shower_drain: 3, living: 3, sofa: 2, bedroom: 8, kitchen: 2 }),
+  const areaLimits: Record<RoomPhotoArea, number> = useMemo(
+    () => ({ living: 3, sofa: 2, bedroom: 8, kitchen: 2 }),
     [],
   )
-  const [roomPhotos, setRoomPhotos] = useState<Record<Exclude<InspectionPhotoArea, 'unclean'>, string[]>>({
-    toilet: [],
+  const [roomPhotos, setRoomPhotos] = useState<Record<RoomPhotoArea, string[]>>({
     living: [],
     sofa: [],
     bedroom: [],
     kitchen: [],
-    shower_drain: [],
   })
   const [cleaningIssue, setCleaningIssue] = useState<UncleanPhoto[]>([])
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const viewerCloseRef = useRef<any>(null)
   const propertyIssueVisitedRef = useRef(false)
+  const [propertyIssueReviewed, setPropertyIssueReviewed] = useState(false)
+  const [cleaningIssueReviewed, setCleaningIssueReviewed] = useState(false)
   const guestSpecialRequest = String((task as any)?.guest_special_request || '').trim()
   const [guestNeedDone, setGuestNeedDone] = useState(false)
 
@@ -116,6 +119,7 @@ export default function InspectionPanelScreen(props: Props) {
     const unsub = nav.addListener('focus', () => {
       if (!propertyIssueVisitedRef.current) return
       propertyIssueVisitedRef.current = false
+      setPropertyIssueReviewed(true)
       setExpanded((p) => ({ ...p, propertyIssue: false, photos: true }))
     })
     return unsub
@@ -127,6 +131,7 @@ export default function InspectionPanelScreen(props: Props) {
       label: x.label,
       qty: x.qty,
       status: null,
+      source_photo_url: x.source_photo_url,
       proof_url: null,
       note: '',
       origin: 'task',
@@ -171,7 +176,7 @@ export default function InspectionPanelScreen(props: Props) {
       return
     }
     const label = String(it.label || id).trim()
-    setRestock((prev) => [...prev, { item_id: id, label, qty: null, status: null, proof_url: null, note: '', origin: 'manual' }])
+    setRestock((prev) => [...prev, { item_id: id, label, qty: null, status: null, source_photo_url: null, proof_url: null, note: '', origin: 'manual' }])
     setRestockPickerOpen(false)
     setRestockPickerQuery('')
   }
@@ -186,7 +191,7 @@ export default function InspectionPanelScreen(props: Props) {
         const [r1, r2] = await Promise.all([getInspectionPhotos(token, cleaningTaskId).catch(() => null), getRestockProof(token, cleaningTaskId).catch(() => null)])
         if (cancelled) return
         if (r1?.items?.length) {
-          const nextRoom: Record<Exclude<InspectionPhotoArea, 'unclean'>, string[]> = { toilet: [], living: [], sofa: [], bedroom: [], kitchen: [], shower_drain: [] }
+          const nextRoom: Record<RoomPhotoArea, string[]> = { living: [], sofa: [], bedroom: [], kitchen: [] }
           const uncleanList: UncleanPhoto[] = []
           for (const it of r1.items) {
             const area = String(it.area || '').trim() as any
@@ -194,10 +199,11 @@ export default function InspectionPanelScreen(props: Props) {
             const note = String(it.note || '').trim()
             if (!url) continue
             if (area === 'unclean') uncleanList.push({ url, note })
-            else if (area in nextRoom) nextRoom[area as Exclude<InspectionPhotoArea, 'unclean'>].push(url)
+            else if (area in nextRoom) nextRoom[area as RoomPhotoArea].push(url)
           }
           setRoomPhotos(nextRoom)
           setCleaningIssue(uncleanList.slice(0, 12))
+          setCleaningIssueReviewed(uncleanList.length > 0)
         }
         if (r2?.items?.length) {
           setRestock((prev) => {
@@ -225,6 +231,7 @@ export default function InspectionPanelScreen(props: Props) {
                 label: id,
                 qty: hit.qty == null ? null : Number(hit.qty),
                 status,
+                source_photo_url: null,
                 proof_url: String(hit.proof_url || '').trim() || null,
                 note: String(hit.note || '').trim(),
                 origin: 'manual',
@@ -251,6 +258,15 @@ export default function InspectionPanelScreen(props: Props) {
     }
   }
 
+  async function ensureLibraryPerm() {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync()
+      return !!perm.granted
+    } catch {
+      return false
+    }
+  }
+
   async function takePhotoAndUpload(purpose: 'inspection_photo' | 'restock_proof', area?: InspectionPhotoArea) {
     if (!token) throw new Error('请先登录')
     const ok = await ensureCameraPerm()
@@ -267,16 +283,32 @@ export default function InspectionPanelScreen(props: Props) {
     return { url: up.url, captured_at: capturedAt }
   }
 
-  async function persistInspectionMedia(nextRoom: Record<Exclude<InspectionPhotoArea, 'unclean'>, string[]>, nextUnclean: UncleanPhoto[]) {
+  async function pickPhotoAndUpload(purpose: 'inspection_photo' | 'restock_proof', area?: InspectionPhotoArea) {
+    if (!token) throw new Error('请先登录')
+    const ok = await ensureLibraryPerm()
+    if (!ok) throw new Error('需要相册权限')
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
+    if (res.canceled || !res.assets?.length) return null
+    const a = res.assets[0] as any
+    const uri = String(a.uri || '').trim()
+    if (!uri) return null
+    const name = String(a.fileName || uri.split('/').pop() || `${purpose}-${Date.now()}.jpg`)
+    const mimeType = String(a.mimeType || 'image/jpeg')
+    const capturedAt = new Date().toISOString()
+    const up = await uploadCleaningMedia(token, { uri, name, mimeType }, { purpose, area: area || undefined, watermark: '1', property_code: propertyCode || undefined, captured_at: capturedAt })
+    return { url: up.url, captured_at: capturedAt }
+  }
+
+  async function persistInspectionMedia(nextRoom: Record<RoomPhotoArea, string[]>, nextUnclean: UncleanPhoto[]) {
     await saveInspectionPhotos(token as string, cleaningTaskId, {
       items: [
-        ...(['toilet', 'living', 'sofa', 'bedroom', 'kitchen', 'shower_drain'] as const).flatMap((a) => nextRoom[a].map((u) => ({ area: a, url: u, note: null }))),
+        ...(['living', 'sofa', 'bedroom', 'kitchen'] as const).flatMap((a) => nextRoom[a].map((u) => ({ area: a, url: u, note: null }))),
         ...nextUnclean.map((x) => ({ area: 'unclean' as const, url: x.url, note: x.note || null })),
       ],
     })
   }
 
-  async function onAddRoomPhoto(area: Exclude<InspectionPhotoArea, 'unclean'>) {
+  async function onAddRoomPhoto(area: RoomPhotoArea) {
     const limit = areaLimits[area]
     if ((roomPhotos[area] || []).length >= limit) return
     try {
@@ -293,7 +325,7 @@ export default function InspectionPanelScreen(props: Props) {
     }
   }
 
-  function onRemoveRoomPhoto(area: Exclude<InspectionPhotoArea, 'unclean'>, idx: number) {
+  function onRemoveRoomPhoto(area: RoomPhotoArea, idx: number) {
     Alert.alert('删除照片', '确认删除这张照片？', [
       { text: '取消', style: 'cancel' as any },
       {
@@ -331,10 +363,27 @@ export default function InspectionPanelScreen(props: Props) {
     }
   }
 
+  async function onPickCleaningIssuePhoto() {
+    if (cleaningIssue.length >= 12) return
+    try {
+      setSaving(true)
+      const up = await pickPhotoAndUpload('inspection_photo', 'unclean')
+      if (!up) return
+      const nextUnclean = [...cleaningIssue, { url: up.url, note: '' }]
+      setCleaningIssue(nextUnclean)
+      await persistInspectionMedia(roomPhotos, nextUnclean)
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '上传失败'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
   async function onSaveCleaningIssueNotes() {
     try {
       setSaving(true)
       await persistInspectionMedia(roomPhotos, cleaningIssue)
+      setCleaningIssueReviewed(cleaningIssue.length > 0)
       Alert.alert(t('common_ok'), '已保存')
       setExpanded(p => ({ ...p, cleaningIssue: false, propertyIssue: true }))
     } catch (e: any) {
@@ -393,11 +442,11 @@ export default function InspectionPanelScreen(props: Props) {
   }
 
   function photosReady() {
-    return !!roomPhotos.toilet.length && !!roomPhotos.living.length && !!roomPhotos.sofa.length && !!roomPhotos.bedroom.length && !!roomPhotos.kitchen.length && !!roomPhotos.shower_drain.length
+    return !!roomPhotos.living.length && !!roomPhotos.sofa.length && !!roomPhotos.bedroom.length && !!roomPhotos.kitchen.length
   }
 
   function cleaningIssueReady() {
-    return true
+    return cleaningIssueReviewed
   }
 
   function restockReady() {
@@ -406,13 +455,14 @@ export default function InspectionPanelScreen(props: Props) {
   }
 
   function completeReady() {
-    return !guestSpecialRequest || guestNeedDone
+    const status = String(task?.status || '').trim().toLowerCase()
+    return ['keys_hung', 'done', 'completed', 'ready'].includes(status)
   }
 
   const progressSteps = [
     { key: 'restock', label: '消耗品', done: restockReady() },
     { key: 'cleaning', label: '清洁反馈', done: cleaningIssueReady() },
-    { key: 'property', label: '房源反馈', done: true },
+    { key: 'property', label: '房源反馈', done: propertyIssueReviewed },
     { key: 'photos', label: '检查照片', done: photosReady() },
     { key: 'complete', label: '标记完成', done: completeReady() },
   ]
@@ -505,29 +555,54 @@ export default function InspectionPanelScreen(props: Props) {
                         <Text style={[styles.chipText, it.status === 'unavailable' ? styles.chipTextActive : null]}>无需补充</Text>
                       </Pressable>
                     </View>
-                    <View style={styles.row}>
-                      {String(it.proof_url || '').trim() && /^https?:\/\//i.test(String(it.proof_url || '')) ? (
-                        <Pressable
-                          onPress={() => {
-                            setViewerUrl(String(it.proof_url))
-                            setViewerOpen(true)
-                          }}
-                          style={({ pressed }) => [styles.proofThumbWrap, pressed ? styles.pressed : null]}
-                        >
-                          <Image source={{ uri: toAbsoluteUrl(it.proof_url) }} style={styles.proofThumb} />
-                        </Pressable>
-                      ) : null}
-                      {it.status === 'unavailable' ? (
-                        <Text style={styles.mutedSmall}>无需补充无需上传照片</Text>
-                      ) : (
-                        <Pressable
-                          onPress={() => onTakeRestockProof(idx)}
-                          disabled={restockUploadingIdx === idx}
-                          style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null, restockUploadingIdx === idx ? styles.submitDisabled : null]}
-                        >
-                          <Text style={styles.photoBtnText}>{restockUploadingIdx === idx ? t('common_loading') : it.proof_url ? '已上传照片' : '上传补充照片'}</Text>
-                        </Pressable>
-                      )}
+                    <View style={styles.restockProofRow}>
+                      <View style={styles.restockProofGallery}>
+                        {String(it.source_photo_url || '').trim() ? (
+                          <Pressable
+                            onPress={() => {
+                              setViewerUrl(String(it.source_photo_url))
+                              setViewerOpen(true)
+                            }}
+                            style={({ pressed }) => [styles.proofThumbWrap, pressed ? styles.pressed : null]}
+                          >
+                            <Image source={{ uri: toAbsoluteUrl(it.source_photo_url) }} style={styles.proofThumb} />
+                            <Text style={styles.proofHint} numberOfLines={1}>清洁员补货照片</Text>
+                          </Pressable>
+                        ) : null}
+                        {String(it.proof_url || '').trim() ? (
+                          <View style={styles.proofThumbCard}>
+                            <Pressable
+                              onPress={() => {
+                                setViewerUrl(String(it.proof_url))
+                                setViewerOpen(true)
+                              }}
+                              style={({ pressed }) => [styles.proofThumbWrap, pressed ? styles.pressed : null]}
+                            >
+                              <Image source={{ uri: toAbsoluteUrl(it.proof_url) }} style={styles.proofThumb} />
+                              <Text style={styles.proofHint} numberOfLines={1}>检查补充照片</Text>
+                            </Pressable>
+                            <Pressable
+                              onPress={() => setRestock((prev) => prev.map((x, i) => (i === idx ? { ...x, proof_url: null } : x)))}
+                              style={({ pressed }) => [styles.proofDeleteBtn, pressed ? styles.pressed : null]}
+                            >
+                              <Ionicons name="trash-outline" size={moderateScale(14)} color="#DC2626" />
+                            </Pressable>
+                          </View>
+                        ) : null}
+                      </View>
+                      <View style={styles.restockActionCol}>
+                        {it.status === 'unavailable' ? (
+                          <Text style={[styles.mutedSmall, styles.restockNoNeedText]}>无需补充无需上传照片</Text>
+                        ) : (
+                          <Pressable
+                            onPress={() => onTakeRestockProof(idx)}
+                            disabled={restockUploadingIdx === idx}
+                            style={({ pressed }) => [styles.photoBtn, styles.restockPhotoBtn, pressed ? styles.pressed : null, restockUploadingIdx === idx ? styles.submitDisabled : null]}
+                          >
+                            <Text style={styles.photoBtnText}>{restockUploadingIdx === idx ? t('common_loading') : it.proof_url ? '重拍' : '拍照上传'}</Text>
+                          </Pressable>
+                        )}
+                      </View>
                     </View>
                     <TextInput
                       value={it.note}
@@ -584,7 +659,14 @@ export default function InspectionPanelScreen(props: Props) {
                   disabled={saving || cleaningIssue.length >= 12}
                   style={({ pressed }) => [styles.photoBtn, cleaningIssue.length >= 12 ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
                 >
-                  <Text style={styles.photoBtnText}>添加照片</Text>
+                  <Text style={styles.photoBtnText}>拍照上传</Text>
+                </Pressable>
+                <Pressable
+                  onPress={onPickCleaningIssuePhoto}
+                  disabled={saving || cleaningIssue.length >= 12}
+                  style={({ pressed }) => [styles.photoBtn, cleaningIssue.length >= 12 ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
+                >
+                  <Text style={styles.photoBtnText}>相册上传</Text>
                 </Pressable>
                 <Pressable onPress={onSaveCleaningIssueNotes} disabled={saving} style={({ pressed }) => [styles.previewBtn, pressed ? styles.pressed : null, saving ? styles.submitDisabled : null]}>
                   <Text style={styles.previewBtnText}>保存</Text>
@@ -627,13 +709,11 @@ export default function InspectionPanelScreen(props: Props) {
             <View style={styles.block}>
               <View style={styles.grid}>
                 {([
-                  { key: 'toilet', label: '马桶', max: areaLimits.toilet },
-                  { key: 'shower_drain', label: '淋浴房下水口', max: areaLimits.shower_drain },
                   { key: 'living', label: '客厅', max: areaLimits.living },
                   { key: 'sofa', label: '沙发', max: areaLimits.sofa },
                   { key: 'bedroom', label: '卧室', max: areaLimits.bedroom },
                   { key: 'kitchen', label: '厨房', max: areaLimits.kitchen },
-                ] as Array<{ key: Exclude<InspectionPhotoArea, 'unclean'>; label: string; max: number }>).map((a) => (
+                ] as Array<{ key: RoomPhotoArea; label: string; max: number }>).map((a) => (
                   <View key={a.key} style={styles.photoCard}>
                     <View style={styles.photoHeadRow}>
                       <Text style={styles.photoLabel}>{a.label}</Text>
@@ -696,8 +776,8 @@ export default function InspectionPanelScreen(props: Props) {
             ) : null}
             <Pressable
               onPress={() => props.navigation.navigate('InspectionComplete', { taskId: task.id })}
-              disabled={!!guestSpecialRequest && !guestNeedDone}
-              style={({ pressed }) => [styles.primaryBtn, pressed ? styles.pressed : null, !!guestSpecialRequest && !guestNeedDone ? styles.submitDisabled : null]}
+              disabled={!photosReady() || (!!guestSpecialRequest && !guestNeedDone)}
+              style={({ pressed }) => [styles.primaryBtn, pressed ? styles.pressed : null, !photosReady() || (!!guestSpecialRequest && !guestNeedDone) ? styles.submitDisabled : null]}
             >
               <Text style={styles.primaryText}>进入标记已完成</Text>
             </Pressable>
@@ -849,8 +929,16 @@ const styles = StyleSheet.create({
   thumbMini: { width: '100%', height: '100%' },
   smallBtn: { marginTop: 10, height: 34, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
   smallBtnText: { color: '#2563EB', fontWeight: '900' },
-  proofThumbWrap: { width: 44, height: 44, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
-  proofThumb: { width: '100%', height: '100%' },
+  restockProofRow: { marginTop: 10, flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  restockProofGallery: { flex: 1, minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  restockActionCol: { width: 96, alignItems: 'stretch' },
+  restockPhotoBtn: { width: '100%', minHeight: 44 },
+  restockNoNeedText: { marginTop: 0, textAlign: 'center' },
+  proofThumbCard: { position: 'relative' },
+  proofThumbWrap: { width: 96, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
+  proofThumb: { width: '100%', height: 72 },
+  proofHint: { paddingHorizontal: 6, paddingVertical: 5, fontSize: 10, lineHeight: 12, fontWeight: '700', color: '#374151', backgroundColor: '#FFFFFF' },
+  proofDeleteBtn: { position: 'absolute', top: 6, right: 6, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.96)', borderWidth: hairline(), borderColor: '#FECACA', alignItems: 'center', justifyContent: 'center' },
   uncleanThumbWrap: { width: 92, height: 92, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   uncleanThumb: { width: '100%', height: '100%' },
   removeBtn: { height: 34, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#FEE2E2', borderWidth: hairline(), borderColor: '#FECACA', alignItems: 'center', justifyContent: 'center' },

@@ -6,7 +6,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { API_BASE_URL } from '../../config/env'
-import { getInspectionPhotos, getRestockProof, uploadCleaningVideo, uploadLockboxVideo } from '../../lib/api'
+import { getInspectionPhotos, uploadCleaningVideo, uploadLockboxVideo } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
@@ -33,13 +33,6 @@ function toAbsoluteUrl(rawUrl: any) {
   return s0
 }
 
-function getRestockItems(task: any) {
-  const list = Array.isArray(task?.restock_items) ? (task.restock_items as any[]) : []
-  return list
-    .map((x) => String(x?.item_id || '').trim())
-    .filter(Boolean)
-}
-
 export default function InspectionCompleteScreen(props: Props) {
   const { t } = useI18n()
   const { token } = useAuth()
@@ -49,19 +42,19 @@ export default function InspectionCompleteScreen(props: Props) {
   const [submitting, setSubmitting] = useState(false)
   const [lockboxLocalUrl, setLockboxLocalUrl] = useState<string | null>(null)
   const [missing, setMissing] = useState<string[]>([])
+  const [validationReady, setValidationReady] = useState(false)
 
   const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
   const cleaningTaskId = String(task?.source_id || '').trim()
   const lockboxFromTask = String((task as any)?.lockbox_video_url || '').trim()
   const effectiveLockboxUrl = lockboxLocalUrl || lockboxFromTask || null
-  const restockItemIds = useMemo(() => getRestockItems(task as any), [task])
-
   const refresh = useCallback(async () => {
     if (!token) return
     if (!cleaningTaskId) return
     try {
       setLoading(true)
-      const [p, r] = await Promise.all([getInspectionPhotos(token, cleaningTaskId).catch(() => null), getRestockProof(token, cleaningTaskId).catch(() => null)])
+      setValidationReady(false)
+      const p = await getInspectionPhotos(token, cleaningTaskId).catch(() => null)
       const needs: string[] = []
 
       const requiredAreas = ['toilet', 'living', 'sofa', 'bedroom', 'kitchen', 'shower_drain']
@@ -73,21 +66,12 @@ export default function InspectionCompleteScreen(props: Props) {
       const missingAreas = requiredAreas.filter(a => !gotAreas.has(a))
       if (missingAreas.length) needs.push('关键区域照片未齐')
 
-      if (restockItemIds.length) {
-        const gotProof = new Set<string>()
-        for (const it of r?.items || []) {
-          const k = String(it.item_id || '').trim()
-          if (k) gotProof.add(k)
-        }
-        const missingProof = restockItemIds.filter(x => !gotProof.has(x))
-        if (missingProof.length) needs.push('消耗品补充未提交')
-      }
-
       setMissing(needs)
+      setValidationReady(true)
     } finally {
       setLoading(false)
     }
-  }, [cleaningTaskId, restockItemIds, token])
+  }, [cleaningTaskId, token])
 
   useEffect(() => {
     refresh()
@@ -136,6 +120,7 @@ export default function InspectionCompleteScreen(props: Props) {
   async function onComplete() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!cleaningTaskId) return Alert.alert(t('common_error'), '缺少任务信息')
+    if (!validationReady || loading) return Alert.alert(t('common_error'), '正在校验检查与补充状态，请稍候')
     if (missing.length) return Alert.alert(t('common_error'), missing.join('、'))
     const u = String(effectiveLockboxUrl || '').trim()
     if (!u) return Alert.alert(t('common_error'), '请先上传挂钥匙视频')
@@ -171,7 +156,9 @@ export default function InspectionCompleteScreen(props: Props) {
             </Text>
           </View>
         </View>
-        {missing.length ? (
+        {!validationReady || loading ? (
+          <Text style={styles.muted}>正在校验检查与补充状态...</Text>
+        ) : missing.length ? (
           <Text style={styles.warn}>{`未满足：${missing.join('、')}`}</Text>
         ) : (
           <Text style={styles.ok}>前置检查已满足</Text>
@@ -188,7 +175,6 @@ export default function InspectionCompleteScreen(props: Props) {
       <View style={styles.card}>
         <View style={styles.sectionHead}>
           <View style={styles.sectionTitleRow}>
-            <Text style={styles.sectionNo}>4.</Text>
             <Text style={styles.sectionTitle}>挂钥匙视频</Text>
           </View>
         </View>
@@ -243,7 +229,6 @@ const styles = StyleSheet.create({
 
   sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  sectionNo: { fontWeight: '900', color: '#111827' },
   sectionTitle: { fontWeight: '900', color: '#111827' },
   previewBtn: { marginTop: 10, height: 38, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', alignSelf: 'flex-start' },
   previewText: { fontWeight: '900', color: '#111827' },

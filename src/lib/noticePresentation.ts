@@ -99,6 +99,22 @@ function getRestockEntries(task: any) {
     .filter((item: any) => !!item && item.needRestock)
 }
 
+function getRestockEntriesFromNoticeData(data: any) {
+  const items = Array.isArray(data?.restock_items) ? data.restock_items : []
+  return items
+    .map((item: any) => {
+      const label = cleanText(item?.label || item?.item_label || item?.item_id)
+      const photoUrl = cleanText(item?.photo_url)
+      const qty0 = item?.qty == null ? null : Number(item.qty)
+      const qty = Number.isFinite(qty0 as any) ? Number(qty0) : null
+      const status = cleanText(item?.status).toLowerCase()
+      if (!label) return null
+      const needRestock = status === 'low' || qty != null
+      return { label, photoUrl, qty, needRestock }
+    })
+    .filter((item: any) => !!item && item.needRestock)
+}
+
 export function getPresentedNotice(notice: Notice) {
   const propertyCode = resolvePropertyCode(notice)
   const relatedTask = resolveRelatedTask(notice)
@@ -108,7 +124,7 @@ export function getPresentedNotice(notice: Notice) {
   const directPhotos = normalizeImageList((data as any).photo_urls)
   const taskLivingPhoto = cleanText((relatedTask as any)?.living_room_photo_url)
   const rawLines = parseLines(notice.content)
-  const restockEntries = getRestockEntries(relatedTask)
+  const restockEntries = getRestockEntriesFromNoticeData(data).length ? getRestockEntriesFromNoticeData(data) : getRestockEntries(relatedTask)
 
   let title = cleanText(notice.title) || '通知'
   let summary = cleanText(notice.summary)

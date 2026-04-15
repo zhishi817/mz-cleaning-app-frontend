@@ -119,6 +119,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   const [supplies, setSupplies] = useState<SupplyItemState[]>([])
   const [remoteAcPhotoUrl, setRemoteAcPhotoUrl] = useState<string | null>(null)
   const [remoteTvPhotoUrl, setRemoteTvPhotoUrl] = useState<string | null>(null)
+  const [livingRoomPhotoUrl, setLivingRoomPhotoUrl] = useState<string | null>(String((task as any)?.living_room_photo_url || '').trim() || null)
 
   const lockboxOk = !!String(lockboxUrl || '').trim()
 
@@ -134,9 +135,10 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         if (!String(it.photo_url || '').trim()) return false
       }
     }
+    if (!String(livingRoomPhotoUrl || '').trim()) return false
     if (!String(remoteTvPhotoUrl || '').trim()) return false
     return true
-  }, [supplies, remoteAcPhotoUrl, remoteTvPhotoUrl])
+  }, [livingRoomPhotoUrl, supplies, remoteAcPhotoUrl, remoteTvPhotoUrl])
 
   const refresh = useCallback(async () => {
     if (!token) return
@@ -196,6 +198,11 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     loadSuppliesChecklist()
   }, [loadSuppliesChecklist])
 
+  useEffect(() => {
+    const next = String((task as any)?.living_room_photo_url || '').trim() || null
+    if (next) setLivingRoomPhotoUrl(next)
+  }, [task?.id])
+
   function toggle(k: keyof typeof expanded) {
     setExpanded(p => ({ ...p, [k]: !p[k] }))
   }
@@ -203,6 +210,15 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   async function ensureCameraPerm() {
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync()
+      return !!perm.granted
+    } catch {
+      return false
+    }
+  }
+
+  async function ensureLibraryPerm() {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync()
       return !!perm.granted
     } catch {
       return false
@@ -278,10 +294,36 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     }
   }
 
+  async function onUploadLivingRoomPhoto(source: 'camera' | 'library') {
+    if (!token) return
+    try {
+      const ok = source === 'camera' ? await ensureCameraPerm() : await ensureLibraryPerm()
+      if (!ok) {
+        Alert.alert(t('common_error'), source === 'camera' ? '需要相机权限' : '需要相册权限')
+        return
+      }
+      const res =
+        source === 'camera'
+          ? await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
+          : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
+      if (res.canceled || !res.assets?.length) return
+      const a = res.assets[0] as any
+      const uri = String(a.uri || '').trim()
+      if (!uri) return
+      const name = String(a.fileName || uri.split('/').pop() || `living-room-${Date.now()}.jpg`)
+      const mimeType = String(a.mimeType || 'image/jpeg')
+      const up = await uploadCleaningMedia(token, { uri, name, mimeType }, { purpose: 'consumable_living_room_photo' })
+      setLivingRoomPhotoUrl(up.url)
+      Alert.alert(t('common_ok'), '客厅照片已上传')
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '上传失败'))
+    }
+  }
+
   async function onSubmitSupplies() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!cleaningTaskId) return Alert.alert(t('common_error'), '缺少任务信息')
-    if (!canSubmitSupplies) return Alert.alert(t('common_error'), '请完成所有消耗品检查（不足项需拍照）')
+    if (!canSubmitSupplies) return Alert.alert(t('common_error'), '请完成所有消耗品检查，并上传客厅照片（不足项需拍照）')
     const out = supplies.map(x => ({
       item_id: x.id,
       status: x.status as any,
@@ -303,7 +345,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     } as any)
     try {
       setSuppliesSubmitting(true)
-      await submitCleaningConsumables(token, cleaningTaskId, { items: out })
+      await submitCleaningConsumables(token, cleaningTaskId, { living_room_photo_url: String(livingRoomPhotoUrl || '').trim(), items: out })
       setSuppliesSubmitted(true)
       Alert.alert(t('common_ok'), '提交成功')
     } catch (e: any) {
@@ -443,6 +485,38 @@ export default function CleaningSelfCompleteScreen(props: Props) {
               <Text style={styles.mutedSmall}>请完成消耗品补充（不足项需拍照）。</Text>
               <Text style={styles.mutedSmall}>{`待住晚数：${remainingNights == null ? '-' : String(remainingNights)}`}</Text>
               {suppliesSubmitted ? <Text style={styles.ok}>已提交</Text> : suppliesLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : <Text style={styles.warn}>未提交</Text>}
+              <View style={styles.supBlock}>
+                <Text style={styles.supLabel}>客厅照片</Text>
+                <Text style={styles.mutedSmall}>提交补品前需重新提供一张客厅照片。</Text>
+                <View style={styles.supRow}>
+                  <Pressable
+                    onPress={() => onUploadLivingRoomPhoto('camera')}
+                    disabled={suppliesSubmitting}
+                    style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                  >
+                    <Text style={styles.supPhotoText}>{livingRoomPhotoUrl ? '重新拍照' : '拍照'}</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => onUploadLivingRoomPhoto('library')}
+                    disabled={suppliesSubmitting}
+                    style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                  >
+                    <Text style={styles.supPhotoText}>相册上传</Text>
+                  </Pressable>
+                </View>
+                {livingRoomPhotoUrl ? (
+                  <Pressable
+                    onPress={() => {
+                      setViewerUrls([toAbsoluteUrl(livingRoomPhotoUrl)])
+                      setViewerIndex(0)
+                      setViewerOpen(true)
+                    }}
+                    style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
+                  >
+                    <Image source={{ uri: toAbsoluteUrl(livingRoomPhotoUrl) }} style={styles.supPreviewImg} />
+                  </Pressable>
+                ) : null}
+              </View>
               {supplies.map((it, idx) => (
                 <View key={it.id} style={styles.supBlock}>
                   <Text style={styles.supLabel}>{it.label}</Text>

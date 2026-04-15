@@ -10,7 +10,7 @@ import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, refreshWorkTasksFromServer, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
-import { deleteKeyPhoto, markGuestCheckedOutByOrder, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadMzappMedia } from '../../lib/api'
+import { deleteKeyPhoto, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadMzappMedia } from '../../lib/api'
 import { enqueueKeyUpload } from '../../lib/keyUploadQueue'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
@@ -136,6 +136,49 @@ function isCleaningWorkSubmitted(status0: any) {
   return ['cleaned', 'restock_pending', 'restocked', 'to_inspect', 'to_hang_keys', 'keys_hung', 'done', 'completed', 'ready'].includes(s)
 }
 
+function checkoutTaskIdsFromTask(task: WorkTaskItem | null) {
+  if (!task || task.source_type !== 'cleaning_tasks') return []
+  return Array.from(
+    new Set(
+      [
+        ...(Array.isArray((task as any)?.cleaning_task_ids) ? (task as any).cleaning_task_ids : []),
+        ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
+        (task as any)?.source_id,
+      ]
+        .map((x) => String(x || '').trim())
+        .filter(Boolean),
+    ),
+  )
+}
+
+function parseTimeMinutes(value: any) {
+  const raw = String(value || '').trim().toLowerCase()
+  if (!raw) return null
+  const s = raw.replace(/\s+/g, '')
+  const m12 = s.match(/^(\d{1,2})(?::(\d{1,2}))?(am|pm)$/)
+  if (m12) {
+    let hour = Number(m12[1] || 0)
+    const minute = Number(m12[2] || 0)
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute < 0 || minute > 59) return null
+    hour = hour % 12
+    if (m12[3] === 'pm') hour += 12
+    return hour * 60 + minute
+  }
+  const m24 = s.match(/^(\d{1,2})(?::(\d{1,2}))?$/)
+  if (m24) {
+    const hour = Number(m24[1] || 0)
+    const minute = Number(m24[2] || 0)
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null
+    return hour * 60 + minute
+  }
+  return null
+}
+
+function isEarlyCheckinTime(value: any) {
+  const mins = parseTimeMinutes(value)
+  return mins != null && mins < 15 * 60
+}
+
 export default function TaskDetailScreen(props: Props) {
   const { t } = useI18n()
   const { user, token } = useAuth()
@@ -246,6 +289,7 @@ export default function TaskDetailScreen(props: Props) {
         { purpose: 'key_photo', watermark: '1', watermark_text: watermarkText, property_code: propertyCode, captured_at: capturedAt },
       )
       await startCleaningTask(token, String(task.source_id), { media_url: up.url, captured_at: capturedAt })
+      await patchWorkTaskItem(String(task.id), { status: 'in_progress', key_photo_url: up.url } as any)
       setLocalKeyPhotoUrl(up.url)
       Alert.alert(t('common_ok'), '钥匙上传成功')
     } catch (e: any) {
@@ -421,6 +465,7 @@ export default function TaskDetailScreen(props: Props) {
   const routerLocation = String((task as any)?.property?.router_location || '').trim()
   const hasCheckout = !!checkoutTime
   const hasCheckin = !!checkinTime
+  const isEarlyCheckin = hasCheckin && isEarlyCheckinTime(checkinTime)
   const titleSuffix = hasCheckout || hasCheckin ? `${hasCheckout ? '退房' : ''}${hasCheckout && hasCheckin ? ' ' : ''}${hasCheckin ? '入住' : ''}` : ''
   const title2 = `${title}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
   const keyPhotoUrl = String(localKeyPhotoUrl || (task as any).key_photo_url || '').trim() || null
@@ -492,11 +537,16 @@ export default function TaskDetailScreen(props: Props) {
               <Text style={styles.tagKeyText}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
             </View>
           ) : null}
-          {showCheckin ? (
-            <View style={styles.tagWarn}>
-              <Text style={styles.tagWarnText}>{`需挂${checkinSets}套钥匙`}</Text>
-            </View>
-          ) : null}
+                    {showCheckin ? (
+                      <View style={styles.tagWarn}>
+                        <Text style={styles.tagWarnText}>{`需挂${checkinSets}套钥匙`}</Text>
+                      </View>
+                    ) : null}
+                    {isEarlyCheckin ? (
+                      <View style={styles.tagWarn}>
+                        <Text style={styles.tagWarnText}>早入住</Text>
+                      </View>
+                    ) : null}
           {isSelfCompleteEligible ? (
             <View style={styles.tag}>
               <Text style={styles.tagText}>自完成</Text>
@@ -650,10 +700,15 @@ export default function TaskDetailScreen(props: Props) {
                       const nextCheckedOutAt = isCheckedOut ? null : new Date().toISOString()
                       try {
                         setCheckedOutPending(true)
-                        const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
-                        if (!orderId) throw new Error('缺少订单ID')
+                        const taskIds = checkoutTaskIdsFromTask(task)
                         await patchWorkTaskItem(String(task.id), { checked_out_at: nextCheckedOutAt } as any)
-                        await markGuestCheckedOutByOrder(token, { order_id: orderId, action: isCheckedOut ? 'unset' : 'set' })
+                        if (taskIds.length) {
+                          await markGuestCheckedOutByTasks(token, { task_ids: taskIds, action: isCheckedOut ? 'unset' : 'set' })
+                        } else {
+                          const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
+                          if (!orderId) throw new Error('缺少订单ID')
+                          await markGuestCheckedOutByOrder(token, { order_id: orderId, action: isCheckedOut ? 'unset' : 'set' })
+                        }
                         Alert.alert(t('common_ok'), isCheckedOut ? '已取消退房' : '已标记已退房')
                         props.navigation.goBack()
                       } catch (e: any) {
@@ -680,10 +735,10 @@ export default function TaskDetailScreen(props: Props) {
               <>
                 <Pressable
                   onPress={onUploadKey}
-                  disabled={keyUploading || isCleaningSubmitted}
-                  style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, keyUploading ? styles.actionBtnDisabled : null]}
+                  disabled={keyUploading || isCleaningSubmitted || !!keyPhotoUrl}
+                  style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, (keyUploading || !!keyPhotoUrl) ? styles.actionBtnDisabled : null]}
                 >
-                  <Text style={styles.actionText}>{keyUploading ? t('common_loading') : (isCleaningSubmitted ? '钥匙记录' : t('tasks_btn_upload_key'))}</Text>
+                  <Text style={styles.actionText}>{keyUploading ? t('common_loading') : (isCleaningSubmitted || !!keyPhotoUrl ? '钥匙记录' : t('tasks_btn_upload_key'))}</Text>
                 </Pressable>
                 <Pressable
                   onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}

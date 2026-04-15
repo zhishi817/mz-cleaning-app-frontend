@@ -65,7 +65,11 @@ function dedupeLoadedState(input: StoreState) {
 
 function shouldDropNotice(n: any) {
   const type = String(n?.type || '').trim().toLowerCase()
+  const data = n && typeof n === 'object' ? (n as any).data : null
+  const entity = String(data?.entity || '').trim().toLowerCase()
+  const action = String(data?.action || '').trim().toLowerCase()
   return type === 'system'
+    || (entity === 'order' && action === 'open_order')
 }
 
 function normText(v: any) {
@@ -141,6 +145,7 @@ function nextId() {
 }
 
 export async function prependNotice(input: Omit<Notice, 'id' | 'createdAt'> & { id?: string; createdAt?: string }) {
+  if (shouldDropNotice(input)) return
   const id = input.id || nextId()
   const existing = state.items.find(n => n.id === id) || null
   const createdAt = normalizeCreatedAt(input.createdAt, id, (input as any)?.data?.event_id, existing?.createdAt)

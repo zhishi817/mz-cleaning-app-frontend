@@ -5,12 +5,12 @@ import { Ionicons } from '@expo/vector-icons'
 import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { API_BASE_URL } from '../../config/env'
-import { getInspectionPhotos, markGuestCheckedOutByOrder, updateCleaningOrderKeysRequired, updateCleaningTaskManagerFields } from '../../lib/api'
+import { getCleaningConsumables, getCompletionPhotos, getInspectionPhotos, getRestockProof, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, updateCleaningTaskManagerFields } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { prependNotice } from '../../lib/noticesStore'
 import { hairline, moderateScale } from '../../lib/scale'
-import { findWorkTaskItemByAnyId, patchWorkTaskItem, refreshWorkTasksFromServer, subscribeWorkTasks, type WorkTasksView } from '../../lib/workTasksStore'
+import { findWorkTaskItemByAnyId, patchWorkTaskItem, refreshWorkTasksFromServer, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'ManagerDailyTask'>
@@ -35,12 +35,10 @@ function toAbsoluteUrl(rawUrl: any) {
 
 const AREA_LABEL: Record<string, string> = {
   unclean: '清洁问题',
-  toilet: '马桶',
   living: '客厅',
   sofa: '沙发',
   bedroom: '卧室',
   kitchen: '厨房',
-  shower_drain: '淋浴房下水口',
 }
 
 function ymd(d: Date) {
@@ -63,6 +61,47 @@ function buildCleaningSummary(checkoutTime: string | null, checkinTime: string |
   return null
 }
 
+function isDoneLikeStatusZh(status0: string) {
+  const s = String(status0 || '').trim().toLowerCase()
+  return s === 'done' || s === 'completed' || s === 'ready' || s === 'keys_hung' || s === 'cleaned' || s === 'restocked' || s === 'inspected'
+}
+
+function statusLabelZh(status: string, task?: WorkTaskItem | null) {
+  const s = String(status || '').trim().toLowerCase()
+  const source = String(task?.source_type || '').trim().toLowerCase()
+  const kind = String(task?.task_kind || '').trim().toLowerCase()
+  if (source === 'cleaning_tasks' && kind === 'cleaning') {
+    const inspectionStatus = String((task as any)?.inspection_status || '').trim().toLowerCase()
+    const hasInspection = Array.isArray((task as any)?.inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
+    if (isDoneLikeStatusZh(s)) {
+      if (hasInspection || inspectionStatus) {
+        if (inspectionStatus === 'keys_hung' || inspectionStatus === 'done' || inspectionStatus === 'completed') return '已挂钥匙'
+        return '待检查'
+      }
+      return '已挂钥匙'
+    }
+    const checkedOutAt = String((task as any)?.checked_out_at || '').trim()
+    if (s === 'in_progress' || s === 'cleaning') return '进行中'
+    if (s !== 'cancelled' && s !== 'canceled') {
+      if (checkedOutAt) return '已退房'
+      return '已分配'
+    }
+  }
+  if (s === 'done' || s === 'completed') return '已完成'
+  if (s === 'to_inspect') return '待检查'
+  if (s === 'to_hang_keys') return '待挂钥匙'
+  if (s === 'to_complete') return '待完成'
+  if (s === 'keys_hung') return '已挂钥匙'
+  if (s === 'in_progress') return '进行中'
+  if (s === 'assigned') return '已分配'
+  if (s === 'cancelled' || s === 'canceled') return '已取消'
+  if (s === 'ready') return '已完成'
+  if (s === 'cleaned') return '已清洁'
+  if (s === 'restocked') return '已补货'
+  if (s === 'inspected') return '已检查'
+  return '待处理'
+}
+
 function hashText(s: string) {
   let h = 0
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
@@ -73,6 +112,21 @@ function isBeforeToday(taskDate0: any) {
   const taskDate = String(taskDate0 || '').slice(0, 10)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(taskDate)) return false
   return taskDate < ymd(new Date())
+}
+
+function checkoutTaskIdsFromTask(task: WorkTaskItem | null) {
+  if (!task || task.source_type !== 'cleaning_tasks') return []
+  return Array.from(
+    new Set(
+      [
+        ...(Array.isArray((task as any)?.cleaning_task_ids) ? (task as any).cleaning_task_ids : []),
+        ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
+        (task as any)?.source_id,
+      ]
+        .map((x) => String(x || '').trim())
+        .filter(Boolean),
+    ),
+  )
 }
 
 export default function ManagerDailyTaskScreen(props: Props) {
@@ -104,7 +158,11 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const [keysDirty, setKeysDirty] = useState(false)
 
   const [photosLoading, setPhotosLoading] = useState(false)
+  const [consumableItems, setConsumableItems] = useState<Array<{ item_id: string; photo_url?: string | null; item_label?: string | null; status?: string | null; note?: string | null }>>([])
+  const [livingRoomPhotoUrl, setLivingRoomPhotoUrl] = useState<string | null>(null)
+  const [completionItems, setCompletionItems] = useState<Array<{ area: string; url: string; note?: string | null }>>([])
   const [inspectionItems, setInspectionItems] = useState<Array<{ area: string; url: string; note?: string | null }>>([])
+  const [restockProofs, setRestockProofs] = useState<Array<{ item_id: string; proof_url: string; note?: string | null; status?: string | null }>>([])
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const syncedTaskIdRef = useRef<string>('')
@@ -112,7 +170,6 @@ export default function ManagerDailyTaskScreen(props: Props) {
   useEffect(() => {
     const currentTaskId = String(task?.id || '').trim()
     if (!currentTaskId) {
-      syncedTaskIdRef.current = ''
       return
     }
     if (syncedTaskIdRef.current === currentTaskId) return
@@ -154,23 +211,66 @@ export default function ManagerDailyTaskScreen(props: Props) {
     return source
   }, [task])
 
+  const cleaningTaskId = useMemo(() => {
+    const ids = (task as any)?.cleaning_task_ids
+    const id0 = Array.isArray(ids) && ids.length ? String(ids[0] || '').trim() : ''
+    if (id0) return id0
+    if (String((task as any)?.task_kind || '').trim() === 'cleaning') return String((task as any)?.source_id || '').trim()
+    return ''
+  }, [task])
+
   useEffect(() => {
     const nav: any = props.navigation as any
     if (!nav || typeof nav.addListener !== 'function') return
     const unsub = nav.addListener('focus', () => {
       if (!token) return
-      if (!inspectionTaskId) return
+      if (!inspectionTaskId && !cleaningTaskId) return
       setPhotosLoading(true)
-      getInspectionPhotos(token, inspectionTaskId)
-        .then((r) => {
-          const items = Array.isArray(r?.items) ? r.items : []
+      Promise.all([
+        cleaningTaskId ? getCleaningConsumables(token, cleaningTaskId).catch(() => null) : Promise.resolve(null),
+        cleaningTaskId ? getCompletionPhotos(token, cleaningTaskId).catch(() => null) : Promise.resolve(null),
+        inspectionTaskId ? getInspectionPhotos(token, inspectionTaskId).catch(() => null) : Promise.resolve(null),
+        cleaningTaskId ? getRestockProof(token, cleaningTaskId).catch(() => null) : Promise.resolve(null),
+      ])
+        .then(([consumablesResp, completionResp, inspectionResp, restockResp]) => {
+          setLivingRoomPhotoUrl(String(consumablesResp?.living_room_photo_url || '').trim() || null)
+          const consumableRows = Array.isArray(consumablesResp?.items) ? consumablesResp.items : []
+          setConsumableItems(
+            consumableRows.map((x) => ({
+              item_id: String(x.item_id || '').trim(),
+              photo_url: String(x.photo_url || '').trim() || null,
+              item_label: x.item_label == null ? null : String(x.item_label || '').trim(),
+              status: x.status == null ? null : String(x.status || '').trim(),
+              note: x.note == null ? null : String(x.note || '').trim(),
+            })),
+          )
+          const completion = Array.isArray(completionResp?.items) ? completionResp.items : []
+          setCompletionItems(completion.map((x) => ({ area: String(x.area || '').trim(), url: String(x.url || '').trim(), note: x.note ?? null })).filter((x) => !!x.url))
+          const items = Array.isArray(inspectionResp?.items) ? inspectionResp.items : []
           setInspectionItems(items.map((x) => ({ area: String(x.area || '').trim(), url: String(x.url || '').trim(), note: x.note ?? null })).filter((x) => !!x.url))
+          const proofs = Array.isArray(restockResp?.items) ? restockResp.items : []
+          setRestockProofs(
+            proofs
+              .map((x) => ({
+                item_id: String(x.item_id || '').trim(),
+                proof_url: String(x.proof_url || '').trim(),
+                note: x.note ?? null,
+                status: x.status == null ? null : String(x.status || '').trim(),
+              }))
+              .filter((x) => !!x.item_id && !!x.proof_url),
+          )
         })
-        .catch(() => setInspectionItems([]))
+        .catch(() => {
+          setConsumableItems([])
+          setLivingRoomPhotoUrl(null)
+          setCompletionItems([])
+          setInspectionItems([])
+          setRestockProofs([])
+        })
         .finally(() => setPhotosLoading(false))
     })
     return unsub
-  }, [inspectionTaskId, props.navigation, token])
+  }, [cleaningTaskId, inspectionTaskId, props.navigation, token])
 
   async function onSave() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
@@ -209,20 +309,21 @@ export default function ManagerDailyTaskScreen(props: Props) {
         if (norm(nextGuest) !== norm(prevGuest)) payload.guest_special_request = nextGuest
       }
       const needKeysUpdate = Number.isFinite(nextKeys) && (keysDirty || nextKeys !== prevKeys)
+      const nextKeysValue = nextKeys >= 2 ? 2 : 1
 
+      if (needKeysUpdate) payload.keys_required = nextKeysValue
       const keysForOtherFields = Object.keys(payload).filter((k) => k !== 'task_ids')
       let saveResult: any = null
       if (keysForOtherFields.length) {
         if (!taskIds.length) throw new Error('缺少任务ID')
         saveResult = await updateCleaningTaskManagerFields(token, payload)
       }
-      let keysResult: any = null
-      const nextKeysValue = nextKeys >= 2 ? 2 : 1
-      if (needKeysUpdate) {
-        const orderIdForKeys = String((task as any)?.order_id_checkin || (task as any)?.order_id || '').trim()
-        if (!orderIdForKeys) throw new Error('当前任务还没有入住订单，暂时无法设置需挂钥匙套数')
-        keysResult = await updateCleaningOrderKeysRequired(token, { order_id: orderIdForKeys, keys_required: nextKeysValue as 1 | 2 })
-      }
+      setCheckoutTime(payload.checkout_time !== undefined ? String(payload.checkout_time || '').trim() : String(prevCheckout || '').trim())
+      setCheckinTime(payload.checkin_time !== undefined ? String(payload.checkin_time || '').trim() : String(prevCheckin || '').trim())
+      setOldCode(payload.old_code !== undefined ? String(payload.old_code || '').trim() : String(prevOldCode || '').trim())
+      setNewCode(payload.new_code !== undefined ? String(payload.new_code || '').trim() : String(prevNewCode || '').trim())
+      setGuestNote(payload.guest_special_request !== undefined ? String(payload.guest_special_request || '').trim() : String(prevGuest || '').trim())
+      setKeysRequired(nextKeysValue)
 
       const changedLines: string[] = []
       const fmt = (label: string, next: any, prev: any) => `${label}：${norm(next) || '-'}（原：${norm(prev) || '-'}）`
@@ -274,7 +375,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
         ]
           .filter(Boolean)
           .join('\n')
-        await prependNotice({
+        void prependNotice({
           id: `manager_fields:${propertyCode}:${nextFieldsKey}`,
           type: needKeysUpdate ? 'key' : 'update',
           title: `任务信息更新：${propertyCode}`,
@@ -290,7 +391,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
             fields_key: nextFieldsKey,
             event_id: `manager_fields:${propertyCode}:${nextFieldsKey}`,
           },
-        })
+        }).catch(() => null)
       }
       if (token && user?.id) {
         const now = new Date()
@@ -299,7 +400,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
         refreshWorkTasksFromServer({ token, userId: String(user.id), date_from, date_to, view: 'all' }).catch(() => null)
       }
       setKeysDirty(false)
-      const skippedAll = (!saveResult || saveResult?.skipped) && (!keysResult || keysResult?.skipped)
+      const skippedAll = !saveResult || saveResult?.skipped
       Alert.alert(t('common_ok'), skippedAll ? '已保存（无变化）' : '已保存')
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
@@ -333,7 +434,22 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const canEditKeysOnly = isCustomerService && !saving
 
   const uncleanPhotos = inspectionItems.filter((x) => x.area === 'unclean')
-  const roomPhotosByArea = (['toilet', 'living', 'sofa', 'bedroom', 'kitchen', 'shower_drain'] as const).map((a) => ({ area: a, items: inspectionItems.filter((x) => x.area === a) }))
+  const roomPhotoAreas = ['living', 'sofa', 'bedroom', 'kitchen'] as const
+  const roomPhotosByArea = roomPhotoAreas.map((a) => ({
+    area: a,
+    cleanerItems: completionItems.filter((x) => x.area === a),
+    inspectorItems: inspectionItems.filter((x) => x.area === a),
+  }))
+  const remoteTvPhotoUrl = String(consumableItems.find((x) => x.item_id === 'remote_tv')?.photo_url || '').trim() || null
+  const remoteAcPhotoUrl = String(consumableItems.find((x) => x.item_id === 'remote_ac')?.photo_url || '').trim() || null
+  const restockItems = Array.isArray((task as any)?.restock_items) ? ((task as any).restock_items as any[]) : []
+  const consumablePhotoRecords = consumableItems.filter((x) => {
+    const itemId = String(x.item_id || '').trim()
+    const photoUrl = String(x.photo_url || '').trim()
+    if (!photoUrl) return false
+    if (itemId === 'remote_tv' || itemId === 'remote_ac') return false
+    return true
+  })
 
   async function onToggleCheckedOut() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
@@ -343,10 +459,15 @@ export default function ManagerDailyTaskScreen(props: Props) {
     const nextCheckedOutAt = checkedOutAt ? null : new Date().toISOString()
     try {
       setMarking(true)
-      const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
-      if (!orderId) throw new Error('缺少订单ID')
+      const taskIds = checkoutTaskIdsFromTask(task)
       await patchWorkTaskItem(taskId, { checked_out_at: nextCheckedOutAt } as any)
-      await markGuestCheckedOutByOrder(token, { order_id: orderId, action: checkedOutAt ? 'unset' : 'set' })
+      if (taskIds.length) {
+        await markGuestCheckedOutByTasks(token, { task_ids: taskIds, action: checkedOutAt ? 'unset' : 'set' })
+      } else {
+        const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
+        if (!orderId) throw new Error('缺少订单ID')
+        await markGuestCheckedOutByOrder(token, { order_id: orderId, action: checkedOutAt ? 'unset' : 'set' })
+      }
       Alert.alert(t('common_ok'), checkedOutAt ? '已取消退房' : '已标记退房，已通知清洁人员')
     } catch (e: any) {
       await patchWorkTaskItem(taskId, { checked_out_at: checkedOutAt || null } as any)
@@ -369,7 +490,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                 </View>
               ) : null}
               <View style={styles.pill}>
-                <Text style={styles.pillText}>{status || '-'}</Text>
+                <Text style={styles.pillText}>{statusLabelZh(status, task)}</Text>
               </View>
             </View>
           </View>
@@ -379,23 +500,6 @@ export default function ManagerDailyTaskScreen(props: Props) {
               {property?.code || task.title}
             </Text>
           </View>
-          {property?.address ? <Text style={styles.addr}>{property.address}</Text> : null}
-          <View style={styles.kvRow}>
-            <Text style={styles.kvLabel}>清洁状态</Text>
-            <Text style={styles.kvValue}>{cleaningStatus || '-'}</Text>
-          </View>
-          <View style={styles.kvRow}>
-            <Text style={styles.kvLabel}>检查状态</Text>
-            <Text style={styles.kvValue}>{inspectionStatus || '-'}</Text>
-          </View>
-          <View style={styles.kvRow}>
-            <Text style={styles.kvLabel}>执行人员</Text>
-            <Text style={styles.kvValue}>{`${String((task as any)?.cleaner_name || '-')}`}</Text>
-          </View>
-          <View style={styles.kvRow}>
-            <Text style={styles.kvLabel}>检查人员</Text>
-            <Text style={styles.kvValue}>{`${isSelfComplete ? '无' : String((task as any)?.inspector_name || '-')}`}</Text>
-          </View>
         </View>
 
         <View style={styles.card}>
@@ -404,24 +508,27 @@ export default function ManagerDailyTaskScreen(props: Props) {
             {!isCustomerService ? <Text style={styles.mutedSmall}>仅客服可编辑</Text> : null}
           </View>
           {isHistoricalTask ? <Text style={styles.mutedSmall}>历史任务仅可修改需挂钥匙套数；时间、密码、客需不可修改</Text> : null}
-          {isCustomerService ? (
-            <Pressable
-              onPress={onToggleCheckedOut}
-              disabled={marking || isHistoricalTask}
-              style={({ pressed }) => [styles.checkoutBtn, pressed ? styles.pressed : null, marking || isHistoricalTask ? styles.checkoutBtnDisabled : null]}
-            >
-              <Text style={styles.checkoutText}>{marking ? t('common_loading') : checkedOutAt ? '取消已退房' : '标记已退房'}</Text>
-            </Pressable>
-          ) : null}
-          <View style={styles.field}>
-            <Text style={styles.label}>退房时间</Text>
-            <TextInput value={checkoutTime} onChangeText={setCheckoutTime} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="例如 10am" placeholderTextColor="#9CA3AF" />
+          <View style={styles.row2Compact}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>退房时间</Text>
+              <TextInput value={checkoutTime} onChangeText={setCheckoutTime} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="例如 11am" placeholderTextColor="#9CA3AF" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>入住时间</Text>
+              <TextInput value={checkinTime} onChangeText={setCheckinTime} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="例如 2pm" placeholderTextColor="#9CA3AF" />
+            </View>
           </View>
-          <View style={styles.field}>
-            <Text style={styles.label}>入住时间</Text>
-            <TextInput value={checkinTime} onChangeText={setCheckinTime} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="例如 3pm" placeholderTextColor="#9CA3AF" />
+          <View style={styles.row2Compact}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>旧密码</Text>
+              <TextInput value={oldCode} onChangeText={setOldCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="旧密码" placeholderTextColor="#9CA3AF" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>新密码</Text>
+              <TextInput value={newCode} onChangeText={setNewCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="新密码" placeholderTextColor="#9CA3AF" />
+            </View>
           </View>
-          <View style={styles.field}>
+          <View style={styles.fieldCompact}>
             <Text style={styles.label}>需挂钥匙套数</Text>
             <View style={styles.pillsRow}>
               <Pressable
@@ -446,17 +553,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
               </Pressable>
             </View>
           </View>
-          <View style={styles.row2}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>旧密码</Text>
-              <TextInput value={oldCode} onChangeText={setOldCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="旧密码" placeholderTextColor="#9CA3AF" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>新密码</Text>
-              <TextInput value={newCode} onChangeText={setNewCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="新密码" placeholderTextColor="#9CA3AF" />
-            </View>
-          </View>
-          <View style={styles.field}>
+          <View style={styles.fieldCompact}>
             <Text style={styles.label}>客人特殊需求</Text>
             <TextInput
               value={guestNote}
@@ -533,16 +630,72 @@ export default function ManagerDailyTaskScreen(props: Props) {
         ) : null}
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>房间检查照片</Text>
+          <Text style={styles.sectionTitle}>清洁现场照片</Text>
+          {photosLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
+          <View style={styles.mediaStack}>
+            <View style={styles.mediaSection}>
+              <Text style={styles.columnTitle}>客厅照片</Text>
+              {livingRoomPhotoUrl ? (
+                <Pressable
+                  onPress={() => {
+                    setViewerUrl(livingRoomPhotoUrl)
+                    setViewerOpen(true)
+                  }}
+                  style={({ pressed }) => [styles.fullWidthMediaCard, pressed ? styles.pressed : null]}
+                >
+                  <Image source={{ uri: toAbsoluteUrl(livingRoomPhotoUrl) }} style={styles.fullWidthImg} />
+                </Pressable>
+              ) : (
+                <Text style={styles.mutedSmall}>暂无</Text>
+              )}
+            </View>
+            <View style={styles.mediaSection}>
+              <Text style={styles.columnTitle}>遥控器照片</Text>
+              {remoteTvPhotoUrl || remoteAcPhotoUrl ? (
+                <View style={styles.grid}>
+                  {remoteTvPhotoUrl ? (
+                    <Pressable
+                      onPress={() => {
+                        setViewerUrl(remoteTvPhotoUrl)
+                        setViewerOpen(true)
+                      }}
+                      style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
+                    >
+                      <Image source={{ uri: toAbsoluteUrl(remoteTvPhotoUrl) }} style={styles.gridImg} />
+                      <Text style={styles.mediaLabel}>电视遥控器</Text>
+                    </Pressable>
+                  ) : null}
+                  {remoteAcPhotoUrl ? (
+                    <Pressable
+                      onPress={() => {
+                        setViewerUrl(remoteAcPhotoUrl)
+                        setViewerOpen(true)
+                      }}
+                      style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
+                    >
+                      <Image source={{ uri: toAbsoluteUrl(remoteAcPhotoUrl) }} style={styles.gridImg} />
+                      <Text style={styles.mediaLabel}>空调遥控器</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : (
+                <Text style={styles.mutedSmall}>暂无</Text>
+              )}
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>清洁完成照片</Text>
           {photosLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
           {roomPhotosByArea.map((g) => (
-            <View key={g.area} style={styles.group}>
+            <View key={`completion-${g.area}`} style={styles.group}>
               <Text style={styles.groupTitle}>{AREA_LABEL[g.area] || g.area}</Text>
-              {g.items.length ? (
+              {g.cleanerItems.length ? (
                 <View style={styles.grid}>
-                  {g.items.map((x, idx) => (
+                  {g.cleanerItems.map((x, idx) => (
                     <Pressable
-                      key={`${x.url}-${idx}`}
+                      key={`cleaner-${g.area}-${x.url}-${idx}`}
                       onPress={() => {
                         setViewerUrl(x.url)
                         setViewerOpen(true)
@@ -558,6 +711,90 @@ export default function ManagerDailyTaskScreen(props: Props) {
               )}
             </View>
           ))}
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>检查照片</Text>
+          {photosLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
+          {roomPhotosByArea.map((g) => (
+            <View key={`inspection-${g.area}`} style={styles.group}>
+              <Text style={styles.groupTitle}>{AREA_LABEL[g.area] || g.area}</Text>
+              {g.inspectorItems.length ? (
+                <View style={styles.grid}>
+                  {g.inspectorItems.map((x, idx) => (
+                    <Pressable
+                      key={`inspector-${g.area}-${x.url}-${idx}`}
+                      onPress={() => {
+                        setViewerUrl(x.url)
+                        setViewerOpen(true)
+                      }}
+                      style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
+                    >
+                      <Image source={{ uri: toAbsoluteUrl(x.url) }} style={styles.gridImg} />
+                    </Pressable>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.mutedSmall}>暂无</Text>
+              )}
+            </View>
+          ))}
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>补品照片记录</Text>
+          {photosLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
+          {restockItems.length || consumablePhotoRecords.length || restockProofs.length ? (
+            restockItems.map((item, idx) => {
+              const itemId = String(item?.item_id || '').trim()
+              const label = String(item?.label || itemId || `补品 ${idx + 1}`).trim()
+              const cleanerRow = consumablePhotoRecords.find((x) => x.item_id === itemId) || null
+              const cleanerPhotoUrl = String(cleanerRow?.photo_url || item?.photo_url || '').trim()
+              const inspectorProof = restockProofs.find((x) => x.item_id === itemId) || null
+              const inspectorPhotoUrl = String(inspectorProof?.proof_url || '').trim()
+              return (
+                <View key={`${itemId || label}-${idx}`} style={styles.group}>
+                  <Text style={styles.groupTitle}>{label}</Text>
+                  <View style={styles.mediaStack}>
+                    <View style={styles.mediaSection}>
+                      <Text style={styles.columnTitle}>清洁拍的</Text>
+                      {cleanerPhotoUrl ? (
+                        <Pressable
+                          onPress={() => {
+                            setViewerUrl(cleanerPhotoUrl)
+                            setViewerOpen(true)
+                          }}
+                          style={({ pressed }) => [styles.fullWidthMediaCard, pressed ? styles.pressed : null]}
+                        >
+                          <Image source={{ uri: toAbsoluteUrl(cleanerPhotoUrl) }} style={styles.fullWidthImg} />
+                        </Pressable>
+                      ) : (
+                        <Text style={styles.mutedSmall}>暂无</Text>
+                      )}
+                    </View>
+                    <View style={styles.mediaSection}>
+                      <Text style={styles.columnTitle}>检查补拍</Text>
+                      {inspectorPhotoUrl ? (
+                        <Pressable
+                          onPress={() => {
+                            setViewerUrl(inspectorPhotoUrl)
+                            setViewerOpen(true)
+                          }}
+                          style={({ pressed }) => [styles.fullWidthMediaCard, pressed ? styles.pressed : null]}
+                        >
+                          <Image source={{ uri: toAbsoluteUrl(inspectorPhotoUrl) }} style={styles.fullWidthImg} />
+                        </Pressable>
+                      ) : (
+                        <Text style={styles.mutedSmall}>暂无</Text>
+                      )}
+                    </View>
+                  </View>
+                </View>
+              )
+            })
+          ) : (
+            <Text style={styles.mutedSmall}>暂无补品照片记录</Text>
+          )}
         </View>
       </ScrollView>
 
@@ -611,11 +848,13 @@ const styles = StyleSheet.create({
   muted: { color: '#6B7280', fontWeight: '700' },
   mutedSmall: { marginTop: 8, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   field: { marginTop: 10 },
+  fieldCompact: { marginTop: 8 },
   label: { color: '#111827', fontWeight: '900', marginBottom: 8 },
   input: { height: 44, borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, fontWeight: '800', color: '#111827' },
   inputDisabled: { backgroundColor: '#F3F4F6', color: '#9CA3AF' },
   textarea: { height: 84, paddingTop: 12, textAlignVertical: 'top' },
   row2: { marginTop: 10, flexDirection: 'row', gap: 10 },
+  row2Compact: { marginTop: 8, flexDirection: 'row', gap: 10 },
   pillsRow: { flexDirection: 'row', gap: 10 },
   pillBtn: { flex: 1, height: 40, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   pillBtnOn: { backgroundColor: '#EFF6FF', borderColor: '#DBEAFE' },
@@ -641,6 +880,11 @@ const styles = StyleSheet.create({
 
   group: { marginTop: 12, paddingTop: 12, borderTopWidth: hairline(), borderTopColor: '#EEF0F6' },
   groupTitle: { color: '#111827', fontWeight: '900' },
+  mediaStack: { marginTop: 10, gap: 12 },
+  mediaSection: { minWidth: 0 },
+  columnTitle: { color: '#6B7280', fontWeight: '800', fontSize: 12, marginBottom: 8 },
+  fullWidthMediaCard: { borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
+  fullWidthImg: { width: '100%', height: 180, backgroundColor: '#F3F4F6' },
   grid: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   gridItem: { width: '48%', borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   gridImg: { width: '100%', height: 160, backgroundColor: '#F3F4F6' },

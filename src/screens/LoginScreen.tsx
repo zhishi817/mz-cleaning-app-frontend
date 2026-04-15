@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Alert, Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useAuth } from '../lib/auth'
@@ -8,12 +8,17 @@ import type { AuthStackParamList } from '../navigation/RootNavigator'
 type Props = NativeStackScreenProps<AuthStackParamList, 'Login'>
 
 export default function LoginScreen(props: Props) {
-  const { signIn, isSigningIn } = useAuth()
+  const { signIn, isSigningIn, authIssue, clearAuthIssue } = useAuth()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [errors, setErrors] = useState<{ username?: string; password?: string }>({})
 
   const canSubmit = useMemo(() => !!username.trim() && !!password.trim() && !isSigningIn, [isSigningIn, password, username])
+
+  useEffect(() => {
+    if (!authIssue) return
+    Alert.alert('登录已失效', authIssue, [{ text: '确定', onPress: clearAuthIssue }])
+  }, [authIssue, clearAuthIssue])
 
   async function onSubmit() {
     const { username: u, password: p, errors: e } = validateLoginForm({ username, password })
@@ -46,6 +51,10 @@ export default function LoginScreen(props: Props) {
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="email-address"
+            textContentType="username"
+            autoComplete="username"
+            importantForAutofill="yes"
+            returnKeyType="next"
             style={[styles.input, errors.username ? styles.inputError : null]}
             editable={!isSigningIn}
           />
@@ -62,6 +71,11 @@ export default function LoginScreen(props: Props) {
             }}
             placeholder="请输入密码"
             secureTextEntry
+            textContentType="password"
+            autoComplete="password"
+            importantForAutofill="yes"
+            returnKeyType="done"
+            onSubmitEditing={onSubmit}
             style={[styles.input, errors.password ? styles.inputError : null]}
             editable={!isSigningIn}
           />
