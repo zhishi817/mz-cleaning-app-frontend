@@ -1,8 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { forgotPasswordApi, loginApi, meApi } from './api'
+import { forgotPasswordApi, loginApi, meApi, unregisterExpoPushToken } from './api'
 import { API_BASE_URL, LOCAL_LOGIN_ENABLED, LOCAL_LOGIN_PASSWORD, LOCAL_LOGIN_ROLE, LOCAL_LOGIN_USERNAME } from '../config/env'
 import {
   clearAuthToken,
+  clearRememberedLogin,
   clearStoredUser,
   getAuthToken,
   getStoredUser,
@@ -10,6 +11,8 @@ import {
   setStoredUser,
   type StoredUser,
 } from './authStorage'
+import { subscribeAuthInvalidated } from './authEvents'
+import { clearRegisteredExpoPushToken, getRegisteredExpoPushToken } from './pushTokenStorage'
 
 type AuthStatus = 'booting' | 'signedOut' | 'signedIn'
 
@@ -21,6 +24,8 @@ type AuthContextValue = {
   signOut: () => Promise<void>
   requestPasswordReset: (params: { email: string }) => Promise<void>
   isSigningIn: boolean
+  authIssue: string | null
+  clearAuthIssue: () => void
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -38,13 +43,31 @@ export function AuthProvider(props: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null)
   const [user, setUser] = useState<StoredUser | null>(null)
   const [isSigningIn, setIsSigningIn] = useState(false)
+  const [authIssue, setAuthIssue] = useState<string | null>(null)
 
-  const signOut = useCallback(async () => {
+  const signOutInternal = useCallback(async (reason: 'manual' | 'session_expired' = 'manual') => {
+    const currentToken = token
+    try {
+      const expoPushToken = await getRegisteredExpoPushToken()
+      if (currentToken && expoPushToken) await unregisterExpoPushToken(currentToken, { expo_push_token: expoPushToken })
+    } catch {}
+    try {
+      await clearRegisteredExpoPushToken()
+    } catch {}
     await clearAuthToken()
     await clearStoredUser()
     setToken(null)
     setUser(null)
     setStatus('signedOut')
+    setAuthIssue(reason === 'session_expired' ? '登录已过期，请重新登录' : null)
+  }, [token])
+
+  const signOut = useCallback(async () => {
+    await signOutInternal('manual')
+  }, [signOutInternal])
+
+  const clearAuthIssue = useCallback(() => {
+    setAuthIssue(null)
   }, [])
 
   const bootstrap = useCallback(async () => {
@@ -78,19 +101,24 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         setToken(t)
         setUser(remote)
         setStatus('signedIn')
+        setAuthIssue(null)
       } catch {
-        if (u) await clearStoredUser()
-        await clearAuthToken()
-        setStatus('signedOut')
+        await signOutInternal('session_expired')
       }
     } catch {
       setStatus('signedOut')
     }
-  }, [])
+  }, [signOutInternal])
 
   useEffect(() => {
     bootstrap()
   }, [bootstrap])
+
+  useEffect(() => {
+    return subscribeAuthInvalidated(() => {
+      signOutInternal('session_expired').catch(() => null)
+    })
+  }, [signOutInternal])
 
   const signIn = useCallback(async (params: { username: string; password: string }) => {
     try {
@@ -102,9 +130,11 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         const localToken = localTokenFor(localUser.username)
         await setAuthToken(localToken)
         await setStoredUser(localUser)
+        await clearRememberedLogin()
         setToken(localToken)
         setUser(localUser)
         setStatus('signedIn')
+        setAuthIssue(null)
         return
       }
       if (!API_BASE_URL && canUseLocalLogin()) {
@@ -114,9 +144,11 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       const remoteUser = await meApi(newToken)
       await setAuthToken(newToken)
       await setStoredUser(remoteUser)
+      await clearRememberedLogin()
       setToken(newToken)
       setUser(remoteUser)
       setStatus('signedIn')
+      setAuthIssue(null)
     } finally {
       setIsSigningIn(false)
     }
@@ -136,8 +168,10 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       signOut,
       requestPasswordReset,
       isSigningIn,
+      authIssue,
+      clearAuthIssue,
     }),
-    [isSigningIn, signIn, signOut, requestPasswordReset, status, token, user],
+    [authIssue, clearAuthIssue, isSigningIn, signIn, signOut, requestPasswordReset, status, token, user],
   )
 
   return <AuthContext.Provider value={value}>{props.children}</AuthContext.Provider>

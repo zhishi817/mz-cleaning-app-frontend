@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react'
-import { Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Alert, Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useAuth } from '../lib/auth'
 import { validateLoginForm } from '../lib/validators'
@@ -8,12 +8,17 @@ import type { AuthStackParamList } from '../navigation/RootNavigator'
 type Props = NativeStackScreenProps<AuthStackParamList, 'Login'>
 
 export default function LoginScreen(props: Props) {
-  const { signIn, isSigningIn } = useAuth()
+  const { signIn, isSigningIn, authIssue, clearAuthIssue } = useAuth()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [errors, setErrors] = useState<{ username?: string; password?: string }>({})
 
   const canSubmit = useMemo(() => !!username.trim() && !!password.trim() && !isSigningIn, [isSigningIn, password, username])
+
+  useEffect(() => {
+    if (!authIssue) return
+    Alert.alert('登录已失效', authIssue, [{ text: '确定', onPress: clearAuthIssue }])
+  }, [authIssue, clearAuthIssue])
 
   async function onSubmit() {
     const { username: u, password: p, errors: e } = validateLoginForm({ username, password })
@@ -29,8 +34,10 @@ export default function LoginScreen(props: Props) {
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.page}>
       <View style={styles.card}>
-        <Text style={styles.title}>MZStay 线下应用</Text>
-        <Text style={styles.subTitle}>请使用后台创建的账号登录</Text>
+        <View style={styles.header}>
+          <Image source={require('../../assets/icon.png')} style={styles.logo} />
+          <Text style={styles.brandTitle}>MZ Cleaning</Text>
+        </View>
 
         <View style={styles.field}>
           <Text style={styles.label}>用户名 / 手机号</Text>
@@ -44,6 +51,10 @@ export default function LoginScreen(props: Props) {
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="email-address"
+            textContentType="username"
+            autoComplete="username"
+            importantForAutofill="yes"
+            returnKeyType="next"
             style={[styles.input, errors.username ? styles.inputError : null]}
             editable={!isSigningIn}
           />
@@ -60,6 +71,11 @@ export default function LoginScreen(props: Props) {
             }}
             placeholder="请输入密码"
             secureTextEntry
+            textContentType="password"
+            autoComplete="password"
+            importantForAutofill="yes"
+            returnKeyType="done"
+            onSubmitEditing={onSubmit}
             style={[styles.input, errors.password ? styles.inputError : null]}
             editable={!isSigningIn}
           />
@@ -96,7 +112,20 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E6E9F2',
   },
-  title: {
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  logo: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: '#0B0B0B',
+  },
+  brandTitle: {
+    marginLeft: 12,
     fontSize: 22,
     fontWeight: '700',
     color: '#111827',

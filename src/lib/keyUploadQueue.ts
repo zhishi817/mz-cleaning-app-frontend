@@ -6,6 +6,9 @@ type QueueItem = {
   id: string
   cleaning_task_id: string
   local_uri: string
+  property_code?: string
+  captured_at?: string
+  watermark_text?: string
   created_at: string
 }
 
@@ -41,13 +44,22 @@ async function ensurePersistedUri(sourceUri: string) {
   return target.uri
 }
 
-export async function enqueueKeyUpload(params: { cleaning_task_id: string; source_uri: string }) {
+export async function enqueueKeyUpload(params: {
+  cleaning_task_id: string
+  source_uri: string
+  property_code?: string
+  captured_at?: string
+  watermark_text?: string
+}) {
   const local_uri = await ensurePersistedUri(params.source_uri)
   const q = await loadQueue()
   const item: QueueItem = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     cleaning_task_id: String(params.cleaning_task_id),
     local_uri,
+    property_code: params.property_code ? String(params.property_code) : undefined,
+    captured_at: params.captured_at ? String(params.captured_at) : undefined,
+    watermark_text: params.watermark_text ? String(params.watermark_text) : undefined,
     created_at: new Date().toISOString(),
   }
   q.push(item)
@@ -73,8 +85,18 @@ export async function processKeyUploadQueue(token: string) {
       try {
         const uri = String(item.local_uri || '').trim()
         if (!uri) continue
-        const up = await uploadCleaningMedia(token, { uri, name: 'key.jpg', mimeType: 'image/jpeg' })
-        await startCleaningTask(token, String(item.cleaning_task_id), { media_url: up.url })
+        const up = await uploadCleaningMedia(
+          token,
+          { uri, name: 'key.jpg', mimeType: 'image/jpeg' },
+          {
+            purpose: 'key_photo',
+            watermark: item.watermark_text ? '1' : '',
+            watermark_text: item.watermark_text || '',
+            property_code: item.property_code || '',
+            captured_at: item.captured_at || '',
+          },
+        )
+        await startCleaningTask(token, String(item.cleaning_task_id), { media_url: up.url, captured_at: item.captured_at || undefined })
         processed++
         try {
           new File(uri).delete()

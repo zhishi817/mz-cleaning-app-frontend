@@ -33,6 +33,10 @@ export default function InfoCenterDetailScreen(props: Props) {
 
   const meta = useMemo(() => {
     if (params.kind === 'secret') return { icon: 'key-outline' as const, bg: '#EFF6FF', fg: '#2563EB' }
+    if (params.kind === 'task') return { icon: 'time-outline' as const, bg: '#FEF3C7', fg: '#D97706' }
+    if (params.kind === 'announcement') return { icon: 'megaphone-outline' as const, bg: '#FEF3C7', fg: '#D97706' }
+    if (params.kind === 'guide') return { icon: 'book-outline' as const, bg: '#DBEAFE', fg: '#2563EB' }
+    if (params.kind === 'warehouse_guide') return { icon: 'home-outline' as const, bg: '#DCFCE7', fg: '#16A34A' }
     return { icon: 'home-outline' as const, bg: '#F3F4F6', fg: '#374151' }
   }, [params.kind])
 
@@ -117,4 +121,3 @@ const styles = StyleSheet.create({
   actionText: { color: '#FFFFFF', fontWeight: '800' },
   pressed: { opacity: 0.92 },
 })
-

@@ -1,16 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Image, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Dimensions, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
 import * as ImagePicker from 'expo-image-picker'
-import { ResizeMode, Video } from 'expo-av'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { getWorkTasksSnapshot, subscribeWorkTasks, type WorkTaskItem } from '../../lib/workTasksStore'
+import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, refreshWorkTasksFromServer, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
-import { markGuestCheckedOut, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadCleaningVideo, uploadLockboxVideo, uploadMzappMedia } from '../../lib/api'
+import { deleteKeyPhoto, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadMzappMedia } from '../../lib/api'
 import { enqueueKeyUpload } from '../../lib/keyUploadQueue'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
@@ -19,6 +19,8 @@ function statusLabel(status: string) {
   const s = String(status || '').trim().toLowerCase()
   if (s === 'done' || s === 'completed') return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
   if (s === 'to_inspect') return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+  if (s === 'to_hang_keys') return { text: '待挂钥匙', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+  if (s === 'to_complete') return { text: '待完成', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
   if (s === 'keys_hung') return { text: '已挂钥匙', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
   if (s === 'in_progress') return { text: '进行中', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
   if (s === 'assigned') return { text: '已分配', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
@@ -26,16 +28,30 @@ function statusLabel(status: string) {
   return { text: '待处理', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
 }
 
-function statusLabelForTask(task: WorkTaskItem) {
+function statusLabelForTask(task: WorkTaskItem, roleNames: string[]) {
   const s = String(task.status || '').trim().toLowerCase()
   const meta = statusLabel(s)
   const source = String(task.source_type || '').trim().toLowerCase()
   const kind = String(task.task_kind || '').trim().toLowerCase()
   if (source === 'cleaning_tasks' && kind === 'cleaning') {
+    const isCleanerView = isCleanerRole(roleNames)
+    const inspectionStatus = String((task as any).inspection_status || '').trim().toLowerCase()
+    const hasInspection = Array.isArray((task as any).inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
+    if (isCleaningWorkSubmitted(s)) {
+      if (isCleanerView) return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
+      if (hasInspection || inspectionStatus) {
+        if (inspectionStatus === 'keys_hung' || inspectionStatus === 'done' || inspectionStatus === 'completed') {
+          return { text: '已挂钥匙', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
+        }
+        return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+      }
+      return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
+    }
     const checkedOutAt = String((task as any).checked_out_at || '').trim()
-    if (s !== 'in_progress' && s !== 'done' && s !== 'completed' && s !== 'cancelled' && s !== 'canceled') {
+    if (s === 'in_progress' || s === 'cleaning') return { text: '进行中', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
+    if (s !== 'cancelled' && s !== 'canceled') {
       if (checkedOutAt) return { text: '已退房', pill: styles.statusPurple, textStyle: styles.statusTextPurple }
-      return { text: '待清洁', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+      return { text: '已分配', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
     }
   }
   return meta
@@ -81,14 +97,95 @@ function stripPhotoLines(text: any) {
   return lines.join('\n').trim()
 }
 
-function pad2(n: number) {
-  return String(n).padStart(2, '0')
+function isManagerRole(role: string) {
+  const r = String(role || '').trim()
+  return r === 'admin' || r === 'offline_manager' || r === 'customer_service'
+}
+
+function roleNamesOf(user: any) {
+  const values = Array.isArray(user?.roles) ? user.roles : []
+  const ids: string[] = values.map((x: any) => String(x || '').trim()).filter(Boolean)
+  const primary = String(user?.role || '').trim()
+  if (primary) ids.unshift(primary)
+  return Array.from(new Set(ids))
+}
+
+function isCleanerRole(roleNames: string[]) {
+  return roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector')
+}
+
+function ymd(d: Date) {
+  const pad2 = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+
+function addDays(d: Date, days: number) {
+  const nd = new Date(d)
+  nd.setDate(nd.getDate() + days)
+  return nd
+}
+
+function isBeforeToday(taskDate0: any) {
+  const taskDate = String(taskDate0 || '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(taskDate)) return false
+  return taskDate < ymd(new Date())
+}
+
+function isCleaningWorkSubmitted(status0: any) {
+  const s = String(status0 || '').trim().toLowerCase()
+  return ['cleaned', 'restock_pending', 'restocked', 'to_inspect', 'to_hang_keys', 'keys_hung', 'done', 'completed', 'ready'].includes(s)
+}
+
+function checkoutTaskIdsFromTask(task: WorkTaskItem | null) {
+  if (!task || task.source_type !== 'cleaning_tasks') return []
+  return Array.from(
+    new Set(
+      [
+        ...(Array.isArray((task as any)?.cleaning_task_ids) ? (task as any).cleaning_task_ids : []),
+        ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
+        (task as any)?.source_id,
+      ]
+        .map((x) => String(x || '').trim())
+        .filter(Boolean),
+    ),
+  )
+}
+
+function parseTimeMinutes(value: any) {
+  const raw = String(value || '').trim().toLowerCase()
+  if (!raw) return null
+  const s = raw.replace(/\s+/g, '')
+  const m12 = s.match(/^(\d{1,2})(?::(\d{1,2}))?(am|pm)$/)
+  if (m12) {
+    let hour = Number(m12[1] || 0)
+    const minute = Number(m12[2] || 0)
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute < 0 || minute > 59) return null
+    hour = hour % 12
+    if (m12[3] === 'pm') hour += 12
+    return hour * 60 + minute
+  }
+  const m24 = s.match(/^(\d{1,2})(?::(\d{1,2}))?$/)
+  if (m24) {
+    const hour = Number(m24[1] || 0)
+    const minute = Number(m24[2] || 0)
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null
+    return hour * 60 + minute
+  }
+  return null
+}
+
+function isEarlyCheckinTime(value: any) {
+  const mins = parseTimeMinutes(value)
+  return mins != null && mins < 15 * 60
 }
 
 export default function TaskDetailScreen(props: Props) {
   const { t } = useI18n()
   const { user, token } = useAuth()
+  const roleNames = useMemo(() => roleNamesOf(user), [user])
+  const insets = useSafeAreaInsets()
   const [hasInit, setHasInit] = useState(false)
+  const [resolvingRemote, setResolvingRemote] = useState(false)
   const [, bump] = useState(0)
   const id = props.route.params.id
   const action = props.route.params.action
@@ -98,8 +195,11 @@ export default function TaskDetailScreen(props: Props) {
   const [deferReason, setDeferReason] = useState('')
   const [showUnfinished, setShowUnfinished] = useState(false)
   const [localKeyPhotoUrl, setLocalKeyPhotoUrl] = useState<string | null>(null)
-  const [lockboxLocalUrl, setLockboxLocalUrl] = useState<string | null>(null)
-  const [lockboxUploading, setLockboxUploading] = useState(false)
+  const [keyUploading, setKeyUploading] = useState(false)
+  const [keyDeleting, setKeyDeleting] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [autoUploadKeyDone, setAutoUploadKeyDone] = useState(false)
+  const [checkedOutPending, setCheckedOutPending] = useState(false)
 
   useEffect(() => {
     setHasInit(true)
@@ -111,7 +211,31 @@ export default function TaskDetailScreen(props: Props) {
   }, [])
 
   const items = getWorkTasksSnapshot().items
-  const task = useMemo<WorkTaskItem | null>(() => items.find(x => x.id === id) || null, [id, items])
+  const task = useMemo<WorkTaskItem | null>(() => findWorkTaskItemByAnyId(id), [id, items])
+  const previewSize = useMemo(() => {
+    const { width, height } = Dimensions.get('window')
+    return { width, height }
+  }, [])
+
+  useEffect(() => {
+    if (!hasInit) return
+    if (task) return
+    if (!token || !user?.id) return
+    let cancelled = false
+    const view: WorkTasksView = isManagerRole(String(user?.role || '')) ? 'all' : 'mine'
+    const now = new Date()
+    const date_from = ymd(addDays(now, -45))
+    const date_to = ymd(addDays(now, 45))
+    setResolvingRemote(true)
+    refreshWorkTasksFromServer({ token, userId: String(user.id), date_from, date_to, view })
+      .catch(() => null)
+      .finally(() => {
+        if (!cancelled) setResolvingRemote(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [hasInit, id, task, token, user?.id, user?.role])
 
   async function onUploadKey() {
     if (!task) return
@@ -123,17 +247,49 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_error'), '仅清洁/检查任务支持上传钥匙')
       return
     }
-    const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 })
+    if (keyUploading) return
+    setKeyUploading(true)
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync()
+      if (!perm.granted) {
+        Alert.alert('需要相机权限', '请在系统设置中允许相机权限后再拍照', [
+          { text: '取消', style: 'cancel' },
+          { text: '去设置', onPress: () => Linking.openSettings() },
+        ])
+        return
+      }
+    } catch {}
+
+    let res: ImagePicker.ImagePickerResult
+    try {
+      res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
+    } catch (e: any) {
+      Alert.alert(t('common_error'), '无法打开相机（模拟器不支持相机拍照，请用真机测试）')
+      return
+    }
     if (res.canceled || !res.assets?.length) return
     const a = res.assets[0] as any
     const uri = String(a.uri || '').trim()
     if (!uri) return
 
+    const propertyCode = String((task as any)?.property?.code || '').trim()
+    const now = new Date()
+    const pad2 = (n: number) => String(n).padStart(2, '0')
+    const watermarkTime = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`
+    const username = String((user as any)?.username || '').trim()
+    const watermarkText = `${propertyCode || '未知房号'}  ${username || '未知用户'}\n${watermarkTime}`
+    const capturedAt = now.toISOString()
+
     try {
       const name = String(a.fileName || uri.split('/').pop() || `key-${Date.now()}.jpg`)
       const mimeType = String(a.mimeType || 'image/jpeg')
-      const up = await uploadCleaningMedia(token, { uri, name, mimeType })
-      await startCleaningTask(token, String(task.source_id), { media_url: up.url })
+      const up = await uploadCleaningMedia(
+        token,
+        { uri, name, mimeType },
+        { purpose: 'key_photo', watermark: '1', watermark_text: watermarkText, property_code: propertyCode, captured_at: capturedAt },
+      )
+      await startCleaningTask(token, String(task.source_id), { media_url: up.url, captured_at: capturedAt })
+      await patchWorkTaskItem(String(task.id), { status: 'in_progress', key_photo_url: up.url } as any)
       setLocalKeyPhotoUrl(up.url)
       Alert.alert(t('common_ok'), '钥匙上传成功')
     } catch (e: any) {
@@ -145,11 +301,40 @@ export default function TaskDetailScreen(props: Props) {
         return
       }
       try {
-        await enqueueKeyUpload({ cleaning_task_id: String(task.source_id), source_uri: uri })
+        await enqueueKeyUpload({
+          cleaning_task_id: String(task.source_id),
+          source_uri: uri,
+          property_code: propertyCode,
+          captured_at: capturedAt,
+          watermark_text: watermarkText,
+        })
         Alert.alert(t('common_ok'), '已离线保存，网络恢复后自动上传')
       } catch (e2: any) {
         Alert.alert(t('common_error'), String(e2?.message || msg))
       }
+    }
+    finally {
+      setKeyUploading(false)
+    }
+  }
+
+  async function onDeleteKey() {
+    if (!task) return
+    if (!token) {
+      Alert.alert(t('common_error'), '请先登录')
+      return
+    }
+    if (task.source_type !== 'cleaning_tasks') return
+    if (keyDeleting) return
+    setKeyDeleting(true)
+    try {
+      await deleteKeyPhoto(token, String(task.source_id))
+      setLocalKeyPhotoUrl(null)
+      Alert.alert(t('common_ok'), '已删除钥匙照片')
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '删除失败'))
+    } finally {
+      setKeyDeleting(false)
     }
   }
 
@@ -161,7 +346,7 @@ export default function TaskDetailScreen(props: Props) {
     }
     try {
       setMarking(true)
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -230,10 +415,13 @@ export default function TaskDetailScreen(props: Props) {
   useEffect(() => {
     if (!task) return
     if (action !== 'upload_key') return
+    if (autoUploadKeyDone) return
+    props.navigation.setParams({ action: undefined })
+    setAutoUploadKeyDone(true)
     ;(async () => {
       await onUploadKey()
     })()
-  }, [action, task])
+  }, [action, task, autoUploadKeyDone, props.navigation])
 
   if (!hasInit) {
     return (
@@ -246,12 +434,12 @@ export default function TaskDetailScreen(props: Props) {
   if (!task) {
     return (
       <View style={styles.page}>
-        <Text style={styles.muted}>{t('common_error')}</Text>
+        <Text style={styles.muted}>{resolvingRemote ? t('common_loading') : t('common_error')}</Text>
       </View>
     )
   }
 
-  const meta = statusLabelForTask(task)
+  const meta = statusLabelForTask(task, roleNames)
   const kind = taskKindLabel(task.task_kind)
   const region = String(task.property?.region || '').trim()
   const code = String(task.property?.code || '').trim()
@@ -271,19 +459,43 @@ export default function TaskDetailScreen(props: Props) {
     return true
   })()
   const isCleaningSource = task.source_type === 'cleaning_tasks'
+  const isCleaningOrInspection = isCleaningSource && (String(task.task_kind || '').toLowerCase() === 'cleaning' || String(task.task_kind || '').toLowerCase() === 'inspection')
+  const wifiSsid = String((task as any)?.property?.wifi_ssid || '').trim()
+  const wifiPassword = String((task as any)?.property?.wifi_password || '').trim()
+  const routerLocation = String((task as any)?.property?.router_location || '').trim()
   const hasCheckout = !!checkoutTime
   const hasCheckin = !!checkinTime
+  const isEarlyCheckin = hasCheckin && isEarlyCheckinTime(checkinTime)
   const titleSuffix = hasCheckout || hasCheckin ? `${hasCheckout ? '退房' : ''}${hasCheckout && hasCheckin ? ' ' : ''}${hasCheckin ? '入住' : ''}` : ''
   const title2 = `${title}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
   const keyPhotoUrl = String(localKeyPhotoUrl || (task as any).key_photo_url || '').trim() || null
   const lockboxVideoUrl = String((task as any).lockbox_video_url || '').trim() || null
+  const checkedOutAt = String((task as any).checked_out_at || '').trim()
+  const isCheckedOut = !!checkedOutAt
+  const taskDate = String(task.scheduled_date || task.date || '').trim()
+  const isHistoricalTask = isBeforeToday(taskDate)
+  const keyTagsRaw = (task as any)?.key_tags
+  const keyTags = keyTagsRaw && typeof keyTagsRaw === 'object' ? keyTagsRaw : null
+  const keysRequiredBase = Number((task as any).keys_required ?? 0)
+  const keysCheckout = Number((task as any).keys_required_checkout ?? keysRequiredBase)
+  const keysCheckin = Number((task as any).keys_required_checkin ?? keysRequiredBase)
+  const checkoutSets = keyTags
+    ? (keyTags.checkout_sets == null ? 0 : Number(keyTags.checkout_sets))
+    : (Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : 0)
+  const checkinSets = keyTags
+    ? (keyTags.checkin_sets == null ? 0 : Number(keyTags.checkin_sets))
+    : (Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : 0)
+  const showCheckout = keyTags ? keyTags.show_checkout === true : (isCleaningSource && !isCheckedOut && checkoutSets >= 2)
+  const showCheckin = keyTags ? keyTags.show_checkin === true : (isCleaningSource && checkinSets >= 2)
   const restockItems = Array.isArray((task as any).restock_items) ? ((task as any).restock_items as any[]) : []
   const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
   const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
   const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
-  const checkedOutAt = String((task as any).checked_out_at || '').trim()
-  const isCheckedOut = !!checkedOutAt
+  const inspectorAssigned = String((task as any).inspector_id || '').trim()
+  const isSelfCompleteEligible = isCleaningTask && isCheckoutTask && !inspectorAssigned
   const isCustomerService = String(user?.role || '') === 'customer_service'
+  const canDeleteKeyPhoto = (String(user?.role || '') === 'cleaner' || String(user?.role || '') === 'cleaner_inspector') && isCleaningTask
+  const isCleaningSubmitted = isCleaningTask && isCleaningWorkSubmitted(task.status)
   const showSummary = !!(task.summary && task.source_type !== 'cleaning_tasks' && !isOfflineTask)
   const isAlreadyDone = (() => {
     const s = String(task.status || '').trim().toLowerCase()
@@ -303,68 +515,11 @@ export default function TaskDetailScreen(props: Props) {
     if (t1 === title2) return null
     return t1
   })()
-  const effectiveLockboxUrl = lockboxLocalUrl || lockboxVideoUrl
-
-  async function onRecordLockboxVideo() {
-    if (!task) return
-    if (!token) {
-      Alert.alert(t('common_error'), '请先登录')
-      return
-    }
-    if (!isInspectionTask) {
-      Alert.alert(t('common_error'), '仅检查任务支持上传挂钥匙视频')
-      return
-    }
-    try {
-      setLockboxUploading(true)
-      const res = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-        videoExportPreset: ImagePicker.VideoExportPreset.HEVC_1920x1080,
-        videoMaxDuration: 30,
-        quality: ImagePicker.UIImagePickerControllerQualityType.High,
-      })
-      if (res.canceled || !res.assets?.length) return
-      const a = res.assets[0] as any
-      const uri = String(a.uri || '').trim()
-      if (!uri) return
-      const name = String(a.fileName || uri.split('/').pop() || `lockbox-${Date.now()}.mov`)
-      const mimeType = String(a.mimeType || 'video/quicktime')
-      const up = await uploadCleaningVideo(token, { uri, name, mimeType })
-      setLockboxLocalUrl(up.url)
-      Alert.alert(t('common_ok'), '视频已上传')
-    } catch (e: any) {
-      Alert.alert(t('common_error'), String(e?.message || '上传失败'))
-    } finally {
-      setLockboxUploading(false)
-    }
-  }
-
-  async function onCompleteInspection() {
-    if (!task) return
-    if (!token) {
-      Alert.alert(t('common_error'), '请先登录')
-      return
-    }
-    if (!isInspectionTask) return
-    const u = String(effectiveLockboxUrl || '').trim()
-    if (!u) {
-      Alert.alert(t('common_error'), '请先上传挂钥匙视频')
-      return
-    }
-    try {
-      setLockboxUploading(true)
-      await uploadLockboxVideo(token, String(task.source_id), { media_url: u })
-      Alert.alert(t('common_ok'), '已挂钥匙')
-      props.navigation.goBack()
-    } catch (e: any) {
-      Alert.alert(t('common_error'), String(e?.message || '提交失败'))
-    } finally {
-      setLockboxUploading(false)
-    }
-  }
+  const effectiveLockboxUrl = lockboxVideoUrl
 
   return (
-    <ScrollView style={styles.page} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+    <>
+      <ScrollView style={styles.page} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <View style={styles.card}>
         <View style={styles.titleRow}>
           <Text style={styles.title}>{title2}</Text>
@@ -377,6 +532,26 @@ export default function TaskDetailScreen(props: Props) {
           <View style={styles.tag}>
             <Text style={styles.tagText}>{kind}</Text>
           </View>
+          {showCheckout ? (
+            <View style={styles.tagKey}>
+              <Text style={styles.tagKeyText}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
+            </View>
+          ) : null}
+                    {showCheckin ? (
+                      <View style={styles.tagWarn}>
+                        <Text style={styles.tagWarnText}>{`需挂${checkinSets}套钥匙`}</Text>
+                      </View>
+                    ) : null}
+                    {isEarlyCheckin ? (
+                      <View style={styles.tagWarn}>
+                        <Text style={styles.tagWarnText}>早入住</Text>
+                      </View>
+                    ) : null}
+          {isSelfCompleteEligible ? (
+            <View style={styles.tag}>
+              <Text style={styles.tagText}>自完成</Text>
+            </View>
+          ) : null}
           {showUrgency ? (
             <View style={styles.tagGray}>
               <Text style={styles.tagGrayText}>{String(task.urgency).toUpperCase()}</Text>
@@ -388,6 +563,13 @@ export default function TaskDetailScreen(props: Props) {
             </View>
           ) : null}
         </View>
+
+        {isSelfCompleteEligible ? (
+          <View style={styles.row}>
+            <Ionicons name="person-outline" size={moderateScale(14)} color="#9CA3AF" />
+            <Text style={styles.rowText}>检查人员：无</Text>
+          </View>
+        ) : null}
 
         {task.property?.address ? (
           <Pressable
@@ -405,6 +587,27 @@ export default function TaskDetailScreen(props: Props) {
             <Text style={styles.rowText}>{task.property.address}</Text>
             <Ionicons name="copy-outline" size={moderateScale(14)} color="#9CA3AF" />
           </Pressable>
+        ) : null}
+
+        {isCleaningOrInspection ? (
+          <>
+            <Pressable
+              onPress={async () => {
+                if (!wifiPassword) return
+                try {
+                  await Clipboard.setStringAsync(wifiPassword)
+                  Alert.alert(t('common_ok'), 'Wi‑Fi 密码已复制')
+                } catch {
+                  Alert.alert(t('common_error'), '复制失败')
+                }
+              }}
+              style={({ pressed }) => [styles.row, pressed ? styles.pressed : null]}
+            >
+              <Ionicons name="wifi-outline" size={moderateScale(14)} color="#9CA3AF" />
+              <Text style={styles.rowText}>{`Wi‑Fi：${wifiSsid || '-'}  密码：${wifiPassword || '-'}`}</Text>
+              {wifiPassword ? <Ionicons name="copy-outline" size={moderateScale(14)} color="#9CA3AF" /> : null}
+            </Pressable>
+          </>
         ) : null}
 
         <View style={styles.row}>
@@ -458,119 +661,71 @@ export default function TaskDetailScreen(props: Props) {
           </View>
         )}
 
-        {isCleaningTask && keyPhotoUrl ? (
+        {isCleaningSource && keyPhotoUrl ? (
           <>
             <View style={styles.line} />
             <Text style={styles.sectionTitle}>钥匙照片</Text>
             <Pressable
-              onPress={async () => {
-                try {
-                  await Linking.openURL(keyPhotoUrl)
-                } catch {
-                  Alert.alert(t('common_error'), '打开失败')
-                }
-              }}
+              onPress={() => setPreviewUrl(keyPhotoUrl)}
               style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
             >
-              <Image source={{ uri: keyPhotoUrl }} style={styles.photo} />
+              <Image source={{ uri: keyPhotoUrl }} style={styles.photo} resizeMode="contain" />
             </Pressable>
+            {canDeleteKeyPhoto ? (
+              <Pressable
+                onPress={() =>
+                  Alert.alert('确认删除？', '删除后需要重新上传钥匙照片。', [
+                    { text: '取消', style: 'cancel' },
+                    { text: '删除', style: 'destructive', onPress: onDeleteKey },
+                  ])
+                }
+                disabled={keyDeleting}
+                style={({ pressed }) => [styles.dangerBtn, pressed ? styles.pressed : null, keyDeleting ? styles.actionBtnDisabled : null]}
+              >
+                <Text style={styles.dangerText}>{keyDeleting ? '删除中...' : '删除钥匙照片'}</Text>
+              </Pressable>
+            ) : null}
           </>
         ) : null}
 
-        {isInspectionTask ? (
-          <>
-            <View style={styles.line} />
-            <Text style={styles.sectionTitle}>待补消耗品</Text>
-            {restockItems.length ? (
-              <View style={styles.restockWrap}>
-                {restockItems.map((it, idx) => (
-                  <View key={`${String(it.item_id || idx)}`} style={styles.restockItem}>
-                    <Text style={styles.restockTitle} numberOfLines={2}>{`${String(it.label || it.item_id || '').trim()}${it.qty ? ` ×${it.qty}` : ''}`}</Text>
-                    {it.note ? <Text style={styles.restockNote} numberOfLines={2}>{String(it.note)}</Text> : null}
-                    {it.photo_url ? (
-                      <Pressable
-                        onPress={async () => {
-                          try {
-                            await Linking.openURL(String(it.photo_url))
-                          } catch {
-                            Alert.alert(t('common_error'), '打开失败')
-                          }
-                        }}
-                        style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
-                      >
-                        <Image source={{ uri: String(it.photo_url) }} style={styles.photo} />
-                      </Pressable>
-                    ) : null}
-                  </View>
-                ))}
-              </View>
-            ) : (
-              <Text style={styles.mutedSmall}>无待补消耗品</Text>
-            )}
-
-            <View style={styles.actionsRow}>
-              <Pressable
-                onPress={() => props.navigation.navigate('RepairForm', { taskId: task.id })}
-                style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
-              >
-                <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-              </Pressable>
-            </View>
-
-            <View style={styles.line} />
-            <Text style={styles.sectionTitle}>挂钥匙视频</Text>
-            {effectiveLockboxUrl ? (
-              <View style={styles.photoWrap}>
-                <Video
-                  source={{ uri: String(effectiveLockboxUrl) }}
-                  style={styles.videoInline}
-                  resizeMode={ResizeMode.CONTAIN}
-                  shouldPlay={false}
-                  useNativeControls
-                />
-              </View>
-            ) : (
-              <Text style={styles.mutedSmall}>未上传</Text>
-            )}
-            <Pressable
-              onPress={onRecordLockboxVideo}
-              disabled={lockboxUploading}
-              style={({ pressed }) => [styles.markBtn, pressed ? styles.pressed : null, lockboxUploading ? styles.markBtnDisabled : null]}
-            >
-              <Text style={styles.markBtnText}>拍摄并上传挂钥匙视频</Text>
-            </Pressable>
-            <Pressable
-              onPress={onCompleteInspection}
-              disabled={lockboxUploading}
-              style={({ pressed }) => [styles.markPrimary, { marginTop: 12 }, pressed ? styles.pressed : null, lockboxUploading ? styles.markBtnDisabled : null]}
-            >
-              <Text style={styles.markPrimaryText}>标记已挂钥匙</Text>
-            </Pressable>
-          </>
-        ) : isCleaningTask ? (
+        {isCleaningTask ? (
           <View style={styles.actionsRow}>
             {isCustomerService ? (
               <>
                 {isCheckoutTask ? (
                   <Pressable
                     onPress={async () => {
+                      if (isHistoricalTask) return
                       if (!token) return
+                      const nextCheckedOutAt = isCheckedOut ? null : new Date().toISOString()
                       try {
-                        await markGuestCheckedOut(token, String(task.source_id), { action: isCheckedOut ? 'unset' : 'set' })
+                        setCheckedOutPending(true)
+                        const taskIds = checkoutTaskIdsFromTask(task)
+                        await patchWorkTaskItem(String(task.id), { checked_out_at: nextCheckedOutAt } as any)
+                        if (taskIds.length) {
+                          await markGuestCheckedOutByTasks(token, { task_ids: taskIds, action: isCheckedOut ? 'unset' : 'set' })
+                        } else {
+                          const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
+                          if (!orderId) throw new Error('缺少订单ID')
+                          await markGuestCheckedOutByOrder(token, { order_id: orderId, action: isCheckedOut ? 'unset' : 'set' })
+                        }
                         Alert.alert(t('common_ok'), isCheckedOut ? '已取消退房' : '已标记已退房')
                         props.navigation.goBack()
                       } catch (e: any) {
+                        await patchWorkTaskItem(String(task.id), { checked_out_at: checkedOutAt || null } as any)
                         Alert.alert(t('common_error'), String(e?.message || '提交失败'))
+                      } finally {
+                        setCheckedOutPending(false)
                       }
                     }}
-                    disabled={!token}
-                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, isCheckedOut ? styles.actionBtnDisabled : null]}
+                    disabled={!token || isHistoricalTask || checkedOutPending}
+                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, isCheckedOut || isHistoricalTask || checkedOutPending ? styles.actionBtnDisabled : null]}
                   >
-                    <Text style={[styles.actionText, isCheckedOut ? { color: '#6B7280' } : null]}>{isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
+                    <Text style={[styles.actionText, isCheckedOut || isHistoricalTask || checkedOutPending ? { color: '#6B7280' } : null]}>{checkedOutPending ? '提交中...' : isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
                   </Pressable>
                 ) : null}
                 <Pressable
-                  onPress={() => props.navigation.navigate('RepairForm', { taskId: task.id })}
+                  onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
                   style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
                 >
                   <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
@@ -578,20 +733,24 @@ export default function TaskDetailScreen(props: Props) {
               </>
             ) : (
               <>
-                <Pressable onPress={onUploadKey} style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}>
-                  <Text style={styles.actionText}>{t('tasks_btn_upload_key')}</Text>
+                <Pressable
+                  onPress={onUploadKey}
+                  disabled={keyUploading || isCleaningSubmitted || !!keyPhotoUrl}
+                  style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, (keyUploading || !!keyPhotoUrl) ? styles.actionBtnDisabled : null]}
+                >
+                  <Text style={styles.actionText}>{keyUploading ? t('common_loading') : (isCleaningSubmitted || !!keyPhotoUrl ? '钥匙记录' : t('tasks_btn_upload_key'))}</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => props.navigation.navigate('RepairForm', { taskId: task.id })}
+                  onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
                   style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
                 >
                   <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => props.navigation.navigate('SuppliesForm', { taskId: task.id })}
+                  onPress={() => props.navigation.navigate(isSelfCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)}
                   style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
                 >
-                  <Text style={styles.actionText}>补品填报</Text>
+                  <Text style={styles.actionText}>{isCleaningSubmitted ? '补品记录' : (isSelfCompleteEligible ? '补充与完成' : '补品填报')}</Text>
                 </Pressable>
               </>
             )}
@@ -607,16 +766,10 @@ export default function TaskDetailScreen(props: Props) {
             </Pressable>
             {effectiveMarkPhotoUrl ? (
               <Pressable
-                onPress={async () => {
-                  try {
-                    await Linking.openURL(String(effectiveMarkPhotoUrl))
-                  } catch {
-                    Alert.alert(t('common_error'), '打开失败')
-                  }
-                }}
+                onPress={() => setPreviewUrl(String(effectiveMarkPhotoUrl))}
                 style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
               >
-                <Image source={{ uri: String(effectiveMarkPhotoUrl) }} style={styles.photo} />
+                <Image source={{ uri: String(effectiveMarkPhotoUrl) }} style={styles.photo} resizeMode="contain" />
               </Pressable>
             ) : null}
 
@@ -684,6 +837,34 @@ export default function TaskDetailScreen(props: Props) {
         ) : null}
       </View>
     </ScrollView>
+    <Modal visible={!!previewUrl} transparent animationType="fade" onRequestClose={() => setPreviewUrl(null)}>
+      <Pressable style={styles.previewBackdrop} onPress={() => setPreviewUrl(null)}>
+        <Pressable style={styles.previewCard} onPress={() => {}}>
+          <View style={[styles.previewTopRow, { paddingTop: Math.max(10, insets.top) }]}>
+            <Pressable onPress={() => setPreviewUrl(null)} style={({ pressed }) => [styles.previewCloseBtn, pressed ? styles.pressed : null]}>
+              <Text style={styles.previewCloseText}>关闭</Text>
+            </Pressable>
+          </View>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={styles.previewScrollContent}
+            maximumZoomScale={3}
+            minimumZoomScale={1}
+            showsVerticalScrollIndicator={false}
+            showsHorizontalScrollIndicator={false}
+            bounces={false}
+            centerContent
+          >
+            {previewUrl ? (
+              <View style={{ width: previewSize.width, height: Math.max(240, previewSize.height - insets.top - insets.bottom - 80) }}>
+                <Image source={{ uri: previewUrl }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+              </View>
+            ) : null}
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
+    </>
   )
 }
 
@@ -710,12 +891,18 @@ const styles = StyleSheet.create({
   tagText: { fontSize: 11, fontWeight: '900', color: '#2563EB' },
   tagGray: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   tagGrayText: { fontSize: 11, fontWeight: '800', color: '#6B7280' },
+  tagKey: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
+  tagKeyText: { fontSize: 11, fontWeight: '900', color: '#B91C1C' },
+  tagWarn: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FFFBEB', borderWidth: hairline(), borderColor: '#FDE68A', alignItems: 'center', justifyContent: 'center' },
+  tagWarnText: { fontSize: 11, fontWeight: '900', color: '#B45309' },
   row: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 6 },
   rowText: { flex: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600' },
   actionsRow: { marginTop: 14, flexDirection: 'row', gap: 10 },
   actionBtn: { flex: 1, height: 36, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   actionBtnDisabled: { backgroundColor: '#E5E7EB' },
   actionText: { fontWeight: '900', color: '#FFFFFF', fontSize: 13 },
+  dangerBtn: { marginTop: 10, height: 36, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
+  dangerText: { fontWeight: '900', color: '#B91C1C', fontSize: 13 },
   line: { marginTop: 14, height: hairline(), backgroundColor: '#EEF0F6' },
   sectionTitle: { marginTop: 14, fontSize: 13, fontWeight: '900', color: '#111827' },
   summary: { marginTop: 8, color: '#374151', fontWeight: '700', lineHeight: 18 },
@@ -741,4 +928,10 @@ const styles = StyleSheet.create({
   restockTitle: { color: '#111827', fontWeight: '900' },
   restockNote: { marginTop: 6, color: '#6B7280', fontWeight: '700' },
   videoInline: { width: '100%', height: moderateScale(220), backgroundColor: '#0B0F17' },
+  previewBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.86)', padding: 12, justifyContent: 'center' },
+  previewCard: { flex: 1, borderRadius: 16, overflow: 'hidden', backgroundColor: '#000000' },
+  previewTopRow: { minHeight: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'flex-end', paddingHorizontal: 10 },
+  previewCloseBtn: { height: 32, paddingHorizontal: 12, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
+  previewCloseText: { color: '#FFFFFF', fontWeight: '900' },
+  previewScrollContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
 })

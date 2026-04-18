@@ -1,11 +1,18 @@
-import React from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Platform, View } from 'react-native'
-import { NavigationContainer } from '@react-navigation/native'
+import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { Ionicons } from '@expo/vector-icons'
+import * as Notifications from 'expo-notifications'
+import Constants from 'expo-constants'
 import { useAuth } from '../lib/auth'
 import { useI18n } from '../lib/i18n'
+import { findWorkTaskItemByAnyId, getWorkTasksSnapshot } from '../lib/workTasksStore'
+import { getNoticesSnapshot, initNoticesStore, prependNotice, subscribeNotices, upsertNotices } from '../lib/noticesStore'
+import { listInboxNotifications, registerExpoPushToken } from '../lib/api'
+import { resolveNoticeCreatedAt } from '../lib/noticeTime'
+import { setRegisteredExpoPushToken } from '../lib/pushTokenStorage'
 import LoginScreen from '../screens/LoginScreen'
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen'
 import TasksScreen from '../screens/tabs/TasksScreen'
@@ -19,8 +26,13 @@ import ProfileEditScreen from '../screens/me/ProfileEditScreen'
 import AccountScreen from '../screens/me/AccountScreen'
 import ChangePasswordScreen from '../screens/me/ChangePasswordScreen'
 import TaskDetailScreen from '../screens/tasks/TaskDetailScreen'
-import RepairFormScreen from '../screens/tasks/RepairFormScreen'
+import FeedbackFormScreen from '../screens/tasks/FeedbackFormScreen'
 import SuppliesFormScreen from '../screens/tasks/SuppliesFormScreen'
+import InspectionPanelScreen from '../screens/tasks/InspectionPanelScreen'
+import InspectionCompleteScreen from '../screens/tasks/InspectionCompleteScreen'
+import CleaningSelfCompleteScreen from '../screens/tasks/CleaningSelfCompleteScreen'
+import ManagerDailyTaskScreen from '../screens/tasks/ManagerDailyTaskScreen'
+import DayEndBackupKeysScreen from '../screens/tasks/DayEndBackupKeysScreen'
 
 export type AuthStackParamList = {
   Login: undefined
@@ -44,14 +56,27 @@ const MeStack = createNativeStackNavigator<MeStackParamList>()
 export type TasksStackParamList = {
   TasksList: undefined
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
-  RepairForm: { taskId: string }
+  InspectionPanel: { taskId: string }
+  InspectionComplete: { taskId: string }
+  CleaningSelfComplete: { taskId: string }
+  ManagerDailyTask: { taskId: string }
+  DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; overviewMode?: boolean; overviewUsers?: Array<{ userId: string; userName: string; roles: string[]; roomCodes: string[]; complete: boolean | null }> }
+  FeedbackForm: { taskId: string }
   SuppliesForm: { taskId: string }
 }
 
 export type NoticesStackParamList = {
   NoticesList: undefined
   NoticeDetail: { id: string }
-  InfoCenterDetail: { kind: 'property' | 'secret'; title: string; subtitle?: string; body?: string; url?: string | null; copyText?: string | null; secretId?: string }
+  InfoCenterDetail: { kind: 'property' | 'secret' | 'task' | 'announcement' | 'guide' | 'warehouse_guide'; title: string; subtitle?: string; body?: string; url?: string | null; copyText?: string | null; secretId?: string }
+  TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
+  InspectionPanel: { taskId: string }
+  InspectionComplete: { taskId: string }
+  CleaningSelfComplete: { taskId: string }
+  ManagerDailyTask: { taskId: string }
+  DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; overviewMode?: boolean; overviewUsers?: Array<{ userId: string; userName: string; roles: string[]; roomCodes: string[]; complete: boolean | null }> }
+  FeedbackForm: { taskId: string }
+  SuppliesForm: { taskId: string }
 }
 
 export type ContactsStackParamList = {
@@ -64,6 +89,60 @@ export type MeStackParamList = {
   ProfileEdit: undefined
   Account: undefined
   ChangePassword: undefined
+}
+
+function pickTaskRouteIdFromNoticeData(data0: any) {
+  const data = data0 && typeof data0 === 'object' ? data0 : {}
+  const taskIds = Array.isArray((data as any).task_ids) ? (data as any).task_ids : []
+  const firstTaskId = String(taskIds[0] || '').trim()
+  if (firstTaskId) return firstTaskId
+  const taskId = String((data as any).task_id || '').trim()
+  if (taskId) return taskId
+  const entity = String((data as any).entity || '').trim()
+  const entityId = String((data as any).entityId || (data as any).entity_id || '').trim()
+  if ((entity === 'cleaning_task' || entity === 'work_task') && entityId) return entityId
+  return ''
+}
+
+function resolveTaskNoticeNavigation(params: { taskRouteId: string; role: string }) {
+  const role = String(params.role || '').trim()
+  const task = findWorkTaskItemByAnyId(params.taskRouteId)
+  const isCleaningTask = String(task?.source_type || '').trim() === 'cleaning_tasks'
+  const isInspection = isCleaningTask && String(task?.task_kind || '').trim() === 'inspection'
+  const isManager = role === 'admin' || role === 'offline_manager' || role === 'customer_service'
+  const isInspector = role === 'cleaning_inspector' || role === 'cleaner_inspector'
+  if (isManager && isCleaningTask) return { screen: 'ManagerDailyTask', params: { taskId: params.taskRouteId } }
+  if (isInspector && isInspection) return { screen: 'InspectionPanel', params: { taskId: params.taskRouteId } }
+  return { screen: 'TaskDetail', params: { id: params.taskRouteId } }
+}
+
+function formatIncomingNotice(title0: string, body0: string, data0: any) {
+  const data = data0 && typeof data0 === 'object' ? data0 : {}
+  const kind = String(data?.kind || '').trim()
+  const propertyCode = String(data?.property_code || '').trim()
+  const photoUrl = String(data?.photo_url || '').trim()
+  const photoUrls = Array.isArray(data?.photo_urls) ? data.photo_urls.map((item: any) => String(item || '').trim()).filter(Boolean) : []
+  if (kind !== 'key_photo_uploaded') {
+    const summary = body0.split('\n')[0]?.slice(0, 60) || body0.slice(0, 60) || '通知'
+    const contentLines = [body0 || title0 || '通知']
+    if (kind === 'inspection_complete' && propertyCode && !/^房源[:：]/.test(contentLines[0] || '')) contentLines.unshift(`房源：${propertyCode}`)
+    if ((photoUrl || photoUrls.length) && kind === 'inspection_complete') {
+      contentLines.push(`照片数：${photoUrls.length || 1}`)
+    }
+    return {
+      title: title0 || '通知',
+      summary,
+      content: contentLines.filter(Boolean).join('\n'),
+    }
+  }
+  const title = propertyCode ? `钥匙已上传：${propertyCode}` : (title0 || '钥匙已上传')
+  const lines = [propertyCode ? `房源：${propertyCode}` : '', body0 || '清洁员已上传钥匙照片', photoUrl ? `照片：${photoUrl}` : ''].filter(Boolean)
+  const content = lines.join('\n')
+  return {
+    title,
+    summary: propertyCode ? `房源：${propertyCode}` : (body0 || '清洁员已上传钥匙照片'),
+    content,
+  }
 }
 
 function BootScreen() {
@@ -89,10 +168,51 @@ function TasksStackNavigator() {
     <TasksStack.Navigator screenOptions={{ headerTitleAlign: 'center' }}>
       <TasksStack.Screen name="TasksList" component={TasksScreen} options={{ headerShown: false, title: t('tabs_tasks') }} />
       <TasksStack.Screen name="TaskDetail" component={TaskDetailScreen} options={{ title: t('task_detail_title') }} />
-      <TasksStack.Screen name="RepairForm" component={RepairFormScreen} options={{ title: t('tasks_btn_repair') }} />
+      <TasksStack.Screen name="InspectionPanel" component={InspectionPanelScreen} options={{ title: '检查与补充' }} />
+      <TasksStack.Screen name="InspectionComplete" component={InspectionCompleteScreen} options={{ title: '标记已完成' }} />
+      <TasksStack.Screen name="CleaningSelfComplete" component={CleaningSelfCompleteScreen} options={{ title: '补充与完成' }} />
+      <TasksStack.Screen name="ManagerDailyTask" component={ManagerDailyTaskScreen} options={{ title: '每日清洁' }} />
+      <TasksStack.Screen name="DayEndBackupKeys" component={DayEndBackupKeysScreen} options={{ title: '日终交接' }} />
+      <TasksStack.Screen name="FeedbackForm" component={FeedbackFormScreen} options={{ title: t('tasks_btn_repair') }} />
       <TasksStack.Screen name="SuppliesForm" component={SuppliesFormScreen} options={{ title: '补品填报' }} />
     </TasksStack.Navigator>
   )
+}
+
+function shouldShowTaskNoticeForCurrentUser(data: any, user: any) {
+  const role = String(user?.role || '').trim()
+  if (role === 'admin' || role === 'offline_manager' || role === 'customer_service') return true
+  const uid = String(user?.id || '').trim()
+  if (!uid) return true
+  const kind = String(data?.kind || '').trim()
+  const taskIds = Array.from(
+    new Set(
+      [
+        ...(Array.isArray(data?.task_ids) ? data.task_ids : []),
+        data?.task_id,
+        data?.entityId,
+        data?.entity_id,
+      ]
+        .map((x) => String(x || '').trim())
+        .filter(Boolean),
+    ),
+  )
+  if (!taskIds.length) return true
+  if (!['guest_checked_out', 'guest_checked_out_cancelled', 'key_photo_uploaded', 'cleaning_task_manager_fields_updated', 'key_photo_deleted'].includes(kind)) return true
+  const items = getWorkTasksSnapshot().items || []
+  const matches = taskIds
+    .map((id) => findWorkTaskItemByAnyId(id) || items.find((it: any) => String(it?.source_id || '').trim() === id) || null)
+    .filter(Boolean) as any[]
+  if (!matches.length) return false
+  return matches.some((task) => {
+    const taskKind = String(task?.task_kind || '').trim().toLowerCase()
+    const assigneeId = String(task?.assignee_id || '').trim()
+    const cleanerId = String(task?.cleaner_id || '').trim()
+    const inspectorId = String(task?.inspector_id || '').trim()
+    if (taskKind === 'inspection') return assigneeId === uid || inspectorId === uid
+    if (taskKind === 'cleaning') return assigneeId === uid || cleanerId === uid
+    return assigneeId === uid
+  })
 }
 
 function NoticesStackNavigator() {
@@ -100,8 +220,16 @@ function NoticesStackNavigator() {
   return (
     <NoticesStack.Navigator screenOptions={{ headerTitleAlign: 'center' }}>
       <NoticesStack.Screen name="NoticesList" component={NoticesScreen} options={{ headerShown: false, title: t('notices_title') }} />
-      <NoticesStack.Screen name="NoticeDetail" component={NoticeDetailScreen} options={{ title: t('notices_title') }} />
-      <NoticesStack.Screen name="InfoCenterDetail" component={InfoCenterDetailScreen} options={{ title: t('notices_title') }} />
+      <NoticesStack.Screen name="NoticeDetail" component={NoticeDetailScreen} options={{ title: t('notices_title'), animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="InfoCenterDetail" component={InfoCenterDetailScreen} options={{ title: t('notices_title'), animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="TaskDetail" component={TaskDetailScreen} options={{ title: t('task_detail_title'), animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="InspectionPanel" component={InspectionPanelScreen} options={{ title: '检查与补充', animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="InspectionComplete" component={InspectionCompleteScreen} options={{ title: '标记已完成', animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="CleaningSelfComplete" component={CleaningSelfCompleteScreen} options={{ title: '补充与完成', animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="ManagerDailyTask" component={ManagerDailyTaskScreen} options={{ title: '每日清洁', animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="DayEndBackupKeys" component={DayEndBackupKeysScreen} options={{ title: '日终交接', animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="FeedbackForm" component={FeedbackFormScreen} options={{ title: t('tasks_btn_repair'), animation: 'slide_from_right' }} />
+      <NoticesStack.Screen name="SuppliesForm" component={SuppliesFormScreen} options={{ title: '补品填报', animation: 'slide_from_right' }} />
     </NoticesStack.Navigator>
   )
 }
@@ -130,6 +258,27 @@ function MeStackNavigator() {
 
 function AppTabs() {
   const { t } = useI18n()
+  const [unreadNotices, setUnreadNotices] = useState(0)
+
+  useEffect(() => {
+    let unsub: (() => void) | null = null
+    let alive = true
+    ;(async () => {
+      await initNoticesStore().catch(() => null)
+      if (!alive) return
+      const update = () => {
+        const n = Object.keys(getNoticesSnapshot().unreadIds || {}).length
+        setUnreadNotices(n)
+      }
+      update()
+      unsub = subscribeNotices(update)
+    })()
+    return () => {
+      alive = false
+      if (unsub) unsub()
+    }
+  }, [])
+
   return (
     <Tabs.Navigator
       screenOptions={({ route }) => ({
@@ -161,7 +310,14 @@ function AppTabs() {
                   : focused
                     ? 'person'
                     : 'person-outline'
-          return <Ionicons name={name as any} size={s} color={color} />
+          const icon = <Ionicons name={name as any} size={s} color={color} />
+          if (route.name !== 'Notices') return icon
+          return (
+            <View style={{ width: s, height: s }}>
+              {icon}
+              {unreadNotices > 0 ? <View style={styles.noticeTabDot} /> : null}
+            </View>
+          )
         },
       })}
     >
@@ -186,11 +342,207 @@ function AppTabs() {
 }
 
 export default function RootNavigator() {
-  const { status } = useAuth()
+  const { status, token, user } = useAuth()
+  const navRef = useNavigationContainerRef<any>()
+  const pushAskedRef = useRef(false)
+  const pushListenerRef = useRef<any>(null)
+  const pushResponseListenerRef = useRef<any>(null)
+  const statusRef = useRef(status)
+  const tokenRef = useRef(token)
+  const userRef = useRef(user)
+
+  useEffect(() => {
+    statusRef.current = status
+    tokenRef.current = token
+    userRef.current = user
+    if (status !== 'signedIn') pushAskedRef.current = false
+  }, [status, token, user])
+
+  async function registerForPush() {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+      }),
+    })
+    const { status } = await Notifications.requestPermissionsAsync()
+    if (status !== 'granted') return
+    const projectId =
+      String((Constants as any)?.expoConfig?.extra?.eas?.projectId || '') ||
+      String((Constants as any)?.easConfig?.projectId || '') ||
+      ''
+    let expoPushToken = ''
+    try {
+      const r = projectId ? await Notifications.getExpoPushTokenAsync({ projectId }) : await Notifications.getExpoPushTokenAsync()
+      expoPushToken = String((r as any)?.data || '').trim()
+    } catch {
+      const r = await Notifications.getExpoPushTokenAsync()
+      expoPushToken = String((r as any)?.data || '').trim()
+    }
+    if (!expoPushToken) return
+    try {
+      if (!token) return
+      await registerExpoPushToken(token, { expo_push_token: expoPushToken, platform: Platform.OS, ua: `mzstay/${String((Constants as any)?.expoConfig?.version || '')}` })
+      await setRegisteredExpoPushToken(expoPushToken)
+    } catch {}
+  }
+
+  useEffect(() => {
+    if (pushAskedRef.current) return
+    if (status !== 'signedIn') return
+    if (!token) return
+    pushAskedRef.current = true
+    registerForPush().catch(() => null)
+  }, [status, token, user?.id])
+
+  useEffect(() => {
+    if (pushListenerRef.current || pushResponseListenerRef.current) return
+    pushListenerRef.current = Notifications.addNotificationReceivedListener((n) => {
+      ;(async () => {
+        try {
+          if (statusRef.current !== 'signedIn' || !tokenRef.current || !String(userRef.current?.id || '').trim()) return
+          await initNoticesStore()
+          const title = String(n?.request?.content?.title || '').trim() || '通知'
+          const body = String(n?.request?.content?.body || '').trim()
+          const data: any = n?.request?.content?.data || {}
+          const kind = String(data?.kind || '').trim()
+          const propertyCode = String(data?.property_code || '').trim()
+          const checkedOutAt = String(data?.checked_out_at || '').trim()
+          const eventId = String(data?.event_id || '').trim()
+          const fieldsKey = String(data?.fields_key || '').trim()
+          const reqId = String((n as any)?.request?.identifier || '').trim()
+          const formatted = formatIncomingNotice(title, body, data)
+          if (!shouldShowTaskNoticeForCurrentUser(data, userRef.current)) return
+          const id0 =
+            kind === 'guest_checked_out' && propertyCode && checkedOutAt
+              ? `guest_checked_out:${propertyCode}:${checkedOutAt}`
+              : kind === 'guest_checked_out_cancelled' && propertyCode
+                ? `guest_checked_out_cancelled:${propertyCode}:${checkedOutAt || ''}`
+                : kind === 'cleaning_task_manager_fields_updated' && propertyCode && fieldsKey
+                  ? `manager_fields:${propertyCode}:${fieldsKey}`
+                  : eventId || reqId || `${Date.now()}`
+          await prependNotice({
+            id: String(id0),
+            type: 'update',
+            title: formatted.title,
+            summary: formatted.summary,
+            content: formatted.content,
+            data,
+          })
+          try {
+            if (tokenRef.current) {
+              const { items } = await listInboxNotifications(tokenRef.current, { limit: 30 })
+              const list = (items || []).map((it: any) => {
+                const ch = Array.isArray(it?.changes) ? it.changes.map((v: any) => String(v || '').toLowerCase()) : []
+                const type: 'key' | 'update' = String(it?.type || '').toUpperCase().includes('KEY') || ch.includes('keys') ? 'key' : 'update'
+                return {
+                  id: String(it?.event_id || it?.id || ''),
+                  type,
+                  title: String(it?.title || '通知'),
+                  summary: String(it?.body || ''),
+                  content: String(it?.body || ''),
+                  data: { ...(it?.data && typeof it.data === 'object' ? it.data : {}), _server_id: String(it?.id || ''), event_id: String(it?.event_id || '') },
+                  createdAt: resolveNoticeCreatedAt(it?.created_at, it?.event_id, it?.id) || new Date().toISOString(),
+                  unread: !it?.read_at,
+                }
+              }).filter((it: any) => shouldShowTaskNoticeForCurrentUser(it?.data || {}, userRef.current))
+              await upsertNotices(list, { replace: true })
+            }
+          } catch {}
+        } catch {}
+      })()
+    })
+    pushResponseListenerRef.current = Notifications.addNotificationResponseReceivedListener((r) => {
+      ;(async () => {
+        try {
+          if (statusRef.current !== 'signedIn' || !tokenRef.current || !String(userRef.current?.id || '').trim()) return
+          await initNoticesStore()
+          const n: any = r?.notification
+          const title = String(n?.request?.content?.title || '').trim() || '通知'
+          const body = String(n?.request?.content?.body || '').trim()
+          const data: any = n?.request?.content?.data || {}
+          const kind = String(data?.kind || '').trim()
+          const propertyCode = String(data?.property_code || '').trim()
+          const checkedOutAt = String(data?.checked_out_at || '').trim()
+          const eventId = String(data?.event_id || '').trim()
+          const fieldsKey = String(data?.fields_key || '').trim()
+          const reqId = String(n?.request?.identifier || '').trim()
+          const formatted = formatIncomingNotice(title, body, data)
+          if (!shouldShowTaskNoticeForCurrentUser(data, userRef.current)) return
+          const id0 =
+            kind === 'guest_checked_out' && propertyCode && checkedOutAt
+              ? `guest_checked_out:${propertyCode}:${checkedOutAt}`
+              : kind === 'guest_checked_out_cancelled' && propertyCode
+                ? `guest_checked_out_cancelled:${propertyCode}:${checkedOutAt || ''}`
+                : kind === 'cleaning_task_manager_fields_updated' && propertyCode && fieldsKey
+                  ? `manager_fields:${propertyCode}:${fieldsKey}`
+                  : eventId || reqId || `${Date.now()}`
+          await prependNotice({
+            id: String(id0),
+            type: 'update',
+            title: formatted.title,
+            summary: formatted.summary,
+            content: formatted.content,
+            data,
+          })
+          try {
+            if (tokenRef.current) {
+              const { items } = await listInboxNotifications(tokenRef.current, { limit: 30 })
+              const list = (items || []).map((it: any) => {
+                const ch = Array.isArray(it?.changes) ? it.changes.map((v: any) => String(v || '').toLowerCase()) : []
+                const type: 'key' | 'update' = String(it?.type || '').toUpperCase().includes('KEY') || ch.includes('keys') ? 'key' : 'update'
+                return {
+                  id: String(it?.event_id || it?.id || ''),
+                  type,
+                  title: String(it?.title || '通知'),
+                  summary: String(it?.body || ''),
+                  content: String(it?.body || ''),
+                  data: { ...(it?.data && typeof it.data === 'object' ? it.data : {}), _server_id: String(it?.id || ''), event_id: String(it?.event_id || '') },
+                  createdAt: resolveNoticeCreatedAt(it?.created_at, it?.event_id, it?.id) || new Date().toISOString(),
+                  unread: !it?.read_at,
+                }
+              }).filter((it: any) => shouldShowTaskNoticeForCurrentUser(it?.data || {}, userRef.current))
+              await upsertNotices(list, { replace: true })
+            }
+          } catch {}
+          if (navRef.isReady()) {
+            navRef.navigate('Notices', { screen: 'NoticesList' } as any)
+            setTimeout(() => {
+              try {
+                navRef.navigate('Notices', { screen: 'NoticeDetail', params: { id: String(id0) } } as any)
+              } catch {}
+            }, 0)
+          }
+        } catch {}
+      })()
+    })
+    return () => {
+      try {
+        pushListenerRef.current?.remove?.()
+        pushResponseListenerRef.current?.remove?.()
+      } catch {}
+      pushListenerRef.current = null
+      pushResponseListenerRef.current = null
+    }
+  }, [navRef])
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navRef}>
       {status === 'booting' ? <BootScreen /> : status === 'signedIn' ? <AppTabs /> : <AuthStackNavigator />}
     </NavigationContainer>
   )
+}
+
+const styles = {
+  noticeTabDot: {
+    position: 'absolute' as const,
+    right: 0,
+    top: 0,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#EF4444',
+  },
 }

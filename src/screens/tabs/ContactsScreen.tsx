@@ -1,14 +1,15 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Linking, Pressable, SectionList, StyleSheet, Text, TextInput, View } from 'react-native'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Alert, Image, Linking, Pressable, SectionList, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
-import { listUsers } from '../../lib/api'
+import { getMyProfile, listUsers } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import { getContactsSnapshot, setContactsSnapshot, subscribeContactsSnapshot, type ContactItem } from '../../lib/contactsStore'
 import { normalizeAuMobile } from '../../lib/phone'
 import { hairline, moderateScale } from '../../lib/scale'
 import type { ContactsStackParamList } from '../../navigation/RootNavigator'
 import { useI18n } from '../../lib/i18n'
+import { API_BASE_URL } from '../../config/env'
 
 type Props = NativeStackScreenProps<ContactsStackParamList, 'ContactsList'>
 
@@ -30,6 +31,18 @@ function initials(name: string) {
   return `${a}${b}`.toUpperCase()
 }
 
+function normalizeAvatarUrl(raw: any) {
+  const s = String(raw || '').trim()
+  if (!s) return null
+  if (/^https?:\/\//i.test(s)) return s
+  if (s.startsWith('/')) {
+    const base = String(API_BASE_URL || '').trim().replace(/\/+$/g, '').replace(/\/auth\/?$/g, '').replace(/\/api\/?$/g, '')
+    if (!base) return null
+    return `${base}${s}`
+  }
+  return s
+}
+
 export default function ContactsScreen(props: Props) {
   const { t } = useI18n()
   const { token } = useAuth()
@@ -41,40 +54,67 @@ export default function ContactsScreen(props: Props) {
 
   useEffect(() => subscribeContactsSnapshot(() => setContactsSnapLocal(getContactsSnapshot())), [])
 
+  const refresh = useCallback(async () => {
+    try {
+      if (!token) {
+        setLoadError(null)
+        setHasLoaded(true)
+        return
+      }
+      const [users, me] = await Promise.all([listUsers(token), getMyProfile(token).catch(() => null)])
+      const myId = me?.id ? String(me.id).trim() : ''
+      const myAvatar = normalizeAvatarUrl(me?.avatar_url)
+      const myDisplay = String(me?.display_name || '').trim()
+
+      const sysItems: ContactItem[] = users.map((u) => {
+        const id0 = String(u.id || '').trim()
+        const isMe = !!(myId && id0 && id0 === myId)
+        const display = String((u as any).display_name || '').trim()
+        const username = String(u.username || '').trim()
+        const avatar0 = normalizeAvatarUrl((u as any).avatar_url)
+        const phone0 = (u as any).phone_au == null ? null : String((u as any).phone_au || '').trim() || null
+        return {
+          id: `user:${id0 || username || String(u.id)}`,
+          source: 'system',
+          name: (isMe ? (myDisplay || display) : display) || username || id0 || String(u.id),
+          avatar_url: isMe ? (myAvatar || avatar0) : avatar0,
+          phone_au: phone0,
+          username,
+          role: String(u.role || ''),
+        }
+      })
+      const prev = getContactsSnapshot()
+      const nextItems = [...prev.items.filter(x => x.source !== 'system'), ...sysItems]
+      const next = { items: nextItems, updated_at: Date.now() }
+      setContactsSnapshot(next)
+      setContactsSnapLocal(next)
+      setLoadError(null)
+    } catch (e: any) {
+      setLoadError(String(e?.message || '加载失败'))
+    } finally {
+      setHasLoaded(true)
+    }
+  }, [token])
+
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      try {
-        if (!token) {
-          setLoadError(null)
-          setHasLoaded(true)
-          return
-        }
-        const users = await listUsers(token)
-        if (cancelled) return
-        const sysItems: ContactItem[] = users.map(u => ({
-          id: `user:${String(u.id)}`,
-          source: 'system',
-          name: String(u.username || u.id),
-          phone_au: (u as any).phone_au == null ? null : String((u as any).phone_au || '').trim() || null,
-          username: String(u.username || ''),
-          role: String(u.role || ''),
-        }))
-        const prev = getContactsSnapshot()
-        const nextItems = [...prev.items.filter(x => x.source !== 'system'), ...sysItems]
-        const next = { items: nextItems, updated_at: Date.now() }
-        setContactsSnapshot(next)
-        setContactsSnapLocal(next)
-        setLoadError(null)
-      } catch (e: any) {
-        setLoadError(String(e?.message || '加载失败'))
-      }
-      setHasLoaded(true)
+      if (cancelled) return
+      await refresh()
     })()
     return () => {
       cancelled = true
     }
-  }, [token])
+  }, [refresh])
+
+  useEffect(() => {
+    const nav: any = props.navigation as any
+    if (!nav || typeof nav.addListener !== 'function') return
+    const unsub = nav.addListener('focus', () => {
+      refresh()
+    })
+    return unsub
+  }, [props.navigation, refresh])
 
   const allItems = useMemo(() => {
     return contactsSnap.items.filter(x => x.source === 'system')
@@ -161,9 +201,13 @@ export default function ContactsScreen(props: Props) {
               onPress={() => props.navigation.navigate('ContactDetail', { id: item.id })}
               style={({ pressed }) => [styles.row, pressed ? styles.rowPressed : null]}
             >
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{initials(item.name)}</Text>
-              </View>
+              {item.avatar_url ? (
+                <Image source={{ uri: item.avatar_url }} style={styles.avatarImg} />
+              ) : (
+                <View style={styles.avatar}>
+                  <Text style={styles.avatarText}>{initials(item.name)}</Text>
+                </View>
+              )}
               <View style={styles.rowMain}>
                 <Text style={styles.name} numberOfLines={1}>
                   {item.name}
@@ -249,6 +293,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  avatarImg: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#DBEAFE' },
   avatarText: { color: '#1D4ED8', fontWeight: '900', fontSize: 14 },
   rowMain: { flex: 1 },
   name: { fontSize: moderateScale(15), fontWeight: '900', color: '#111827' },

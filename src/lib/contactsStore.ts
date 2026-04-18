@@ -4,6 +4,7 @@ export type ContactItem = {
   id: string
   source: Source
   name: string
+  avatar_url?: string | null
   phone_au: string | null
   username: string | null
   role: string | null

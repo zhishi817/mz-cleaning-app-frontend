@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Linking, Pressable, StyleSheet, Text, View } from 'react-native'
+import { Alert, Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import { getContactsSnapshot, subscribeContactsSnapshot } from '../../lib/contactsStore'
@@ -54,9 +54,13 @@ export default function ContactDetailScreen(props: Props) {
     <View style={styles.page}>
       <View style={styles.card}>
         <View style={styles.row}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{initials(effective.name)}</Text>
-          </View>
+          {effective.avatar_url ? (
+            <Image source={{ uri: effective.avatar_url }} style={styles.avatarImg} />
+          ) : (
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{initials(effective.name)}</Text>
+            </View>
+          )}
           <View style={{ flex: 1 }}>
             <Text style={styles.name}>{effective.name}</Text>
             {effective.source === 'system' ? <Text style={styles.meta}>{`${effective.username || ''}${effective.role ? ` · ${effective.role}` : ''}`}</Text> : null}
@@ -96,6 +100,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  avatarImg: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#DBEAFE' },
   avatarText: { color: '#1D4ED8', fontWeight: '900', fontSize: 18 },
   name: { fontSize: 18, fontWeight: '900', color: '#111827' },
   meta: { marginTop: 6, color: '#6B7280', fontWeight: '700' },

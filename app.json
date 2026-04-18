@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "MZStay_app",
-    "slug": "MZStay_app",
-    "version": "1.0.0",
+    "name": "MZStay",
+    "slug": "mzstay-app",
+    "version": "1.0.14",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -13,18 +13,32 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.mzproperty.cleaning",
+      "buildNumber": "14",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "用于拍摄钥匙照片并上传到任务记录。",
+        "NSMicrophoneUsageDescription": "用于拍摄挂钥匙视频并上传到任务记录。"
+      }
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.mzproperty.cleaning"
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "1f7721fb-d570-4b01-8335-310ead68238a"
+      }
+    },
+    "plugins": ["expo-notifications"]
   }
 }

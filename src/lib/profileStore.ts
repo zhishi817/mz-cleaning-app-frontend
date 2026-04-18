@@ -4,6 +4,12 @@ export type Profile = {
   avatar_url: string | null
   display_name: string
   phone_au: string
+  legal_name: string
+  bank_account_name: string
+  bank_bsb: string
+  bank_account_number: string
+  personal_abn: string
+  photo_id_url: string | null
   owner_id?: string
   owner_username?: string
 }
@@ -28,6 +34,12 @@ export async function getProfile(owner: { id?: string | null; username?: string 
       avatar_url: legacy.avatarUri || legacy.avatar_url || null,
       display_name: legacy.name || legacy.display_name || u,
       phone_au: legacy.mobileAu || legacy.phone_au || '',
+      legal_name: legacy.legal_name || '',
+      bank_account_name: legacy.bank_account_name || '',
+      bank_bsb: legacy.bank_bsb || '',
+      bank_account_number: legacy.bank_account_number || '',
+      personal_abn: legacy.personal_abn || '',
+      photo_id_url: legacy.photo_id_url || null,
       owner_id: id,
       owner_username: u,
     }
@@ -54,5 +66,11 @@ export function defaultProfileFromUser(user: { username: string; role: string } 
     avatar_url: null,
     display_name: username || 'User',
     phone_au: '',
+    legal_name: '',
+    bank_account_name: '',
+    bank_bsb: '',
+    bank_account_number: '',
+    personal_abn: '',
+    photo_id_url: null,
   }
 }
