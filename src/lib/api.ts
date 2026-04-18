@@ -547,6 +547,58 @@ export type PropertyFeedback = {
   created_at: string
   status: 'open' | 'in_progress' | 'resolved' | 'cancelled' | 'need_replace' | 'replaced' | 'no_action'
   resolved_at?: string | null
+  completed_at?: string | null
+  review_status?: 'pending' | 'approved' | 'rejected' | null
+  repair_photo_urls?: string[] | null
+  repair_notes?: string | null
+  project_items?: PropertyFeedbackProject[] | null
+}
+
+export type PropertyFeedbackProject = {
+  id: string
+  name: string
+  area?: string | null
+  category?: string | null
+  detail?: string | null
+  note?: string | null
+  started_at?: string | null
+  ended_at?: string | null
+  duration_minutes?: number | null
+  before_photos: string[]
+  after_photos: string[]
+  status: 'open' | 'completed'
+  completed_by?: string | null
+  completed_at?: string | null
+}
+
+export type DailyNecessityOption = {
+  id: string
+  category?: string | null
+  item_name: string
+  sku?: string | null
+  unit?: string | null
+  default_quantity?: number | null
+}
+
+export async function listDailyNecessityOptions(token: string, params?: { keyword?: string; limit?: number }) {
+  const sp = new URLSearchParams()
+  if (params?.keyword) sp.set('keyword', params.keyword)
+  if (params?.limit != null) sp.set('limit', String(params.limit))
+  const qs = sp.toString()
+  const urls = buildUrlCandidates(`mzapp/daily-necessities-options${qs ? `?${qs}` : ''}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    const res = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 8000)
+    lastRes = res
+    if (res.ok) {
+      const data = (await res.json()) as any
+      if (!Array.isArray(data)) throw new Error('日用品明细返回格式不正确')
+      return data as DailyNecessityOption[]
+    }
+  }
+  const msg = lastRes ? await parseErrorMessage(lastRes) : ''
+  throw new Error(msg || '获取日用品明细失败')
 }
 
 export async function listPropertyFeedbacks(
@@ -616,6 +668,174 @@ export async function createPropertyFeedback(
   }
   const msg = lastRes ? await parseErrorMessage(lastRes) : ''
   throw new Error(msg || '提交失败')
+}
+
+export async function createPropertyFeedbackBatch(
+  token: string,
+  items: Array<
+    | {
+        kind: 'maintenance'
+        property_id: string
+        source_task_id?: string
+        area?: string
+        category?: string
+        detail?: string
+        media_urls?: string[]
+        items?: Array<{ area: string; category: string; detail: string; media_urls?: string[] }>
+      }
+    | {
+        kind: 'deep_cleaning'
+        property_id: string
+        source_task_id?: string
+        areas?: string[]
+        detail?: string
+        media_urls?: string[]
+      }
+    | {
+        kind: 'daily_necessities'
+        property_id: string
+        source_task_id?: string
+        status: 'need_replace' | 'replaced' | 'no_action'
+        item_name: string
+        quantity: number
+        note?: string
+        media_urls?: string[]
+      }
+  >,
+) {
+  const results: Array<{ ok: boolean; response?: any; error?: string }> = []
+  for (const item of items) {
+    try {
+      const response = await createPropertyFeedback(token, item as any)
+      results.push({ ok: true, response })
+    } catch (e: any) {
+      results.push({ ok: false, error: String(e?.message || '提交失败') })
+    }
+  }
+  return results
+}
+
+export async function updatePropertyFeedback(
+  token: string,
+  kind: 'maintenance' | 'deep_cleaning' | 'daily_necessities',
+  feedbackId: string,
+  params:
+    | {
+        kind?: 'maintenance'
+        area?: string
+        category?: string
+        detail?: string
+        note?: string
+        media_urls?: string[]
+        repair_photo_urls?: string[]
+      }
+    | {
+        kind?: 'deep_cleaning'
+        areas?: string[]
+        detail?: string
+        note?: string
+        media_urls?: string[]
+        repair_photo_urls?: string[]
+      }
+    | {
+        kind?: 'daily_necessities'
+        status?: 'need_replace' | 'replaced' | 'no_action'
+        item_name?: string
+        quantity?: number
+        note?: string
+        media_urls?: string[]
+      },
+) {
+  const urls = buildUrlCandidates(`mzapp/property-feedbacks/${encodeURIComponent(kind)}/${encodeURIComponent(feedbackId)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    })
+    lastRes = res
+    if (res.ok) return (await res.json()) as { ok: boolean; row?: PropertyFeedback | null }
+  }
+  const msg = lastRes ? await parseErrorMessage(lastRes) : ''
+  throw new Error(msg || '更新反馈失败')
+}
+
+export async function createPropertyFeedbackProject(
+  token: string,
+  kind: 'maintenance' | 'deep_cleaning',
+  feedbackId: string,
+  params: { name: string; area?: string; category?: string; detail?: string; note?: string },
+) {
+  const urls = buildUrlCandidates(`mzapp/property-feedbacks/${encodeURIComponent(kind)}/${encodeURIComponent(feedbackId)}/projects`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    })
+    lastRes = res
+    if (res.ok) return (await res.json()) as { ok: boolean; item: PropertyFeedbackProject; row: PropertyFeedback }
+  }
+  const msg = lastRes ? await parseErrorMessage(lastRes) : ''
+  throw new Error(msg || '新增项目失败')
+}
+
+export async function updatePropertyFeedbackProject(
+  token: string,
+  kind: 'maintenance' | 'deep_cleaning',
+  feedbackId: string,
+  projectId: string,
+  params: { name?: string; area?: string; category?: string; detail?: string; note?: string },
+) {
+  const urls = buildUrlCandidates(`mzapp/property-feedbacks/${encodeURIComponent(kind)}/${encodeURIComponent(feedbackId)}/projects/${encodeURIComponent(projectId)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    })
+    lastRes = res
+    if (res.ok) return (await res.json()) as { ok: boolean; item: PropertyFeedbackProject; row: PropertyFeedback }
+  }
+  const msg = lastRes ? await parseErrorMessage(lastRes) : ''
+  throw new Error(msg || '更新项目失败')
+}
+
+export async function completePropertyFeedbackProject(
+  token: string,
+  kind: 'maintenance' | 'deep_cleaning',
+  feedbackId: string,
+  projectId: string,
+  params: {
+    note?: string
+    detail?: string
+    source_task_id?: string
+    started_at?: string
+    ended_at?: string
+    before_photos?: string[]
+    after_photos: string[]
+  },
+) {
+  const urls = buildUrlCandidates(`mzapp/property-feedbacks/${encodeURIComponent(kind)}/${encodeURIComponent(feedbackId)}/projects/${encodeURIComponent(projectId)}/complete`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    })
+    lastRes = res
+    if (res.ok) return (await res.json()) as { ok: boolean; item: PropertyFeedbackProject; row: PropertyFeedback }
+  }
+  const msg = lastRes ? await parseErrorMessage(lastRes) : ''
+  throw new Error(msg || '提交完成失败')
 }
 
 export async function uploadCleaningMedia(

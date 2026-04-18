@@ -6,6 +6,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
+import { getJson, setJson } from '../../lib/storage'
 import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
 import { getCleaningConsumables, listChecklistItems, submitCleaningConsumables, uploadCleaningMedia, type ChecklistItem } from '../../lib/api'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
@@ -22,6 +23,11 @@ type ItemState = {
   photo_url: string | null
 }
 
+type CachedConsumablesRecord = {
+  living_room_photo_url?: string | null
+  items?: Array<{ item_id: string; qty?: number | null; note?: string | null; status?: string | null; photo_url?: string | null }>
+}
+
 const SHOWER_DRAIN_PHOTOS = [
   { id: 'shower_drain_photo_1', label: '淋浴房下水口 1' },
   { id: 'shower_drain_photo_2', label: '淋浴房下水口 2' },
@@ -33,6 +39,39 @@ const KITCHEN_REQUIRED_PHOTOS = [
   { id: 'kettle_photo', label: '烧水壶' },
   { id: 'toaster_photo', label: '面包机' },
 ] as const
+
+function buildBaseItems(list: ChecklistItem[]) {
+  return (list || []).map((it: ChecklistItem) => ({
+    id: it.id,
+    label: it.label,
+    required: !!it.required,
+    status: it.id === 'other' ? ('ok' as const) : (null as any),
+    qty: '1',
+    note: '',
+    photo_url: null,
+  }))
+}
+
+function applyExistingToItems(baseMapped: ItemState[], existingItems: any[]) {
+  const byId = new Map((existingItems || []).map((x: any) => [String(x.item_id || ''), x]))
+  return baseMapped.map((it): ItemState => {
+    const prev = byId.get(it.id)
+    if (!prev) return it
+    if (it.id === 'other') return { ...it, note: String(prev.note || '') }
+    return {
+      ...it,
+      status: (String(prev.status || '').trim() === 'low' ? 'low' : 'ok') as 'ok' | 'low',
+      qty: prev.qty != null ? String(prev.qty) : '1',
+      note: String(prev.note || ''),
+      photo_url: String(prev.photo_url || '').trim() || null,
+    }
+  })
+}
+
+const SUPPLIES_CHECKLIST_CACHE_KEY = 'supplies_checklist_v1'
+function suppliesRecordCacheKey(taskId: string) {
+  return `supplies_record_${String(taskId || '').trim()}`
+}
 
 export default function SuppliesFormScreen(props: Props) {
   const { t } = useI18n()
@@ -96,20 +135,43 @@ export default function SuppliesFormScreen(props: Props) {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
+      try {
+        const [cachedChecklist, cachedRecord] = await Promise.all([
+          getJson<ChecklistItem[]>(SUPPLIES_CHECKLIST_CACHE_KEY),
+          cleaningTaskId ? getJson<CachedConsumablesRecord>(suppliesRecordCacheKey(cleaningTaskId)) : Promise.resolve(null),
+        ])
+        if (cancelled) return
+        const baseList = Array.isArray(cachedChecklist) ? cachedChecklist : []
+        if (baseList.length) {
+          const mapped = applyExistingToItems(buildBaseItems(baseList), Array.isArray(cachedRecord?.items) ? cachedRecord?.items || [] : [])
+          setItems(mapped)
+          setHasExistingRecord(!!(cachedRecord?.items && cachedRecord.items.length))
+        }
+        const byId = new Map((Array.isArray(cachedRecord?.items) ? cachedRecord?.items : []).map((x: any) => [String(x.item_id || ''), x]))
+        const nextExtraPhotos = Object.fromEntries(
+          allRequiredScenePhotos.map((item) => [item.id, String(byId.get(item.id)?.photo_url || '').trim() || null]),
+        ) as Record<string, string | null>
+        setRemoteAcPhotoUrl(String(byId.get('remote_ac')?.photo_url || '').trim() || null)
+        setRemoteTvPhotoUrl(String(byId.get('remote_tv')?.photo_url || '').trim() || null)
+        setLivingRoomPhotoUrl(String(cachedRecord?.living_room_photo_url || '').trim() || null)
+        setExtraPhotoUrls(nextExtraPhotos)
+      } catch {}
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [allRequiredScenePhotos, cleaningTaskId])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
       if (!token) return
       try {
         setLoading(true)
         const list = await listChecklistItems(token)
         if (cancelled) return
-        const baseMapped = (list || []).map((it: ChecklistItem) => ({
-          id: it.id,
-          label: it.label,
-          required: !!it.required,
-          status: it.id === 'other' ? ('ok' as const) : (null as any),
-          qty: '1',
-          note: '',
-          photo_url: null,
-        }))
+        const baseMapped = buildBaseItems(list || [])
+        void setJson(SUPPLIES_CHECKLIST_CACHE_KEY, list || [])
         let existingItems: any[] = []
         let existingLivingRoomPhotoUrl: string | null = null
         try {
@@ -117,22 +179,10 @@ export default function SuppliesFormScreen(props: Props) {
           const existing = await getCleaningConsumables(token, cleaningTaskId)
           existingItems = Array.isArray(existing?.items) ? existing.items : []
           existingLivingRoomPhotoUrl = String(existing?.living_room_photo_url || '').trim() || null
+          void setJson(suppliesRecordCacheKey(cleaningTaskId), { living_room_photo_url: existingLivingRoomPhotoUrl, items: existingItems })
         } catch {}
         const byId = new Map(existingItems.map((x: any) => [String(x.item_id || ''), x]))
-        const mapped: ItemState[] = baseMapped.map((it) => {
-          const prev = byId.get(it.id)
-          if (!prev) return it
-          if (it.id === 'other') {
-            return { ...it, note: String(prev.note || '') }
-          }
-          return {
-            ...it,
-            status: String(prev.status || '').trim() === 'low' ? 'low' : 'ok',
-            qty: prev.qty != null ? String(prev.qty) : '1',
-            note: String(prev.note || ''),
-            photo_url: String(prev.photo_url || '').trim() || null,
-          }
-        })
+        const mapped: ItemState[] = applyExistingToItems(baseMapped, existingItems)
         const acRemote = byId.get('remote_ac')
         const tvRemote = byId.get('remote_tv')
         const nextExtraPhotos = Object.fromEntries(
@@ -439,8 +489,6 @@ export default function SuppliesFormScreen(props: Props) {
       <ScrollView style={styles.page} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {!task ? (
           <Text style={styles.muted}>{t('common_loading')}</Text>
-        ) : loading ? (
-          <Text style={styles.muted}>{t('common_loading')}</Text>
         ) : (
           <View style={styles.card}>
             <View style={styles.heroCard}>
@@ -478,6 +526,8 @@ export default function SuppliesFormScreen(props: Props) {
                   <Text style={styles.sectionHint}>逐项判断库存是否足够，不足时补数量并拍照。</Text>
                 </View>
               </View>
+              {loading && items.length ? <Text style={styles.muted}>正在同步最新补品记录…</Text> : null}
+              {loading && !items.length ? <Text style={styles.muted}>正在加载补品清单…</Text> : null}
 
               <View style={styles.itemList}>
                 {regularItems.map((it) => {
