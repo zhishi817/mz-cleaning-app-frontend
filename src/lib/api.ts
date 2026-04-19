@@ -342,13 +342,20 @@ export type WorkTask = {
   task_type?: string | null
   assignee_id: string | null
   inspector_id?: string | null
+  inspection_mode?: 'pending_decision' | 'same_day' | 'self_complete' | 'deferred' | null
+  inspection_due_date?: string | null
   status: string
   cleaning_status?: string | null
   inspection_status?: string | null
   urgency: string
+  sort_index?: number | null
   old_code?: string | null
   new_code?: string | null
   guest_special_request?: string | null
+  note?: string | null
+  completion_photo_urls?: string[] | null
+  completion_note?: string | null
+  completion_reason?: string | null
   keys_required?: number | null
   keys_required_checkout?: number | null
   keys_required_checkin?: number | null
@@ -1477,6 +1484,7 @@ export async function listCompanySecretsForApp(token: string) {
 export type CompanyContentAudienceScope = 'all_staff' | 'cleaners' | 'warehouse_staff' | 'maintenance_staff' | 'managers'
 export type CompanyContentPageType = 'announce' | 'doc' | 'warehouse'
 export type CompanyContentCategory = 'company_rule' | 'work_guide'
+export type CompanyGuideRole = 'cleaner' | 'cleaning_inspector'
 
 export type CompanyContentItem = {
   id: string
@@ -1489,6 +1497,7 @@ export type CompanyContentItem = {
   audience_scope?: CompanyContentAudienceScope | null
   page_type?: CompanyContentPageType | null
   category?: CompanyContentCategory | null
+  guide_role?: CompanyGuideRole | null
   expires_at?: string | null
   created_at?: string | null
 }
@@ -1700,6 +1709,32 @@ export async function reorderCleaningTasks(
   return (await parseJsonOrThrow(res)) as any
 }
 
+export async function reorderWorkTasks(
+  token: string,
+  params: { date: string; task_ids: string[] },
+) {
+  const task_ids = Array.from(new Set((Array.isArray(params.task_ids) ? params.task_ids : []).map((x) => String(x || '').trim()).filter(Boolean)))
+  if (!task_ids.length) throw new Error('缺少任务ID')
+  const urls = buildUrlCandidates('mzapp/work-tasks/reorder')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: params.date, task_ids }),
+      },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
 export async function uploadMzappMedia(
   token: string,
   file: { uri: string; name: string; mimeType: string },
@@ -1737,7 +1772,7 @@ export async function uploadMzappMedia(
 export async function markWorkTask(
   token: string,
   taskId: string,
-  params: { action: 'done' | 'defer'; photo_url?: string | null; note?: string | null; reason?: string | null; defer_to?: string | null },
+  params: { action: 'done' | 'defer'; photo_url?: string | null; photo_urls?: string[] | null; note?: string | null; reason?: string | null; defer_to?: string | null },
 ) {
   const urls = buildUrlCandidates(`mzapp/work-tasks/${encodeURIComponent(taskId)}/mark`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')

@@ -15,6 +15,8 @@ import type { TasksStackParamList } from '../../navigation/RootNavigator'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'InspectionComplete'>
 
+const REQUIRED_INSPECTION_AREAS = ['living', 'sofa', 'bedroom', 'kitchen'] as const
+
 function normalizeBase(base: string) {
   return String(base || '').trim().replace(/\/+$/g, '')
 }
@@ -57,13 +59,12 @@ export default function InspectionCompleteScreen(props: Props) {
       const p = await getInspectionPhotos(token, cleaningTaskId).catch(() => null)
       const needs: string[] = []
 
-      const requiredAreas = ['toilet', 'living', 'sofa', 'bedroom', 'kitchen', 'shower_drain']
       const gotAreas = new Set<string>()
       for (const it of p?.items || []) {
         const a = String(it.area || '').trim()
         if (a) gotAreas.add(a)
       }
-      const missingAreas = requiredAreas.filter(a => !gotAreas.has(a))
+      const missingAreas = REQUIRED_INSPECTION_AREAS.filter(a => !gotAreas.has(a))
       if (missingAreas.length) needs.push('关键区域照片未齐')
 
       setMissing(needs)

@@ -12,7 +12,9 @@ import { findWorkTaskItemByAnyId, getWorkTasksSnapshot } from '../lib/workTasksS
 import { getNoticesSnapshot, initNoticesStore, prependNotice, subscribeNotices, upsertNotices } from '../lib/noticesStore'
 import { listInboxNotifications, registerExpoPushToken } from '../lib/api'
 import { resolveNoticeCreatedAt } from '../lib/noticeTime'
-import { setRegisteredExpoPushToken } from '../lib/pushTokenStorage'
+import { getPushDeviceId, setRegisteredExpoPushToken } from '../lib/pushTokenStorage'
+import { isTaskManagerUser } from '../lib/roles'
+import type { CompanyGuideRole } from '../lib/api'
 import LoginScreen from '../screens/LoginScreen'
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen'
 import TasksScreen from '../screens/tabs/TasksScreen'
@@ -68,7 +70,7 @@ export type TasksStackParamList = {
 export type NoticesStackParamList = {
   NoticesList: undefined
   NoticeDetail: { id: string }
-  InfoCenterDetail: { kind: 'property' | 'secret' | 'task' | 'announcement' | 'guide' | 'warehouse_guide'; title: string; subtitle?: string; body?: string; url?: string | null; copyText?: string | null; secretId?: string }
+  InfoCenterDetail: { kind: 'property' | 'secret' | 'task' | 'announcement' | 'guide' | 'warehouse_guide'; title: string; subtitle?: string; body?: string; contentRaw?: string | null; guideRole?: CompanyGuideRole | null; url?: string | null; copyText?: string | null; secretId?: string }
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
   InspectionPanel: { taskId: string }
   InspectionComplete: { taskId: string }
@@ -180,8 +182,7 @@ function TasksStackNavigator() {
 }
 
 function shouldShowTaskNoticeForCurrentUser(data: any, user: any) {
-  const role = String(user?.role || '').trim()
-  if (role === 'admin' || role === 'offline_manager' || role === 'customer_service') return true
+  if (isTaskManagerUser(user)) return true
   const uid = String(user?.id || '').trim()
   if (!uid) return true
   const kind = String(data?.kind || '').trim()
@@ -384,7 +385,13 @@ export default function RootNavigator() {
     if (!expoPushToken) return
     try {
       if (!token) return
-      await registerExpoPushToken(token, { expo_push_token: expoPushToken, platform: Platform.OS, ua: `mzstay/${String((Constants as any)?.expoConfig?.version || '')}` })
+      const deviceId = await getPushDeviceId()
+      await registerExpoPushToken(token, {
+        expo_push_token: expoPushToken,
+        device_id: deviceId,
+        platform: Platform.OS,
+        ua: `mzstay/${String((Constants as any)?.expoConfig?.version || '')}`,
+      })
       await setRegisteredExpoPushToken(expoPushToken)
     } catch {}
   }

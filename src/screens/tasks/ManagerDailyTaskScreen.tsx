@@ -5,10 +5,12 @@ import { Ionicons } from '@expo/vector-icons'
 import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { API_BASE_URL } from '../../config/env'
+import { effectiveInspectionMode, inspectionModeLabel, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
 import { getCleaningConsumables, getCompletionPhotos, getInspectionPhotos, getRestockProof, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, updateCleaningTaskManagerFields } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { prependNotice } from '../../lib/noticesStore'
+import { hasAnyRole, hasRole } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
 import { findWorkTaskItemByAnyId, patchWorkTaskItem, refreshWorkTasksFromServer, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
@@ -71,10 +73,14 @@ function statusLabelZh(status: string, task?: WorkTaskItem | null) {
   const source = String(task?.source_type || '').trim().toLowerCase()
   const kind = String(task?.task_kind || '').trim().toLowerCase()
   if (source === 'cleaning_tasks' && kind === 'cleaning') {
+    const taskType = String((task as any)?.task_type || '').trim().toLowerCase()
+    const isStayoverTask = isStayoverTaskType(taskType)
     const inspectionStatus = String((task as any)?.inspection_status || '').trim().toLowerCase()
     const hasInspection = Array.isArray((task as any)?.inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
+    const inspectionMode = effectiveInspectionMode(task as any)
     if (isDoneLikeStatusZh(s)) {
-      if (hasInspection || inspectionStatus) {
+      if (isStayoverTask) return '已完成'
+      if (inspectionMode === 'same_day' || inspectionMode === 'deferred' || hasInspection || inspectionStatus) {
         if (inspectionStatus === 'keys_hung' || inspectionStatus === 'done' || inspectionStatus === 'completed') return '已挂钥匙'
         return '待检查'
       }
@@ -146,8 +152,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
   }, [])
 
   const task = useMemo(() => findWorkTaskItemByAnyId(props.route.params.taskId), [props.route.params.taskId, storeVersion])
-  const isCustomerService = String(user?.role || '') === 'customer_service'
-  const canSeeUnclean = String(user?.role || '') === 'admin' || String(user?.role || '') === 'offline_manager'
+  const isCustomerService = hasRole(user, 'customer_service')
+  const canSeeUnclean = hasAnyRole(user, ['admin', 'offline_manager'])
 
   const [checkoutTime, setCheckoutTime] = useState('')
   const [checkinTime, setCheckinTime] = useState('')
@@ -424,10 +430,12 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const checkedOutAt = String((task as any)?.checked_out_at || '').trim()
   const hasKeyPhoto = !!String((task as any)?.key_photo_url || '').trim()
   const lockboxUrl = String((task as any)?.lockbox_video_url || '').trim()
-  const inspectorAssigned = String((task as any)?.inspector_id || '').trim()
   const taskType = String((task as any)?.task_type || '').trim().toLowerCase()
+  const isStayoverTask = isStayoverTaskType(taskType)
   const isCheckoutLike = taskType === 'checkout_clean' || taskType === 'turnover' || !!String((task as any)?.start_time || '').trim()
-  const isSelfComplete = isCheckoutLike && !inspectorAssigned
+  const inspectionMode = effectiveInspectionMode(task as any)
+  const inspectionPlanText = inspectionModeLabel(inspectionMode, String((task as any)?.inspection_due_date || '').trim() || null)
+  const isSelfComplete = isSelfCompleteMode(task as any) && (isCheckoutLike || isStayoverTask)
   const taskDate = String((task as any)?.scheduled_date || (task as any)?.date || '').trim()
   const isHistoricalTask = isBeforeToday(taskDate)
   const canEditGeneralInfo = isCustomerService && !saving && !isHistoricalTask
@@ -484,9 +492,14 @@ export default function ManagerDailyTaskScreen(props: Props) {
           <View style={styles.headRow}>
             <Text style={styles.title}>每日清洁</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              {isSelfComplete ? (
-                <View style={[styles.pill, { backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE' }]}>
-                  <Text style={[styles.pillText, { color: '#2563EB' }]}>自完成</Text>
+              {isStayoverTask ? (
+                <View style={[styles.pill, { backgroundColor: '#ECFDF5', borderWidth: hairline(), borderColor: '#A7F3D0' }]}>
+                  <Text style={[styles.pillText, { color: '#047857' }]}>入住中清洁</Text>
+                </View>
+              ) : null}
+              {!isStayoverTask ? (
+                <View style={[styles.pill, inspectionMode === 'pending_decision' ? { backgroundColor: '#FEF3C7', borderWidth: hairline(), borderColor: '#F59E0B' } : { backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE' }]}>
+                  <Text style={[styles.pillText, inspectionMode === 'pending_decision' ? { color: '#B45309' } : { color: '#2563EB' }]}>{inspectionPlanText}</Text>
                 </View>
               ) : null}
               <View style={styles.pill}>
@@ -528,31 +541,33 @@ export default function ManagerDailyTaskScreen(props: Props) {
               <TextInput value={newCode} onChangeText={setNewCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="新密码" placeholderTextColor="#9CA3AF" />
             </View>
           </View>
-          <View style={styles.fieldCompact}>
-            <Text style={styles.label}>需挂钥匙套数</Text>
-            <View style={styles.pillsRow}>
-              <Pressable
-                onPress={() => {
-                  setKeysRequired(1)
-                  setKeysDirty(true)
-                }}
-                disabled={!canEditKeysOnly}
-                style={({ pressed }) => [styles.pillBtn, keysRequired === 1 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
-              >
-                <Text style={[styles.pillBtnText, keysRequired === 1 ? styles.pillBtnTextOn : null]}>1 套</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => {
-                  setKeysRequired(2)
-                  setKeysDirty(true)
-                }}
-                disabled={!canEditKeysOnly}
-                style={({ pressed }) => [styles.pillBtn, keysRequired === 2 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
-              >
-                <Text style={[styles.pillBtnText, keysRequired === 2 ? styles.pillBtnTextOn : null]}>2 套</Text>
-              </Pressable>
+          {!isStayoverTask ? (
+            <View style={styles.fieldCompact}>
+              <Text style={styles.label}>需挂钥匙套数</Text>
+              <View style={styles.pillsRow}>
+                <Pressable
+                  onPress={() => {
+                    setKeysRequired(1)
+                    setKeysDirty(true)
+                  }}
+                  disabled={!canEditKeysOnly}
+                  style={({ pressed }) => [styles.pillBtn, keysRequired === 1 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
+                >
+                  <Text style={[styles.pillBtnText, keysRequired === 1 ? styles.pillBtnTextOn : null]}>1 套</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    setKeysRequired(2)
+                    setKeysDirty(true)
+                  }}
+                  disabled={!canEditKeysOnly}
+                  style={({ pressed }) => [styles.pillBtn, keysRequired === 2 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
+                >
+                  <Text style={[styles.pillBtnText, keysRequired === 2 ? styles.pillBtnTextOn : null]}>2 套</Text>
+                </Pressable>
+              </View>
             </View>
-          </View>
+          ) : null}
           <View style={styles.fieldCompact}>
             <Text style={styles.label}>客人特殊需求</Text>
             <TextInput
@@ -580,6 +595,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
           </Pressable>
         </View>
 
+        {!isStayoverTask ? (
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>钥匙与挂钥匙视频</Text>
           <Text style={styles.mutedSmall}>这里展示已上传的钥匙照片、挂钥匙视频（如有）。</Text>
@@ -603,8 +619,9 @@ export default function ManagerDailyTaskScreen(props: Props) {
           ) : null}
           {!hasKeyPhoto && !lockboxUrl ? <Text style={styles.mutedSmall}>暂无钥匙照片或挂钥匙视频</Text> : null}
         </View>
+        ) : null}
 
-        {canSeeUnclean ? (
+        {canSeeUnclean && !isStayoverTask ? (
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>清洁问题照片（检查员拍摄）</Text>
             {photosLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
@@ -741,6 +758,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
           ))}
         </View>
 
+        {!isStayoverTask ? (
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>补品照片记录</Text>
           {photosLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
@@ -796,6 +814,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
             <Text style={styles.mutedSmall}>暂无补品照片记录</Text>
           )}
         </View>
+        ) : null}
       </ScrollView>
 
       <Modal

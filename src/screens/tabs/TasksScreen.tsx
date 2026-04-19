@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { reorderCleaningTasks } from '../../lib/api'
+import { reorderCleaningTasks, reorderWorkTasks } from '../../lib/api'
 import { markGuestCheckedOutByOrder, markGuestCheckedOutByTasks } from '../../lib/api'
 import { listMzappAlerts, markMzappAlertRead } from '../../lib/api'
 import { getMyProfile } from '../../lib/api'
@@ -17,6 +17,8 @@ import { processDayEndHandoverQueue } from '../../lib/dayEndHandoverQueue'
 import { processKeyUploadQueue } from '../../lib/keyUploadQueue'
 import { getNoticesSnapshot, initNoticesStore, prependNotice } from '../../lib/noticesStore'
 import { getProfile, setProfile, type Profile } from '../../lib/profileStore'
+import { effectiveInspectionMode, inspectionModeLabel, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
+import { isTaskManagerUser } from '../../lib/roles'
 import {
   activateWorkTasksRealtime,
   getWorkTasksSnapshot,
@@ -225,6 +227,22 @@ function urgencyRank(u: string) {
   return 0
 }
 
+function urgencyMeta(value: any) {
+  const s = String(value || '').trim().toLowerCase()
+  if (!s) return null
+  if (s === 'urgent') return { text: '紧急', pill: styles.urgencyUrgent, textStyle: styles.urgencyUrgentText }
+  if (s === 'high') return { text: '高优先', pill: styles.urgencyHigh, textStyle: styles.urgencyHighText }
+  if (s === 'medium') return { text: '普通', pill: styles.urgencyMedium, textStyle: styles.urgencyMediumText }
+  return { text: '低优先', pill: styles.urgencyLow, textStyle: styles.urgencyLowText }
+}
+
+function taskSortIndexValue(task: WorkTaskItem) {
+  const raw = (task as any).sort_index
+  if (raw == null) return Number.POSITIVE_INFINITY
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY
+}
+
 function statusLabel(status: string) {
   const s = String(status || '').trim().toLowerCase()
   if (s === 'done' || s === 'completed') return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
@@ -250,9 +268,10 @@ function statusLabelForTask(task: WorkTaskItem, roleNames: string[]) {
     const isCleanerView = isCleanerRole(roleNames)
     const inspectionStatus = String((task as any).inspection_status || '').trim().toLowerCase()
     const hasInspection = Array.isArray((task as any).inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
+    const inspectionMode = effectiveInspectionMode(task as any)
     if (isDoneLikeStatus(s)) {
       if (isCleanerView) return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-      if (hasInspection || inspectionStatus) {
+      if (inspectionMode === 'same_day' || inspectionMode === 'deferred' || hasInspection || inspectionStatus) {
         if (inspectionStatus === 'keys_hung' || inspectionStatus === 'done' || inspectionStatus === 'completed') {
           return { text: '已挂钥匙', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
         }
@@ -306,7 +325,7 @@ function stripPhotoLines(text: any) {
     .split('\n')
     .map((x) => String(x || '').trim())
     .filter(Boolean)
-    .filter((x) => !/^照片\s*:/i.test(x))
+    .filter((x) => !/^照片\s*\d*\s*:/i.test(x))
   return lines.join('\n').trim()
 }
 
@@ -332,6 +351,7 @@ export default function TasksScreen(props: Props) {
     return Array.from(new Set(ids))
   }, [user])
   const canManagerMode = useMemo(() => isManagerRole(roleNames), [roleNames])
+  const canTaskManagerView = useMemo(() => isTaskManagerUser(user), [user])
   const canSwitchMode = useMemo(() => {
     if (!canManagerMode) return false
     return roleNames.some((r) => !isManagerRoleName(r))
@@ -690,7 +710,12 @@ export default function TasksScreen(props: Props) {
           {
             text: '查看任务',
             onPress: () => {
-              if (workTask) props.navigation.navigate('TaskDetail', { id: workTask.id })
+              if (!workTask) return
+              if (canTaskManagerView && workTask.source_type === 'cleaning_tasks') {
+                props.navigation.navigate('ManagerDailyTask', { taskId: workTask.id })
+                return
+              }
+              props.navigation.navigate('TaskDetail', { id: workTask.id })
             },
           },
           { text: t('common_cancel') },
@@ -706,7 +731,12 @@ export default function TasksScreen(props: Props) {
         {
           text: '去上传',
           onPress: () => {
-            if (workTask) props.navigation.navigate('TaskDetail', { id: workTask.id, action: 'upload_key' })
+            if (!workTask) return
+            if (canTaskManagerView && workTask.source_type === 'cleaning_tasks') {
+              props.navigation.navigate('ManagerDailyTask', { taskId: workTask.id })
+              return
+            }
+            props.navigation.navigate('TaskDetail', { id: workTask.id, action: 'upload_key' })
           },
         },
         { text: t('common_cancel') },
@@ -841,16 +871,12 @@ export default function TasksScreen(props: Props) {
         if (aDone !== bDone) return aDone ? 1 : -1
       }
 
+      const sortDelta = taskSortIndexValue(a) - taskSortIndexValue(b)
+      if (sortDelta) return sortDelta
+
       const aIsCleaning = a.source_type === 'cleaning_tasks'
       const bIsCleaning = b.source_type === 'cleaning_tasks'
-      if (aIsCleaning && bIsCleaning) {
-        const aiRaw = (a as any).sort_index
-        const biRaw = (b as any).sort_index
-        const ai = aiRaw == null ? Number.POSITIVE_INFINITY : Number(aiRaw)
-        const bi = biRaw == null ? Number.POSITIVE_INFINITY : Number(biRaw)
-        const d = ai - bi
-        if (d) return d
-      } else {
+      if (!(aIsCleaning && bIsCleaning)) {
         const ur = urgencyRank(b.urgency) - urgencyRank(a.urgency)
         if (ur) return ur
       }
@@ -870,18 +896,19 @@ export default function TasksScreen(props: Props) {
 
   const canReorder = useMemo(() => {
     if (roleNames.includes('cleaner') || roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')) return true
-    return false
-  }, [roleNames.join('|')])
+    if (canManagerMode && mode === 'manager') return false
+    return selectedTasks.some((task) => task.source_type !== 'cleaning_tasks')
+  }, [canManagerMode, mode, selectedTasks, roleNames.join('|')])
 
   const isReorderableTask = useMemo(() => {
     return (task: WorkTaskItem) => {
-      if (task.source_type !== 'cleaning_tasks') return false
+      if (task.source_type !== 'cleaning_tasks') return !(canManagerMode && mode === 'manager')
       if (roleNames.includes('cleaner_inspector')) return task.task_kind === 'cleaning' || task.task_kind === 'inspection'
       if (roleNames.includes('cleaning_inspector')) return task.task_kind === 'inspection'
       if (roleNames.includes('cleaner')) return task.task_kind === 'cleaning'
       return false
     }
-  }, [roleNames.join('|')])
+  }, [canManagerMode, mode, roleNames.join('|')])
 
   useEffect(() => {
     if (!reorderMode) return
@@ -1027,15 +1054,13 @@ export default function TasksScreen(props: Props) {
       const ad = String(a.scheduled_date || (a as any).date || '')
       const bd = String(b.scheduled_date || (b as any).date || '')
       if (ad && bd && ad !== bd) return ad.localeCompare(bd)
+      const sortDelta = taskSortIndexValue(a) - taskSortIndexValue(b)
+      if (sortDelta) return sortDelta
       const aIsCleaning = a.source_type === 'cleaning_tasks'
       const bIsCleaning = b.source_type === 'cleaning_tasks'
-      if (aIsCleaning && bIsCleaning) {
-        const aiRaw = (a as any).sort_index
-        const biRaw = (b as any).sort_index
-        const ai = aiRaw == null ? Number.POSITIVE_INFINITY : Number(aiRaw)
-        const bi = biRaw == null ? Number.POSITIVE_INFINITY : Number(biRaw)
-        const d = ai - bi
-        if (d) return d
+      if (!(aIsCleaning && bIsCleaning)) {
+        const ur = urgencyRank(b.urgency) - urgencyRank(a.urgency)
+        if (ur) return ur
       }
       return String(a.title || '').localeCompare(String(b.title || ''))
     })
@@ -1310,12 +1335,18 @@ function showBanner(title: string, message: string) {
       }
       const cleanerGroups: string[][] = []
       const inspectorGroups: string[][] = []
+      const workTaskIds: string[] = []
       for (const { task } of marks) {
         if (!isReorderableTask(task)) continue
+        if (task.source_type !== 'cleaning_tasks') {
+          workTaskIds.push(String(task.id))
+          continue
+        }
         const ids = Array.isArray((task as any).source_ids) && (task as any).source_ids.length ? (task as any).source_ids.map((x: any) => String(x)) : [String(task.source_id)]
         if (task.task_kind === 'cleaning') cleanerGroups.push(ids)
         else if (task.task_kind === 'inspection') inspectorGroups.push(ids)
       }
+      if (workTaskIds.length) await reorderWorkTasks(token, { date: selectedDate, task_ids: workTaskIds })
       if (cleanerGroups.length) await reorderCleaningTasks(token, { kind: 'cleaner', date: selectedDate, groups: cleanerGroups })
       if (inspectorGroups.length) await reorderCleaningTasks(token, { kind: 'inspector', date: selectedDate, groups: inspectorGroups })
       await refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: canManagerMode && mode === 'manager' ? view : 'mine' })
@@ -1618,23 +1649,25 @@ function showBanner(title: string, message: string) {
               const oldCode = String((task as any).old_code || '').trim()
               const newCode = String((task as any).new_code || '').trim()
               const guestSpecialRequest = String((task as any).guest_special_request || '').trim()
-              const showUrgency = (() => {
-                const u = String(task.urgency || '').trim().toLowerCase()
-                if (!u) return false
-                if (u === 'medium') return false
-                return true
-              })()
+              const taskNote = String((task as any).note || '').trim()
+              const urgency = urgencyMeta(task.urgency)
               const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
-              const showSummary = !!(task.summary && task.source_type !== 'cleaning_tasks' && !isOfflineTask)
+              const detailPreview = !isOfflineTask && task.source_type !== 'cleaning_tasks' ? stripPhotoLines(task.summary) : ''
+              const showSummary = !!detailPreview
               const isCleaningSource = task.source_type === 'cleaning_tasks'
               const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
               const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
               const isCleaningSubmitted = isCleaningTask && isCleaningWorkSubmitted(task.status)
               const hasKeyPhoto = !!String((task as any)?.key_photo_url || '').trim()
               const taskType = String((task as any).task_type || '').trim().toLowerCase()
+              const isStayoverTask = isCleaningTask && isStayoverTaskType(taskType)
               const isCheckoutTask = taskType === 'checkout_clean' || !!checkoutTime
-              const inspectorAssigned = String((task as any).inspector_id || '').trim()
-              const isSelfCompleteEligible = isCleaningTask && isCheckoutTask && !inspectorAssigned
+              const inspectionMode = effectiveInspectionMode(task as any)
+              const inspectionPlanLabel = inspectionModeLabel(inspectionMode, String((task as any).inspection_due_date || '').trim() || null)
+              const isSelfCompleteEligible = isCleaningTask && isSelfCompleteMode(task as any) && (isCheckoutTask || isStayoverTask)
+              const isDirectCompleteEligible = isCleaningTask && (isSelfCompleteEligible || isStayoverTask)
+              const isPendingInspectionDecision = isCleaningTask && !isStayoverTask && inspectionMode === 'pending_decision'
+              const showInspectionPlanTag = isCleaningTask && !isStayoverTask
               const checkedOutAt = String((task as any).checked_out_at || '').trim()
               const isCheckedOut = !!checkedOutAt
               const isHistoricalTask = isBeforeToday(String(task.scheduled_date || (task as any).date || ''))
@@ -1761,9 +1794,8 @@ function showBanner(title: string, message: string) {
                       })
                       return
                     }
-                    const role0 = String(user?.role || '')
-                    const isManager0 = role0 === 'admin' || role0 === 'offline_manager' || role0 === 'customer_service'
-                    const isInspector0 = role0 === 'cleaning_inspector' || role0 === 'cleaner_inspector'
+                    const isManager0 = canTaskManagerView
+                    const isInspector0 = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
                     const isInspection0 = task.source_type === 'cleaning_tasks' && task.task_kind === 'inspection'
                     const isCleaningTask0 = task.source_type === 'cleaning_tasks'
                     if (isManager0 && isCleaningTask0) {
@@ -1779,7 +1811,7 @@ function showBanner(title: string, message: string) {
                     style={({ pressed }) => [styles.taskCard, pressed ? styles.segmentPressed : null]}
                   >
                   <View style={styles.taskTitleRow}>
-                    {task.source_type === 'cleaning_tasks' && !isManager ? (
+                    {!isManager && (isReorderableTask(task) || sortIndex != null) ? (
                       <View style={[styles.orderPill, reorderMode && isReorderableTask(task) ? styles.orderPillActive : null]}>
                         <Text style={[styles.orderPillText, reorderMode && isReorderableTask(task) ? styles.orderPillTextActive : null]}>
                           {reorderMode && isReorderableTask(task) ? (selectedMark || '·') : sortIndex == null ? '·' : String(sortIndex)}
@@ -1795,39 +1827,47 @@ function showBanner(title: string, message: string) {
                   </View>
 
                   <View style={styles.taskSubRow}>
-                    <View style={styles.tag}>
-                      <Text style={styles.tagText}>{kind}</Text>
-                    </View>
-                    {showCheckout ? (
-                      <View style={styles.tagKey}>
-                        <Text style={styles.tagKeyText}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
+                    {isStayoverTask ? (
+                      <View style={styles.tag}>
+                        <Text style={styles.tagText}>入住中清洁</Text>
                       </View>
-                    ) : null}
-                    {showCheckin ? (
-                      <View style={styles.tagWarn}>
-                        <Text style={styles.tagWarnText}>{`需挂${checkinSets}套钥匙`}</Text>
-                      </View>
-                    ) : null}
-                    {isLateCheckout ? (
-                      <View style={styles.tagLate}>
-                        <Text style={styles.tagLateText}>晚退房</Text>
-                      </View>
-                    ) : null}
-                    {isEarlyCheckin ? (
-                      <View style={styles.tagWarn}>
-                        <Text style={styles.tagWarnText}>早入住</Text>
-                      </View>
-                    ) : null}
-                      {isSelfCompleteEligible ? (
+                    ) : (
+                      <>
                         <View style={styles.tag}>
-                          <Text style={styles.tagText}>自完成</Text>
+                          <Text style={styles.tagText}>{kind}</Text>
                         </View>
-                      ) : null}
-                    {showUrgency ? (
-                      <View style={styles.tagGray}>
-                        <Text style={styles.tagGrayText}>{String(task.urgency).toUpperCase()}</Text>
-                      </View>
-                    ) : null}
+                        {showCheckout ? (
+                          <View style={styles.tagKey}>
+                            <Text style={styles.tagKeyText}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
+                          </View>
+                        ) : null}
+                        {showCheckin ? (
+                          <View style={styles.tagWarn}>
+                            <Text style={styles.tagWarnText}>{`需挂${checkinSets}套钥匙`}</Text>
+                          </View>
+                        ) : null}
+                        {isLateCheckout ? (
+                          <View style={styles.tagLate}>
+                            <Text style={styles.tagLateText}>晚退房</Text>
+                          </View>
+                        ) : null}
+                        {isEarlyCheckin ? (
+                          <View style={styles.tagWarn}>
+                            <Text style={styles.tagWarnText}>早入住</Text>
+                          </View>
+                        ) : null}
+                        {showInspectionPlanTag ? (
+                          <View style={inspectionMode === 'pending_decision' ? styles.tagWarn : styles.tag}>
+                            <Text style={inspectionMode === 'pending_decision' ? styles.tagWarnText : styles.tagText}>{inspectionPlanLabel}</Text>
+                          </View>
+                        ) : null}
+                        {urgency ? (
+                          <View style={[styles.urgencyPill, urgency.pill]}>
+                            <Text style={[styles.urgencyText, urgency.textStyle]}>{urgency.text}</Text>
+                          </View>
+                        ) : null}
+                      </>
+                    )}
                   </View>
 
                   {isCleaningSource ? (
@@ -1843,7 +1883,7 @@ function showBanner(title: string, message: string) {
                         </View>
                         <View style={styles.execTextWrap}>
                           <Text style={styles.execLabel}>执行人员</Text>
-                          <Text style={styles.execNames} numberOfLines={1}>{`清洁: ${cleanerName || '-'} · 检查: ${isSelfCompleteEligible ? '无' : (inspectorName || '-')}`}</Text>
+                          <Text style={styles.execNames} numberOfLines={1}>{`清洁: ${cleanerName || '-'} · 检查: ${isDirectCompleteEligible || isPendingInspectionDecision ? '无' : (inspectorName || '-')}`}</Text>
                           {isManager || isInspectorUser ? (
                             <Text style={styles.execOrder} numberOfLines={1}>
                               {`清洁顺序：${cleanerOrderN == null ? '-' : String(cleanerOrderN)}  检查顺序：${inspectorOrderN == null ? '-' : String(inspectorOrderN)}`}
@@ -1935,6 +1975,20 @@ function showBanner(title: string, message: string) {
                         </View>
                       ) : null}
 
+                      {taskNote ? (
+                        <View style={styles.guestRow}>
+                          <View style={styles.guestIconWrap}>
+                            <Ionicons name="document-text-outline" size={moderateScale(20)} color="#2563EB" />
+                          </View>
+                          <View style={styles.guestCell}>
+                            <Text style={styles.guestLabel}>备注：</Text>
+                            <Text style={styles.guestValue} numberOfLines={3}>
+                              {taskNote}
+                            </Text>
+                          </View>
+                        </View>
+                      ) : null}
+
                       {!isOfflineTask ? (
                         guideUrl ? (
                           <Pressable
@@ -2006,7 +2060,7 @@ function showBanner(title: string, message: string) {
 
                   {showSummary ? (
                     <Text style={styles.summary} numberOfLines={3}>
-                      {task.summary}
+                      {detailPreview}
                     </Text>
                   ) : null}
 
@@ -2077,7 +2131,7 @@ function showBanner(title: string, message: string) {
                     </View>
                   ) : isCleaningTask ? (
                     <View style={styles.actionsRow}>
-                      {!isCleaningSubmitted ? (
+                      {!isCleaningSubmitted && !isStayoverTask ? (
                         <Pressable
                           onPress={() => props.navigation.navigate('TaskDetail', { id: task.id, action: 'upload_key' })}
                           disabled={hasKeyPhoto}
@@ -2093,10 +2147,19 @@ function showBanner(title: string, message: string) {
                         <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
                       </Pressable>
                       <Pressable
-                        onPress={() => props.navigation.navigate(isSelfCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
+                        onPress={() => {
+                          if (isPendingInspectionDecision) return
+                          props.navigation.navigate(isDirectCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)
+                        }}
+                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, isPendingInspectionDecision ? styles.actionBtnDisabled : null]}
                       >
-                        <Text style={styles.actionText}>{isCleaningSubmitted ? '补品记录' : (isSelfCompleteEligible ? '补充与完成' : '补品填报')}</Text>
+                        <Text style={styles.actionText}>
+                          {isPendingInspectionDecision
+                            ? '待确认检查安排'
+                            : isCleaningSubmitted
+                              ? (isDirectCompleteEligible ? '完成记录' : '补品记录')
+                              : (isStayoverTask ? '标记已完成' : (isSelfCompleteEligible ? '补充与完成' : '补品填报'))}
+                        </Text>
                       </Pressable>
                     </View>
                   ) : null}
@@ -2302,6 +2365,16 @@ const styles = StyleSheet.create({
   taskSubRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   tag: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
   tagText: { fontSize: 11, fontWeight: '900', color: '#2563EB' },
+  urgencyPill: { paddingHorizontal: 10, height: 24, borderRadius: 12, borderWidth: hairline(), alignItems: 'center', justifyContent: 'center' },
+  urgencyText: { fontSize: 11, fontWeight: '900' },
+  urgencyUrgent: { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5' },
+  urgencyUrgentText: { color: '#B91C1C' },
+  urgencyHigh: { backgroundColor: '#FFF7ED', borderColor: '#FDBA74' },
+  urgencyHighText: { color: '#C2410C' },
+  urgencyMedium: { backgroundColor: '#EFF6FF', borderColor: '#93C5FD' },
+  urgencyMediumText: { color: '#1D4ED8' },
+  urgencyLow: { backgroundColor: '#F3F4F6', borderColor: '#D1D5DB' },
+  urgencyLowText: { color: '#4B5563' },
   tagGray: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   tagGrayText: { fontSize: 11, fontWeight: '800', color: '#6B7280' },
   tagKey: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },

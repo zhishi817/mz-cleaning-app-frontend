@@ -6,6 +6,7 @@ import * as Clipboard from 'expo-clipboard'
 import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
+import { effectiveInspectionMode, inspectionModeLabel, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, refreshWorkTasksFromServer, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
@@ -37,9 +38,10 @@ function statusLabelForTask(task: WorkTaskItem, roleNames: string[]) {
     const isCleanerView = isCleanerRole(roleNames)
     const inspectionStatus = String((task as any).inspection_status || '').trim().toLowerCase()
     const hasInspection = Array.isArray((task as any).inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
+    const inspectionMode = effectiveInspectionMode(task as any)
     if (isCleaningWorkSubmitted(s)) {
       if (isCleanerView) return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-      if (hasInspection || inspectionStatus) {
+      if (inspectionMode === 'same_day' || inspectionMode === 'deferred' || hasInspection || inspectionStatus) {
         if (inspectionStatus === 'keys_hung' || inspectionStatus === 'done' || inspectionStatus === 'completed') {
           return { text: '已挂钥匙', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
         }
@@ -93,8 +95,39 @@ function stripPhotoLines(text: any) {
     .split('\n')
     .map((x) => String(x || '').trim())
     .filter(Boolean)
-    .filter((x) => !/^照片\s*:/i.test(x))
+    .filter((x) => !/^照片\s*\d*\s*:/i.test(x))
   return lines.join('\n').trim()
+}
+
+function photoUrlsFromText(text: any) {
+  const s = String(text || '').trim()
+  if (!s) return []
+  return Array.from(
+    new Set(
+      s
+        .split('\n')
+        .map((line) => String(line || '').trim())
+        .filter((line) => /^照片\s*\d*\s*:/i.test(line))
+        .map((line) => extractFirstUrl(line))
+        .filter(Boolean)
+        .map((url) => String(url || '').trim()),
+    ),
+  )
+}
+
+function normalizePhotoUrls(input: any) {
+  const values = Array.isArray(input) ? input : []
+  return Array.from(new Set(values.map((item) => String(item || '').trim()).filter(Boolean)))
+}
+
+function urgencyMeta(value: any) {
+  const s = String(value || '').trim().toLowerCase()
+  if (!s) return null
+  if (s === 'urgent') return { text: '紧急', pill: styles.urgencyUrgent, textStyle: styles.urgencyUrgentText }
+  if (s === 'high') return { text: '高优先', pill: styles.urgencyHigh, textStyle: styles.urgencyHighText }
+  if (s === 'medium') return { text: '普通', pill: styles.urgencyMedium, textStyle: styles.urgencyMediumText }
+  if (s === 'low') return { text: '低优先', pill: styles.urgencyLow, textStyle: styles.urgencyLowText }
+  return { text: s.toUpperCase(), pill: styles.urgencyMedium, textStyle: styles.urgencyMediumText }
 }
 
 function isManagerRole(role: string) {
@@ -183,6 +216,7 @@ export default function TaskDetailScreen(props: Props) {
   const { t } = useI18n()
   const { user, token } = useAuth()
   const roleNames = useMemo(() => roleNamesOf(user), [user])
+  const canManagerView = useMemo(() => roleNames.some(isManagerRole), [roleNames])
   const insets = useSafeAreaInsets()
   const [hasInit, setHasInit] = useState(false)
   const [resolvingRemote, setResolvingRemote] = useState(false)
@@ -190,7 +224,7 @@ export default function TaskDetailScreen(props: Props) {
   const id = props.route.params.id
   const action = props.route.params.action
   const [marking, setMarking] = useState(false)
-  const [markPhotoUrl, setMarkPhotoUrl] = useState<string | null>(null)
+  const [markPhotoUrls, setMarkPhotoUrls] = useState<string[]>([])
   const [markNote, setMarkNote] = useState('')
   const [deferReason, setDeferReason] = useState('')
   const [showUnfinished, setShowUnfinished] = useState(false)
@@ -218,11 +252,19 @@ export default function TaskDetailScreen(props: Props) {
   }, [])
 
   useEffect(() => {
+    if (!task) return
+    setMarkPhotoUrls(normalizePhotoUrls((task as any).completion_photo_urls).length ? normalizePhotoUrls((task as any).completion_photo_urls) : photoUrlsFromText(task.summary))
+    setMarkNote(String((task as any).completion_note || '').trim())
+    setDeferReason(String((task as any).completion_reason || '').trim())
+    setShowUnfinished(false)
+  }, [task?.id])
+
+  useEffect(() => {
     if (!hasInit) return
     if (task) return
     if (!token || !user?.id) return
     let cancelled = false
-    const view: WorkTasksView = isManagerRole(String(user?.role || '')) ? 'all' : 'mine'
+    const view: WorkTasksView = canManagerView ? 'all' : 'mine'
     const now = new Date()
     const date_from = ymd(addDays(now, -45))
     const date_to = ymd(addDays(now, 45))
@@ -235,7 +277,7 @@ export default function TaskDetailScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [hasInit, id, task, token, user?.id, user?.role])
+  }, [canManagerView, hasInit, id, task, token, user?.id])
 
   async function onUploadKey() {
     if (!task) return
@@ -338,29 +380,68 @@ export default function TaskDetailScreen(props: Props) {
     }
   }
 
-  async function onTakePhotoForMarking() {
+  async function ensureCameraPerm() {
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync()
+      return !!perm.granted
+    } catch {
+      return false
+    }
+  }
+
+  async function ensureLibraryPerm() {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync()
+      return !!perm.granted
+    } catch {
+      return false
+    }
+  }
+
+  async function onAppendPhotosForMarking(source: 'camera' | 'library') {
     if (!task) return
     if (!token) {
       Alert.alert(t('common_error'), '请先登录')
       return
     }
+    const permitted = source === 'camera' ? await ensureCameraPerm() : await ensureLibraryPerm()
+    if (!permitted) {
+      Alert.alert(t('common_error'), source === 'camera' ? '请先开启相机权限' : '请先开启相册权限')
+      return
+    }
     try {
       setMarking(true)
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
+      const res =
+        source === 'camera'
+          ? await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
+          : await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              quality: 1,
+              allowsMultipleSelection: true,
+              selectionLimit: 0,
+            })
       if (res.canceled || !res.assets?.length) return
-      const a = res.assets[0] as any
-      const uri = String(a.uri || '').trim()
-      if (!uri) return
-      const name = String(a.fileName || uri.split('/').pop() || `task-${Date.now()}.jpg`)
-      const mimeType = String(a.mimeType || 'image/jpeg')
-      const up = await uploadMzappMedia(token, { uri, name, mimeType })
-      setMarkPhotoUrl(up.url)
-      Alert.alert(t('common_ok'), '照片已上传')
+      const uploaded: string[] = []
+      for (const asset of res.assets as any[]) {
+        const uri = String(asset?.uri || '').trim()
+        if (!uri) continue
+        const name = String(asset?.fileName || uri.split('/').pop() || `task-${Date.now()}.jpg`)
+        const mimeType = String(asset?.mimeType || 'image/jpeg')
+        const up = await uploadMzappMedia(token, { uri, name, mimeType })
+        uploaded.push(up.url)
+      }
+      if (!uploaded.length) return
+      setMarkPhotoUrls((prev) => normalizePhotoUrls([...prev, ...uploaded]))
+      Alert.alert(t('common_ok'), uploaded.length > 1 ? `已上传 ${uploaded.length} 张照片` : '照片已上传')
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '上传失败'))
     } finally {
       setMarking(false)
     }
+  }
+
+  function removeMarkPhoto(index: number) {
+    setMarkPhotoUrls((prev) => prev.filter((_, idx) => idx !== index))
   }
 
   async function onMarkDone() {
@@ -369,13 +450,20 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_error'), '请先登录')
       return
     }
-    if (!effectiveMarkPhotoUrl) {
+    if (!effectiveMarkPhotoUrls.length) {
       Alert.alert(t('common_error'), '请先拍照上传')
       return
     }
     try {
       setMarking(true)
-      await markWorkTask(token, String(task.id), { action: 'done', photo_url: effectiveMarkPhotoUrl, note: markNote.trim() || null })
+      const note = markNote.trim() || null
+      await markWorkTask(token, String(task.id), {
+        action: 'done',
+        photo_url: effectiveMarkPhotoUrls[0] || null,
+        photo_urls: effectiveMarkPhotoUrls,
+        note,
+      })
+      await patchWorkTaskItem(String(task.id), { status: 'done', completion_photo_urls: effectiveMarkPhotoUrls, completion_note: note, completion_reason: null } as any)
       Alert.alert(t('common_ok'), '已标记完成')
       props.navigation.goBack()
     } catch (e: any) {
@@ -391,7 +479,7 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_error'), '请先登录')
       return
     }
-    if (!effectiveMarkPhotoUrl) {
+    if (!effectiveMarkPhotoUrls.length) {
       Alert.alert(t('common_error'), '请先拍照上传')
       return
     }
@@ -402,7 +490,15 @@ export default function TaskDetailScreen(props: Props) {
     }
     try {
       setMarking(true)
-      await markWorkTask(token, String(task.id), { action: 'defer', photo_url: effectiveMarkPhotoUrl, reason: r, note: markNote.trim() || null })
+      const note = markNote.trim() || null
+      await markWorkTask(token, String(task.id), {
+        action: 'defer',
+        photo_url: effectiveMarkPhotoUrls[0] || null,
+        photo_urls: effectiveMarkPhotoUrls,
+        reason: r,
+        note,
+      })
+      await patchWorkTaskItem(String(task.id), { status: 'todo', completion_photo_urls: effectiveMarkPhotoUrls, completion_note: note, completion_reason: r } as any)
       Alert.alert(t('common_ok'), '已挪到下次')
       props.navigation.goBack()
     } catch (e: any) {
@@ -452,13 +548,9 @@ export default function TaskDetailScreen(props: Props) {
   const isCheckoutTask = taskType === 'checkout_clean' || !!checkoutTime
   const oldCode = String((task as any).old_code || '').trim()
   const newCode = String((task as any).new_code || '').trim()
-  const showUrgency = (() => {
-    const u = String(task.urgency || '').trim().toLowerCase()
-    if (!u) return false
-    if (u === 'medium') return false
-    return true
-  })()
+  const urgency = urgencyMeta(task.urgency)
   const isCleaningSource = task.source_type === 'cleaning_tasks'
+  const isStayoverTask = isCleaningSource && isStayoverTaskType(taskType)
   const isCleaningOrInspection = isCleaningSource && (String(task.task_kind || '').toLowerCase() === 'cleaning' || String(task.task_kind || '').toLowerCase() === 'inspection')
   const wifiSsid = String((task as any)?.property?.wifi_ssid || '').trim()
   const wifiPassword = String((task as any)?.property?.wifi_password || '').trim()
@@ -470,6 +562,7 @@ export default function TaskDetailScreen(props: Props) {
   const title2 = `${title}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
   const keyPhotoUrl = String(localKeyPhotoUrl || (task as any).key_photo_url || '').trim() || null
   const lockboxVideoUrl = String((task as any).lockbox_video_url || '').trim() || null
+  const taskNote = String((task as any).note || '').trim()
   const checkedOutAt = String((task as any).checked_out_at || '').trim()
   const isCheckedOut = !!checkedOutAt
   const taskDate = String(task.scheduled_date || task.date || '').trim()
@@ -491,18 +584,25 @@ export default function TaskDetailScreen(props: Props) {
   const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
   const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
   const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
-  const inspectorAssigned = String((task as any).inspector_id || '').trim()
-  const isSelfCompleteEligible = isCleaningTask && isCheckoutTask && !inspectorAssigned
-  const isCustomerService = String(user?.role || '') === 'customer_service'
-  const canDeleteKeyPhoto = (String(user?.role || '') === 'cleaner' || String(user?.role || '') === 'cleaner_inspector') && isCleaningTask
+  const inspectionMode = effectiveInspectionMode(task as any)
+  const inspectionPlanLabel = inspectionModeLabel(inspectionMode, String((task as any).inspection_due_date || '').trim() || null)
+  const isSelfCompleteEligible = isCleaningTask && isSelfCompleteMode(task as any) && (isCheckoutTask || isStayoverTask)
+  const isDirectCompleteEligible = isCleaningTask && (isSelfCompleteEligible || isStayoverTask)
+  const isPendingInspectionDecision = isCleaningTask && !isStayoverTask && inspectionMode === 'pending_decision'
+  const isCustomerService = roleNames.includes('customer_service')
+  const canDeleteKeyPhoto = (roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector')) && isCleaningTask
   const isCleaningSubmitted = isCleaningTask && isCleaningWorkSubmitted(task.status)
-  const showSummary = !!(task.summary && task.source_type !== 'cleaning_tasks' && !isOfflineTask)
+  const detailText = (() => {
+    if (isCleaningSource) return null
+    if (isOfflineTask) return null
+    const s = stripPhotoLines(task.summary)
+    return s || null
+  })()
   const isAlreadyDone = (() => {
     const s = String(task.status || '').trim().toLowerCase()
     return s === 'done' || s === 'completed'
   })()
-  const savedMarkPhotoUrl = extractFirstUrl(task.summary)
-  const effectiveMarkPhotoUrl = markPhotoUrl || savedMarkPhotoUrl
+  const effectiveMarkPhotoUrls = markPhotoUrls
   const offlineDetail = (() => {
     if (!isOfflineTask) return null
     const code2 = String(task.property?.code || '').trim()
@@ -529,45 +629,58 @@ export default function TaskDetailScreen(props: Props) {
         </View>
 
         <View style={styles.tagsRow}>
-          <View style={styles.tag}>
-            <Text style={styles.tagText}>{kind}</Text>
-          </View>
-          {showCheckout ? (
-            <View style={styles.tagKey}>
-              <Text style={styles.tagKeyText}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
-            </View>
-          ) : null}
-                    {showCheckin ? (
-                      <View style={styles.tagWarn}>
-                        <Text style={styles.tagWarnText}>{`需挂${checkinSets}套钥匙`}</Text>
-                      </View>
-                    ) : null}
-                    {isEarlyCheckin ? (
-                      <View style={styles.tagWarn}>
-                        <Text style={styles.tagWarnText}>早入住</Text>
-                      </View>
-                    ) : null}
-          {isSelfCompleteEligible ? (
+          {isStayoverTask ? (
             <View style={styles.tag}>
-              <Text style={styles.tagText}>自完成</Text>
+              <Text style={styles.tagText}>入住中清洁</Text>
             </View>
-          ) : null}
-          {showUrgency ? (
-            <View style={styles.tagGray}>
-              <Text style={styles.tagGrayText}>{String(task.urgency).toUpperCase()}</Text>
-            </View>
-          ) : null}
-          {unitType ? (
-            <View style={styles.tagGray}>
-              <Text style={styles.tagGrayText}>{unitType}</Text>
-            </View>
-          ) : null}
+          ) : (
+            <>
+              <View style={styles.tag}>
+                <Text style={styles.tagText}>{kind}</Text>
+              </View>
+              {showCheckout ? (
+                <View style={styles.tagKey}>
+                  <Text style={styles.tagKeyText}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
+                </View>
+              ) : null}
+              {showCheckin ? (
+                <View style={styles.tagWarn}>
+                  <Text style={styles.tagWarnText}>{`需挂${checkinSets}套钥匙`}</Text>
+                </View>
+              ) : null}
+              {isEarlyCheckin ? (
+                <View style={styles.tagWarn}>
+                  <Text style={styles.tagWarnText}>早入住</Text>
+                </View>
+              ) : null}
+              <View style={inspectionMode === 'pending_decision' ? styles.tagWarn : styles.tag}>
+                <Text style={inspectionMode === 'pending_decision' ? styles.tagWarnText : styles.tagText}>{inspectionPlanLabel}</Text>
+              </View>
+              {urgency ? (
+                <View style={[styles.urgencyPill, urgency.pill]}>
+                  <Text style={[styles.urgencyText, urgency.textStyle]}>{urgency.text}</Text>
+                </View>
+              ) : null}
+              {unitType ? (
+                <View style={styles.tagGray}>
+                  <Text style={styles.tagGrayText}>{unitType}</Text>
+                </View>
+              ) : null}
+            </>
+          )}
         </View>
 
-        {isSelfCompleteEligible ? (
+        {isDirectCompleteEligible || isPendingInspectionDecision ? (
           <View style={styles.row}>
             <Ionicons name="person-outline" size={moderateScale(14)} color="#9CA3AF" />
             <Text style={styles.rowText}>检查人员：无</Text>
+          </View>
+        ) : null}
+
+        {unitType && isStayoverTask ? (
+          <View style={styles.row}>
+            <Ionicons name="bed-outline" size={moderateScale(14)} color="#9CA3AF" />
+            <Text style={styles.rowText}>{unitType}</Text>
           </View>
         ) : null}
 
@@ -629,6 +742,13 @@ export default function TaskDetailScreen(props: Props) {
           </View>
         ) : null}
 
+        {taskNote ? (
+          <View style={styles.row}>
+            <Ionicons name="document-text-outline" size={moderateScale(14)} color="#9CA3AF" />
+            <Text style={styles.rowText}>{`备注：${taskNote}`}</Text>
+          </View>
+        ) : null}
+
         {!checkoutTime && checkinTime ? (
           <View style={styles.row}>
             <Ionicons name="time-outline" size={moderateScale(14)} color="#9CA3AF" />
@@ -661,7 +781,7 @@ export default function TaskDetailScreen(props: Props) {
           </View>
         )}
 
-        {isCleaningSource && keyPhotoUrl ? (
+        {isCleaningSource && !isStayoverTask && keyPhotoUrl ? (
           <>
             <View style={styles.line} />
             <Text style={styles.sectionTitle}>钥匙照片</Text>
@@ -733,13 +853,15 @@ export default function TaskDetailScreen(props: Props) {
               </>
             ) : (
               <>
-                <Pressable
-                  onPress={onUploadKey}
-                  disabled={keyUploading || isCleaningSubmitted || !!keyPhotoUrl}
-                  style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, (keyUploading || !!keyPhotoUrl) ? styles.actionBtnDisabled : null]}
-                >
-                  <Text style={styles.actionText}>{keyUploading ? t('common_loading') : (isCleaningSubmitted || !!keyPhotoUrl ? '钥匙记录' : t('tasks_btn_upload_key'))}</Text>
-                </Pressable>
+                {!isStayoverTask ? (
+                  <Pressable
+                    onPress={onUploadKey}
+                    disabled={keyUploading || isCleaningSubmitted || !!keyPhotoUrl}
+                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, (keyUploading || !!keyPhotoUrl) ? styles.actionBtnDisabled : null]}
+                  >
+                    <Text style={styles.actionText}>{keyUploading ? t('common_loading') : (isCleaningSubmitted || !!keyPhotoUrl ? '钥匙记录' : t('tasks_btn_upload_key'))}</Text>
+                  </Pressable>
+                ) : null}
                 <Pressable
                   onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
                   style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
@@ -747,37 +869,59 @@ export default function TaskDetailScreen(props: Props) {
                   <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => props.navigation.navigate(isSelfCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)}
-                  style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
+                  onPress={() => {
+                    if (isPendingInspectionDecision) return
+                    props.navigation.navigate(isDirectCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)
+                  }}
+                  style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, isPendingInspectionDecision ? styles.actionBtnDisabled : null]}
                 >
-                  <Text style={styles.actionText}>{isCleaningSubmitted ? '补品记录' : (isSelfCompleteEligible ? '补充与完成' : '补品填报')}</Text>
+                  <Text style={styles.actionText}>
+                    {isPendingInspectionDecision
+                      ? '待确认检查安排'
+                      : isCleaningSubmitted
+                        ? (isDirectCompleteEligible ? '完成记录' : '补品记录')
+                        : (isStayoverTask ? '标记已完成' : (isSelfCompleteEligible ? '补充与完成' : '补品填报'))}
+                  </Text>
                 </Pressable>
               </>
             )}
           </View>
         ) : (
           <View style={styles.markWrap}>
+            {offlineDetail || detailText ? (
+              <View style={styles.detailPanel}>
+                <Text style={styles.sectionTitle}>任务内容</Text>
+                <Text style={styles.summary}>{offlineDetail || detailText}</Text>
+              </View>
+            ) : null}
             <Text style={styles.sectionTitle}>任务处理</Text>
             <Text style={styles.mutedSmall} numberOfLines={2}>
-              {effectiveMarkPhotoUrl ? '已上传照片' : '未上传照片（需要拍照后才能提交）'}
+              {effectiveMarkPhotoUrls.length ? `已上传 ${effectiveMarkPhotoUrls.length} 张照片，可继续追加或删除` : '未上传照片（需要拍照/相册上传后才能提交）'}
             </Text>
-            <Pressable onPress={onTakePhotoForMarking} disabled={marking} style={({ pressed }) => [styles.markBtn, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}>
-              <Text style={styles.markBtnText}>拍照上传</Text>
-            </Pressable>
-            {effectiveMarkPhotoUrl ? (
-              <Pressable
-                onPress={() => setPreviewUrl(String(effectiveMarkPhotoUrl))}
-                style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
-              >
-                <Image source={{ uri: String(effectiveMarkPhotoUrl) }} style={styles.photo} resizeMode="contain" />
+            <View style={styles.markUploadRow}>
+              <Pressable onPress={() => onAppendPhotosForMarking('camera')} disabled={marking} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}>
+                <Text style={styles.markBtnText}>拍照上传</Text>
               </Pressable>
-            ) : null}
-
-            {offlineDetail ? (
-              <>
-                <Text style={styles.label}>任务内容</Text>
-                <Text style={styles.summary}>{offlineDetail}</Text>
-              </>
+              <Pressable onPress={() => onAppendPhotosForMarking('library')} disabled={marking} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}>
+                <Text style={styles.markBtnText}>相册上传</Text>
+              </Pressable>
+            </View>
+            {effectiveMarkPhotoUrls.length ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.markPhotoList}>
+                {effectiveMarkPhotoUrls.map((url, index) => (
+                  <View key={`${url}:${index}`} style={styles.markPhotoCard}>
+                    <Pressable
+                      onPress={() => setPreviewUrl(String(url))}
+                      style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
+                    >
+                      <Image source={{ uri: String(url) }} style={styles.markPhotoThumb} resizeMode="cover" />
+                    </Pressable>
+                    <Pressable onPress={() => removeMarkPhoto(index)} style={({ pressed }) => [styles.markPhotoRemoveBtn, pressed ? styles.pressed : null]}>
+                      <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
+                    </Pressable>
+                  </View>
+                ))}
+              </ScrollView>
             ) : null}
 
             <Text style={styles.label}>备注（可选）</Text>
@@ -827,14 +971,6 @@ export default function TaskDetailScreen(props: Props) {
             ) : null}
           </View>
         )}
-
-        {showSummary ? (
-          <>
-            <View style={styles.line} />
-            <Text style={styles.sectionTitle}>详情</Text>
-            <Text style={styles.summary}>{stripPhotoLines(task.summary)}</Text>
-          </>
-        ) : null}
       </View>
     </ScrollView>
     <Modal visible={!!previewUrl} transparent animationType="fade" onRequestClose={() => setPreviewUrl(null)}>
@@ -889,6 +1025,16 @@ const styles = StyleSheet.create({
   tagsRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   tag: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
   tagText: { fontSize: 11, fontWeight: '900', color: '#2563EB' },
+  urgencyPill: { paddingHorizontal: 10, height: 24, borderRadius: 12, borderWidth: hairline(), alignItems: 'center', justifyContent: 'center' },
+  urgencyText: { fontSize: 11, fontWeight: '900' },
+  urgencyUrgent: { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5' },
+  urgencyUrgentText: { color: '#B91C1C' },
+  urgencyHigh: { backgroundColor: '#FFF7ED', borderColor: '#FDBA74' },
+  urgencyHighText: { color: '#C2410C' },
+  urgencyMedium: { backgroundColor: '#EFF6FF', borderColor: '#93C5FD' },
+  urgencyMediumText: { color: '#1D4ED8' },
+  urgencyLow: { backgroundColor: '#F3F4F6', borderColor: '#D1D5DB' },
+  urgencyLowText: { color: '#4B5563' },
   tagGray: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   tagGrayText: { fontSize: 11, fontWeight: '800', color: '#6B7280' },
   tagKey: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
@@ -915,10 +1061,18 @@ const styles = StyleSheet.create({
   muted: { padding: 16, color: '#6B7280', fontWeight: '700' },
   mutedSmall: { marginTop: 8, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   markWrap: { marginTop: 14 },
+  detailPanel: { marginBottom: 4 },
   label: { marginTop: 14, marginBottom: 8, color: '#111827', fontWeight: '900' },
   input: { height: 44, borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, fontWeight: '700', color: '#111827' },
   markRow: { marginTop: 14, flexDirection: 'row', gap: 10 },
   markBtn: { marginTop: 12, height: 36, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  markUploadRow: { marginTop: 12, flexDirection: 'row', gap: 10 },
+  markUploadBtn: { flex: 1, marginTop: 0 },
+  markPhotoList: { gap: 10, paddingTop: 12, paddingBottom: 4 },
+  markPhotoCard: { width: moderateScale(112), position: 'relative' },
+  markPhotoThumbWrap: { borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F3F4F6' },
+  markPhotoThumb: { width: '100%', height: moderateScale(112) },
+  markPhotoRemoveBtn: { position: 'absolute', top: 8, right: 8, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(17,24,39,0.84)', alignItems: 'center', justifyContent: 'center' },
   markBtnText: { fontWeight: '900', color: '#FFFFFF', fontSize: 13 },
   markPrimary: { flex: 1, height: 36, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   markPrimaryText: { color: '#FFFFFF', fontWeight: '900', fontSize: 13 },

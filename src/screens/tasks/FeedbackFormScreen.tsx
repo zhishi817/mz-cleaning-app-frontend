@@ -256,6 +256,27 @@ function buildDefaultProject(kind: 'maintenance' | 'deep_cleaning'): PropertyFee
   }
 }
 
+function feedbackPreviewUrls(item: PropertyFeedback): string[] {
+  const basePhotos = [
+    ...normalizeUrls(item.media_urls),
+    ...normalizeUrls(item.repair_photo_urls),
+  ]
+  if (item.kind === 'daily_necessities') return Array.from(new Set(basePhotos))
+
+  const projectItems = Array.isArray(item.project_items) ? item.project_items : []
+  const target = projectItems.find((it) => it.status !== 'completed') || projectItems[0] || null
+  const orderedProjects = target
+    ? [target, ...projectItems.filter((it) => it.id !== target.id)]
+    : projectItems
+  return Array.from(new Set([
+    ...orderedProjects.flatMap((it) => [
+      ...normalizeUrls(it.before_photos),
+      ...normalizeUrls(it.after_photos),
+    ]),
+    ...basePhotos,
+  ]))
+}
+
 function makeDraftId() {
   return `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
@@ -539,6 +560,13 @@ export default function FeedbackFormScreen(props: Props) {
 
   function removeDeepCleaningDraft(clientId: string) {
     setDeepCleaningDrafts((prev) => (prev.length > 1 ? prev.filter((draft) => draft.clientId !== clientId) : prev))
+  }
+
+  function removeDeepCleaningPhoto(clientId: string, field: 'media' | 'completionAfterPhotos', photoIndex: number) {
+    updateDeepCleaningDraft(clientId, (draft) => ({
+      ...draft,
+      [field]: draft[field].filter((_, idx) => idx !== photoIndex),
+    }))
   }
 
   function removeDailyDraft(clientId: string) {
@@ -825,6 +853,20 @@ export default function FeedbackFormScreen(props: Props) {
     setViewerUrls(list)
     setViewerIndex(Math.max(0, Math.min(index, list.length - 1)))
     setViewerOpen(true)
+  }
+
+  function closeDetailModal() {
+    setDetailItem(null)
+  }
+
+  function closeViewer() {
+    setViewerOpen(false)
+  }
+
+  function syncViewerIndex(offsetX: number) {
+    const safeWidth = Math.max(screenWidth, 1)
+    const nextIndex = Math.round(Number(offsetX || 0) / safeWidth)
+    setViewerIndex(Math.max(0, Math.min(nextIndex, Math.max(viewerUrls.length - 1, 0))))
   }
 
   function openProjectAction(mode: ActionMode, feedback: PropertyFeedback, project?: PropertyFeedbackProject | null) {
@@ -1126,6 +1168,7 @@ export default function FeedbackFormScreen(props: Props) {
     if (!detailItem || (detailItem.kind !== 'maintenance' && detailItem.kind !== 'deep_cleaning')) return null
     return buildHistoryProject(detailItem)
   }, [detailItem])
+  const pendingHistoryCount = pendingGroups.maintenance.length + pendingGroups.deep.length + pendingGroups.daily.length
   const currentDraftCount = kind === 'maintenance' ? maintenanceDrafts.length : kind === 'deep_cleaning' ? deepCleaningDrafts.length : dailyDrafts.length
   const submitButtonLabel = submitting ? t('common_loading') : currentDraftCount > 1 ? `提交全部 ${currentDraftCount} 条记录` : '提交记录'
 
@@ -1263,7 +1306,7 @@ export default function FeedbackFormScreen(props: Props) {
                           <Text style={styles.createSectionTitle}>现场照片</Text>
                           <Text style={styles.label}>深度清洁前照片</Text>
                           <UploadButtons onCamera={() => appendDeepCleaningPhoto(draft.clientId, 'media', 'camera')} onLibrary={() => appendDeepCleaningPhoto(draft.clientId, 'media', 'library')} />
-                          <PhotoStrip urls={draft.media} onPress={openViewer} />
+                          <PhotoStrip urls={draft.media} onPress={openViewer} onRemove={(photoIndex) => removeDeepCleaningPhoto(draft.clientId, 'media', photoIndex)} />
                         </View>
                         <View style={styles.createSection}>
                           <Text style={styles.createSectionTitle}>完成信息</Text>
@@ -1399,10 +1442,33 @@ export default function FeedbackFormScreen(props: Props) {
               {listError ? <Text style={styles.muted}>{listError}</Text> : null}
               {expanded && !listError ? (
                 <View style={styles.historyGroups}>
-                  <FeedbackGroup title={`维修 (${pendingGroups.maintenance.length})`} items={pendingGroups.maintenance} onView={setDetailItem} onEdit={requestRecordEdit} />
-                  <FeedbackGroup title={`深清 (${pendingGroups.deep.length})`} items={pendingGroups.deep} onView={setDetailItem} onEdit={requestRecordEdit} />
-                  <FeedbackGroup title={`日用品 (${pendingGroups.daily.length})`} items={pendingGroups.daily} onView={setDetailItem} onEdit={requestRecordEdit} />
-                  <FeedbackGroup title={`已完成待复核 (${resolved.length})`} items={resolved} onView={setDetailItem} onEdit={requestRecordEdit} />
+                  <View style={styles.historySection}>
+                    <View style={styles.historySectionHead}>
+                      <View style={styles.historySectionTextWrap}>
+                        <Text style={styles.historySectionTitle}>处理中反馈</Text>
+                        <Text style={styles.historySectionSubtitle}>先看当前还需要继续跟进的记录，再按类型查看。</Text>
+                      </View>
+                      <View style={styles.historySectionCount}>
+                        <Text style={styles.historySectionCountText}>{pendingHistoryCount}</Text>
+                      </View>
+                    </View>
+                    <FeedbackGroup title="房源维修" items={pendingGroups.maintenance} emptyText="暂无处理中维修反馈" onView={setDetailItem} onEdit={requestRecordEdit} onPreview={openViewer} />
+                    <FeedbackGroup title="深度清洁" items={pendingGroups.deep} emptyText="暂无处理中深清反馈" onView={setDetailItem} onEdit={requestRecordEdit} onPreview={openViewer} />
+                    <FeedbackGroup title="日用品反馈" items={pendingGroups.daily} emptyText="暂无处理中日用品反馈" onView={setDetailItem} onEdit={requestRecordEdit} onPreview={openViewer} />
+                  </View>
+
+                  <View style={styles.historySection}>
+                    <View style={styles.historySectionHead}>
+                      <View style={styles.historySectionTextWrap}>
+                        <Text style={styles.historySectionTitle}>已完成待复核</Text>
+                        <Text style={styles.historySectionSubtitle}>已提交完工信息，等待后续复核确认。</Text>
+                      </View>
+                      <View style={styles.historySectionCount}>
+                        <Text style={styles.historySectionCountText}>{resolved.length}</Text>
+                      </View>
+                    </View>
+                    <FeedbackGroup title="完工记录" items={resolved} emptyText="暂无待复核记录" onView={setDetailItem} onEdit={requestRecordEdit} onPreview={openViewer} />
+                  </View>
                 </View>
               ) : null}
             </View>
@@ -1410,9 +1476,10 @@ export default function FeedbackFormScreen(props: Props) {
         )}
       </ScrollView>
 
-      <Modal visible={!!detailItem} transparent animationType="slide" onRequestClose={() => setDetailItem(null)}>
-        <Pressable style={styles.modalRoot} onPress={() => setDetailItem(null)}>
-          <Pressable onPress={() => {}} style={[styles.modalCard, { maxHeight: '88%' }]}>
+      <Modal visible={!!detailItem} transparent presentationStyle="overFullScreen" animationType="fade" onRequestClose={closeDetailModal}>
+        <View style={styles.modalRoot}>
+          <Pressable style={styles.modalBackdrop} onPress={closeDetailModal} />
+          <View style={[styles.modalCard, { maxHeight: '88%' }]}>
             <View style={styles.modalTop}>
               <Text style={styles.modalTitle}>反馈详情</Text>
               <View style={styles.modalActions}>
@@ -1422,10 +1489,10 @@ export default function FeedbackFormScreen(props: Props) {
                     <Text style={styles.headerActionText}>编辑记录</Text>
                   </Pressable>
                 ) : null}
-                <Pressable onPress={() => setDetailItem(null)}><Text style={styles.closeText}>关闭</Text></Pressable>
+                <Pressable onPress={closeDetailModal}><Text style={styles.closeText}>关闭</Text></Pressable>
               </View>
             </View>
-            <ScrollView contentContainerStyle={{ padding: 14 }}>
+            <ScrollView contentContainerStyle={styles.detailModalBody} keyboardShouldPersistTaps="handled">
               <Text style={styles.detailHeadline}>{statusLabel(detailItem)}</Text>
               {detailItem?.kind === 'daily_necessities' ? <Text style={styles.detailText}>{extractContentText(detailItem?.detail) || '-'}</Text> : null}
               <Text style={styles.detailMeta}>{`${String(detailItem?.created_by_name || '').trim() || 'unknown'}  ${fmtTime(detailItem?.created_at || '')}`}</Text>
@@ -1476,11 +1543,11 @@ export default function FeedbackFormScreen(props: Props) {
                 </>
               ) : null}
             </ScrollView>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
 
-      <Modal visible={recordEditOpen} transparent animationType="fade" onRequestClose={() => { setRecordEditOpen(false); setRecordEditFeedback(null) }}>
+      <Modal visible={recordEditOpen} transparent presentationStyle="overFullScreen" animationType="fade" onRequestClose={() => { setRecordEditOpen(false); setRecordEditFeedback(null) }}>
         <View style={styles.modalRoot}>
           <View style={styles.modalSheet}>
             <View style={styles.modalTop}>
@@ -1549,7 +1616,7 @@ export default function FeedbackFormScreen(props: Props) {
         </View>
       </Modal>
 
-      <Modal visible={actionOpen} transparent animationType="fade" onRequestClose={() => { setActionOpen(false); setActionFeedback(null); }}>
+      <Modal visible={actionOpen} transparent presentationStyle="overFullScreen" animationType="fade" onRequestClose={() => { setActionOpen(false); setActionFeedback(null); }}>
         <View style={styles.modalRoot}>
           <View style={styles.modalSheet}>
             <View style={styles.modalTop}>
@@ -1625,7 +1692,7 @@ export default function FeedbackFormScreen(props: Props) {
         </View>
       </Modal>
 
-      <Modal visible={dailyEditOpen} transparent animationType="fade" onRequestClose={() => setDailyEditOpen(false)}>
+      <Modal visible={dailyEditOpen} transparent presentationStyle="overFullScreen" animationType="fade" onRequestClose={() => setDailyEditOpen(false)}>
         <View style={styles.modalRoot}>
           <View style={styles.modalSheet}>
             <View style={styles.modalTop}>
@@ -1688,27 +1755,35 @@ export default function FeedbackFormScreen(props: Props) {
         </View>
       </Modal>
 
-      <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)}>
-        <View style={styles.viewerRoot}>
-          <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: viewerIndex * screenWidth, y: 0 }}>
+      <Modal visible={viewerOpen} transparent presentationStyle="overFullScreen" animationType="fade" onRequestClose={closeViewer}>
+        <Pressable style={styles.viewerBackdrop} onPress={closeViewer}>
+          <Pressable style={styles.viewerCard} onPress={() => {}}>
+            <ScrollView
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              contentOffset={{ x: viewerIndex * screenWidth, y: 0 }}
+              onMomentumScrollEnd={(event) => syncViewerIndex(event.nativeEvent.contentOffset.x)}
+            >
             {viewerUrls.map((u, idx) => (
-              <View key={`${u}-${idx}`} style={{ width: screenWidth, height: '100%' }}>
+                <View key={`${u}-${idx}`} style={[styles.viewerSlide, { width: screenWidth }]}>
                 <Image source={{ uri: toAbsoluteUrl(u) }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
               </View>
             ))}
-          </ScrollView>
-          <View style={[styles.viewerTop, { paddingTop: Math.max(insets.top, 12) }]}>
-            <Pressable onPress={() => setViewerOpen(false)}><Text style={styles.viewerText}>关闭</Text></Pressable>
-            {viewerUrls[viewerIndex] ? (
-              <Pressable onPress={() => Linking.openURL(viewerUrls[viewerIndex]).catch(() => Alert.alert(t('common_error'), '打开失败'))}>
-                <Text style={styles.viewerText}>浏览器打开</Text>
-              </Pressable>
-            ) : null}
-          </View>
-        </View>
+            </ScrollView>
+            <View style={[styles.viewerTop, { paddingTop: Math.max(insets.top, 12) }]}>
+              <Pressable onPress={closeViewer}><Text style={styles.viewerText}>关闭</Text></Pressable>
+              {viewerUrls[viewerIndex] ? (
+                <Pressable onPress={() => Linking.openURL(viewerUrls[viewerIndex]).catch(() => Alert.alert(t('common_error'), '打开失败'))}>
+                  <Text style={styles.viewerText}>浏览器打开</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          </Pressable>
+        </Pressable>
       </Modal>
 
-      <Modal visible={timePickerOpen} transparent animationType="slide" onRequestClose={() => setTimePickerOpen(false)}>
+      <Modal visible={timePickerOpen} transparent presentationStyle="overFullScreen" animationType="slide" onRequestClose={() => setTimePickerOpen(false)}>
         <View style={styles.modalRoot}>
           <View style={[styles.modalCard, { maxHeight: '72%' }]}>
             <View style={styles.modalTop}>
@@ -1776,44 +1851,70 @@ function StepCard(props: { step: string; title: string; subtitle?: string; child
   )
 }
 
-function PhotoStrip(props: { urls: string[]; onPress: (urls: string[], index: number) => void }) {
+function PhotoStrip(props: { urls: string[]; onPress: (urls: string[], index: number) => void; onRemove?: (index: number) => void }) {
   if (!props.urls.length) return null
   return (
     <View style={styles.thumbRow}>
       {props.urls.map((u, idx) => (
-        <Pressable key={`${u}-${idx}`} onPress={() => props.onPress(props.urls, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
-          <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.thumb} />
-        </Pressable>
+        <View key={`${u}-${idx}`} style={styles.thumbItemWrap}>
+          <Pressable onPress={() => props.onPress(props.urls, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
+            <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.thumb} />
+          </Pressable>
+          {props.onRemove ? (
+            <Pressable onPress={() => props.onRemove?.(idx)} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
+              <Ionicons name="trash-outline" size={14} color="#FFFFFF" />
+            </Pressable>
+          ) : null}
+        </View>
       ))}
     </View>
   )
 }
 
-function FeedbackGroup(props: { title: string; items: PropertyFeedback[]; onView: (item: PropertyFeedback) => void; onEdit: (item: PropertyFeedback) => void }) {
+function FeedbackGroup(props: { title: string; items: PropertyFeedback[]; emptyText?: string; onView: (item: PropertyFeedback) => void; onEdit: (item: PropertyFeedback) => void; onPreview: (urls: string[], index: number) => void }) {
   return (
-    <View style={{ marginTop: 10 }}>
-      <Text style={styles.groupTitle}>{props.title}</Text>
+    <View style={styles.groupBlock}>
+      <View style={styles.groupHead}>
+        <Text style={styles.groupTitle}>{props.title}</Text>
+        <View style={styles.groupCountPill}>
+          <Text style={styles.groupCountText}>{props.items.length}</Text>
+        </View>
+      </View>
       {props.items.length ? (
-        props.items.map((item) => (
-          <View key={`${item.kind}:${item.id}`} style={styles.feedbackItem}>
-            <View style={styles.feedbackRow}>
-              <View style={styles.feedbackMain}>
-                <Text style={styles.feedbackTitle}>{extractContentText(item.detail) || item.item_name || '无标题'}</Text>
-                <Text style={styles.feedbackMeta}>{statusLabel(item)}</Text>
-              </View>
-              <View style={styles.feedbackActions}>
-                <Pressable onPress={() => props.onView(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
-                  <Ionicons name="eye-outline" size={18} color="#2563EB" />
-                </Pressable>
-                <Pressable onPress={() => props.onEdit(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
-                  <Ionicons name="create-outline" size={18} color="#2563EB" />
-                </Pressable>
+        props.items.map((item) => {
+          const previewUrls = feedbackPreviewUrls(item)
+          const previewUrl = previewUrls[0] ? toAbsoluteUrl(previewUrls[0]) : ''
+          return (
+            <View key={`${item.kind}:${item.id}`} style={styles.feedbackItem}>
+              <View style={styles.feedbackRow}>
+                <View style={styles.feedbackMain}>
+                  <Text style={styles.feedbackTitle}>{extractContentText(item.detail) || item.item_name || '无标题'}</Text>
+                  <Text style={styles.feedbackMeta}>{statusLabel(item)}</Text>
+                </View>
+                {previewUrl ? (
+                  <Pressable onPress={() => props.onPreview(previewUrls, 0)} style={({ pressed }) => [styles.feedbackThumbWrap, pressed ? styles.pressed : null]}>
+                    <Image source={{ uri: previewUrl }} style={styles.feedbackThumb} resizeMode="cover" />
+                    {previewUrls.length > 1 ? (
+                      <View style={styles.feedbackThumbBadge}>
+                        <Text style={styles.feedbackThumbBadgeText}>{previewUrls.length}</Text>
+                      </View>
+                    ) : null}
+                  </Pressable>
+                ) : null}
+                <View style={styles.feedbackActions}>
+                  <Pressable onPress={() => props.onView(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
+                    <Ionicons name="eye-outline" size={18} color="#2563EB" />
+                  </Pressable>
+                  <Pressable onPress={() => props.onEdit(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
+                    <Ionicons name="create-outline" size={18} color="#2563EB" />
+                  </Pressable>
+                </View>
               </View>
             </View>
-          </View>
-        ))
+          )
+        })
       ) : (
-        <Text style={styles.muted}>暂无记录</Text>
+        <Text style={styles.groupEmptyText}>{props.emptyText || '暂无记录'}</Text>
       )}
     </View>
   )
@@ -1891,8 +1992,10 @@ const styles = StyleSheet.create({
   timeFieldText: { color: '#111827', fontWeight: '800' },
   timeFieldPlaceholder: { color: '#6B7280', fontWeight: '700' },
   thumbRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  thumbItemWrap: { position: 'relative' },
   thumbWrap: { borderRadius: 10, overflow: 'hidden' },
   thumb: { width: 74, height: 74, borderRadius: 10, backgroundColor: '#E5E7EB' },
+  thumbDeleteBtn: { position: 'absolute', right: 4, top: 4, width: 20, height: 20, borderRadius: 10, backgroundColor: 'rgba(17,24,39,0.76)', alignItems: 'center', justifyContent: 'center' },
   submitWrap: { marginTop: 2, marginBottom: 2 },
   batchActions: { marginTop: 16, gap: 10 },
   secondaryBtn: { borderRadius: 16, backgroundColor: '#EFF6FF', paddingVertical: 14, alignItems: 'center', borderWidth: hairline(), borderColor: '#BFDBFE' },
@@ -1923,25 +2026,43 @@ const styles = StyleSheet.create({
   historySyncSubtitle: { color: '#1D4ED8', fontWeight: '700', fontSize: 12, marginTop: 2 },
   historyToggle: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: '#E2E8F0' },
   historyToggleText: { color: '#334155', fontWeight: '800', fontSize: 12 },
-  historyGroups: { marginTop: 10 },
+  historyGroups: { marginTop: 10, gap: 12 },
+  historySection: { borderRadius: 16, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E2E8F0', padding: 12 },
+  historySectionHead: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  historySectionTextWrap: { flex: 1 },
+  historySectionTitle: { color: '#0F172A', fontSize: 15, fontWeight: '900' },
+  historySectionSubtitle: { marginTop: 4, color: '#64748B', fontSize: 12, fontWeight: '700', lineHeight: 17 },
+  historySectionCount: { minWidth: 34, height: 34, borderRadius: 17, backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
+  historySectionCountText: { color: '#1D4ED8', fontSize: 13, fontWeight: '900' },
   sectionHead: { marginTop: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   sectionTitle: { fontWeight: '900', color: '#111827', fontSize: 16 },
   toggleBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: '#F3F4F6' },
   toggleText: { fontWeight: '800', color: '#111827', fontSize: 12 },
-  groupTitle: { fontWeight: '800', color: '#374151', marginBottom: 6 },
+  groupBlock: { marginTop: 12 },
+  groupHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 },
+  groupTitle: { fontWeight: '800', color: '#334155', fontSize: 13 },
+  groupCountPill: { minWidth: 24, height: 24, borderRadius: 12, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
+  groupCountText: { color: '#475569', fontSize: 11, fontWeight: '900' },
+  groupEmptyText: { color: '#94A3B8', fontWeight: '700', fontSize: 12 },
   feedbackItem: { padding: 10, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E2E8F0', marginBottom: 8 },
   feedbackRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   feedbackMain: { flex: 1, minWidth: 0 },
   feedbackTitle: { fontWeight: '800', color: '#1F2937' },
   feedbackMeta: { marginTop: 6, color: '#64748B', fontWeight: '700', fontSize: 12 },
+  feedbackThumbWrap: { width: 56, height: 56, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', position: 'relative' },
+  feedbackThumb: { width: '100%', height: '100%', backgroundColor: '#DBEAFE' },
+  feedbackThumbBadge: { position: 'absolute', right: 4, bottom: 4, minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4, backgroundColor: 'rgba(15,23,42,0.78)', alignItems: 'center', justifyContent: 'center' },
+  feedbackThumbBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
   feedbackActions: { flexDirection: 'row', gap: 8 },
   muted: { color: '#6B7280', marginTop: 8, fontWeight: '600' },
   modalRoot: { flex: 1, backgroundColor: 'rgba(17,24,39,0.45)', alignItems: 'center', justifyContent: 'center', padding: 16 },
+  modalBackdrop: { ...StyleSheet.absoluteFillObject },
   modalCard: { width: '100%', backgroundColor: '#FFFFFF', borderRadius: 18, overflow: 'hidden' },
   modalSheet: { width: '100%', height: '88%', backgroundColor: '#FFFFFF', borderRadius: 18, overflow: 'hidden' },
   modalBody: { flex: 1, minHeight: 0 },
   modalScroll: { flex: 1 },
   modalScrollBody: { padding: 14, paddingBottom: 120 },
+  detailModalBody: { padding: 14, paddingBottom: 20 },
   modalTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: hairline(), borderBottomColor: '#E5E7EB' },
   modalFooter: { paddingHorizontal: 14, paddingTop: 8, paddingBottom: 14, borderTopWidth: hairline(), borderTopColor: '#E5E7EB', backgroundColor: '#FFFFFF' },
   modalActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -1970,7 +2091,9 @@ const styles = StyleSheet.create({
   timeChipText: { color: '#111827', fontWeight: '800' },
   timeChipTextActive: { color: '#FFFFFF' },
   pressed: { opacity: 0.75 },
-  viewerRoot: { flex: 1, backgroundColor: '#000000' },
+  viewerBackdrop: { flex: 1, backgroundColor: '#000000' },
+  viewerCard: { flex: 1, backgroundColor: '#000000' },
+  viewerSlide: { height: '100%' },
   viewerTop: { position: 'absolute', left: 0, right: 0, top: 0, paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between' },
   viewerText: { color: '#FFFFFF', fontWeight: '800' },
 })

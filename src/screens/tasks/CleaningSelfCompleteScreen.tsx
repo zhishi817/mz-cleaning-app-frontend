@@ -6,6 +6,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
+import { effectiveInspectionMode } from '../../lib/cleaningInspection'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
@@ -91,6 +92,11 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   const cleaningTaskId = String(task?.source_id || '').trim()
   const propertyCode = String(task?.property?.code || '').trim()
   const propertyAddr = String(task?.property?.address || '').trim()
+  const taskType = String((task as any)?.task_type || '').trim().toLowerCase()
+  const isStayoverTask = taskType === 'stayover_clean'
+  const inspectionMode = effectiveInspectionMode(task as any)
+  const requiresConsumables = !isStayoverTask
+  const requiresLockboxVideo = !isStayoverTask
 
   const [completion, setCompletion] = useState<Record<PhotoArea, string[]>>({
     toilet: [],
@@ -121,7 +127,18 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   const [remoteTvPhotoUrl, setRemoteTvPhotoUrl] = useState<string | null>(null)
   const [livingRoomPhotoUrl, setLivingRoomPhotoUrl] = useState<string | null>(String((task as any)?.living_room_photo_url || '').trim() || null)
 
-  const lockboxOk = !!String(lockboxUrl || '').trim()
+  const lockboxOk = !requiresLockboxVideo || !!String(lockboxUrl || '').trim()
+  const feedbackStepNo = isStayoverTask ? '1.' : '2.'
+  const photosStepNo = isStayoverTask ? '2.' : '3.'
+  const completeStepNo = isStayoverTask ? '3.' : '4.'
+
+  useEffect(() => {
+    if (!task || isStayoverTask) return
+    if (inspectionMode === 'self_complete') return
+    Alert.alert('待确认检查安排', '当前任务不是“自完成”流程，请等待经理确认检查安排。', [
+      { text: '知道了', onPress: () => props.navigation.goBack() },
+    ])
+  }, [inspectionMode, isStayoverTask, props.navigation, task])
 
   const canSubmitSupplies = useMemo(() => {
     if (!supplies.length) return false
@@ -161,6 +178,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   }, [cleaningTaskId, token])
 
   const loadSuppliesChecklist = useCallback(async () => {
+    if (!requiresConsumables) return
     if (!token) return
     if (supplies.length) return
     try {
@@ -181,7 +199,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     } finally {
       setSuppliesLoading(false)
     }
-  }, [supplies.length, t, token])
+  }, [requiresConsumables, supplies.length, t, token])
 
   useEffect(() => {
     refresh()
@@ -195,6 +213,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   }, [props.navigation, refresh])
 
   useEffect(() => {
+    if (!requiresConsumables) return
     loadSuppliesChecklist()
   }, [loadSuppliesChecklist])
 
@@ -437,7 +456,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   async function onSelfComplete() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!cleaningTaskId) return Alert.alert(t('common_error'), '缺少任务信息')
-    if (!lockboxOk) return Alert.alert(t('common_error'), '请先上传挂钥匙视频')
+    if (requiresLockboxVideo && !lockboxOk) return Alert.alert(t('common_error'), '请先上传挂钥匙视频')
     if (!completionOk) return Alert.alert(t('common_error'), '请先上传房间完成照片')
     try {
       setSubmitting(true)
@@ -473,188 +492,191 @@ export default function CleaningSelfCompleteScreen(props: Props) {
             {loading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
           </View>
           {propertyAddr ? <Text style={styles.sub}>{propertyAddr}</Text> : null}
+          {isStayoverTask ? <Text style={styles.mutedSmall}>入住中清洁无需上传钥匙、无需补品和检查，补齐完成照片后可直接标记完成。</Text> : null}
         </View>
 
-        <View style={styles.card}>
-          <Pressable onPress={() => toggle('supplies')} style={({ pressed }) => [styles.sectionHead, pressed ? styles.pressed : null]}>
-            {sectionTitle('1.', '消耗品补充', 'cube-outline')}
-            <Ionicons name={expanded.supplies ? 'chevron-up' : 'chevron-down'} size={moderateScale(18)} color="#6B7280" />
-          </Pressable>
-          {expanded.supplies ? (
-            <>
-              <Text style={styles.mutedSmall}>请完成消耗品补充（不足项需拍照）。</Text>
-              <Text style={styles.mutedSmall}>{`待住晚数：${remainingNights == null ? '-' : String(remainingNights)}`}</Text>
-              {suppliesSubmitted ? <Text style={styles.ok}>已提交</Text> : suppliesLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : <Text style={styles.warn}>未提交</Text>}
-              <View style={styles.supBlock}>
-                <Text style={styles.supLabel}>客厅照片</Text>
-                <Text style={styles.mutedSmall}>提交补品前需重新提供一张客厅照片。</Text>
-                <View style={styles.supRow}>
-                  <Pressable
-                    onPress={() => onUploadLivingRoomPhoto('camera')}
-                    disabled={suppliesSubmitting}
-                    style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
-                  >
-                    <Text style={styles.supPhotoText}>{livingRoomPhotoUrl ? '重新拍照' : '拍照'}</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => onUploadLivingRoomPhoto('library')}
-                    disabled={suppliesSubmitting}
-                    style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
-                  >
-                    <Text style={styles.supPhotoText}>相册上传</Text>
-                  </Pressable>
+        {requiresConsumables ? (
+          <View style={styles.card}>
+            <Pressable onPress={() => toggle('supplies')} style={({ pressed }) => [styles.sectionHead, pressed ? styles.pressed : null]}>
+              {sectionTitle('1.', '消耗品补充', 'cube-outline')}
+              <Ionicons name={expanded.supplies ? 'chevron-up' : 'chevron-down'} size={moderateScale(18)} color="#6B7280" />
+            </Pressable>
+            {expanded.supplies ? (
+              <>
+                <Text style={styles.mutedSmall}>请完成消耗品补充（不足项需拍照）。</Text>
+                <Text style={styles.mutedSmall}>{`待住晚数：${remainingNights == null ? '-' : String(remainingNights)}`}</Text>
+                {suppliesSubmitted ? <Text style={styles.ok}>已提交</Text> : suppliesLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : <Text style={styles.warn}>未提交</Text>}
+                <View style={styles.supBlock}>
+                  <Text style={styles.supLabel}>客厅照片</Text>
+                  <Text style={styles.mutedSmall}>提交补品前需重新提供一张客厅照片。</Text>
+                  <View style={styles.supRow}>
+                    <Pressable
+                      onPress={() => onUploadLivingRoomPhoto('camera')}
+                      disabled={suppliesSubmitting}
+                      style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                    >
+                      <Text style={styles.supPhotoText}>{livingRoomPhotoUrl ? '重新拍照' : '拍照'}</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => onUploadLivingRoomPhoto('library')}
+                      disabled={suppliesSubmitting}
+                      style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                    >
+                      <Text style={styles.supPhotoText}>相册上传</Text>
+                    </Pressable>
+                  </View>
+                  {livingRoomPhotoUrl ? (
+                    <Pressable
+                      onPress={() => {
+                        setViewerUrls([toAbsoluteUrl(livingRoomPhotoUrl)])
+                        setViewerIndex(0)
+                        setViewerOpen(true)
+                      }}
+                      style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
+                    >
+                      <Image source={{ uri: toAbsoluteUrl(livingRoomPhotoUrl) }} style={styles.supPreviewImg} />
+                    </Pressable>
+                  ) : null}
                 </View>
-                {livingRoomPhotoUrl ? (
-                  <Pressable
-                    onPress={() => {
-                      setViewerUrls([toAbsoluteUrl(livingRoomPhotoUrl)])
-                      setViewerIndex(0)
-                      setViewerOpen(true)
-                    }}
-                    style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
-                  >
-                    <Image source={{ uri: toAbsoluteUrl(livingRoomPhotoUrl) }} style={styles.supPreviewImg} />
-                  </Pressable>
-                ) : null}
-              </View>
-              {supplies.map((it, idx) => (
-                <View key={it.id} style={styles.supBlock}>
-                  <Text style={styles.supLabel}>{it.label}</Text>
-                  {it.id === 'other' ? (
-                    <TextInput
-                      value={it.note}
-                      onChangeText={(v) => setSupplyItem(idx, { note: v })}
-                      style={[styles.supInput, styles.supNote]}
-                      placeholder="其他需要补充/检查的内容（可选）"
-                      placeholderTextColor="#9CA3AF"
-                      multiline
-                    />
-                  ) : (
-                    <View style={styles.supRow}>
-                      <Pressable
-                        onPress={() => setSupplyItem(idx, { status: 'ok', photo_url: null })}
-                        style={({ pressed }) => [styles.supChip, it.status === 'ok' ? styles.supChipActive : null, pressed ? styles.pressed : null]}
-                      >
-                        <Text style={[styles.supChipText, it.status === 'ok' ? styles.supChipTextActive : null]}>足够</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => setSupplyItem(idx, { status: 'low' })}
-                        style={({ pressed }) => [styles.supChip, it.status === 'low' ? styles.supChipActive : null, pressed ? styles.pressed : null]}
-                      >
-                        <Text style={[styles.supChipText, it.status === 'low' ? styles.supChipTextActive : null]}>不足</Text>
-                      </Pressable>
-                    </View>
-                  )}
-                  {it.status === 'low' ? (
-                    <>
-                      <View style={styles.supRow}>
-                        <TextInput
-                          value={it.qty}
-                          onChangeText={(v) => setSupplyItem(idx, { qty: v.replace(/[^\d]/g, '').slice(0, 6) })}
-                          style={[styles.supInput, styles.supQty]}
-                          placeholder="缺多少（数量）"
-                          placeholderTextColor="#9CA3AF"
-                          keyboardType="number-pad"
-                        />
-                        <Pressable
-                          onPress={() => onTakeStockPhoto(idx)}
-                          disabled={suppliesSubmitting}
-                          style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
-                        >
-                          <Text style={styles.supPhotoText}>{it.photo_url ? '已拍照' : '拍照库存'}</Text>
-                        </Pressable>
-                      </View>
-                      {it.photo_url ? (
-                        <Pressable
-                          onPress={() => {
-                            setViewerUrls([toAbsoluteUrl(it.photo_url)])
-                            setViewerIndex(0)
-                            setViewerOpen(true)
-                          }}
-                          style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
-                        >
-                          <Image source={{ uri: toAbsoluteUrl(it.photo_url) }} style={styles.supPreviewImg} />
-                        </Pressable>
-                      ) : null}
+                {supplies.map((it, idx) => (
+                  <View key={it.id} style={styles.supBlock}>
+                    <Text style={styles.supLabel}>{it.label}</Text>
+                    {it.id === 'other' ? (
                       <TextInput
                         value={it.note}
                         onChangeText={(v) => setSupplyItem(idx, { note: v })}
                         style={[styles.supInput, styles.supNote]}
-                        placeholder="备注（可选）"
+                        placeholder="其他需要补充/检查的内容（可选）"
                         placeholderTextColor="#9CA3AF"
                         multiline
                       />
-                    </>
+                    ) : (
+                      <View style={styles.supRow}>
+                        <Pressable
+                          onPress={() => setSupplyItem(idx, { status: 'ok', photo_url: null })}
+                          style={({ pressed }) => [styles.supChip, it.status === 'ok' ? styles.supChipActive : null, pressed ? styles.pressed : null]}
+                        >
+                          <Text style={[styles.supChipText, it.status === 'ok' ? styles.supChipTextActive : null]}>足够</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => setSupplyItem(idx, { status: 'low' })}
+                          style={({ pressed }) => [styles.supChip, it.status === 'low' ? styles.supChipActive : null, pressed ? styles.pressed : null]}
+                        >
+                          <Text style={[styles.supChipText, it.status === 'low' ? styles.supChipTextActive : null]}>不足</Text>
+                        </Pressable>
+                      </View>
+                    )}
+                    {it.status === 'low' ? (
+                      <>
+                        <View style={styles.supRow}>
+                          <TextInput
+                            value={it.qty}
+                            onChangeText={(v) => setSupplyItem(idx, { qty: v.replace(/[^\d]/g, '').slice(0, 6) })}
+                            style={[styles.supInput, styles.supQty]}
+                            placeholder="缺多少（数量）"
+                            placeholderTextColor="#9CA3AF"
+                            keyboardType="number-pad"
+                          />
+                          <Pressable
+                            onPress={() => onTakeStockPhoto(idx)}
+                            disabled={suppliesSubmitting}
+                            style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                          >
+                            <Text style={styles.supPhotoText}>{it.photo_url ? '已拍照' : '拍照库存'}</Text>
+                          </Pressable>
+                        </View>
+                        {it.photo_url ? (
+                          <Pressable
+                            onPress={() => {
+                              setViewerUrls([toAbsoluteUrl(it.photo_url)])
+                              setViewerIndex(0)
+                              setViewerOpen(true)
+                            }}
+                            style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
+                          >
+                            <Image source={{ uri: toAbsoluteUrl(it.photo_url) }} style={styles.supPreviewImg} />
+                          </Pressable>
+                        ) : null}
+                        <TextInput
+                          value={it.note}
+                          onChangeText={(v) => setSupplyItem(idx, { note: v })}
+                          style={[styles.supInput, styles.supNote]}
+                          placeholder="备注（可选）"
+                          placeholderTextColor="#9CA3AF"
+                          multiline
+                        />
+                      </>
+                    ) : null}
+                  </View>
+                ))}
+                <View style={styles.supBlock}>
+                  <Text style={styles.supLabel}>遥控器拍照</Text>
+                  <Text style={styles.mutedSmall}>请拍照：电视遥控器、空调遥控器。</Text>
+                  <Text style={styles.mutedSmall}>备注：空调遥控器嵌在墙上的不用拍照。</Text>
+
+                  <Text style={[styles.supLabel, { marginTop: 10 }]}>空调遥控器</Text>
+                  <View style={styles.supRow}>
+                    <Pressable
+                      onPress={() => onTakeRemotePhoto('ac')}
+                      disabled={suppliesSubmitting}
+                      style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                    >
+                      <Text style={styles.supPhotoText}>{remoteAcPhotoUrl ? '已拍照' : '拍照'}</Text>
+                    </Pressable>
+                  </View>
+                  {remoteAcPhotoUrl ? (
+                    <Pressable
+                      onPress={() => {
+                        setViewerUrls([toAbsoluteUrl(remoteAcPhotoUrl)])
+                        setViewerIndex(0)
+                        setViewerOpen(true)
+                      }}
+                      style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
+                    >
+                      <Image source={{ uri: toAbsoluteUrl(remoteAcPhotoUrl) }} style={styles.supPreviewImg} />
+                    </Pressable>
+                  ) : null}
+
+                  <Text style={[styles.supLabel, { marginTop: 12 }]}>电视遥控器</Text>
+                  <View style={styles.supRow}>
+                    <Pressable
+                      onPress={() => onTakeRemotePhoto('tv')}
+                      disabled={suppliesSubmitting}
+                      style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                    >
+                      <Text style={styles.supPhotoText}>{remoteTvPhotoUrl ? '已拍照' : '拍照'}</Text>
+                    </Pressable>
+                  </View>
+                  {remoteTvPhotoUrl ? (
+                    <Pressable
+                      onPress={() => {
+                        setViewerUrls([toAbsoluteUrl(remoteTvPhotoUrl)])
+                        setViewerIndex(0)
+                        setViewerOpen(true)
+                      }}
+                      style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
+                    >
+                      <Image source={{ uri: toAbsoluteUrl(remoteTvPhotoUrl) }} style={styles.supPreviewImg} />
+                    </Pressable>
                   ) : null}
                 </View>
-              ))}
-              <View style={styles.supBlock}>
-                <Text style={styles.supLabel}>遥控器拍照</Text>
-                <Text style={styles.mutedSmall}>请拍照：电视遥控器、空调遥控器。</Text>
-                <Text style={styles.mutedSmall}>备注：空调遥控器嵌在墙上的不用拍照。</Text>
-
-                <Text style={[styles.supLabel, { marginTop: 10 }]}>空调遥控器</Text>
-                <View style={styles.supRow}>
+                {supplies.length ? (
                   <Pressable
-                    onPress={() => onTakeRemotePhoto('ac')}
-                    disabled={suppliesSubmitting}
-                    style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                    onPress={onSubmitSupplies}
+                    disabled={suppliesSubmitting || !canSubmitSupplies}
+                    style={({ pressed }) => [styles.primaryBtn, pressed ? styles.pressed : null, suppliesSubmitting || !canSubmitSupplies ? styles.disabledPrimary : null]}
                   >
-                    <Text style={styles.supPhotoText}>{remoteAcPhotoUrl ? '已拍照' : '拍照'}</Text>
-                  </Pressable>
-                </View>
-                {remoteAcPhotoUrl ? (
-                  <Pressable
-                    onPress={() => {
-                      setViewerUrls([toAbsoluteUrl(remoteAcPhotoUrl)])
-                      setViewerIndex(0)
-                      setViewerOpen(true)
-                    }}
-                    style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
-                  >
-                    <Image source={{ uri: toAbsoluteUrl(remoteAcPhotoUrl) }} style={styles.supPreviewImg} />
+                    <Text style={styles.primaryText}>{suppliesSubmitting ? t('common_loading') : '提交消耗品补充'}</Text>
                   </Pressable>
                 ) : null}
-
-                <Text style={[styles.supLabel, { marginTop: 12 }]}>电视遥控器</Text>
-                <View style={styles.supRow}>
-                  <Pressable
-                    onPress={() => onTakeRemotePhoto('tv')}
-                    disabled={suppliesSubmitting}
-                    style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
-                  >
-                    <Text style={styles.supPhotoText}>{remoteTvPhotoUrl ? '已拍照' : '拍照'}</Text>
-                  </Pressable>
-                </View>
-                {remoteTvPhotoUrl ? (
-                  <Pressable
-                    onPress={() => {
-                      setViewerUrls([toAbsoluteUrl(remoteTvPhotoUrl)])
-                      setViewerIndex(0)
-                      setViewerOpen(true)
-                    }}
-                    style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
-                  >
-                    <Image source={{ uri: toAbsoluteUrl(remoteTvPhotoUrl) }} style={styles.supPreviewImg} />
-                  </Pressable>
-                ) : null}
-              </View>
-              {supplies.length ? (
-                <Pressable
-                  onPress={onSubmitSupplies}
-                  disabled={suppliesSubmitting || !canSubmitSupplies}
-                  style={({ pressed }) => [styles.primaryBtn, pressed ? styles.pressed : null, suppliesSubmitting || !canSubmitSupplies ? styles.disabledPrimary : null]}
-                >
-                  <Text style={styles.primaryText}>{suppliesSubmitting ? t('common_loading') : '提交消耗品补充'}</Text>
-                </Pressable>
-              ) : null}
-            </>
-          ) : null}
-        </View>
+              </>
+            ) : null}
+          </View>
+        ) : null}
 
         <View style={styles.card}>
           <Pressable onPress={() => toggle('feedback')} style={({ pressed }) => [styles.sectionHead, pressed ? styles.pressed : null]}>
-            {sectionTitle('2.', '房源问题反馈', 'chatbubble-ellipses-outline')}
+            {sectionTitle(feedbackStepNo, '房源问题反馈', 'chatbubble-ellipses-outline')}
             <Ionicons name={expanded.feedback ? 'chevron-up' : 'chevron-down'} size={moderateScale(18)} color="#6B7280" />
           </Pressable>
           {expanded.feedback ? (
@@ -674,7 +696,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
 
         <View style={styles.card}>
           <Pressable onPress={() => toggle('photos')} style={({ pressed }) => [styles.sectionHead, pressed ? styles.pressed : null]}>
-            {sectionTitle('3.', '房间完成照片', 'camera-outline')}
+            {sectionTitle(photosStepNo, '房间完成照片', 'camera-outline')}
             <Ionicons name={expanded.photos ? 'chevron-up' : 'chevron-down'} size={moderateScale(18)} color="#6B7280" />
           </Pressable>
           {expanded.photos ? (
@@ -736,20 +758,20 @@ export default function CleaningSelfCompleteScreen(props: Props) {
 
         <View style={styles.card}>
           <Pressable onPress={() => toggle('complete')} style={({ pressed }) => [styles.sectionHead, pressed ? styles.pressed : null]}>
-            {sectionTitle('4.', '标记已完成', 'checkmark-circle-outline')}
+            {sectionTitle(completeStepNo, '标记已完成', 'checkmark-circle-outline')}
             <Ionicons name={expanded.complete ? 'chevron-up' : 'chevron-down'} size={moderateScale(18)} color="#6B7280" />
           </Pressable>
           {expanded.complete ? (
             <>
               <View style={{ marginTop: 8, gap: 6 }}>
-                <Text style={styles.mutedSmall}>{`消耗品补充：${suppliesSubmitted ? '已提交' : '未提交'}`}</Text>
+                {requiresConsumables ? <Text style={styles.mutedSmall}>{`消耗品补充：${suppliesSubmitted ? '已提交' : '未提交'}`}</Text> : null}
                 <Text style={styles.mutedSmall}>{`房间完成照片：${completionOk ? '已满足' : '未满足'}`}</Text>
-                <Text style={styles.mutedSmall}>{`挂钥匙视频：${lockboxOk ? '已上传' : '未上传'}`}</Text>
+                {requiresLockboxVideo ? <Text style={styles.mutedSmall}>{`挂钥匙视频：${lockboxOk ? '已上传' : '未上传'}`}</Text> : null}
               </View>
 
               <View style={{ marginTop: 10 }}>
-                <Text style={styles.mutedSmall}>挂钥匙视频（可重传）</Text>
-                {lockboxOk ? (
+                {requiresLockboxVideo ? <Text style={styles.mutedSmall}>挂钥匙视频（可重传）</Text> : <Text style={styles.mutedSmall}>入住中清洁补齐完成照片后可直接标记完成。</Text>}
+                {requiresLockboxVideo && lockboxOk ? (
                   <View style={styles.videoWrap}>
                     <Video
                       source={{ uri: toAbsoluteUrl(lockboxUrl) }}
@@ -761,13 +783,15 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                   </View>
                 ) : null}
                 <View style={styles.row}>
-                  <Pressable
-                    onPress={onUploadLockboxVideo}
-                    disabled={uploading || submitting}
-                    style={({ pressed }) => [styles.grayBtn, pressed ? styles.pressed : null, uploading || submitting ? styles.disabled : null]}
-                  >
-                    <Text style={styles.grayText}>{lockboxOk ? '重传视频' : '上传视频'}</Text>
-                  </Pressable>
+                  {requiresLockboxVideo ? (
+                    <Pressable
+                      onPress={onUploadLockboxVideo}
+                      disabled={uploading || submitting}
+                      style={({ pressed }) => [styles.grayBtn, pressed ? styles.pressed : null, uploading || submitting ? styles.disabled : null]}
+                    >
+                      <Text style={styles.grayText}>{lockboxOk ? '重传视频' : '上传视频'}</Text>
+                    </Pressable>
+                  ) : null}
                   <Pressable
                     onPress={onSelfComplete}
                     disabled={uploading || submitting}

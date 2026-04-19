@@ -4,12 +4,14 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useIsFocused } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth'
+import { companyContentBody, companyContentSummary, companyGuideRoleLabel } from '../../lib/companyContent'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getJson, setJson } from '../../lib/storage'
 import { getNoticesSnapshot, initNoticesStore, markNoticeRead, refreshNotices, subscribeNotices, type Notice, upsertNotices } from '../../lib/noticesStore'
 import { getPresentedNotice } from '../../lib/noticePresentation'
 import { resolveNoticeCreatedAt } from '../../lib/noticeTime'
+import { isTaskInspectorUser, isTaskManagerUser, roleNamesOf } from '../../lib/roles'
 import { getWorkTasksSnapshot, subscribeWorkTasks } from '../../lib/workTasksStore'
 import {
   listCompanyAnnouncementsForApp,
@@ -21,6 +23,7 @@ import {
   markInboxNotificationsRead,
   type CompanyAnnouncement,
   type CompanyGuide,
+  type CompanyGuideRole,
   type InboxNotificationItem,
   type WarehouseGuide,
   type WorkTask,
@@ -42,6 +45,8 @@ type SearchResult = {
   url?: string | null
   copyText?: string | null
   secretId?: string
+  contentRaw?: string | null
+  guideRole?: CompanyGuideRole | null
 }
 
 type SearchSection = {
@@ -51,11 +56,20 @@ type SearchSection = {
   items: SearchResult[]
 }
 
+type CompanySecretSummary = {
+  id: string
+  title: string
+  username?: string | null
+  note?: string | null
+  secret?: string | null
+  updated_at?: string | null
+}
+
 type CompanyContentCache = {
   announcements: CompanyAnnouncement[]
   workGuides: CompanyGuide[]
   warehouseGuides: WarehouseGuide[]
-  secrets: Array<{ id: string; title: string; username?: string | null; note?: string | null; secret?: string | null; updated_at?: string | null }>
+  secrets: CompanySecretSummary[]
 }
 
 const COMPANY_CONTENT_CACHE_KEY = 'mzstay.notices.company-content.v1'
@@ -97,57 +111,6 @@ function normalizeHttpUrl(raw: string | null | undefined) {
   if (!u) return null
   if (/^https?:\/\//i.test(u)) return u
   return `https://${u}`
-}
-
-function extractTextLinesFromContent(content: string | null | undefined): string[] {
-  const raw = String(content || '').trim()
-  if (!raw) return []
-  try {
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return raw.split(/\n+/).map(s => s.trim()).filter(Boolean)
-    const lines: string[] = []
-    for (const block of parsed) {
-      const type = String(block?.type || '').trim()
-      if (type === 'heading' || type === 'paragraph' || type === 'callout') {
-        const text = String(block?.text || '').trim()
-        if (text) lines.push(text)
-        continue
-      }
-      if (type === 'image' || type === 'video') {
-        const caption = String(block?.caption || '').trim()
-        if (caption) lines.push(caption)
-        continue
-      }
-      if (type === 'step') {
-        const title = String(block?.title || '').trim()
-        if (title) lines.push(title)
-        const contents = Array.isArray(block?.contents) ? block.contents : []
-        for (const item of contents) {
-          const text = String(item?.text || item?.caption || '').trim()
-          if (text) lines.push(text)
-        }
-      }
-    }
-    return lines.filter(Boolean)
-  } catch {
-    return raw
-      .replace(/<[^>]+>/g, ' ')
-      .split(/\n+/)
-      .map(s => s.replace(/\s+/g, ' ').trim())
-      .filter(Boolean)
-  }
-}
-
-function companyContentBody(content: string | null | undefined) {
-  return extractTextLinesFromContent(content).join('\n')
-}
-
-function companyContentSummary(content: string | null | undefined, fallback = '暂无内容') {
-  const lines = extractTextLinesFromContent(content)
-  const merged = lines.slice(0, 3).join(' ')
-  const summary = merged.replace(/\s+/g, ' ').trim()
-  if (!summary) return fallback
-  return summary.length > 84 ? `${summary.slice(0, 84).trim()}...` : summary
 }
 
 function taskStatusLabel(task: WorkTask) {
@@ -215,6 +178,33 @@ function announcementSubtitle(item: CompanyAnnouncement) {
   return `${item.urgent ? '紧急公告 · ' : ''}${item.published_at ? item.published_at : '已发布'}`
 }
 
+function currentGuideRoleOf(user: any): CompanyGuideRole | null {
+  const roleNames = roleNamesOf(user)
+  if (roleNames.includes('cleaner')) return 'cleaner'
+  if (roleNames.includes('cleaning_inspector')) return 'cleaning_inspector'
+  return null
+}
+
+function preferredGuideRoleOf(user: any): CompanyGuideRole {
+  return currentGuideRoleOf(user) || 'cleaner'
+}
+
+function sortGuidesForRole(guides: CompanyGuide[], preferredRole: CompanyGuideRole) {
+  return guides
+    .map((guide, idx) => ({ guide, idx }))
+    .sort((a, b) => {
+      const rank = (role: CompanyGuideRole | null | undefined) => {
+        if (role === preferredRole) return 0
+        if (!role) return 1
+        return 2
+      }
+      const diff = rank(a.guide.guide_role) - rank(b.guide.guide_role)
+      if (diff !== 0) return diff
+      return a.idx - b.idx
+    })
+    .map((item) => item.guide)
+}
+
 export default function NoticesScreen(props: Props) {
   const { t } = useI18n()
   const { token, user } = useAuth()
@@ -226,7 +216,7 @@ export default function NoticesScreen(props: Props) {
   const [loadingMore, setLoadingMore] = useState(false)
   const [showUnreadOnly, setShowUnreadOnly] = useState(false)
   const [query, setQuery] = useState('')
-  const [secrets, setSecrets] = useState<Array<{ id: string; title: string; username?: string | null; note?: string | null; secret?: string | null; updated_at?: string | null }>>([])
+  const [secrets, setSecrets] = useState<CompanySecretSummary[]>([])
   const [historyTasks, setHistoryTasks] = useState<WorkTask[]>([])
   const [announcements, setAnnouncements] = useState<CompanyAnnouncement[]>([])
   const [announcementIndex, setAnnouncementIndex] = useState(0)
@@ -239,13 +229,15 @@ export default function NoticesScreen(props: Props) {
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false)
   const companyContentLoadedRef = useRef(false)
   const historyLoadedWindowIndexRef = useRef(-1)
-  const role = String(user?.role || '').trim()
-  const canSearchAllTaskHistory = role === 'admin' || role === 'offline_manager' || role === 'customer_service'
+  const canSearchAllTaskHistory = isTaskManagerUser(user)
+  const currentGuideRole = useMemo(() => currentGuideRoleOf(user), [user])
+  const preferredGuideRole = useMemo(() => preferredGuideRoleOf(user), [user])
+  const orderedWorkGuides = useMemo(() => sortGuidesForRole(workGuides, preferredGuideRole), [preferredGuideRole, workGuides])
 
   const snap = getNoticesSnapshot()
   const hasAnyUnread = Object.keys(snap.unreadIds || {}).length > 0
   const announcementCardWidth = useMemo(() => Math.max(280, windowWidth - 32), [windowWidth])
-  const featuredGuides = workGuides.slice(0, 5)
+  const featuredGuides = orderedWorkGuides.slice(0, 5)
 
   useEffect(() => {
     if (!announcements.length) {
@@ -570,11 +562,12 @@ export default function NoticesScreen(props: Props) {
       if (announcementResults.length >= 8) break
     }
 
-    for (const guide of workGuides) {
+    for (const guide of orderedWorkGuides) {
       const title = String(guide.title || '').trim()
       const body = companyContentBody(guide.content)
       const summary = companyContentSummary(guide.content, '工作指南')
-      const hay = `${title} ${summary} ${body}`.toLowerCase()
+      const roleLabel = companyGuideRoleLabel(guide.guide_role)
+      const hay = `${title} ${roleLabel} ${summary} ${body}`.toLowerCase()
       if (!hay.includes(q)) continue
       const key = String(guide.id || '').trim()
       if (!key || seen.has(`guide:${key}`)) continue
@@ -583,8 +576,10 @@ export default function NoticesScreen(props: Props) {
         id: `guide:${key}`,
         kind: 'guide',
         title: title || '工作指南',
-        subtitle: summary,
+        subtitle: roleLabel ? `${roleLabel} · ${summary}` : summary,
         body,
+        contentRaw: guide.content || null,
+        guideRole: guide.guide_role || null,
         icon: 'book-outline',
       })
       if (guideResults.length >= 8) break
@@ -605,6 +600,7 @@ export default function NoticesScreen(props: Props) {
         title: title || '仓库指南',
         subtitle: summary,
         body,
+        contentRaw: guide.content || null,
         icon: 'cube-outline',
       })
       if (warehouseGuideResults.length >= 8) break
@@ -617,14 +613,14 @@ export default function NoticesScreen(props: Props) {
       { key: 'guide', title: '工作指南', emptyText: '没有匹配的工作指南。', items: guideResults },
       { key: 'warehouse_guide', title: '仓库指南', emptyText: '没有匹配的仓库指南。', items: warehouseGuideResults },
     ] satisfies SearchSection[]
-  }, [query, announcements, historyTasks, historyWindowIndex, warehouseGuides, workGuides])
+  }, [announcements, historyTasks, historyWindowIndex, orderedWorkGuides, query, warehouseGuides])
 
   function openSearchResult(item: SearchResult) {
     if (item.kind === 'task' && item.taskId) {
       const isCleaningTask = String(item.taskSourceType || '').trim() === 'cleaning_tasks'
       const isInspection = isCleaningTask && String(item.taskKind || '').trim() === 'inspection'
-      const isManager = role === 'admin' || role === 'offline_manager' || role === 'customer_service'
-      const isInspector = role === 'cleaning_inspector' || role === 'cleaner_inspector'
+      const isManager = isTaskManagerUser(user)
+      const isInspector = isTaskInspectorUser(user)
       if (isManager && isCleaningTask) {
         props.navigation.navigate('ManagerDailyTask', { taskId: item.taskId })
         return
@@ -641,6 +637,8 @@ export default function NoticesScreen(props: Props) {
       title: item.title,
       subtitle: item.subtitle,
       body: item.body,
+      contentRaw: item.contentRaw || null,
+      guideRole: item.guideRole || null,
       url: item.url || null,
       copyText: item.copyText || null,
       secretId: item.secretId,
@@ -840,6 +838,8 @@ export default function NoticesScreen(props: Props) {
               const title = String(guide.title || '工作指南')
               const body = companyContentBody(guide.content)
               const summary = companyContentSummary(guide.content, '点击查看工作指南')
+              const roleLabel = companyGuideRoleLabel(guide.guide_role)
+              const isRecommended = !!currentGuideRole && guide.guide_role === currentGuideRole
               return (
                 <Pressable
                   key={String(guide.id || title)}
@@ -849,6 +849,8 @@ export default function NoticesScreen(props: Props) {
                       title,
                       subtitle: guide.updated_at ? `更新于 ${formatTime(String(guide.updated_at)).replace('/', '-').replace('/', '-')}` : '工作指南',
                       body,
+                      contentRaw: guide.content || null,
+                      guideRole: guide.guide_role || null,
                     })
                   }
                   style={({ pressed }) => [styles.guideCard, pressed ? styles.rowPressed : null]}
@@ -859,6 +861,20 @@ export default function NoticesScreen(props: Props) {
                     </View>
                     <Ionicons name="chevron-forward" size={moderateScale(14)} color="#9CA3AF" />
                   </View>
+                  {roleLabel || isRecommended ? (
+                    <View style={styles.guideBadgeRow}>
+                      {roleLabel ? (
+                        <View style={styles.guideBadge}>
+                          <Text style={styles.guideBadgeText}>{roleLabel}</Text>
+                        </View>
+                      ) : null}
+                      {isRecommended ? (
+                        <View style={[styles.guideBadge, styles.guideBadgePrimary]}>
+                          <Text style={[styles.guideBadgeText, styles.guideBadgePrimaryText]}>适合你</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  ) : null}
                   <Text style={styles.guideTitle} numberOfLines={2}>
                     {title}
                   </Text>
@@ -1069,6 +1085,11 @@ const styles = StyleSheet.create({
     borderWidth: hairline(),
     borderColor: '#BFDBFE',
   },
+  guideBadgeRow: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  guideBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE' },
+  guideBadgePrimary: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
+  guideBadgeText: { color: '#1D4ED8', fontSize: 11, fontWeight: '900' },
+  guideBadgePrimaryText: { color: '#FFFFFF' },
   guideTitle: { marginTop: 12, color: '#111827', fontSize: 14, fontWeight: '900' },
   guideSummary: { marginTop: 8, color: '#6B7280', fontSize: 12, lineHeight: 18, fontWeight: '700' },
   guidePlaceholder: {
