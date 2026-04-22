@@ -6,7 +6,11 @@ import {
   clearRememberedLogin,
   clearStoredUser,
   getAuthToken,
+  getRememberedLoginHint,
+  getRememberedPlainPassword,
   getStoredUser,
+  pruneExpiredRememberedLogin,
+  setRememberedLogin,
   setAuthToken,
   setStoredUser,
   type StoredUser,
@@ -38,6 +42,12 @@ function canUseLocalLogin() {
   return !!(__DEV__ && LOCAL_LOGIN_ENABLED && !API_BASE_URL)
 }
 
+function normalizeUsername(username: string) {
+  const alias: Record<string, string> = { ops: 'cs', field: 'cleaner' }
+  const key = String(username || '').trim()
+  return alias[key] || key
+}
+
 export function AuthProvider(props: { children: React.ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('booting')
   const [token, setToken] = useState<string | null>(null)
@@ -56,6 +66,9 @@ export function AuthProvider(props: { children: React.ReactNode }) {
     } catch {}
     await clearAuthToken()
     await clearStoredUser()
+    if (reason === 'manual') {
+      await clearRememberedLogin()
+    }
     setToken(null)
     setUser(null)
     setStatus('signedOut')
@@ -69,6 +82,43 @@ export function AuthProvider(props: { children: React.ReactNode }) {
   const clearAuthIssue = useCallback(() => {
     setAuthIssue(null)
   }, [])
+
+  const applySignedInState = useCallback(async (nextToken: string, nextUser: StoredUser) => {
+    await setAuthToken(nextToken)
+    await setStoredUser(nextUser)
+    setToken(nextToken)
+    setUser(nextUser)
+    setStatus('signedIn')
+    setAuthIssue(null)
+  }, [])
+
+  const signInWithRemoteCredentials = useCallback(async (username: string, password: string) => {
+    const normalizedUsername = normalizeUsername(username)
+    const { token: newToken } = await loginApi({ username: normalizedUsername, password })
+    const remoteUser = await meApi(newToken)
+    await setRememberedLogin({
+      username: normalizedUsername,
+      password,
+      rememberPassword: true,
+      biometricEnabled: false,
+    })
+    await applySignedInState(newToken, remoteUser)
+  }, [applySignedInState])
+
+  const trySilentReauth = useCallback(async () => {
+    await pruneExpiredRememberedLogin()
+    const hint = await getRememberedLoginHint()
+    if (!hint || hint.expired) return false
+    const password = await getRememberedPlainPassword()
+    if (!password) return false
+    try {
+      await signInWithRemoteCredentials(hint.username, password)
+      return true
+    } catch {
+      await clearRememberedLogin()
+      return false
+    }
+  }, [signInWithRemoteCredentials])
 
   const bootstrap = useCallback(async () => {
     try {
@@ -97,18 +147,15 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       }
       try {
         const remote = await meApi(t)
-        await setStoredUser(remote)
-        setToken(t)
-        setUser(remote)
-        setStatus('signedIn')
-        setAuthIssue(null)
+        await applySignedInState(t, remote)
       } catch {
-        await signOutInternal('session_expired')
+        const recovered = await trySilentReauth()
+        if (!recovered) await signOutInternal('session_expired')
       }
     } catch {
       setStatus('signedOut')
     }
-  }, [signOutInternal])
+  }, [applySignedInState, signOutInternal, trySilentReauth])
 
   useEffect(() => {
     bootstrap()
@@ -116,15 +163,18 @@ export function AuthProvider(props: { children: React.ReactNode }) {
 
   useEffect(() => {
     return subscribeAuthInvalidated(() => {
-      signOutInternal('session_expired').catch(() => null)
+      trySilentReauth().then((recovered) => {
+        if (!recovered) signOutInternal('session_expired').catch(() => null)
+      }).catch(() => {
+        signOutInternal('session_expired').catch(() => null)
+      })
     })
-  }, [signOutInternal])
+  }, [signOutInternal, trySilentReauth])
 
   const signIn = useCallback(async (params: { username: string; password: string }) => {
     try {
       setIsSigningIn(true)
-      const alias: Record<string, string> = { ops: 'cs', field: 'cleaner' }
-      const username = alias[params.username] || params.username
+      const username = normalizeUsername(params.username)
       if (canUseLocalLogin() && username.trim() === LOCAL_LOGIN_USERNAME && params.password === LOCAL_LOGIN_PASSWORD) {
         const localUser = { id: `local:${username.trim()}`, username: username.trim(), role: LOCAL_LOGIN_ROLE }
         const localToken = localTokenFor(localUser.username)
@@ -140,19 +190,11 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       if (!API_BASE_URL && canUseLocalLogin()) {
         throw new Error('后端地址未配置，且本地测试账号/密码不匹配')
       }
-      const { token: newToken } = await loginApi({ username, password: params.password })
-      const remoteUser = await meApi(newToken)
-      await setAuthToken(newToken)
-      await setStoredUser(remoteUser)
-      await clearRememberedLogin()
-      setToken(newToken)
-      setUser(remoteUser)
-      setStatus('signedIn')
-      setAuthIssue(null)
+      await signInWithRemoteCredentials(username, params.password)
     } finally {
       setIsSigningIn(false)
     }
-  }, [])
+  }, [signInWithRemoteCredentials])
 
   const requestPasswordReset = useCallback(async (params: { email: string }) => {
     if (!API_BASE_URL && canUseLocalLogin()) return

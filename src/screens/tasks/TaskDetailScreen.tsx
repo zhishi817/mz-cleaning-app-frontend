@@ -125,7 +125,7 @@ function urgencyMeta(value: any) {
   if (!s) return null
   if (s === 'urgent') return { text: '紧急', pill: styles.urgencyUrgent, textStyle: styles.urgencyUrgentText }
   if (s === 'high') return { text: '高优先', pill: styles.urgencyHigh, textStyle: styles.urgencyHighText }
-  if (s === 'medium') return { text: '普通', pill: styles.urgencyMedium, textStyle: styles.urgencyMediumText }
+  if (s === 'medium') return null
   if (s === 'low') return { text: '低优先', pill: styles.urgencyLow, textStyle: styles.urgencyLowText }
   return { text: s.toUpperCase(), pill: styles.urgencyMedium, textStyle: styles.urgencyMediumText }
 }

@@ -545,6 +545,7 @@ export type PropertyFeedback = {
   areas?: string[] | null
   category?: string | null
   detail: string
+  invoice_description_en?: string | null
   item_name?: string | null
   quantity?: number | null
   note?: string | null
