@@ -12,6 +12,8 @@ export default function LoginScreen(props: Props) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [errors, setErrors] = useState<{ username?: string; password?: string }>({})
+  const [focusedField, setFocusedField] = useState<'username' | 'password' | null>(null)
+  const biometricLabel = Platform.OS === 'ios' ? 'Face ID' : '指纹/面容'
 
   const canSubmit = useMemo(() => !!username.trim() && !!password.trim() && !isSigningIn, [isSigningIn, password, username])
 
@@ -30,6 +32,13 @@ export default function LoginScreen(props: Props) {
       Alert.alert('登录失败', err?.message || '请稍后重试')
     }
   }
+
+  const focusHint =
+    focusedField === 'username'
+      ? '如果系统已保存账号，键盘上方通常会直接出现已保存账号建议，点一下即可带入。'
+      : focusedField === 'password'
+        ? `如果系统已保存密码，可直接点键盘建议，并用 ${biometricLabel} 或系统验证完成自动填充。`
+        : null
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.page}>
@@ -50,11 +59,13 @@ export default function LoginScreen(props: Props) {
             placeholder="admin / cs / cleaner"
             autoCapitalize="none"
             autoCorrect={false}
-            keyboardType="email-address"
+            keyboardType="default"
             textContentType="username"
             autoComplete="username"
             importantForAutofill="yes"
             returnKeyType="next"
+            onFocus={() => setFocusedField('username')}
+            onBlur={() => setFocusedField(current => (current === 'username' ? null : current))}
             style={[styles.input, errors.username ? styles.inputError : null]}
             editable={!isSigningIn}
           />
@@ -72,15 +83,23 @@ export default function LoginScreen(props: Props) {
             placeholder="请输入密码"
             secureTextEntry
             textContentType="password"
-            autoComplete="password"
+            autoComplete="current-password"
             importantForAutofill="yes"
             returnKeyType="done"
             onSubmitEditing={onSubmit}
+            onFocus={() => setFocusedField('password')}
+            onBlur={() => setFocusedField(current => (current === 'password' ? null : current))}
             style={[styles.input, errors.password ? styles.inputError : null]}
             editable={!isSigningIn}
           />
           {!!errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
         </View>
+
+        {focusHint ? (
+          <View style={styles.focusHintBox}>
+            <Text style={styles.focusHintText}>{focusHint}</Text>
+          </View>
+        ) : null}
 
         <Pressable
           style={({ pressed }) => [styles.submitBtn, !canSubmit ? styles.submitBtnDisabled : null, pressed && canSubmit ? styles.submitBtnPressed : null]}
@@ -89,6 +108,8 @@ export default function LoginScreen(props: Props) {
         >
           <Text style={styles.submitText}>{isSigningIn ? '登录中…' : '登录'}</Text>
         </Pressable>
+
+        <Text style={styles.systemHint}>如已在系统密码管理器中保存账号，可直接使用 {biometricLabel} 或系统自动填充登录。</Text>
 
         <Pressable onPress={() => props.navigation.navigate('ForgotPassword')} disabled={isSigningIn} style={styles.forgotBtn}>
           <Text style={styles.forgotText}>忘记密码？</Text>
@@ -162,6 +183,20 @@ const styles = StyleSheet.create({
     color: '#EF4444',
     fontSize: 12,
   },
+  focusHintBox: {
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  focusHintText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#1D4ED8',
+  },
   submitBtn: {
     marginTop: 18,
     paddingVertical: 14,
@@ -179,6 +214,13 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
+  },
+  systemHint: {
+    marginTop: 12,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#6B7280',
+    textAlign: 'center',
   },
   forgotBtn: {
     marginTop: 14,
