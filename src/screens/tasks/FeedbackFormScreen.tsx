@@ -680,8 +680,8 @@ export default function FeedbackFormScreen(props: Props) {
     try {
       const res =
         source === 'camera'
-          ? await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
-          : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsMultipleSelection: true, selectionLimit: 0, orderedSelection: true })
+          ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1 })
+          : await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 1, allowsMultipleSelection: true, selectionLimit: 0, orderedSelection: true })
       if (res.canceled || !res.assets?.length) return []
       const uploaded: string[] = []
       for (const asset of res.assets as any[]) {

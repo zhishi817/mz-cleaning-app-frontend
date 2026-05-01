@@ -428,7 +428,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
     } catch {}
     let res: ImagePicker.ImagePickerResult
     try {
-      res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
+      res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1 })
     } catch {
       Alert.alert(t('common_error'), '无法打开相机（请用真机测试）')
       return

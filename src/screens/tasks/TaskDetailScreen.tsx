@@ -304,7 +304,7 @@ export default function TaskDetailScreen(props: Props) {
 
     let res: ImagePicker.ImagePickerResult
     try {
-      res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
+      res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1 })
     } catch (e: any) {
       Alert.alert(t('common_error'), '无法打开相机（模拟器不支持相机拍照，请用真机测试）')
       return
@@ -413,9 +413,9 @@ export default function TaskDetailScreen(props: Props) {
       setMarking(true)
       const res =
         source === 'camera'
-          ? await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
+          ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1 })
           : await ImagePicker.launchImageLibraryAsync({
-              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              mediaTypes: 'images',
               quality: 1,
               allowsMultipleSelection: true,
               selectionLimit: 0,

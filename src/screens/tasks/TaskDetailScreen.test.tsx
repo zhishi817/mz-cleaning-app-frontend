@@ -13,7 +13,7 @@ jest.mock('react-native-safe-area-context', () => {
 
 jest.mock('expo-image-picker', () => {
   return {
-    MediaTypeOptions: { Images: 'Images' },
+    MediaType: { IMAGE: 'images', VIDEO: 'videos' },
     requestCameraPermissionsAsync: jest.fn(async () => ({ granted: true })),
     launchCameraAsync: jest.fn(async () => ({
       canceled: false,

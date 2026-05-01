@@ -67,7 +67,7 @@ async function pickSingleImage(t: (key: any) => string) {
     return null
   }
   const result = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+    mediaTypes: 'images',
     quality: 1,
     allowsEditing: false,
   })

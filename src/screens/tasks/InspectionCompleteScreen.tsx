@@ -103,7 +103,7 @@ export default function InspectionCompleteScreen(props: Props) {
         return
       }
       const res = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+        mediaTypes: 'videos',
         videoMaxDuration: 30,
         quality: ImagePicker.UIImagePickerControllerQualityType.High,
       } as any)

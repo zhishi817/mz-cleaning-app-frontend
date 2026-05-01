@@ -268,7 +268,7 @@ export default function InspectionPanelScreen(props: Props) {
     if (!token) throw new Error('请先登录')
     const ok = await ensureCameraPerm()
     if (!ok) throw new Error('需要相机权限')
-    const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
+    const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1, allowsEditing: true, aspect: [4, 3] })
     if (res.canceled || !res.assets?.length) return null
     const a = res.assets[0] as any
     const uri = String(a.uri || '').trim()
@@ -284,7 +284,7 @@ export default function InspectionPanelScreen(props: Props) {
     if (!token) throw new Error('请先登录')
     const ok = await ensureLibraryPerm()
     if (!ok) throw new Error('需要相册权限')
-    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 1, allowsEditing: true, aspect: [4, 3] })
     if (res.canceled || !res.assets?.length) return null
     const a = res.assets[0] as any
     const uri = String(a.uri || '').trim()
