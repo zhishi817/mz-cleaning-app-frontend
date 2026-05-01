@@ -2,7 +2,7 @@
   "expo": {
     "name": "MZStay",
     "slug": "mzstay-app",
-    "version": "1.0.16",
+    "version": "1.0.17",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -15,7 +15,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.mzproperty.cleaning",
-      "buildNumber": "16",
+      "buildNumber": "17",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "用于拍摄钥匙照片并上传到任务记录。",

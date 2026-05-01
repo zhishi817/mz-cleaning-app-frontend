@@ -40,6 +40,10 @@ const KITCHEN_REQUIRED_PHOTOS = [
   { id: 'toaster_photo', label: '面包机' },
 ] as const
 
+const ADDITIONAL_REQUIRED_PHOTOS = [
+  { id: 'vacuum_used_photo', label: '吸尘器使用后' },
+] as const
+
 function buildBaseItems(list: ChecklistItem[]) {
   return (list || []).map((it: ChecklistItem) => ({
     id: it.id,
@@ -100,6 +104,7 @@ export default function SuppliesFormScreen(props: Props) {
     () => [
       ...SHOWER_DRAIN_PHOTOS,
       ...KITCHEN_REQUIRED_PHOTOS,
+      ...ADDITIONAL_REQUIRED_PHOTOS,
     ],
     [],
   )
@@ -404,6 +409,9 @@ export default function SuppliesFormScreen(props: Props) {
     for (const item of KITCHEN_REQUIRED_PHOTOS) {
       if (!String(extraPhotoUrls[item.id] || '').trim()) return false
     }
+    for (const item of ADDITIONAL_REQUIRED_PHOTOS) {
+      if (!String(extraPhotoUrls[item.id] || '').trim()) return false
+    }
     if (!String(remoteTvPhotoUrl || '').trim()) return false
     return true
   }, [extraPhotoUrls, items, livingRoomPhotoUrl, remoteTvPhotoUrl])
@@ -439,7 +447,7 @@ export default function SuppliesFormScreen(props: Props) {
       return
     }
     if (!canSubmit) {
-      Alert.alert(t('common_error'), '请完成所有消耗品检查，并按要求拍完客厅、浴室、厨房和遥控器照片（不足项需拍照）')
+      Alert.alert(t('common_error'), '请完成所有消耗品检查，并按要求拍完客厅、浴室、厨房、吸尘器使用后和电视遥控器照片（不足项需拍照）')
       return
     }
     const mirrorChecked = await confirmToiletPaperMirrorChecked()
@@ -627,10 +635,10 @@ export default function SuppliesFormScreen(props: Props) {
               <View style={styles.sectionHead}>
                 <View style={styles.sectionHeadMain}>
                   <Text style={styles.sectionTitle}>拍照上传</Text>
-                  <Text style={styles.sectionHint}>客厅照片、浴室点位、厨房点位和电视遥控器都要拍；空调遥控器嵌在墙上的可不拍，只支持手机现场拍照。</Text>
+                  <Text style={styles.sectionHint}>客厅照片、浴室点位、厨房点位、吸尘器使用后和电视遥控器都要拍；空调遥控器嵌在墙上的可不拍，只支持手机现场拍照。</Text>
                 </View>
                 <View style={styles.progressPill}>
-                  <Text style={styles.progressPillText}>{`${requiredPhotosReady}/8 已完成`}</Text>
+                  <Text style={styles.progressPillText}>{`${requiredPhotosReady}/9 已完成`}</Text>
                 </View>
               </View>
 
@@ -772,6 +780,61 @@ export default function SuppliesFormScreen(props: Props) {
                       </View>
                     )
                   })}
+                </View>
+              </View>
+
+              <View style={styles.photoChecklistGroup}>
+                <View style={styles.groupHead}>
+                  <Text style={styles.groupTitle}>吸尘器使用后</Text>
+                  <Pressable
+                    onPress={() => onTakeRequiredScenePhoto('vacuum_used_photo')}
+                    disabled={submitting || batchUploadingGroup !== null}
+                    style={({ pressed }) => [styles.primaryPhotoBtnSmall, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={styles.primaryPhotoBtnText}>拍照</Text>
+                  </Pressable>
+                </View>
+                <View style={styles.photoChecklistEntry}>
+                  <View style={styles.photoChecklistRow}>
+                    <View style={styles.photoChecklistTextWrap}>
+                      <Text style={styles.photoChecklistLabel}>吸尘器使用后</Text>
+                      <Text style={styles.photoChecklistHint}>现场拍摄吸尘器使用后的状态。</Text>
+                    </View>
+                    {extraPhotoUrls.vacuum_used_photo ? (
+                      <>
+                        <Text style={styles.doneTag}>已拍</Text>
+                        <Pressable
+                          onPress={() => onTakeRequiredScenePhoto('vacuum_used_photo')}
+                          disabled={submitting || batchUploadingGroup !== null}
+                          style={({ pressed }) => [styles.photoBtn, styles.photoChecklistBtn, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
+                        >
+                          <Text style={styles.photoBtnText}>重拍</Text>
+                        </Pressable>
+                      </>
+                    ) : (
+                      <Text style={styles.pendingTag}>待拍</Text>
+                    )}
+                  </View>
+                </View>
+                <View style={styles.thumbRow}>
+                  {extraPhotoUrls.vacuum_used_photo ? (
+                    <View style={styles.thumbMiniWrap}>
+                      <Pressable
+                        onPress={() => {
+                          setViewerUrl(String(extraPhotoUrls.vacuum_used_photo))
+                          setViewerOpen(true)
+                        }}
+                        style={({ pressed }) => [styles.thumbMiniPress, pressed ? styles.pressed : null]}
+                      >
+                        <Image source={{ uri: String(extraPhotoUrls.vacuum_used_photo) }} style={styles.thumbMini} />
+                      </Pressable>
+                      <Pressable onPress={() => removeRequiredScenePhoto('vacuum_used_photo')} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
+                        <Ionicons name="trash-outline" size={moderateScale(12)} color="#FFFFFF" />
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <View style={styles.thumbMiniEmpty}><Text style={styles.thumbMiniEmptyText}>吸尘器</Text></View>
+                  )}
                 </View>
               </View>
 

@@ -205,6 +205,14 @@ function sortGuidesForRole(guides: CompanyGuide[], preferredRole: CompanyGuideRo
     .map((item) => item.guide)
 }
 
+function filterGuidesForCurrentRole(guides: CompanyGuide[], currentRole: CompanyGuideRole | null) {
+  if (!currentRole) return guides
+  return guides.filter((guide) => {
+    const role = guide.guide_role || null
+    return !role || role === currentRole
+  })
+}
+
 export default function NoticesScreen(props: Props) {
   const { t } = useI18n()
   const { token, user } = useAuth()
@@ -232,7 +240,8 @@ export default function NoticesScreen(props: Props) {
   const canSearchAllTaskHistory = isTaskManagerUser(user)
   const currentGuideRole = useMemo(() => currentGuideRoleOf(user), [user])
   const preferredGuideRole = useMemo(() => preferredGuideRoleOf(user), [user])
-  const orderedWorkGuides = useMemo(() => sortGuidesForRole(workGuides, preferredGuideRole), [preferredGuideRole, workGuides])
+  const visibleWorkGuides = useMemo(() => filterGuidesForCurrentRole(workGuides, currentGuideRole), [currentGuideRole, workGuides])
+  const orderedWorkGuides = useMemo(() => sortGuidesForRole(visibleWorkGuides, preferredGuideRole), [preferredGuideRole, visibleWorkGuides])
 
   const snap = getNoticesSnapshot()
   const hasAnyUnread = Object.keys(snap.unreadIds || {}).length > 0

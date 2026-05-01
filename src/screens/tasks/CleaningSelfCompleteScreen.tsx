@@ -16,7 +16,7 @@ import { API_BASE_URL } from '../../config/env'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'CleaningSelfComplete'>
 
-type PhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen'
+type PhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'vacuum_used'
 
 type CompletionPhotoItem = { area: PhotoArea; url: string }
 
@@ -104,6 +104,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     sofa: [],
     bedroom: [],
     kitchen: [],
+    vacuum_used: [],
   })
   const [lockboxLocalUrl, setLockboxLocalUrl] = useState<string | null>(null)
   const lockboxFromTask = String((task as any)?.lockbox_video_url || '').trim()
@@ -117,7 +118,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   const [viewerUrls, setViewerUrls] = useState<string[]>([])
   const [viewerIndex, setViewerIndex] = useState(0)
 
-  const requiredAreas: PhotoArea[] = ['toilet', 'living', 'sofa', 'bedroom', 'kitchen']
+  const requiredAreas: PhotoArea[] = ['toilet', 'living', 'sofa', 'bedroom', 'kitchen', 'vacuum_used']
 
   const completionOk = useMemo(() => requiredAreas.every(a => (completion[a] || []).length > 0), [completion])
 
@@ -155,7 +156,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     if (!String(livingRoomPhotoUrl || '').trim()) return false
     if (!String(remoteTvPhotoUrl || '').trim()) return false
     return true
-  }, [livingRoomPhotoUrl, supplies, remoteAcPhotoUrl, remoteTvPhotoUrl])
+  }, [livingRoomPhotoUrl, supplies, remoteTvPhotoUrl])
 
   const refresh = useCallback(async () => {
     if (!token) return
@@ -163,7 +164,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     try {
       setLoading(true)
       const r = await getCompletionPhotos(token, cleaningTaskId).catch(() => null)
-      const next: Record<PhotoArea, string[]> = { toilet: [], living: [], sofa: [], bedroom: [], kitchen: [] }
+      const next: Record<PhotoArea, string[]> = { toilet: [], living: [], sofa: [], bedroom: [], kitchen: [], vacuum_used: [] }
       for (const it of r?.items || []) {
         const a = String(it.area || '').trim() as PhotoArea
         const url = String(it.url || '').trim()
@@ -701,16 +702,17 @@ export default function CleaningSelfCompleteScreen(props: Props) {
           </Pressable>
           {expanded.photos ? (
             <>
-              <Text style={styles.mutedSmall}>每个区域至少 1 张照片。</Text>
+              <Text style={styles.mutedSmall}>每个区域至少 1 张照片，并补拍一张吸尘器使用后照片。</Text>
               {completionOk ? <Text style={styles.ok}>已满足</Text> : <Text style={styles.warn}>未满足</Text>}
               {requiredAreas.map((a) => {
                 const list = completion[a] || []
                 const title =
                   a === 'toilet' ? '浴室' :
-                    a === 'living' ? '客厅' :
-                      a === 'sofa' ? '沙发' :
-                        a === 'bedroom' ? '卧室' :
+                        a === 'living' ? '客厅' :
+                          a === 'sofa' ? '沙发' :
+                            a === 'bedroom' ? '卧室' :
                           a === 'kitchen' ? '厨房' :
+                            a === 'vacuum_used' ? '吸尘器使用后' :
                             a
                 return (
                   <View key={a} style={{ marginTop: 10 }}>

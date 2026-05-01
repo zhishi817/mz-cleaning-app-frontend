@@ -1172,15 +1172,20 @@ export async function getRestockProof(token: string, cleaningTaskId: string) {
   if (!res.ok) throw new Error(await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
     items: Array<{ item_id: string; proof_url: string | null; status?: string | null; qty?: number | null; note?: string | null; created_at?: string | null }>
+    confirmed_sufficient?: boolean
+    confirmed_at?: string | null
   }
 }
 
 export async function saveRestockProof(
   token: string,
   cleaningTaskId: string,
-  params: { items: Array<{ item_id: string; status: 'restocked' | 'unavailable'; qty?: number | null; note?: string | null; proof_url: string | null }> },
+  params: {
+    items: Array<{ item_id: string; status: 'restocked' | 'unavailable'; qty?: number | null; note?: string | null; proof_url: string | null }>
+    confirmed_sufficient?: boolean
+  },
 ) {
-  const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/restock-proof`)
+  const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/restock-proof`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
   for (const url of urls) {
@@ -1196,7 +1201,7 @@ export async function saveRestockProof(
   return (await parseJsonOrThrow(res)) as any
 }
 
-export type CompletionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen'
+export type CompletionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'vacuum_used'
 
 export async function getCompletionPhotos(token: string, cleaningTaskId: string) {
   const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/completion-photos`)
@@ -1655,6 +1660,18 @@ export type MzappAlert = {
   read_at?: string | null
 }
 
+export type CustomerServiceMemo = {
+  id: string
+  content: string
+  is_done: boolean
+  is_alert: boolean
+  sort_index: number
+  reminder_at?: string | null
+  reminder_sent_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
 export async function listMzappAlerts(token: string, params?: { unread?: boolean; kind?: string; limit?: number }) {
   const q = new URLSearchParams()
   if (params?.unread) q.set('unread', '1')
@@ -1679,6 +1696,81 @@ export async function markMzappAlertRead(token: string, alertId: string) {
   let lastRes: Response | null = null
   for (const url of urls) {
     lastRes = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: boolean }
+}
+
+export async function listCustomerServiceMemos(token: string) {
+  const urls = buildUrlCandidates('mzapp/customer-service-memos')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as CustomerServiceMemo[]
+}
+
+export async function createCustomerServiceMemo(
+  token: string,
+  params: { content: string; is_done?: boolean; is_alert?: boolean; sort_index?: number; reminder_at?: string | null },
+) {
+  const urls = buildUrlCandidates('mzapp/customer-service-memos')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as CustomerServiceMemo
+}
+
+export async function updateCustomerServiceMemo(
+  token: string,
+  memoId: string,
+  params: { content?: string; is_done?: boolean; is_alert?: boolean; sort_index?: number; reminder_at?: string | null },
+) {
+  const urls = buildUrlCandidates(`mzapp/customer-service-memos/${encodeURIComponent(memoId)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as CustomerServiceMemo
+}
+
+export async function deleteCustomerServiceMemo(token: string, memoId: string) {
+  const urls = buildUrlCandidates(`mzapp/customer-service-memos/${encodeURIComponent(memoId)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, 15000)
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response

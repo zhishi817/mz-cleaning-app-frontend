@@ -6,7 +6,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { API_BASE_URL } from '../../config/env'
-import { getInspectionPhotos, uploadCleaningVideo, uploadLockboxVideo } from '../../lib/api'
+import { getInspectionPhotos, getRestockProof, uploadCleaningVideo, uploadLockboxVideo } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
@@ -56,7 +56,10 @@ export default function InspectionCompleteScreen(props: Props) {
     try {
       setLoading(true)
       setValidationReady(false)
-      const p = await getInspectionPhotos(token, cleaningTaskId).catch(() => null)
+      const [p, restock] = await Promise.all([
+        getInspectionPhotos(token, cleaningTaskId).catch(() => null),
+        getRestockProof(token, cleaningTaskId).catch(() => null),
+      ])
       const needs: string[] = []
 
       const gotAreas = new Set<string>()
@@ -65,7 +68,9 @@ export default function InspectionCompleteScreen(props: Props) {
         if (a) gotAreas.add(a)
       }
       const missingAreas = REQUIRED_INSPECTION_AREAS.filter(a => !gotAreas.has(a))
-      if (missingAreas.length) needs.push('关键区域照片未齐')
+      if (missingAreas.length) needs.push('关键区域照片未齐（每个区域至少 1 张）')
+      const hasRestockRecord = !!(restock?.items?.length || restock?.confirmed_sufficient)
+      if (!hasRestockRecord) needs.push('消耗品确认未完成')
 
       setMissing(needs)
       setValidationReady(true)
