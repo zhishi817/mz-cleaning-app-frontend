@@ -3,7 +3,6 @@ import { API_BASE_URL } from '../config/env'
 import { listWorkTasks, type WorkTask } from './api'
 import { prependNotice } from './noticesStore'
 import EventSource from 'react-native-sse'
-import { notifyAuthInvalidated } from './authEvents'
 
 export type WorkTaskItem = WorkTask & {
   date: string
@@ -497,10 +496,11 @@ function connectWorkTasksRealtime(forceReconnect = false) {
     if (streamEs !== es) return
     const xhrStatus = Number((event as any)?.xhrStatus || 0)
     if (xhrStatus === 401 || xhrStatus === 403) {
-      if (xhrStatus === 401) notifyAuthInvalidated('session_expired')
       setConnectionState('error')
-      closeStream(false)
-      stopHealthTimer()
+      // SSE long connections can report transient auth-like errors when the
+      // socket is interrupted. We reconnect here instead of forcing a logout.
+      streamEs = null
+      scheduleReconnect()
       return
     }
     streamEs = null
