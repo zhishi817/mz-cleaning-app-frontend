@@ -17,6 +17,7 @@ import {
 } from './authStorage'
 import { subscribeAuthInvalidated } from './authEvents'
 import { clearRegisteredExpoPushToken, getRegisteredExpoPushToken } from './pushTokenStorage'
+import { deactivateWorkTasksRealtime } from './workTasksStore'
 
 type AuthStatus = 'booting' | 'signedOut' | 'signedIn'
 
@@ -24,7 +25,7 @@ type AuthContextValue = {
   status: AuthStatus
   token: string | null
   user: StoredUser | null
-  signIn: (params: { username: string; password: string }) => Promise<void>
+  signIn: (params: { username: string; password: string; rememberPassword?: boolean; biometricEnabled?: boolean }) => Promise<void>
   signOut: () => Promise<void>
   requestPasswordReset: (params: { email: string }) => Promise<void>
   isSigningIn: boolean
@@ -56,6 +57,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
   const [authIssue, setAuthIssue] = useState<string | null>(null)
 
   const signOutInternal = useCallback(async (reason: 'manual' | 'session_expired' = 'manual') => {
+    deactivateWorkTasksRealtime()
     const currentToken = token
     try {
       const expoPushToken = await getRegisteredExpoPushToken()
@@ -66,9 +68,6 @@ export function AuthProvider(props: { children: React.ReactNode }) {
     } catch {}
     await clearAuthToken()
     await clearStoredUser()
-    if (reason === 'manual') {
-      await clearRememberedLogin()
-    }
     setToken(null)
     setUser(null)
     setStatus('signedOut')
@@ -92,16 +91,22 @@ export function AuthProvider(props: { children: React.ReactNode }) {
     setAuthIssue(null)
   }, [])
 
-  const signInWithRemoteCredentials = useCallback(async (username: string, password: string) => {
+  const signInWithRemoteCredentials = useCallback(async (
+    username: string,
+    password: string,
+    options?: { persistRememberedLogin?: boolean; rememberPassword?: boolean; biometricEnabled?: boolean },
+  ) => {
     const normalizedUsername = normalizeUsername(username)
     const { token: newToken } = await loginApi({ username: normalizedUsername, password })
     const remoteUser = await meApi(newToken)
-    await setRememberedLogin({
-      username: normalizedUsername,
-      password,
-      rememberPassword: true,
-      biometricEnabled: false,
-    })
+    if (options?.persistRememberedLogin) {
+      await setRememberedLogin({
+        username: normalizedUsername,
+        password,
+        rememberPassword: options.rememberPassword !== false,
+        biometricEnabled: options.biometricEnabled === true,
+      })
+    }
     await applySignedInState(newToken, remoteUser)
   }, [applySignedInState])
 
@@ -125,11 +130,13 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       const t = await getAuthToken()
       const u = await getStoredUser()
       if (!t) {
+        deactivateWorkTasksRealtime()
         setStatus('signedOut')
         return
       }
       if (t.startsWith('local:')) {
         if (!canUseLocalLogin()) {
+          deactivateWorkTasksRealtime()
           await clearAuthToken()
           if (u) await clearStoredUser()
           setStatus('signedOut')
@@ -153,6 +160,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         if (!recovered) await signOutInternal('session_expired')
       }
     } catch {
+      deactivateWorkTasksRealtime()
       setStatus('signedOut')
     }
   }, [applySignedInState, signOutInternal, trySilentReauth])
@@ -163,6 +171,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
 
   useEffect(() => {
     return subscribeAuthInvalidated(() => {
+      deactivateWorkTasksRealtime()
       trySilentReauth().then((recovered) => {
         if (!recovered) signOutInternal('session_expired').catch(() => null)
       }).catch(() => {
@@ -171,7 +180,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
     })
   }, [signOutInternal, trySilentReauth])
 
-  const signIn = useCallback(async (params: { username: string; password: string }) => {
+  const signIn = useCallback(async (params: { username: string; password: string; rememberPassword?: boolean; biometricEnabled?: boolean }) => {
     try {
       setIsSigningIn(true)
       const username = normalizeUsername(params.username)
@@ -190,7 +199,11 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       if (!API_BASE_URL && canUseLocalLogin()) {
         throw new Error('后端地址未配置，且本地测试账号/密码不匹配')
       }
-      await signInWithRemoteCredentials(username, params.password)
+      await signInWithRemoteCredentials(username, params.password, {
+        persistRememberedLogin: true,
+        rememberPassword: params.rememberPassword,
+        biometricEnabled: params.biometricEnabled,
+      })
     } finally {
       setIsSigningIn(false)
     }

@@ -24,8 +24,10 @@ export type DayEndHandoverDraft = {
   pending_submit: boolean
   key_items: DayEndDraftPhoto[]
   return_wash_items: DayEndDraftPhoto[]
+  warehouse_key_items: DayEndDraftPhoto[]
   consumable_items: DayEndDraftPhoto[]
   reject_items: DayEndRejectDraftItem[]
+  no_warehouse_key?: boolean
   updated_at: string
 }
 
@@ -74,8 +76,10 @@ function normalizeDraft(raw: any): DayEndHandoverDraft | null {
     return_wash_items: Array.isArray(raw.return_wash_items)
       ? raw.return_wash_items
       : (Array.isArray(raw.dirty_items) ? raw.dirty_items : []),
+    warehouse_key_items: Array.isArray(raw.warehouse_key_items) ? raw.warehouse_key_items : [],
     consumable_items: Array.isArray(raw.consumable_items) ? raw.consumable_items : [],
     reject_items: Array.isArray(raw.reject_items) ? raw.reject_items : [],
+    no_warehouse_key: !!raw.no_warehouse_key,
     updated_at: String(raw.updated_at || new Date().toISOString()),
   }
 }
@@ -100,6 +104,7 @@ export async function clearDayEndHandoverDraft(userId: string, date: string) {
   const allPhotos = [
     ...(draft?.key_items || []),
     ...(draft?.return_wash_items || []),
+    ...(draft?.warehouse_key_items || []),
     ...(draft?.consumable_items || []),
     ...((draft?.reject_items || []).flatMap((item) => item.photos || [])),
   ]
@@ -113,7 +118,7 @@ export async function clearDayEndHandoverDraft(userId: string, date: string) {
 export async function persistDayEndDraftPhoto(params: {
   user_id: string
   date: string
-  bucket: 'key' | 'return_wash' | 'consumable' | 'reject'
+  bucket: 'key' | 'return_wash' | 'warehouse_key' | 'consumable' | 'reject'
   source_uri: string
   captured_at: string
   watermark_text?: string
@@ -124,6 +129,7 @@ export async function persistDayEndDraftPhoto(params: {
     pending_submit: false,
     key_items: [],
     return_wash_items: [],
+    warehouse_key_items: [],
     consumable_items: [],
     reject_items: [],
     updated_at: new Date().toISOString(),
@@ -140,6 +146,8 @@ export async function persistDayEndDraftPhoto(params: {
     await saveDayEndHandoverDraft({ ...existing, key_items: [item, ...(existing.key_items || [])] })
   } else if (params.bucket === 'return_wash') {
     await saveDayEndHandoverDraft({ ...existing, return_wash_items: [item, ...(existing.return_wash_items || [])] })
+  } else if (params.bucket === 'warehouse_key') {
+    await saveDayEndHandoverDraft({ ...existing, warehouse_key_items: [item, ...(existing.warehouse_key_items || [])], no_warehouse_key: false })
   } else if (params.bucket === 'consumable') {
     await saveDayEndHandoverDraft({ ...existing, consumable_items: [item, ...(existing.consumable_items || [])] })
   } else if (params.bucket === 'reject') {
@@ -189,6 +197,7 @@ export async function processDayEndHandoverQueue(token: string) {
       try {
         const keyItems = await uploadItems('backup_key_return', 'key', draft.key_items || [])
         const returnWashItems = await uploadItems('return_wash_linen', 'return-wash', draft.return_wash_items || [])
+        const warehouseKeyItems = await uploadItems('warehouse_key_return', 'warehouse-key', draft.warehouse_key_items || [])
         const consumableItems = await uploadItems('remaining_consumables', 'consumables', draft.consumable_items || [])
         const rejectItems: DayEndRejectDraftItem[] = []
         for (const item of draft.reject_items || []) {
@@ -199,6 +208,7 @@ export async function processDayEndHandoverQueue(token: string) {
           ...draft,
           key_items: keyItems,
           return_wash_items: returnWashItems,
+          warehouse_key_items: warehouseKeyItems,
           consumable_items: consumableItems,
           reject_items: rejectItems,
           updated_at: new Date().toISOString(),
@@ -210,7 +220,9 @@ export async function processDayEndHandoverQueue(token: string) {
             key_photos: (nextDraft.key_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
             return_wash_photos: (nextDraft.return_wash_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
             dirty_linen_photos: (nextDraft.return_wash_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
+            warehouse_key_photos: (nextDraft.warehouse_key_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
             consumable_photos: (nextDraft.consumable_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
+            no_warehouse_key: !!nextDraft.no_warehouse_key,
             reject_items: (nextDraft.reject_items || [])
               .map((item) => ({
                 linen_type: String(item.linen_type || '').trim(),
@@ -220,8 +232,20 @@ export async function processDayEndHandoverQueue(token: string) {
               }))
               .filter((item) => item.linen_type && item.quantity > 0 && item.used_room && item.photos.length > 0),
           }
-          if ((payload.key_photos.length && payload.return_wash_photos.length) || payload.consumable_photos.length) {
-            await uploadDayEndHandover(token, payload)
+          const sectionPayload =
+            payload.key_photos.length && payload.return_wash_photos.length
+              ? { ...payload, section: 'all' as const }
+              : payload.warehouse_key_photos.length || payload.no_warehouse_key
+                ? { ...payload, section: 'warehouse_key' as const }
+                : payload.consumable_photos.length
+                  ? { ...payload, section: 'consumable' as const }
+                  : payload.key_photos.length
+                    ? { ...payload, section: 'key' as const }
+                    : payload.return_wash_photos.length
+                      ? { ...payload, section: 'return_wash' as const }
+                      : null
+          if (sectionPayload) {
+            await uploadDayEndHandover(token, sectionPayload)
             await clearDayEndHandoverDraft(nextDraft.user_id, nextDraft.date)
             processed++
             continue

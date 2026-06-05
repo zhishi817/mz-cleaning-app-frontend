@@ -15,6 +15,22 @@ export function hasAnyRole(user: any, roleNames: string[]) {
   return (roleNames || []).some((roleName) => set.has(String(roleName || '').trim()))
 }
 
+export function permissionCodesOf(user: any): string[] {
+  const values = Array.isArray(user?.permissions) ? user.permissions : []
+  return Array.from(new Set(values.map((x: any) => String(x || '').trim()).filter(Boolean)))
+}
+
+export function hasPermission(user: any, code: string) {
+  const wanted = String(code || '').trim()
+  if (!wanted) return false
+  return permissionCodesOf(user).includes(wanted)
+}
+
+export function hasAnyPermission(user: any, codes: string[]) {
+  const set = new Set(permissionCodesOf(user))
+  return (codes || []).some((code) => set.has(String(code || '').trim()))
+}
+
 export function isTaskManagerUser(user: any) {
   return hasAnyRole(user, ['admin', 'offline_manager', 'customer_service'])
 }

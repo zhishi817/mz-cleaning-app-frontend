@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Dimensions, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import { effectiveInspectionMode, inspectionModeLabel, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
 import { useI18n } from '../../lib/i18n'
-import { hairline, moderateScale } from '../../lib/scale'
+import { hairline, isCompactWidth, moderateScale } from '../../lib/scale'
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, refreshWorkTasksFromServer, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import { deleteKeyPhoto, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadMzappMedia } from '../../lib/api'
@@ -215,6 +215,7 @@ function isEarlyCheckinTime(value: any) {
 export default function TaskDetailScreen(props: Props) {
   const { t } = useI18n()
   const { user, token } = useAuth()
+  const { width, height } = useWindowDimensions()
   const roleNames = useMemo(() => roleNamesOf(user), [user])
   const canManagerView = useMemo(() => roleNames.some(isManagerRole), [roleNames])
   const insets = useSafeAreaInsets()
@@ -246,10 +247,8 @@ export default function TaskDetailScreen(props: Props) {
 
   const items = getWorkTasksSnapshot().items
   const task = useMemo<WorkTaskItem | null>(() => findWorkTaskItemByAnyId(id), [id, items])
-  const previewSize = useMemo(() => {
-    const { width, height } = Dimensions.get('window')
-    return { width, height }
-  }, [])
+  const previewSize = useMemo(() => ({ width, height }), [height, width])
+  const isCompactLayout = isCompactWidth(width)
 
   useEffect(() => {
     if (!task) return
@@ -619,9 +618,9 @@ export default function TaskDetailScreen(props: Props) {
 
   return (
     <>
-      <ScrollView style={styles.page} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+    <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, moderateScale(20)) + moderateScale(12) }]} showsVerticalScrollIndicator={false}>
       <View style={styles.card}>
-        <View style={styles.titleRow}>
+        <View style={[styles.titleRow, isCompactLayout ? styles.titleRowCompact : null]}>
           <Text style={styles.title}>{title2}</Text>
           <View style={[styles.statusPill, meta.pill]}>
             <Text style={[styles.statusText, meta.textStyle]}>{meta.text}</Text>
@@ -809,7 +808,7 @@ export default function TaskDetailScreen(props: Props) {
         ) : null}
 
         {isCleaningTask ? (
-          <View style={styles.actionsRow}>
+          <View style={[styles.actionsRow, isCompactLayout ? styles.actionsRowCompact : null]}>
             {isCustomerService ? (
               <>
                 {isCheckoutTask ? (
@@ -839,14 +838,14 @@ export default function TaskDetailScreen(props: Props) {
                       }
                     }}
                     disabled={!token || isHistoricalTask || checkedOutPending}
-                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, isCheckedOut || isHistoricalTask || checkedOutPending ? styles.actionBtnDisabled : null]}
+                    style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, isCheckedOut || isHistoricalTask || checkedOutPending ? styles.actionBtnDisabled : null]}
                   >
                     <Text style={[styles.actionText, isCheckedOut || isHistoricalTask || checkedOutPending ? { color: '#6B7280' } : null]}>{checkedOutPending ? '提交中...' : isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
                   </Pressable>
                 ) : null}
                 <Pressable
                   onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                  style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
+                  style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null]}
                 >
                   <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
                 </Pressable>
@@ -857,14 +856,14 @@ export default function TaskDetailScreen(props: Props) {
                   <Pressable
                     onPress={onUploadKey}
                     disabled={keyUploading || isCleaningSubmitted || !!keyPhotoUrl}
-                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, (keyUploading || !!keyPhotoUrl) ? styles.actionBtnDisabled : null]}
+                    style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, (keyUploading || !!keyPhotoUrl) ? styles.actionBtnDisabled : null]}
                   >
                     <Text style={styles.actionText}>{keyUploading ? t('common_loading') : (isCleaningSubmitted || !!keyPhotoUrl ? '钥匙记录' : t('tasks_btn_upload_key'))}</Text>
                   </Pressable>
                 ) : null}
                 <Pressable
                   onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                  style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null]}
+                  style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null]}
                 >
                   <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
                 </Pressable>
@@ -873,7 +872,7 @@ export default function TaskDetailScreen(props: Props) {
                     if (isPendingInspectionDecision) return
                     props.navigation.navigate(isDirectCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)
                   }}
-                  style={({ pressed }) => [styles.actionBtn, pressed ? styles.pressed : null, isPendingInspectionDecision ? styles.actionBtnDisabled : null]}
+                  style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, isPendingInspectionDecision ? styles.actionBtnDisabled : null]}
                 >
                   <Text style={styles.actionText}>
                     {isPendingInspectionDecision
@@ -898,11 +897,11 @@ export default function TaskDetailScreen(props: Props) {
             <Text style={styles.mutedSmall} numberOfLines={2}>
               {effectiveMarkPhotoUrls.length ? `已上传 ${effectiveMarkPhotoUrls.length} 张照片，可继续追加或删除` : '未上传照片（需要拍照/相册上传后才能提交）'}
             </Text>
-            <View style={styles.markUploadRow}>
-              <Pressable onPress={() => onAppendPhotosForMarking('camera')} disabled={marking} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}>
+            <View style={[styles.markUploadRow, isCompactLayout ? styles.actionsRowCompact : null]}>
+              <Pressable onPress={() => onAppendPhotosForMarking('camera')} disabled={marking} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}>
                 <Text style={styles.markBtnText}>拍照上传</Text>
               </Pressable>
-              <Pressable onPress={() => onAppendPhotosForMarking('library')} disabled={marking} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}>
+              <Pressable onPress={() => onAppendPhotosForMarking('library')} disabled={marking} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}>
                 <Text style={styles.markBtnText}>相册上传</Text>
               </Pressable>
             </View>
@@ -933,21 +932,21 @@ export default function TaskDetailScreen(props: Props) {
               placeholderTextColor="#9CA3AF"
             />
 
-            <View style={styles.markRow}>
+            <View style={[styles.markRow, isCompactLayout ? styles.actionsRowCompact : null]}>
               <Pressable
                 onPress={() => {
                   setShowUnfinished(false)
                   onMarkDone()
                 }}
                 disabled={marking || isAlreadyDone}
-                style={({ pressed }) => [styles.markPrimary, pressed ? styles.pressed : null, marking || isAlreadyDone ? styles.markBtnDisabled : null]}
+                style={({ pressed }) => [styles.markPrimary, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking || isAlreadyDone ? styles.markBtnDisabled : null]}
               >
                 <Text style={styles.markPrimaryText}>标记完成</Text>
               </Pressable>
               <Pressable
                 onPress={() => setShowUnfinished(v => !v)}
                 disabled={marking}
-                style={({ pressed }) => [styles.markBtn, { flex: 1, marginTop: 0 }, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}
+                style={({ pressed }) => [styles.markBtn, { flex: 1, marginTop: 0 }, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}
               >
                 <Text style={styles.markBtnText}>未完成</Text>
               </Pressable>
@@ -1008,10 +1007,11 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#F6F7FB' },
   content: { padding: 16 },
   card: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14, borderWidth: hairline(), borderColor: '#EEF0F6' },
-  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  title: { flex: 1, fontSize: moderateScale(18), fontWeight: '900', color: '#111827' },
-  statusPill: { height: 26, paddingHorizontal: 10, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
-  statusText: { fontSize: 12, fontWeight: '900' },
+  titleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  titleRowCompact: { alignItems: 'flex-start' },
+  title: { flex: 1, minWidth: 0, flexShrink: 1, fontSize: moderateScale(18), lineHeight: moderateScale(23), fontWeight: '900', color: '#111827' },
+  statusPill: { minHeight: 26, paddingHorizontal: 10, paddingVertical: 3, borderRadius: 13, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  statusText: { fontSize: 12, fontWeight: '900', textAlign: 'center' },
   statusBlue: { backgroundColor: '#DBEAFE' },
   statusAmber: { backgroundColor: '#FEF3C7' },
   statusGreen: { backgroundColor: '#DCFCE7' },
@@ -1041,13 +1041,15 @@ const styles = StyleSheet.create({
   tagKeyText: { fontSize: 11, fontWeight: '900', color: '#B91C1C' },
   tagWarn: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FFFBEB', borderWidth: hairline(), borderColor: '#FDE68A', alignItems: 'center', justifyContent: 'center' },
   tagWarnText: { fontSize: 11, fontWeight: '900', color: '#B45309' },
-  row: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 6 },
-  rowText: { flex: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600' },
-  actionsRow: { marginTop: 14, flexDirection: 'row', gap: 10 },
-  actionBtn: { flex: 1, height: 36, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  row: { marginTop: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  rowText: { flex: 1, minWidth: 0, flexShrink: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600', lineHeight: moderateScale(19) },
+  actionsRow: { marginTop: 14, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  actionsRowCompact: { flexDirection: 'column' },
+  actionBtn: { flex: 1, flexGrow: 1, flexShrink: 1, minWidth: 128, minHeight: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  actionBtnCompact: { width: '100%', flexBasis: '100%', flexGrow: 0 },
   actionBtnDisabled: { backgroundColor: '#E5E7EB' },
-  actionText: { fontWeight: '900', color: '#FFFFFF', fontSize: 13 },
-  dangerBtn: { marginTop: 10, height: 36, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
+  actionText: { flexShrink: 1, fontWeight: '900', color: '#FFFFFF', fontSize: 13, lineHeight: 17, textAlign: 'center' },
+  dangerBtn: { marginTop: 10, minHeight: 40, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
   dangerText: { fontWeight: '900', color: '#B91C1C', fontSize: 13 },
   line: { marginTop: 14, height: hairline(), backgroundColor: '#EEF0F6' },
   sectionTitle: { marginTop: 14, fontSize: 13, fontWeight: '900', color: '#111827' },
@@ -1064,18 +1066,18 @@ const styles = StyleSheet.create({
   detailPanel: { marginBottom: 4 },
   label: { marginTop: 14, marginBottom: 8, color: '#111827', fontWeight: '900' },
   input: { height: 44, borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, fontWeight: '700', color: '#111827' },
-  markRow: { marginTop: 14, flexDirection: 'row', gap: 10 },
-  markBtn: { marginTop: 12, height: 36, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
-  markUploadRow: { marginTop: 12, flexDirection: 'row', gap: 10 },
+  markRow: { marginTop: 14, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  markBtn: { marginTop: 12, minHeight: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  markUploadRow: { marginTop: 12, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   markUploadBtn: { flex: 1, marginTop: 0 },
   markPhotoList: { gap: 10, paddingTop: 12, paddingBottom: 4 },
   markPhotoCard: { width: moderateScale(112), position: 'relative' },
   markPhotoThumbWrap: { borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F3F4F6' },
   markPhotoThumb: { width: '100%', height: moderateScale(112) },
   markPhotoRemoveBtn: { position: 'absolute', top: 8, right: 8, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(17,24,39,0.84)', alignItems: 'center', justifyContent: 'center' },
-  markBtnText: { fontWeight: '900', color: '#FFFFFF', fontSize: 13 },
-  markPrimary: { flex: 1, height: 36, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
-  markPrimaryText: { color: '#FFFFFF', fontWeight: '900', fontSize: 13 },
+  markBtnText: { flexShrink: 1, fontWeight: '900', color: '#FFFFFF', fontSize: 13, lineHeight: 17, textAlign: 'center' },
+  markPrimary: { flex: 1, flexShrink: 1, minWidth: 128, minHeight: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  markPrimaryText: { flexShrink: 1, color: '#FFFFFF', fontWeight: '900', fontSize: 13, lineHeight: 17, textAlign: 'center' },
   markBtnDisabled: { backgroundColor: '#E5E7EB' },
   restockWrap: { marginTop: 10, gap: 12 },
   restockItem: { padding: 12, borderRadius: 14, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6' },

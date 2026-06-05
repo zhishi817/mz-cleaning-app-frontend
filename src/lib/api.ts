@@ -258,15 +258,170 @@ export type CleaningAppProperty = {
   access_guide_link?: string | null
 }
 
+export type MzappExpenseScope = 'company' | 'property'
+
+export type MzappExpenseCategoryOption = {
+  value: string
+  label: string
+}
+
+export type MzappExpensePropertyOption = {
+  id: string
+  code: string
+  address?: string | null
+  region?: string | null
+}
+
+export type MzappExpenseBootstrap = {
+  permissions: string[]
+  scopes: MzappExpenseScope[]
+  categories: Record<MzappExpenseScope, MzappExpenseCategoryOption[]>
+  properties: MzappExpensePropertyOption[]
+}
+
+export type MzappExpenseReceipt = {
+  id: string
+  url: string
+  file_name?: string | null
+  mime_type?: string | null
+  file_size?: number | null
+  created_at?: string | null
+}
+
+export type MzappExpenseListItem = {
+  id: string
+  scope: MzappExpenseScope
+  property_id?: string | null
+  property_code?: string | null
+  property_address?: string | null
+  property_region?: string | null
+  occurred_at: string
+  amount: number
+  currency?: string | null
+  category?: string | null
+  category_detail?: string | null
+  expense_name?: string | null
+  note?: string | null
+  invoice_url?: string | null
+  created_at?: string | null
+  created_by?: string | null
+}
+
+export type MzappExpenseDetail = MzappExpenseListItem & {
+  due_date?: string | null
+  paid_date?: string | null
+  month_key?: string | null
+  receipts: MzappExpenseReceipt[]
+}
+
+export type MzappExpenseOcrResult = {
+  expense_name?: string | null
+  amount?: number | null
+  occurred_at?: string | null
+}
+
+export type MzappExpenseOcrResponse = {
+  available?: boolean
+  reason?: string
+  suggestion: MzappExpenseOcrResult
+}
+
+export type MzappExpenseCreatePayload = {
+  scope: MzappExpenseScope
+  property_id?: string
+  occurred_at: string
+  amount: number
+  category: string
+  category_detail?: string
+  expense_name?: string
+  note?: string
+  receipt_urls?: string[]
+}
+
+export type MzappExpenseUpdatePayload = Partial<Omit<MzappExpenseCreatePayload, 'scope'>> & {
+  receipt_urls?: string[]
+}
+
+export type MzappExpenseReceiptImage = {
+  id: string
+  receipt_id?: string
+  url: string
+  sort_index?: number | null
+  created_at?: string | null
+  created_by?: string | null
+}
+
+export type MzappExpenseReceiptItem = {
+  id?: string
+  line_no?: number | null
+  scope: MzappExpenseScope
+  property_id?: string | null
+  property_code?: string | null
+  property_address?: string | null
+  property_region?: string | null
+  expense_name: string
+  amount: number
+  category: string
+  category_detail?: string | null
+  note?: string | null
+  company_expense_id?: string | null
+  property_expense_id?: string | null
+}
+
+export type MzappExpenseReceiptRecord = {
+  id: string
+  receipt_date: string
+  receipt_total_amount: number
+  currency?: string | null
+  note?: string | null
+  created_at?: string | null
+  created_by?: string | null
+  first_image_url?: string | null
+  item_count: number
+  scope_summary: string
+}
+
+export type MzappExpenseReceiptDetail = MzappExpenseReceiptRecord & {
+  updated_at?: string | null
+  generated_from?: string | null
+  deleted_at?: string | null
+  deleted_by?: string | null
+  delete_source?: string | null
+  images: MzappExpenseReceiptImage[]
+  items: MzappExpenseReceiptItem[]
+}
+
+export type MzappExpenseReceiptCreatePayload = {
+  receipt_date: string
+  receipt_total_amount: number
+  note?: string
+  receipt_urls: string[]
+  items: Array<{
+    id?: string
+    scope: MzappExpenseScope
+    property_id?: string
+    expense_name: string
+    amount: number
+    category: string
+    category_detail?: string
+    note?: string
+  }>
+}
+
+export type MzappExpenseReceiptUpdatePayload = MzappExpenseReceiptCreatePayload
+
 export type CleaningAppTask = {
   id: string
   task_id: string
   date: string
   task_date: string
+  task_type?: string | null
   status: string
   assignee_id: string | null
   cleaner_id?: string | null
   inspector_id: string | null
+  inspection_mode?: 'pending_decision' | 'same_day' | 'self_complete' | 'deferred' | null
+  inspection_due_date?: string | null
   cleaner_name?: string | null
   inspector_name?: string | null
   checkout_time: string | null
@@ -1007,6 +1162,7 @@ export async function listDayEndHandover(token: string, params: { date: string; 
     key_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
     dirty_linen_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
     return_wash_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
+    warehouse_key_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
     consumable_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
     reject_items: Array<{
       id: string
@@ -1018,7 +1174,13 @@ export async function listDayEndHandover(token: string, params: { date: string; 
       updated_at?: string | null
     }>
     no_dirty_linen: boolean
+    no_warehouse_key: boolean
     submitted_at?: string | null
+    key_submitted_at?: string | null
+    dirty_linen_submitted_at?: string | null
+    warehouse_key_submitted_at?: string | null
+    consumable_submitted_at?: string | null
+    reject_submitted_at?: string | null
     updated_at?: string | null
   }
 }
@@ -1055,9 +1217,11 @@ export async function uploadDayEndHandover(
   token: string,
   params: {
     date: string
-    key_photos: Array<{ url: string; captured_at?: string }>
-    dirty_linen_photos: Array<{ url: string; captured_at?: string }>
+    section?: 'all' | 'key' | 'dirty_linen' | 'return_wash' | 'warehouse_key' | 'consumable' | 'reject'
+    key_photos?: Array<{ url: string; captured_at?: string }>
+    dirty_linen_photos?: Array<{ url: string; captured_at?: string }>
     return_wash_photos?: Array<{ url: string; captured_at?: string }>
+    warehouse_key_photos?: Array<{ url: string; captured_at?: string }>
     consumable_photos?: Array<{ url: string; captured_at?: string }>
     reject_items?: Array<{
       linen_type: string
@@ -1066,6 +1230,7 @@ export async function uploadDayEndHandover(
       photos: Array<{ url: string; captured_at?: string }>
     }>
     no_dirty_linen?: boolean
+    no_warehouse_key?: boolean
   },
 ) {
   const urls = buildUrlCandidates('cleaning-app/day-end/handover')
@@ -1171,7 +1336,7 @@ export async function getRestockProof(token: string, cleaningTaskId: string) {
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
-    items: Array<{ item_id: string; proof_url: string | null; status?: string | null; qty?: number | null; note?: string | null; created_at?: string | null }>
+    items: Array<{ item_id: string; proof_url: string | null; proof_urls?: string[]; status?: string | null; qty?: number | null; note?: string | null; created_at?: string | null }>
     confirmed_sufficient?: boolean
     confirmed_at?: string | null
   }
@@ -1181,7 +1346,7 @@ export async function saveRestockProof(
   token: string,
   cleaningTaskId: string,
   params: {
-    items: Array<{ item_id: string; status: 'restocked' | 'unavailable'; qty?: number | null; note?: string | null; proof_url: string | null }>
+    items: Array<{ item_id: string; status: 'restocked' | 'unavailable'; qty?: number | null; note?: string | null; proof_url: string | null; proof_urls?: string[] }>
     confirmed_sufficient?: boolean
   },
 ) {
@@ -1398,7 +1563,7 @@ export async function markInboxNotificationsRead(token: string, params: { ids?: 
 export async function submitCleaningConsumables(
   token: string,
   taskId: string,
-  params: { living_room_photo_url: string; items: Array<{ item_id: string; status: 'ok' | 'low'; qty?: number; note?: string; photo_url?: string }> },
+  params: { living_room_photo_url: string; items: Array<{ item_id: string; status: 'ok' | 'low'; qty?: number; note?: string; photo_url?: string; photo_urls?: string[] }> },
 ) {
   const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(taskId)}/consumables`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -1442,7 +1607,7 @@ export async function getCleaningConsumables(
   if (!res.ok) throw new Error(await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
     living_room_photo_url?: string | null
-    items: Array<{ id: string; item_id: string; qty: number; need_restock: boolean; note?: string | null; status?: string | null; photo_url?: string | null; item_label?: string | null; created_at?: string | null }>
+    items: Array<{ id: string; item_id: string; qty: number; need_restock: boolean; note?: string | null; status?: string | null; photo_url?: string | null; photo_urls?: string[]; item_label?: string | null; created_at?: string | null }>
   }
 }
 
@@ -1860,6 +2025,287 @@ export async function uploadMzappMedia(
   const u = String(data?.url || '').trim()
   if (!u) throw new Error('上传成功但未返回 url')
   return { url: u }
+}
+
+export async function getMzappExpenseBootstrap(token: string) {
+  const urls = buildUrlCandidates('mzapp/expenses/bootstrap')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseBootstrap
+}
+
+export async function uploadMzappExpenseReceipt(
+  token: string,
+  file: { uri: string; name: string; mimeType: string },
+) {
+  const urls = buildUrlCandidates('mzapp/expenses/receipts/upload')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  const { compressImageForUpload } = await import('./imageCompression')
+  const compressedUri = await compressImageForUpload(file.uri)
+  const form = new FormData()
+  form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form as any }, 30000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { url: string }
+}
+
+export async function ocrMzappExpenseReceipt(
+  token: string,
+  params: { scope: MzappExpenseScope; receipt_url: string },
+) {
+  const urls = buildUrlCandidates('mzapp/expenses/ocr')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      },
+      30000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  const data = (await parseJsonOrThrow(res)) as any
+  return {
+    available: data?.available,
+    reason: data?.reason,
+    suggestion: (data?.suggestion || {}) as MzappExpenseOcrResult,
+  } as MzappExpenseOcrResponse
+}
+
+export async function createMzappExpense(token: string, payload: MzappExpenseCreatePayload) {
+  const urls = buildUrlCandidates('mzapp/expenses')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      20000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseDetail
+}
+
+export async function listMyMzappExpenses(
+  token: string,
+  params?: { scope?: MzappExpenseScope; limit?: number; offset?: number },
+) {
+  const urls = buildUrlCandidates('mzapp/expenses/mine')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  const qs = new URLSearchParams()
+  if (params?.scope) qs.set('scope', params.scope)
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  if (params?.offset != null) qs.set('offset', String(params.offset))
+  const fullUrls = urls.map((url) => (qs.size ? `${url}?${qs.toString()}` : url))
+  let lastRes: Response | null = null
+  for (const url of fullUrls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { items: MzappExpenseListItem[]; total: number }
+}
+
+export async function getMyMzappExpense(token: string, scope: MzappExpenseScope, id: string) {
+  const urls = buildUrlCandidates(`mzapp/expenses/mine/${encodeURIComponent(scope)}/${encodeURIComponent(id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseDetail
+}
+
+export async function updateMyMzappExpense(
+  token: string,
+  scope: MzappExpenseScope,
+  id: string,
+  payload: MzappExpenseUpdatePayload,
+) {
+  const urls = buildUrlCandidates(`mzapp/expenses/mine/${encodeURIComponent(scope)}/${encodeURIComponent(id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      20000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseDetail
+}
+
+export async function deleteMyMzappExpense(token: string, scope: MzappExpenseScope, id: string) {
+  const urls = buildUrlCandidates(`mzapp/expenses/mine/${encodeURIComponent(scope)}/${encodeURIComponent(id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: true }
+}
+
+export async function getMzappExpenseReceiptBootstrap(token: string) {
+  const urls = buildUrlCandidates('mzapp/expense-receipts/bootstrap')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseBootstrap
+}
+
+export async function uploadMzappExpenseReceiptImage(
+  token: string,
+  file: { uri: string; name: string; mimeType: string },
+) {
+  const urls = buildUrlCandidates('mzapp/expense-receipts/images/upload')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  const { compressImageForUpload } = await import('./imageCompression')
+  const compressedUri = await compressImageForUpload(file.uri)
+  const form = new FormData()
+  form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form as any }, 30000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { url: string }
+}
+
+export async function createMzappExpenseReceipt(token: string, payload: MzappExpenseReceiptCreatePayload) {
+  const urls = buildUrlCandidates('mzapp/expense-receipts')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      20000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseReceiptDetail
+}
+
+export async function listMyMzappExpenseReceipts(
+  token: string,
+  params?: { limit?: number; offset?: number },
+) {
+  const urls = buildUrlCandidates('mzapp/expense-receipts/mine')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  const qs = new URLSearchParams()
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  if (params?.offset != null) qs.set('offset', String(params.offset))
+  const fullUrls = urls.map((url) => (qs.size ? `${url}?${qs.toString()}` : url))
+  let lastRes: Response | null = null
+  for (const url of fullUrls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { items: MzappExpenseReceiptRecord[]; total: number }
+}
+
+export async function getMyMzappExpenseReceipt(token: string, id: string) {
+  const urls = buildUrlCandidates(`mzapp/expense-receipts/mine/${encodeURIComponent(id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseReceiptDetail
+}
+
+export async function updateMyMzappExpenseReceipt(
+  token: string,
+  id: string,
+  payload: MzappExpenseReceiptUpdatePayload,
+) {
+  const urls = buildUrlCandidates(`mzapp/expense-receipts/mine/${encodeURIComponent(id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      20000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseReceiptDetail
+}
+
+export async function deleteMyMzappExpenseReceipt(token: string, id: string) {
+  const urls = buildUrlCandidates(`mzapp/expense-receipts/mine/${encodeURIComponent(id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: true }
 }
 
 export async function markWorkTask(

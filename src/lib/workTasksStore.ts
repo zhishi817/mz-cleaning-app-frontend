@@ -3,6 +3,7 @@ import { API_BASE_URL } from '../config/env'
 import { listWorkTasks, type WorkTask } from './api'
 import { prependNotice } from './noticesStore'
 import EventSource from 'react-native-sse'
+import { notifyAuthInvalidated } from './authEvents'
 
 export type WorkTaskItem = WorkTask & {
   date: string
@@ -212,7 +213,7 @@ function stopHealthTimer() {
   healthTimer = null
 }
 
-function closeStream(advanceRequestId = true) {
+function closeStream() {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
@@ -224,6 +225,20 @@ function closeStream(advanceRequestId = true) {
     } catch {}
   }
   streamEs = null
+}
+
+export function deactivateWorkTasksRealtime() {
+  activeRealtimeParams = null
+  activeStreamIdentity = null
+  closeStream()
+  stopHealthTimer()
+  if (resyncTimer) {
+    clearTimeout(resyncTimer)
+    resyncTimer = null
+  }
+  fullSyncQueued = false
+  lastStreamActivityAt = 0
+  setConnectionState('idle')
 }
 
 function scheduleReconnect() {
@@ -439,7 +454,7 @@ function connectWorkTasksRealtime(forceReconnect = false) {
   if (!urls.length) return
   if (!forceReconnect && streamEs) return
 
-  closeStream(false)
+  closeStream()
   stopHealthTimer()
   setConnectionState('connecting')
   touchStreamActivity()
@@ -497,10 +512,8 @@ function connectWorkTasksRealtime(forceReconnect = false) {
     const xhrStatus = Number((event as any)?.xhrStatus || 0)
     if (xhrStatus === 401 || xhrStatus === 403) {
       setConnectionState('error')
-      // SSE long connections can report transient auth-like errors when the
-      // socket is interrupted. We reconnect here instead of forcing a logout.
-      streamEs = null
-      scheduleReconnect()
+      deactivateWorkTasksRealtime()
+      notifyAuthInvalidated('session_expired')
       return
     }
     streamEs = null

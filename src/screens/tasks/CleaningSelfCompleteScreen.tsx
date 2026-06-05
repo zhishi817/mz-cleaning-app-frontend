@@ -27,7 +27,7 @@ type SupplyItemState = {
   status: 'ok' | 'low' | null
   qty: string
   note: string
-  photo_url: string | null
+  photo_urls: string[]
 }
 
 function normalizeBase(base: string) {
@@ -150,7 +150,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       if (it.status === 'low') {
         const q = Number(String(it.qty || '').trim())
         if (!Number.isFinite(q) || q < 1) return false
-        if (!String(it.photo_url || '').trim()) return false
+        if (!(it.photo_urls || []).length) return false
       }
     }
     if (!String(livingRoomPhotoUrl || '').trim()) return false
@@ -192,7 +192,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         status: it.id === 'other' ? ('ok' as const) : (null as any),
         qty: '1',
         note: '',
-        photo_url: null,
+        photo_urls: [],
       }))
       setSupplies(mapped)
     } catch (e: any) {
@@ -283,7 +283,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       const name = String(a.fileName || uri.split('/').pop() || `stock-${Date.now()}.jpg`)
       const mimeType = String(a.mimeType || 'image/jpeg')
       const up = await uploadCleaningMedia(token, { uri, name, mimeType })
-      setSupplyItem(idx, { photo_url: up.url })
+      setSupplies((prev) => prev.map((x, i) => (i === idx ? { ...x, photo_urls: [...x.photo_urls, up.url] } : x)))
       Alert.alert(t('common_ok'), '库存照片已上传')
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '上传失败'))
@@ -349,7 +349,8 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       status: x.status as any,
       qty: x.status === 'low' ? Number(String(x.qty || '').trim()) : undefined,
       note: x.note.trim() || undefined,
-      photo_url: x.photo_url || undefined,
+      photo_url: x.photo_urls[0] || undefined,
+      photo_urls: x.photo_urls.length ? x.photo_urls : undefined,
     }))
     if (String(remoteAcPhotoUrl || '').trim()) {
       out.push({
@@ -553,10 +554,10 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                       />
                     ) : (
                       <View style={styles.supRow}>
-                        <Pressable
-                          onPress={() => setSupplyItem(idx, { status: 'ok', photo_url: null })}
-                          style={({ pressed }) => [styles.supChip, it.status === 'ok' ? styles.supChipActive : null, pressed ? styles.pressed : null]}
-                        >
+                          <Pressable
+                            onPress={() => setSupplyItem(idx, { status: 'ok', photo_urls: [] })}
+                            style={({ pressed }) => [styles.supChip, it.status === 'ok' ? styles.supChipActive : null, pressed ? styles.pressed : null]}
+                          >
                           <Text style={[styles.supChipText, it.status === 'ok' ? styles.supChipTextActive : null]}>足够</Text>
                         </Pressable>
                         <Pressable
@@ -583,20 +584,32 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                             disabled={suppliesSubmitting}
                             style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
                           >
-                            <Text style={styles.supPhotoText}>{it.photo_url ? '已拍照' : '拍照库存'}</Text>
+                            <Text style={styles.supPhotoText}>{it.photo_urls.length ? `继续拍照 (${it.photo_urls.length})` : '拍照库存'}</Text>
                           </Pressable>
                         </View>
-                        {it.photo_url ? (
-                          <Pressable
-                            onPress={() => {
-                              setViewerUrls([toAbsoluteUrl(it.photo_url)])
-                              setViewerIndex(0)
-                              setViewerOpen(true)
-                            }}
-                            style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
-                          >
-                            <Image source={{ uri: toAbsoluteUrl(it.photo_url) }} style={styles.supPreviewImg} />
-                          </Pressable>
+                        {it.photo_urls.length ? (
+                          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingVertical: 6 }}>
+                            {it.photo_urls.map((photoUrl, photoIdx) => (
+                              <View key={`${photoUrl}-${photoIdx}`} style={styles.thumbWrap}>
+                                <Pressable
+                                  onPress={() => {
+                                    setViewerUrls(it.photo_urls.map((url) => toAbsoluteUrl(url)))
+                                    setViewerIndex(photoIdx)
+                                    setViewerOpen(true)
+                                  }}
+                                  style={({ pressed }) => [styles.thumbPress, pressed ? styles.pressed : null]}
+                                >
+                                  <Image source={{ uri: toAbsoluteUrl(photoUrl) }} style={styles.thumb} />
+                                </Pressable>
+                                <Pressable
+                                  onPress={() => setSupplies((prev) => prev.map((x, i) => (i === idx ? { ...x, photo_urls: x.photo_urls.filter((_, j) => j !== photoIdx) } : x)))}
+                                  style={({ pressed }) => [styles.removeBtn, pressed ? styles.pressed : null]}
+                                >
+                                  <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
+                                </Pressable>
+                              </View>
+                            ))}
+                          </ScrollView>
                         ) : null}
                         <TextInput
                           value={it.note}
@@ -842,8 +855,8 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#F6F7FB' },
   content: { padding: 16, gap: 12 },
   card: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 12, borderWidth: hairline(), borderColor: '#EEF0F6' },
-  headRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  badge: { height: 30, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '72%' },
+  headRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
+  badge: { minHeight: 30, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '100%', flexShrink: 1 },
   badgeText: { color: '#2563EB', fontWeight: '900', flexShrink: 1 },
   sub: { marginTop: 8, color: '#6B7280', fontWeight: '700' },
   muted: { marginTop: 10, color: '#6B7280', fontWeight: '700' },
@@ -851,19 +864,19 @@ const styles = StyleSheet.create({
   ok: { marginTop: 8, color: '#16A34A', fontWeight: '900' },
   warn: { marginTop: 8, color: '#DC2626', fontWeight: '900' },
   pressed: { opacity: 0.92 },
-  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sectionNo: { width: 22, fontWeight: '900', color: '#6B7280' },
-  sectionTitle: { fontSize: 15, fontWeight: '900', color: '#111827' },
-  row: { marginTop: 10, flexDirection: 'row', gap: 10 },
-  primaryBtn: { flex: 1, height: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
-  primaryText: { color: '#FFFFFF', fontWeight: '900' },
-  grayBtn: { flex: 1, height: 40, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', borderWidth: hairline(), borderColor: '#E5E7EB' },
-  grayText: { color: '#111827', fontWeight: '900' },
+  sectionTitle: { flexShrink: 1, minWidth: 0, fontSize: 15, fontWeight: '900', color: '#111827' },
+  row: { marginTop: 10, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  primaryBtn: { flex: 1, flexShrink: 1, minWidth: 140, minHeight: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  primaryText: { color: '#FFFFFF', fontWeight: '900', textAlign: 'center' },
+  grayBtn: { flex: 1, flexShrink: 1, minWidth: 140, minHeight: 40, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', borderWidth: hairline(), borderColor: '#E5E7EB', paddingHorizontal: 12, paddingVertical: 8 },
+  grayText: { color: '#111827', fontWeight: '900', textAlign: 'center' },
   disabled: { opacity: 0.6 },
   disabledPrimary: { backgroundColor: '#93C5FD' },
   areaHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  areaTitle: { flex: 1, color: '#111827', fontWeight: '900' },
+  areaTitle: { flex: 1, minWidth: 0, color: '#111827', fontWeight: '900' },
   areaCount: { width: 24, textAlign: 'center', color: '#6B7280', fontWeight: '900' },
   areaBtn: { height: 30, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
   areaBtnText: { color: '#FFFFFF', fontWeight: '900', fontSize: 12 },
@@ -873,16 +886,16 @@ const styles = StyleSheet.create({
   removeBtn: { position: 'absolute', top: 6, right: 6, width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
   supBlock: { marginTop: 12, paddingTop: 10, borderTopWidth: hairline(), borderTopColor: '#EEF0F6' },
   supLabel: { color: '#111827', fontWeight: '900' },
-  supRow: { marginTop: 8, flexDirection: 'row', gap: 10, alignItems: 'center' },
-  supChip: { flex: 1, height: 34, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', borderWidth: hairline(), borderColor: '#E5E7EB' },
+  supRow: { marginTop: 8, flexDirection: 'row', gap: 10, alignItems: 'center', flexWrap: 'wrap' },
+  supChip: { flex: 1, minWidth: 120, minHeight: 34, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', borderWidth: hairline(), borderColor: '#E5E7EB' },
   supChipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
   supChipText: { color: '#111827', fontWeight: '900' },
   supChipTextActive: { color: '#FFFFFF' },
   supInput: { height: 38, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E5E7EB', paddingHorizontal: 10, color: '#111827', fontWeight: '800' },
   supQty: { flex: 1 },
   supNote: { marginTop: 8, minHeight: 80, textAlignVertical: 'top', paddingTop: 10, paddingBottom: 10 },
-  supPhotoBtn: { width: 110, height: 38, borderRadius: 12, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
-  supPhotoText: { color: '#FFFFFF', fontWeight: '900', fontSize: 12 },
+  supPhotoBtn: { minWidth: 110, minHeight: 38, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 12, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
+  supPhotoText: { color: '#FFFFFF', fontWeight: '900', fontSize: 12, textAlign: 'center' },
   supPhotoPreview: { marginTop: 8, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6' },
   supPreviewImg: { width: '100%', height: 180, backgroundColor: '#F3F4F6' },
   videoWrap: { marginTop: 10, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },

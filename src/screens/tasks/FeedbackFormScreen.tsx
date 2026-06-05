@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, Alert, Dimensions, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useIsFocused } from '@react-navigation/native'
@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { getJson, setJson } from '../../lib/storage'
+import { getJson, remove as removeStorage, setJson } from '../../lib/storage'
 import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
 import {
   completePropertyFeedbackProject,
@@ -77,13 +77,30 @@ const DAILY_STATUS_OPTIONS = [
 
 const DAILY_OPTIONS_CACHE_KEY = 'feedback_daily_necessity_options_v1'
 const FEEDBACK_HISTORY_CACHE_TTL_MS = 3 * 60 * 1000
+const FEEDBACK_DRAFT_CACHE_VERSION = 1
 function feedbackHistoryCacheKey(propertyId: string, propertyCode: string) {
   return `feedback_history_open_${String(propertyId || '').trim()}_${String(propertyCode || '').trim()}`
+}
+
+function feedbackDraftCacheKey(propertyId: string, propertyCode: string, taskId: string, userId: string) {
+  const owner = String(userId || '').trim() || 'anon'
+  const taskKey = String(taskId || '').trim() || 'no-task'
+  const propertyKey = String(propertyId || propertyCode || '').trim() || 'no-property'
+  return `feedback_form_draft_v${FEEDBACK_DRAFT_CACHE_VERSION}_${owner}_${propertyKey}_${taskKey}`
 }
 
 type FeedbackHistoryCache = {
   pending: PropertyFeedback[]
   resolved: PropertyFeedback[]
+  updated_at: number
+}
+
+type FeedbackFormDraftCache = {
+  version: number
+  kind: Kind
+  maintenanceDrafts?: MaintenanceDraft[]
+  deepCleaningDrafts?: DeepCleaningDraft[]
+  dailyDrafts?: DailyDraft[]
   updated_at: number
 }
 
@@ -377,6 +394,67 @@ function buildDailyDraft(): DailyDraft {
   }
 }
 
+function normalizeMaintenanceDraft(raw: any): MaintenanceDraft {
+  return {
+    ...buildMaintenanceDraft(),
+    clientId: String(raw?.clientId || makeDraftId()),
+    area: AREA_OPTIONS.includes(raw?.area) ? raw.area : null,
+    detail: String(raw?.detail || ''),
+    media: normalizeUrls(raw?.media),
+    submitAsCompleted: !!raw?.submitAsCompleted,
+    completionNote: String(raw?.completionNote || ''),
+    completionAfterPhotos: normalizeUrls(raw?.completionAfterPhotos),
+  }
+}
+
+function normalizeDeepCleaningDraft(raw: any): DeepCleaningDraft {
+  return {
+    ...buildDeepCleaningDraft(),
+    clientId: String(raw?.clientId || makeDraftId()),
+    area: DEEP_CLEANING_AREA_OPTIONS.includes(raw?.area) ? raw.area : null,
+    detail: String(raw?.detail || ''),
+    media: normalizeUrls(raw?.media),
+    submitAsCompleted: !!raw?.submitAsCompleted,
+    completionNote: String(raw?.completionNote || ''),
+    completionAfterPhotos: normalizeUrls(raw?.completionAfterPhotos),
+    completionStartedAt: String(raw?.completionStartedAt || '').trim() || null,
+    completionEndedAt: String(raw?.completionEndedAt || '').trim() || null,
+  }
+}
+
+function normalizeDailyDraft(raw: any): DailyDraft {
+  const status = DAILY_STATUS_OPTIONS.some((x) => x.value === raw?.status) ? raw.status : 'need_replace'
+  return {
+    ...buildDailyDraft(),
+    clientId: String(raw?.clientId || makeDraftId()),
+    status,
+    itemName: String(raw?.itemName || ''),
+    itemSku: String(raw?.itemSku || '').trim() || null,
+    qty: String(raw?.qty || '1'),
+    note: String(raw?.note || ''),
+    media: normalizeUrls(raw?.media),
+  }
+}
+
+function hasMaintenanceDraftContent(draft: MaintenanceDraft) {
+  return !!draft.area || !!draft.detail.trim() || draft.media.length > 0 || draft.submitAsCompleted || !!draft.completionNote.trim() || draft.completionAfterPhotos.length > 0
+}
+
+function hasDeepCleaningDraftContent(draft: DeepCleaningDraft) {
+  return !!draft.area ||
+    !!draft.detail.trim() ||
+    draft.media.length > 0 ||
+    draft.submitAsCompleted ||
+    !!draft.completionNote.trim() ||
+    draft.completionAfterPhotos.length > 0 ||
+    !!String(draft.completionStartedAt || '').trim() ||
+    !!String(draft.completionEndedAt || '').trim()
+}
+
+function hasDailyDraftContent(draft: DailyDraft) {
+  return !!draft.itemName.trim() || String(draft.qty || '').trim() !== '1' || !!draft.note.trim() || draft.media.length > 0 || draft.status !== 'need_replace'
+}
+
 export default function FeedbackFormScreen(props: Props) {
   const { t } = useI18n()
   const { token, user } = useAuth()
@@ -432,8 +510,97 @@ export default function FeedbackFormScreen(props: Props) {
   const task = useMemo(() => getWorkTasksSnapshot().items.find((x) => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
   const propertyId = String(task?.property_id || task?.property?.id || '').trim()
   const propertyCode = String(task?.property?.code || '').trim()
+  const taskId = String(task?.id || props.route.params.taskId || '').trim()
+  const userKey = String((user as any)?.id || (user as any)?.username || (user as any)?.email || '').trim()
+  const draftCacheKey = useMemo(() => feedbackDraftCacheKey(propertyId, propertyCode, taskId, userKey), [propertyId, propertyCode, taskId, userKey])
   const historyCacheRef = useRef<FeedbackHistoryCache | null>(null)
   const historyRefreshRef = useRef<Promise<void> | null>(null)
+  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastSavedDraftRef = useRef('')
+  const [draftCacheHydrated, setDraftCacheHydrated] = useState(false)
+
+  const persistFeedbackDraftSnapshot = useCallback(async (snapshot?: {
+    kind?: Kind
+    maintenanceDrafts?: MaintenanceDraft[]
+    deepCleaningDrafts?: DeepCleaningDraft[]
+    dailyDrafts?: DailyDraft[]
+  }) => {
+    const nextKind = snapshot?.kind || kind
+    const nextMaintenance = snapshot?.maintenanceDrafts || maintenanceDrafts
+    const nextDeepCleaning = snapshot?.deepCleaningDrafts || deepCleaningDrafts
+    const nextDaily = snapshot?.dailyDrafts || dailyDrafts
+    const hasContent =
+      nextMaintenance.some(hasMaintenanceDraftContent) ||
+      nextDeepCleaning.some(hasDeepCleaningDraftContent) ||
+      nextDaily.some(hasDailyDraftContent)
+
+    if (!hasContent) {
+      lastSavedDraftRef.current = ''
+      await removeStorage(draftCacheKey).catch(() => null)
+      return
+    }
+
+    const payload: FeedbackFormDraftCache = {
+      version: FEEDBACK_DRAFT_CACHE_VERSION,
+      kind: nextKind,
+      maintenanceDrafts: nextMaintenance,
+      deepCleaningDrafts: nextDeepCleaning,
+      dailyDrafts: nextDaily,
+      updated_at: Date.now(),
+    }
+    const serialized = JSON.stringify(payload)
+    if (serialized === lastSavedDraftRef.current) return
+    lastSavedDraftRef.current = serialized
+    await setJson(draftCacheKey, payload).catch(() => {
+      lastSavedDraftRef.current = ''
+    })
+  }, [dailyDrafts, deepCleaningDrafts, draftCacheKey, kind, maintenanceDrafts])
+
+  useEffect(() => {
+    let cancelled = false
+    setDraftCacheHydrated(false)
+    lastSavedDraftRef.current = ''
+    ;(async () => {
+      try {
+        const cached = await getJson<FeedbackFormDraftCache>(draftCacheKey)
+        if (cancelled || !cached || cached.version !== FEEDBACK_DRAFT_CACHE_VERSION) return
+        if (cached.kind === 'maintenance' || cached.kind === 'deep_cleaning' || cached.kind === 'daily_necessities') {
+          setKind(cached.kind)
+        }
+        if (Array.isArray(cached.maintenanceDrafts) && cached.maintenanceDrafts.length) {
+          setMaintenanceDrafts(cached.maintenanceDrafts.map(normalizeMaintenanceDraft))
+        }
+        if (Array.isArray(cached.deepCleaningDrafts) && cached.deepCleaningDrafts.length) {
+          setDeepCleaningDrafts(cached.deepCleaningDrafts.map(normalizeDeepCleaningDraft))
+        }
+        if (Array.isArray(cached.dailyDrafts) && cached.dailyDrafts.length) {
+          setDailyDrafts(cached.dailyDrafts.map(normalizeDailyDraft))
+        }
+        lastSavedDraftRef.current = JSON.stringify(cached)
+      } catch {
+      } finally {
+        if (!cancelled) setDraftCacheHydrated(true)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [draftCacheKey])
+
+  useEffect(() => {
+    return () => {
+      if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!draftCacheHydrated) return
+    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
+    draftSaveTimerRef.current = setTimeout(() => {
+      draftSaveTimerRef.current = null
+      void persistFeedbackDraftSnapshot()
+    }, 300)
+  }, [draftCacheHydrated, persistFeedbackDraftSnapshot])
 
   useEffect(() => {
     const title = kind === 'maintenance' ? '房源维修' : kind === 'deep_cleaning' ? '深度清洁' : '日用品反馈'
@@ -547,12 +714,6 @@ export default function FeedbackFormScreen(props: Props) {
     if (nextKind === 'daily_necessities' && !dailyDrafts.length) setDailyDrafts([buildDailyDraft()])
   }
 
-  function resetDraftsForKind(targetKind: Kind) {
-    if (targetKind === 'maintenance') setMaintenanceDrafts([buildMaintenanceDraft()])
-    else if (targetKind === 'deep_cleaning') setDeepCleaningDrafts([buildDeepCleaningDraft()])
-    else setDailyDrafts([buildDailyDraft()])
-  }
-
   function updateMaintenanceDraft(clientId: string, updater: (draft: MaintenanceDraft) => MaintenanceDraft) {
     setMaintenanceDrafts((prev) => prev.map((draft) => (draft.clientId === clientId ? updater(draft) : draft)))
   }
@@ -621,10 +782,13 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   function removeDeepCleaningPhoto(clientId: string, field: 'media' | 'completionAfterPhotos', photoIndex: number) {
-    updateDeepCleaningDraft(clientId, (draft) => ({
-      ...draft,
-      [field]: draft[field].filter((_, idx) => idx !== photoIndex),
-    }))
+    const next = deepCleaningDrafts.map((draft) => (
+      draft.clientId === clientId
+        ? { ...draft, [field]: draft[field].filter((_, idx) => idx !== photoIndex) }
+        : draft
+    ))
+    setDeepCleaningDrafts(next)
+    void persistFeedbackDraftSnapshot({ deepCleaningDrafts: next })
   }
 
   function removeMaintenancePhoto(clientId: string, field: 'media' | 'completionAfterPhotos', photoIndex: number) {
@@ -717,7 +881,13 @@ export default function FeedbackFormScreen(props: Props) {
   async function appendDeepCleaningPhoto(clientId: string, field: 'media' | 'completionAfterPhotos', source: 'camera' | 'library') {
     const urls = await uploadPhotoUrls(source)
     if (!urls.length) return
-    updateDeepCleaningDraft(clientId, (draft) => ({ ...draft, [field]: [...draft[field], ...urls] }))
+    const next = deepCleaningDrafts.map((draft) => (
+      draft.clientId === clientId
+        ? { ...draft, [field]: [...draft[field], ...urls] }
+        : draft
+    ))
+    setDeepCleaningDrafts(next)
+    await persistFeedbackDraftSnapshot({ deepCleaningDrafts: next })
   }
 
   async function appendDailyPhoto(clientId: string, source: 'camera' | 'library') {
@@ -823,11 +993,9 @@ export default function FeedbackFormScreen(props: Props) {
           }
           successCount += 1
         }
-        if (!failedIds.size) {
-          resetDraftsForKind('maintenance')
-        } else {
-          setMaintenanceDrafts((prev) => prev.filter((draft) => failedIds.has(draft.clientId)))
-        }
+        const nextMaintenanceDrafts = !failedIds.size ? [buildMaintenanceDraft()] : maintenanceDrafts.filter((draft) => failedIds.has(draft.clientId))
+        setMaintenanceDrafts(nextMaintenanceDrafts)
+        await persistFeedbackDraftSnapshot({ maintenanceDrafts: nextMaintenanceDrafts })
         dismissCreateSuccess(successCount, maintenanceDrafts.filter((draft) => failedIds.has(draft.clientId)).map((_, idx) => `维修记录${idx + 1}`))
       } else if (kind === 'deep_cleaning') {
         const invalidIndex = deepCleaningDrafts.findIndex((draft) => {
@@ -883,11 +1051,9 @@ export default function FeedbackFormScreen(props: Props) {
           }
           successCount += 1
         }
-        if (!failedIds.size) {
-          resetDraftsForKind('deep_cleaning')
-        } else {
-          setDeepCleaningDrafts((prev) => prev.filter((draft) => failedIds.has(draft.clientId)))
-        }
+        const nextDeepCleaningDrafts = !failedIds.size ? [buildDeepCleaningDraft()] : deepCleaningDrafts.filter((draft) => failedIds.has(draft.clientId))
+        setDeepCleaningDrafts(nextDeepCleaningDrafts)
+        await persistFeedbackDraftSnapshot({ deepCleaningDrafts: nextDeepCleaningDrafts })
         dismissCreateSuccess(successCount, deepCleaningDrafts.filter((draft) => failedIds.has(draft.clientId)).map((_, idx) => `深清记录${idx + 1}`))
       } else {
         const invalidIndex = dailyDrafts.findIndex((draft) => {
@@ -917,11 +1083,9 @@ export default function FeedbackFormScreen(props: Props) {
           if (result.ok) successCount += 1
           else failedIds.add(dailyDrafts[idx].clientId)
         })
-        if (!failedIds.size) {
-          resetDraftsForKind('daily_necessities')
-        } else {
-          setDailyDrafts((prev) => prev.filter((draft) => failedIds.has(draft.clientId)))
-        }
+        const nextDailyDrafts = !failedIds.size ? [buildDailyDraft()] : dailyDrafts.filter((draft) => failedIds.has(draft.clientId))
+        setDailyDrafts(nextDailyDrafts)
+        await persistFeedbackDraftSnapshot({ dailyDrafts: nextDailyDrafts })
         dismissCreateSuccess(successCount, dailyDrafts.filter((draft) => failedIds.has(draft.clientId)).map((_, idx) => `日用品记录${idx + 1}`))
       }
       await refreshLists({ force: true })
@@ -2006,11 +2170,11 @@ const styles = StyleSheet.create({
   stepTitle: { fontSize: 18, fontWeight: '900', color: '#111827' },
   stepSubtitle: { marginTop: 4, color: '#6B7280', fontWeight: '600', lineHeight: 18 },
   stepBody: { marginTop: 16, minWidth: 0 },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' },
   headerTextWrap: { flex: 1, minWidth: 0 },
   title: { fontSize: 22, fontWeight: '900', color: '#111827' },
-  taskBadge: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
-  taskBadgeText: { color: '#2563EB', fontWeight: '800' },
+  taskBadge: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center', maxWidth: '100%' },
+  taskBadgeText: { color: '#2563EB', fontWeight: '800', textAlign: 'center' },
   sub: { marginTop: 8, color: '#6B7280', fontWeight: '600', lineHeight: 20 },
   segmentRow: { flexDirection: 'row', gap: 8, marginTop: 14, flexWrap: 'wrap' },
   segment: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#EEF2FF' },
@@ -2034,16 +2198,16 @@ const styles = StyleSheet.create({
   photoRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   photoBtn: { backgroundColor: '#EFF6FF', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, borderWidth: hairline(), borderColor: '#BFDBFE' },
   photoBtnText: { color: '#1D4ED8', fontWeight: '800' },
-  choiceGrid: { flexDirection: 'row', gap: 10 },
-  choiceCard: { flex: 1, borderRadius: 16, borderWidth: hairline(), borderColor: '#D1D5DB', backgroundColor: '#F8FAFC', paddingHorizontal: 14, paddingVertical: 12 },
+  choiceGrid: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  choiceCard: { flex: 1, minWidth: 130, borderRadius: 16, borderWidth: hairline(), borderColor: '#D1D5DB', backgroundColor: '#F8FAFC', paddingHorizontal: 14, paddingVertical: 12 },
   choiceCardActive: { backgroundColor: '#EFF6FF', borderColor: '#93C5FD' },
   choiceTitle: { fontSize: 15, fontWeight: '900', color: '#111827' },
   choiceTitleActive: { color: '#1D4ED8' },
   choiceDesc: { marginTop: 4, color: '#6B7280', fontWeight: '600', lineHeight: 16, fontSize: 12 },
   choiceDescActive: { color: '#1E40AF' },
   createCard: { marginTop: 12, borderRadius: 18, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#DCE4F2', overflow: 'hidden' },
-  createCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: hairline(), borderBottomColor: '#E2E8F0', backgroundColor: '#FFFFFF' },
-  createCardTitle: { fontSize: 16, fontWeight: '900', color: '#111827' },
+  createCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: hairline(), borderBottomColor: '#E2E8F0', backgroundColor: '#FFFFFF' },
+  createCardTitle: { flex: 1, minWidth: 0, fontSize: 16, fontWeight: '900', color: '#111827' },
   removeBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: '#FEE2E2' },
   removeBtnText: { color: '#DC2626', fontWeight: '800', fontSize: 12 },
   createSection: { margin: 12, marginTop: 0, padding: 14, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E8EDF5' },
@@ -2079,8 +2243,8 @@ const styles = StyleSheet.create({
   submitDisabled: { opacity: 0.5 },
   submitText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
   historyCard: { backgroundColor: '#F8FAFC', borderRadius: 18, borderWidth: hairline(), borderColor: '#E2E8F0', padding: 14 },
-  historyHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
-  historyTitleWrap: { flex: 1 },
+  historyHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' },
+  historyTitleWrap: { flex: 1, minWidth: 0 },
   historyTitle: { fontSize: 16, fontWeight: '900', color: '#334155' },
   historySubtitle: { marginTop: 4, color: '#64748B', fontWeight: '600' },
   historySyncBanner: {
@@ -2095,7 +2259,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  historySyncTextWrap: { flex: 1 },
+  historySyncTextWrap: { flex: 1, minWidth: 0 },
   historySyncTitle: { color: '#1E3A8A', fontWeight: '900', fontSize: 13 },
   historySyncSubtitle: { color: '#1D4ED8', fontWeight: '700', fontSize: 12, marginTop: 2 },
   historyToggle: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: '#E2E8F0' },
@@ -2103,21 +2267,21 @@ const styles = StyleSheet.create({
   historyGroups: { marginTop: 10, gap: 12 },
   historySection: { borderRadius: 16, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E2E8F0', padding: 12 },
   historySectionHead: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
-  historySectionHeadActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  historySectionTextWrap: { flex: 1 },
+  historySectionHeadActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 },
+  historySectionTextWrap: { flex: 1, minWidth: 0 },
   historySectionTitle: { color: '#0F172A', fontSize: 15, fontWeight: '900' },
   historySectionSubtitle: { marginTop: 4, color: '#64748B', fontSize: 12, fontWeight: '700', lineHeight: 17 },
   historySectionCount: { minWidth: 34, height: 34, borderRadius: 17, backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
   historySectionCountText: { color: '#1D4ED8', fontSize: 13, fontWeight: '900' },
   historySectionToggle: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: '#E2E8F0' },
   historySectionToggleText: { color: '#334155', fontWeight: '800', fontSize: 12 },
-  sectionHead: { marginTop: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sectionTitle: { fontWeight: '900', color: '#111827', fontSize: 16 },
+  sectionHead: { marginTop: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+  sectionTitle: { flexShrink: 1, minWidth: 0, fontWeight: '900', color: '#111827', fontSize: 16 },
   toggleBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: '#F3F4F6' },
   toggleText: { fontWeight: '800', color: '#111827', fontSize: 12 },
   groupBlock: { marginTop: 12 },
-  groupHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 },
-  groupTitle: { fontWeight: '800', color: '#334155', fontSize: 13 },
+  groupHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
+  groupTitle: { flex: 1, minWidth: 0, fontWeight: '800', color: '#334155', fontSize: 13 },
   groupCountPill: { minWidth: 24, height: 24, borderRadius: 12, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
   groupCountText: { color: '#475569', fontSize: 11, fontWeight: '900' },
   groupEmptyText: { color: '#94A3B8', fontWeight: '700', fontSize: 12 },
@@ -2130,7 +2294,7 @@ const styles = StyleSheet.create({
   feedbackThumb: { width: '100%', height: '100%', backgroundColor: '#DBEAFE' },
   feedbackThumbBadge: { position: 'absolute', right: 4, bottom: 4, minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4, backgroundColor: 'rgba(15,23,42,0.78)', alignItems: 'center', justifyContent: 'center' },
   feedbackThumbBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
-  feedbackActions: { flexDirection: 'row', gap: 8 },
+  feedbackActions: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' },
   muted: { color: '#6B7280', marginTop: 8, fontWeight: '600' },
   modalRoot: { flex: 1, backgroundColor: 'rgba(17,24,39,0.45)', alignItems: 'center', justifyContent: 'center', padding: 16 },
   modalBackdrop: { ...StyleSheet.absoluteFillObject },
@@ -2140,27 +2304,27 @@ const styles = StyleSheet.create({
   modalScroll: { flex: 1 },
   modalScrollBody: { padding: 14, paddingBottom: 120 },
   detailModalBody: { padding: 14, paddingBottom: 20 },
-  modalTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: hairline(), borderBottomColor: '#E5E7EB' },
+  modalTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: hairline(), borderBottomColor: '#E5E7EB' },
   modalFooter: { paddingHorizontal: 14, paddingTop: 8, paddingBottom: 14, borderTopWidth: hairline(), borderTopColor: '#E5E7EB', backgroundColor: '#FFFFFF' },
-  modalActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  modalTitle: { fontWeight: '900', color: '#111827', fontSize: 16 },
+  modalActions: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' },
+  modalTitle: { flex: 1, minWidth: 0, fontWeight: '900', color: '#111827', fontSize: 16 },
   closeText: { color: '#2563EB', fontWeight: '800' },
   headerActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE' },
-  headerActionText: { color: '#2563EB', fontWeight: '800', fontSize: 12 },
+  headerActionText: { color: '#2563EB', fontWeight: '800', fontSize: 12, textAlign: 'center' },
   iconBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', alignItems: 'center', justifyContent: 'center' },
   detailHeadline: { color: '#111827', fontWeight: '900', fontSize: 16 },
   detailText: { marginTop: 10, color: '#374151', lineHeight: 20 },
   detailMeta: { marginTop: 8, color: '#6B7280', fontSize: 12, fontWeight: '700' },
   projectCard: { marginTop: 10, padding: 12, borderRadius: 14, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#E2E8F0' },
-  projectTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
-  projectTitle: { fontWeight: '900', color: '#111827' },
+  projectTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' },
+  projectTitle: { flexShrink: 1, minWidth: 0, fontWeight: '900', color: '#111827' },
   projectMeta: { marginTop: 6, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   projectText: { marginTop: 6, color: '#374151', lineHeight: 18 },
-  inlineBtns: { flexDirection: 'row', gap: 8 },
+  inlineBtns: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' },
   miniBtn: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10, backgroundColor: '#E5E7EB' },
-  miniBtnText: { color: '#111827', fontWeight: '800', fontSize: 12 },
+  miniBtnText: { color: '#111827', fontWeight: '800', fontSize: 12, textAlign: 'center' },
   miniBtnPrimary: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10, backgroundColor: '#2563EB' },
-  miniBtnPrimaryText: { color: '#FFFFFF', fontWeight: '800', fontSize: 12 },
+  miniBtnPrimaryText: { color: '#FFFFFF', fontWeight: '800', fontSize: 12, textAlign: 'center' },
   photoSectionLabel: { marginTop: 8, color: '#374151', fontWeight: '800' },
   timeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   timeChip: { minWidth: 52, paddingHorizontal: 10, paddingVertical: 9, borderRadius: 10, backgroundColor: '#F3F4F6', alignItems: 'center' },

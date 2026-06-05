@@ -120,7 +120,10 @@ const styles = StyleSheet.create({
   },
   submitBtn: {
     marginTop: 18,
+    minHeight: 48,
+    justifyContent: 'center',
     paddingVertical: 14,
+    paddingHorizontal: 12,
     borderRadius: 12,
     backgroundColor: '#2563EB',
     alignItems: 'center',
@@ -135,5 +138,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
+    textAlign: 'center',
   },
 })

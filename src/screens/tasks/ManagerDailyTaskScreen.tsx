@@ -164,11 +164,11 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const [keysDirty, setKeysDirty] = useState(false)
 
   const [photosLoading, setPhotosLoading] = useState(false)
-  const [consumableItems, setConsumableItems] = useState<Array<{ item_id: string; photo_url?: string | null; item_label?: string | null; status?: string | null; note?: string | null }>>([])
+  const [consumableItems, setConsumableItems] = useState<Array<{ item_id: string; photo_url?: string | null; photo_urls?: string[]; item_label?: string | null; status?: string | null; note?: string | null }>>([])
   const [livingRoomPhotoUrl, setLivingRoomPhotoUrl] = useState<string | null>(null)
   const [completionItems, setCompletionItems] = useState<Array<{ area: string; url: string; note?: string | null }>>([])
   const [inspectionItems, setInspectionItems] = useState<Array<{ area: string; url: string; note?: string | null }>>([])
-  const [restockProofs, setRestockProofs] = useState<Array<{ item_id: string; proof_url: string; note?: string | null; status?: string | null }>>([])
+  const [restockProofs, setRestockProofs] = useState<Array<{ item_id: string; proof_url: string; proof_urls?: string[]; note?: string | null; status?: string | null }>>([])
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const syncedTaskIdRef = useRef<string>('')
@@ -245,6 +245,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
             consumableRows.map((x) => ({
               item_id: String(x.item_id || '').trim(),
               photo_url: String(x.photo_url || '').trim() || null,
+              photo_urls: Array.isArray(x.photo_urls) ? x.photo_urls.map((url) => String(url || '').trim()).filter(Boolean) : (String(x.photo_url || '').trim() ? [String(x.photo_url || '').trim()] : []),
               item_label: x.item_label == null ? null : String(x.item_label || '').trim(),
               status: x.status == null ? null : String(x.status || '').trim(),
               note: x.note == null ? null : String(x.note || '').trim(),
@@ -260,10 +261,11 @@ export default function ManagerDailyTaskScreen(props: Props) {
               .map((x) => ({
                 item_id: String(x.item_id || '').trim(),
                 proof_url: String(x.proof_url || '').trim(),
+                proof_urls: Array.isArray(x.proof_urls) ? x.proof_urls.map((url) => String(url || '').trim()).filter(Boolean) : (String(x.proof_url || '').trim() ? [String(x.proof_url || '').trim()] : []),
                 note: x.note ?? null,
                 status: x.status == null ? null : String(x.status || '').trim(),
               }))
-              .filter((x) => !!x.item_id && !!x.proof_url),
+              .filter((x) => !!x.item_id && ((x.proof_urls && x.proof_urls.length > 0) || !!x.proof_url)),
           )
         })
         .catch(() => {
@@ -453,8 +455,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const restockItems = Array.isArray((task as any)?.restock_items) ? ((task as any).restock_items as any[]) : []
   const consumablePhotoRecords = consumableItems.filter((x) => {
     const itemId = String(x.item_id || '').trim()
-    const photoUrl = String(x.photo_url || '').trim()
-    if (!photoUrl) return false
+    const photoUrls = Array.isArray(x.photo_urls) && x.photo_urls.length ? x.photo_urls : (String(x.photo_url || '').trim() ? [String(x.photo_url || '').trim()] : [])
+    if (!photoUrls.length) return false
     if (itemId === 'remote_tv' || itemId === 'remote_ac') return false
     return true
   })
@@ -491,7 +493,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
         <View style={styles.card}>
           <View style={styles.headRow}>
             <Text style={styles.title}>每日清洁</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <View style={styles.headPillsRow}>
               {isStayoverTask ? (
                 <View style={[styles.pill, { backgroundColor: '#ECFDF5', borderWidth: hairline(), borderColor: '#A7F3D0' }]}>
                   <Text style={[styles.pillText, { color: '#047857' }]}>入住中清洁</Text>
@@ -522,21 +524,21 @@ export default function ManagerDailyTaskScreen(props: Props) {
           </View>
           {isHistoricalTask ? <Text style={styles.mutedSmall}>历史任务仅可修改需挂钥匙套数；时间、密码、客需不可修改</Text> : null}
           <View style={styles.row2Compact}>
-            <View style={{ flex: 1 }}>
+            <View style={styles.formHalf}>
               <Text style={styles.label}>退房时间</Text>
               <TextInput value={checkoutTime} onChangeText={setCheckoutTime} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="例如 11am" placeholderTextColor="#9CA3AF" />
             </View>
-            <View style={{ flex: 1 }}>
+            <View style={styles.formHalf}>
               <Text style={styles.label}>入住时间</Text>
               <TextInput value={checkinTime} onChangeText={setCheckinTime} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="例如 2pm" placeholderTextColor="#9CA3AF" />
             </View>
           </View>
           <View style={styles.row2Compact}>
-            <View style={{ flex: 1 }}>
+            <View style={styles.formHalf}>
               <Text style={styles.label}>旧密码</Text>
               <TextInput value={oldCode} onChangeText={setOldCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="旧密码" placeholderTextColor="#9CA3AF" />
             </View>
-            <View style={{ flex: 1 }}>
+            <View style={styles.formHalf}>
               <Text style={styles.label}>新密码</Text>
               <TextInput value={newCode} onChangeText={setNewCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="新密码" placeholderTextColor="#9CA3AF" />
             </View>
@@ -767,41 +769,55 @@ export default function ManagerDailyTaskScreen(props: Props) {
               const itemId = String(item?.item_id || '').trim()
               const label = String(item?.label || itemId || `补品 ${idx + 1}`).trim()
               const cleanerRow = consumablePhotoRecords.find((x) => x.item_id === itemId) || null
-              const cleanerPhotoUrl = String(cleanerRow?.photo_url || item?.photo_url || '').trim()
+              const cleanerPhotoUrls = Array.isArray(cleanerRow?.photo_urls) && cleanerRow?.photo_urls?.length
+                ? cleanerRow.photo_urls
+                : (String(cleanerRow?.photo_url || item?.photo_url || '').trim() ? [String(cleanerRow?.photo_url || item?.photo_url || '').trim()] : [])
               const inspectorProof = restockProofs.find((x) => x.item_id === itemId) || null
-              const inspectorPhotoUrl = String(inspectorProof?.proof_url || '').trim()
+              const inspectorPhotoUrls = Array.isArray(inspectorProof?.proof_urls) && inspectorProof?.proof_urls?.length
+                ? inspectorProof.proof_urls
+                : (String(inspectorProof?.proof_url || '').trim() ? [String(inspectorProof?.proof_url || '').trim()] : [])
               return (
                 <View key={`${itemId || label}-${idx}`} style={styles.group}>
                   <Text style={styles.groupTitle}>{label}</Text>
                   <View style={styles.mediaStack}>
                     <View style={styles.mediaSection}>
                       <Text style={styles.columnTitle}>清洁拍的</Text>
-                      {cleanerPhotoUrl ? (
-                        <Pressable
-                          onPress={() => {
-                            setViewerUrl(cleanerPhotoUrl)
-                            setViewerOpen(true)
-                          }}
-                          style={({ pressed }) => [styles.fullWidthMediaCard, pressed ? styles.pressed : null]}
-                        >
-                          <Image source={{ uri: toAbsoluteUrl(cleanerPhotoUrl) }} style={styles.fullWidthImg} />
-                        </Pressable>
+                      {cleanerPhotoUrls.length ? (
+                        <View style={styles.grid}>
+                          {cleanerPhotoUrls.map((photoUrl, photoIdx) => (
+                            <Pressable
+                              key={`cleaner-proof-${itemId}-${photoIdx}`}
+                              onPress={() => {
+                                setViewerUrl(photoUrl)
+                                setViewerOpen(true)
+                              }}
+                              style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
+                            >
+                              <Image source={{ uri: toAbsoluteUrl(photoUrl) }} style={styles.gridImg} />
+                            </Pressable>
+                          ))}
+                        </View>
                       ) : (
                         <Text style={styles.mutedSmall}>暂无</Text>
                       )}
                     </View>
                     <View style={styles.mediaSection}>
                       <Text style={styles.columnTitle}>检查补拍</Text>
-                      {inspectorPhotoUrl ? (
-                        <Pressable
-                          onPress={() => {
-                            setViewerUrl(inspectorPhotoUrl)
-                            setViewerOpen(true)
-                          }}
-                          style={({ pressed }) => [styles.fullWidthMediaCard, pressed ? styles.pressed : null]}
-                        >
-                          <Image source={{ uri: toAbsoluteUrl(inspectorPhotoUrl) }} style={styles.fullWidthImg} />
-                        </Pressable>
+                      {inspectorPhotoUrls.length ? (
+                        <View style={styles.grid}>
+                          {inspectorPhotoUrls.map((photoUrl, photoIdx) => (
+                            <Pressable
+                              key={`inspector-proof-${itemId}-${photoIdx}`}
+                              onPress={() => {
+                                setViewerUrl(photoUrl)
+                                setViewerOpen(true)
+                              }}
+                              style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
+                            >
+                              <Image source={{ uri: toAbsoluteUrl(photoUrl) }} style={styles.gridImg} />
+                            </Pressable>
+                          ))}
+                        </View>
                       ) : (
                         <Text style={styles.mutedSmall}>暂无</Text>
                       )}
@@ -851,18 +867,19 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#F6F7FB' },
   content: { padding: 16 },
   card: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 12, borderWidth: hairline(), borderColor: '#EEF0F6', marginBottom: 12 },
-  headRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  title: { fontSize: 16, fontWeight: '900', color: '#111827' },
-  pill: { height: 28, paddingHorizontal: 10, borderRadius: 999, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
-  pillText: { color: '#2563EB', fontWeight: '900', fontSize: 12 },
+  headRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  headPillsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', flexShrink: 1, maxWidth: '72%' },
+  title: { flex: 1, minWidth: 0, flexShrink: 1, fontSize: 16, fontWeight: '900', color: '#111827' },
+  pill: { minHeight: 28, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center', maxWidth: '100%' },
+  pillText: { color: '#2563EB', fontWeight: '900', fontSize: 12, textAlign: 'center' },
   metaRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  metaText: { color: '#111827', fontWeight: '900', flexShrink: 1 },
+  metaText: { flex: 1, minWidth: 0, color: '#111827', fontWeight: '900', flexShrink: 1 },
   addr: { marginTop: 6, color: '#6B7280', fontWeight: '700' },
   kvRow: { marginTop: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   kvLabel: { color: '#6B7280', fontWeight: '800' },
   kvValue: { color: '#111827', fontWeight: '900', flexShrink: 1 },
 
-  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
   sectionTitle: { color: '#111827', fontWeight: '900' },
   muted: { color: '#6B7280', fontWeight: '700' },
   mutedSmall: { marginTop: 8, color: '#6B7280', fontWeight: '700', fontSize: 12 },
@@ -873,8 +890,9 @@ const styles = StyleSheet.create({
   inputDisabled: { backgroundColor: '#F3F4F6', color: '#9CA3AF' },
   textarea: { height: 84, paddingTop: 12, textAlignVertical: 'top' },
   row2: { marginTop: 10, flexDirection: 'row', gap: 10 },
-  row2Compact: { marginTop: 8, flexDirection: 'row', gap: 10 },
-  pillsRow: { flexDirection: 'row', gap: 10 },
+  row2Compact: { marginTop: 8, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  formHalf: { flex: 1, minWidth: 130 },
+  pillsRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   pillBtn: { flex: 1, height: 40, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   pillBtnOn: { backgroundColor: '#EFF6FF', borderColor: '#DBEAFE' },
   pillBtnText: { color: '#6B7280', fontWeight: '900' },
@@ -884,11 +902,11 @@ const styles = StyleSheet.create({
   checkoutBtnDisabled: { backgroundColor: '#BAE6FD' },
   checkoutText: { color: '#0369A1', fontWeight: '900' },
 
-  grayBtnFull: { marginTop: 10, height: 44, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
-  grayText: { color: '#111827', fontWeight: '900' },
-  primaryBtnFull: { marginTop: 12, height: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  grayBtnFull: { marginTop: 10, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  grayText: { color: '#111827', fontWeight: '900', textAlign: 'center' },
+  primaryBtnFull: { marginTop: 12, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   primaryBtnDisabled: { backgroundColor: '#93C5FD' },
-  primaryText: { color: '#FFFFFF', fontWeight: '900' },
+  primaryText: { color: '#FFFFFF', fontWeight: '900', textAlign: 'center' },
   pressed: { opacity: 0.92 },
 
   mediaThumbWrap: { marginTop: 10, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
@@ -905,7 +923,7 @@ const styles = StyleSheet.create({
   fullWidthMediaCard: { borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   fullWidthImg: { width: '100%', height: 180, backgroundColor: '#F3F4F6' },
   grid: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  gridItem: { width: '48%', borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
+  gridItem: { flexBasis: '47%', flexGrow: 1, minWidth: 120, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   gridImg: { width: '100%', height: 160, backgroundColor: '#F3F4F6' },
 
   viewerMask: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)' },

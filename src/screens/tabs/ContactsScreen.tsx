@@ -212,7 +212,7 @@ export default function ContactsScreen(props: Props) {
                 <Text style={styles.name} numberOfLines={1}>
                   {item.name}
                 </Text>
-                <Text style={styles.mobile}>{item.phone_au || '-'}</Text>
+                <Text style={styles.mobile} numberOfLines={1}>{item.phone_au || '-'}</Text>
               </View>
               <Pressable
                 accessibilityRole="button"
@@ -266,7 +266,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  searchInput: { flex: 1, fontSize: 14, fontWeight: '700', color: '#111827' },
+  searchInput: { flex: 1, minWidth: 0, fontSize: 14, fontWeight: '700', color: '#111827' },
   listWrap: { flex: 1 },
   emptyWrap: { paddingHorizontal: 16, paddingTop: 10 },
   emptyText: { color: '#9CA3AF', fontWeight: '700' },
@@ -295,7 +295,7 @@ const styles = StyleSheet.create({
   },
   avatarImg: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#DBEAFE' },
   avatarText: { color: '#1D4ED8', fontWeight: '900', fontSize: 14 },
-  rowMain: { flex: 1 },
+  rowMain: { flex: 1, minWidth: 0 },
   name: { fontSize: moderateScale(15), fontWeight: '900', color: '#111827' },
   mobile: { marginTop: 4, color: '#6B7280', fontWeight: '700' },
   callBtn: {
@@ -307,6 +307,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: hairline(),
     borderColor: '#DBEAFE',
+    flexShrink: 0,
   },
   index: {
     position: 'absolute',

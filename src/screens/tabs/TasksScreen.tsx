@@ -22,6 +22,7 @@ import { effectiveInspectionMode, inspectionModeLabel, isSelfCompleteMode, isSta
 import { isTaskManagerUser } from '../../lib/roles'
 import {
   activateWorkTasksRealtime,
+  deactivateWorkTasksRealtime,
   getWorkTasksSnapshot,
   initWorkTasksStore,
   makeWorkTasksBucketKey,
@@ -335,6 +336,67 @@ function taskSortIndexValue(task: WorkTaskItem) {
   return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY
 }
 
+function taskRegionValue(task: WorkTaskItem) {
+  return String((task as any).region || task.property?.region || '').trim()
+}
+
+const MANAGER_REGION_ORDER = ['West Melbourne', 'Melbourne', 'Docklands', 'Southbank', 'St Kilda'] as const
+
+function managerRegionRank(region0: string) {
+  const region = String(region0 || '').trim().toLowerCase()
+  if (!region) return Number.POSITIVE_INFINITY
+  const idx = MANAGER_REGION_ORDER.findIndex((item) => item.toLowerCase() === region)
+  return idx >= 0 ? idx : MANAGER_REGION_ORDER.length
+}
+
+function taskCleanerSortValue(task: WorkTaskItem) {
+  const cleanerName = String((task as any).cleaner_name || '').trim()
+  const cleanerId = String((task as any).cleaner_id || task.assignee_id || '').trim()
+  const inspectorName = String((task as any).inspector_name || '').trim()
+  const inspectorId = String((task as any).inspector_id || '').trim()
+  return cleanerName || cleanerId || inspectorName || inspectorId
+}
+
+function taskManagerSearchText(task: WorkTaskItem) {
+  return [
+    task.property?.code,
+    task.property?.address,
+    task.title,
+    (task as any).region,
+    task.property?.region,
+    (task as any).cleaner_name,
+    (task as any).cleaner_id,
+    task.assignee_id,
+    (task as any).inspector_name,
+    (task as any).inspector_id,
+  ]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean)
+    .join(' ')
+}
+
+function compareManagerTaskGrouping(a: WorkTaskItem, b: WorkTaskItem) {
+  const ar = taskRegionValue(a)
+  const br = taskRegionValue(b)
+  const aRegionEmpty = !ar
+  const bRegionEmpty = !br
+  if (aRegionEmpty !== bRegionEmpty) return aRegionEmpty ? 1 : -1
+  const regionRankDelta = managerRegionRank(ar) - managerRegionRank(br)
+  if (regionRankDelta) return regionRankDelta
+  const regionDelta = ar.localeCompare(br)
+  if (regionDelta) return regionDelta
+
+  const ac = taskCleanerSortValue(a)
+  const bc = taskCleanerSortValue(b)
+  const aCleanerEmpty = !ac
+  const bCleanerEmpty = !bc
+  if (aCleanerEmpty !== bCleanerEmpty) return aCleanerEmpty ? 1 : -1
+  const cleanerDelta = ac.localeCompare(bc)
+  if (cleanerDelta) return cleanerDelta
+
+  return 0
+}
+
 function statusLabel(status: string) {
   const s = String(status || '').trim().toLowerCase()
   if (s === 'done' || s === 'completed') return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
@@ -432,7 +494,7 @@ function initialsOf(name: string) {
 }
 
 export default function TasksScreen(props: Props) {
-  const { user, token } = useAuth()
+  const { status, user, token } = useAuth()
   const { locale, t } = useI18n()
   const { width: windowWidth } = useWindowDimensions()
   const roleNames = useMemo(() => {
@@ -803,7 +865,7 @@ export default function TasksScreen(props: Props) {
   }, [canManagerMode, mode, view])
 
   const refreshTasksData = useCallback(async (opts?: { silent?: boolean; preserveError?: boolean }) => {
-    if (!user?.id || !token) return
+    if (status !== 'signedIn' || !user?.id || !token) return
     const silent = opts?.silent === true
     const preserveError = opts?.preserveError === true
     if (!silent) setRefreshing(true)
@@ -821,12 +883,17 @@ export default function TasksScreen(props: Props) {
     } finally {
       if (!silent) setRefreshing(false)
     }
-  }, [effectiveView, range.date_from, range.date_to, token, user?.id])
+  }, [effectiveView, range.date_from, range.date_to, status, token, user?.id])
+
+  useEffect(() => {
+    if (status === 'signedIn' && token && user?.id) return
+    deactivateWorkTasksRealtime()
+  }, [status, token, user?.id])
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      if (!user?.id || !token) return
+      if (status !== 'signedIn' || !user?.id || !token) return
       setTaskNoticeArmed(false)
       await initNoticesStore().catch(() => null)
       const bucketKey = makeWorkTasksBucketKey({ userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
@@ -843,10 +910,10 @@ export default function TasksScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [effectiveView, range.date_from, range.date_to, refreshTasksData, token, user?.id])
+  }, [effectiveView, range.date_from, range.date_to, refreshTasksData, status, token, user?.id])
 
   useEffect(() => {
-    if (!token || !user?.id) return
+    if (status !== 'signedIn' || !token || !user?.id) return
     const nav: any = props.navigation as any
     const onFocus = async () => {
       try {
@@ -859,7 +926,7 @@ export default function TasksScreen(props: Props) {
         if (typeof unsub === 'function') unsub()
       } catch {}
     }
-  }, [props.navigation, refreshTasksData, token, user?.id])
+  }, [props.navigation, refreshTasksData, status, token, user?.id])
 
   useEffect(() => {
     if (!token || !user?.id) return
@@ -1124,6 +1191,11 @@ export default function TasksScreen(props: Props) {
         if (aDone !== bDone) return aDone ? 1 : -1
       }
 
+      if (canManagerMode && mode === 'manager') {
+        const managerGroupDelta = compareManagerTaskGrouping(a, b)
+        if (managerGroupDelta) return managerGroupDelta
+      }
+
       const sortDelta = taskSortIndexValue(a) - taskSortIndexValue(b)
       if (sortDelta) return sortDelta
 
@@ -1134,18 +1206,10 @@ export default function TasksScreen(props: Props) {
         if (ur) return ur
       }
 
-      const ar = String((a as any).region || a.property?.region || '').trim()
-      const br = String((b as any).region || b.property?.region || '').trim()
-      const aEmpty = !ar
-      const bEmpty = !br
-      if (aEmpty !== bEmpty) return aEmpty ? 1 : -1
-      const r0 = ar.localeCompare(br)
-      if (r0) return r0
-
       return String(a.title || '').localeCompare(String(b.title || ''))
     })
     return list
-  }, [period, selectedDate, tasksByDate])
+  }, [canManagerMode, mode, period, selectedDate, tasksByDate])
 
   const canReorder = useMemo(() => {
     if (roleNames.includes('cleaner') || roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')) return true
@@ -1288,15 +1352,11 @@ export default function TasksScreen(props: Props) {
   }, [canManagerMode, dayEndDate, mode, period, token])
   const visibleTasks = useMemo(() => {
     const q = search.trim().toLowerCase()
-    const searchEnabled = canManagerMode && mode === 'manager' && period === 'today'
-    const base = searchEnabled && q ? items : renderTasks
+    // The manager search input is labeled as "today's tasks", so it must stay within
+    // the currently selected day instead of falling back to the whole hydrated week.
+    const base = renderTasks
     const filtered = q
-      ? base.filter((t) => {
-          const code = String(t.property?.code || '').toLowerCase()
-          const addr = String(t.property?.address || '').toLowerCase()
-          const title = String(t.title || '').toLowerCase()
-          return code.includes(q) || addr.includes(q) || title.includes(q)
-        })
+      ? base.filter((t) => taskManagerSearchText(t).includes(q))
       : base
     const list = filtered.slice()
     list.sort((a, b) => {
@@ -1308,6 +1368,10 @@ export default function TasksScreen(props: Props) {
       const ad = String(a.scheduled_date || (a as any).date || '')
       const bd = String(b.scheduled_date || (b as any).date || '')
       if (ad && bd && ad !== bd) return ad.localeCompare(bd)
+      if (canManagerMode && mode === 'manager') {
+        const managerGroupDelta = compareManagerTaskGrouping(a, b)
+        if (managerGroupDelta) return managerGroupDelta
+      }
       const sortDelta = taskSortIndexValue(a) - taskSortIndexValue(b)
       if (sortDelta) return sortDelta
       const aIsCleaning = a.source_type === 'cleaning_tasks'
@@ -1365,7 +1429,7 @@ export default function TasksScreen(props: Props) {
       return deduped
     }
     return list
-  }, [items, renderTasks, search, canManagerMode, mode, period])
+  }, [renderTasks, search, canManagerMode, mode, period])
   const showDayEndCard = period === 'today' && (isCleanerSelf || isInspectorSelf ? selfDayEndTasks.length > 0 : cleanerTodayTasks.length > 0) && !!dayEndViewerTarget.userId
   const dayEndInsertIndex = useMemo(() => {
     if (!showDayEndCard) return -1
@@ -1891,7 +1955,7 @@ function showBanner(title: string, message: string) {
               value={search}
               onChangeText={setSearch}
               style={styles.searchInput}
-              placeholder="搜索今日任务房源（编号/地址/标题）"
+              placeholder="搜索今日任务（房号/地址/清洁/检查）"
               placeholderTextColor="#9CA3AF"
             />
             {search.trim() ? (
@@ -2132,7 +2196,7 @@ function showBanner(title: string, message: string) {
                         </Text>
                       </View>
                     ) : null}
-                    <Text style={styles.taskTitle} numberOfLines={1}>
+                    <Text style={styles.taskTitle} numberOfLines={2}>
                       {title2}
                     </Text>
                     <View style={[styles.statusPill, meta.pill]}>
@@ -2631,8 +2695,9 @@ function showBanner(title: string, message: string) {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#F6F7FB' },
   header: {
-    height: moderateScale(60),
-    paddingHorizontal: 18,
+    minHeight: moderateScale(60),
+    paddingHorizontal: 16,
+    paddingVertical: 8,
     borderBottomWidth: hairline(),
     borderBottomColor: '#EEF0F6',
     flexDirection: 'row',
@@ -2640,7 +2705,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     backgroundColor: '#FFFFFF',
   },
-  hello: { fontSize: moderateScale(20), fontWeight: '800', color: '#111827' },
+  hello: { flex: 1, minWidth: 0, flexShrink: 1, fontSize: moderateScale(20), fontWeight: '800', color: '#111827' },
   helloName: { fontSize: moderateScale(20), fontWeight: '800', color: '#111827' },
   avatar: {
     width: moderateScale(36),
@@ -2791,10 +2856,10 @@ const styles = StyleSheet.create({
   monthDotOut: { backgroundColor: '#9CA3AF' },
   monthDotHidden: { opacity: 0 },
 
-  sectionHeader: { marginTop: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sectionTitle: { fontSize: moderateScale(14), fontWeight: '800', color: '#6B7280' },
-  sectionCount: { fontSize: moderateScale(12), fontWeight: '700', color: '#9CA3AF' },
-  sectionRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  sectionHeader: { marginTop: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+  sectionTitle: { flexShrink: 1, minWidth: 0, fontSize: moderateScale(14), fontWeight: '800', color: '#6B7280' },
+  sectionCount: { flexShrink: 1, fontSize: moderateScale(12), fontWeight: '700', color: '#9CA3AF' },
+  sectionRight: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1, flexWrap: 'wrap', justifyContent: 'flex-end' },
   viewSegment: { flexDirection: 'row', gap: 6, backgroundColor: '#F2F4F8', borderRadius: 14, padding: 4 },
   viewSegmentItem: { height: 28, paddingHorizontal: 10, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   viewSegmentItemActive: { backgroundColor: '#FFFFFF' },
@@ -2808,15 +2873,15 @@ const styles = StyleSheet.create({
   emptyText: { color: '#9CA3AF', fontWeight: '800' },
 
   taskCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14, borderWidth: hairline(), borderColor: '#EEF0F6' },
-  taskTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  taskTitle: { flex: 1, fontSize: moderateScale(18), fontWeight: '900', color: '#111827' },
+  taskTitleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  taskTitle: { flex: 1, minWidth: 0, flexShrink: 1, fontSize: moderateScale(18), lineHeight: moderateScale(23), fontWeight: '900', color: '#111827' },
   orderPill: { width: 26, height: 26, borderRadius: 13, borderWidth: hairline(), borderColor: '#DBEAFE', backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' },
   orderPillActive: { borderColor: '#2563EB', backgroundColor: '#2563EB' },
   orderPillText: { fontSize: 12, fontWeight: '900', color: '#2563EB' },
   orderPillTextActive: { color: '#FFFFFF' },
   orderInput: { width: 44, height: 30, borderRadius: 10, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 8, fontWeight: '900', color: '#111827', textAlign: 'center' },
-  statusPill: { height: 26, paddingHorizontal: 10, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
-  statusText: { fontSize: 12, fontWeight: '900' },
+  statusPill: { minHeight: 26, paddingHorizontal: 10, paddingVertical: 3, borderRadius: 13, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  statusText: { fontSize: 12, fontWeight: '900', textAlign: 'center' },
   statusBlue: { backgroundColor: '#DBEAFE' },
   statusAmber: { backgroundColor: '#FEF3C7' },
   statusGreen: { backgroundColor: '#DCFCE7' },
@@ -2848,9 +2913,9 @@ const styles = StyleSheet.create({
   tagWarnText: { fontSize: 11, fontWeight: '900', color: '#B45309' },
   tagLate: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#F3E8FF', borderWidth: hairline(), borderColor: '#D8B4FE', alignItems: 'center', justifyContent: 'center' },
   tagLateText: { fontSize: 11, fontWeight: '900', color: '#7C3AED' },
-  row: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6 },
-  addr: { flex: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600' },
-  linkInline: { flex: 1, color: '#2563EB', fontSize: moderateScale(13), fontWeight: '800' },
+  row: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 },
+  addr: { flex: 1, minWidth: 0, flexShrink: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600' },
+  linkInline: { flex: 1, minWidth: 0, flexShrink: 1, color: '#2563EB', fontSize: moderateScale(13), fontWeight: '800' },
   execCard: { marginTop: 12, padding: 14, borderRadius: 18, backgroundColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', gap: 12 },
   execBadges: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   execBadgeClean: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
@@ -2860,32 +2925,32 @@ const styles = StyleSheet.create({
   execLabel: { color: '#6B7280', fontWeight: '600', fontSize: moderateScale(12) },
   execNames: { marginTop: 4, color: '#111827', fontWeight: '600', fontSize: moderateScale(13) },
   execOrder: { marginTop: 4, color: '#6B7280', fontWeight: '600', fontSize: moderateScale(12) },
-  unitTypeRow: { marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  unitTypeCell: { flex: 1 },
-  unitTypeText: { color: '#111827', fontSize: moderateScale(13), fontWeight: '600' },
-  addrRow: { marginTop: 16, flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  addrText: { flex: 1, color: '#111827', fontSize: moderateScale(13), fontWeight: '600', lineHeight: moderateScale(19) },
+  unitTypeRow: { marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 12, minWidth: 0 },
+  unitTypeCell: { flex: 1, minWidth: 0 },
+  unitTypeText: { flexShrink: 1, color: '#111827', fontSize: moderateScale(13), fontWeight: '600' },
+  addrRow: { marginTop: 16, flexDirection: 'row', alignItems: 'flex-start', gap: 10, minWidth: 0 },
+  addrText: { flex: 1, minWidth: 0, flexShrink: 1, color: '#111827', fontSize: moderateScale(13), fontWeight: '600', lineHeight: moderateScale(19) },
   timeRow: { marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  timeCell: { flex: 1 },
+  timeCell: { flex: 1, minWidth: 0 },
   timeLabel: { color: '#9CA3AF', fontWeight: '600', fontSize: moderateScale(12) },
   timeValue: { marginTop: 2, color: '#111827', fontWeight: '600', fontSize: moderateScale(13) },
   timeDivider: { width: hairline(), height: 44, backgroundColor: '#EEF0F6' },
   pwRowNew: { marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  pwCell: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
-  pwLabel: { color: '#9CA3AF', fontWeight: '600', fontSize: moderateScale(12) },
-  pwValue: { color: '#111827', fontWeight: '600', fontSize: moderateScale(13) },
+  pwCell: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  pwLabel: { flexShrink: 0, color: '#9CA3AF', fontWeight: '600', fontSize: moderateScale(12) },
+  pwValue: { flex: 1, minWidth: 0, flexShrink: 1, color: '#111827', fontWeight: '600', fontSize: moderateScale(13) },
   guestRow: { marginTop: 14, flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   guestIconWrap: { width: moderateScale(20), height: moderateScale(20), marginTop: 2, alignItems: 'center', justifyContent: 'center' },
-  guestCell: { flex: 1, flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
-  guestLabel: { color: '#9CA3AF', fontWeight: '600', fontSize: moderateScale(12), lineHeight: moderateScale(19) },
-  guestValue: { color: '#111827', fontWeight: '600', fontSize: moderateScale(13), flexShrink: 1, lineHeight: moderateScale(19) },
+  guestCell: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  guestLabel: { flexShrink: 0, color: '#9CA3AF', fontWeight: '600', fontSize: moderateScale(12), lineHeight: moderateScale(19) },
+  guestValue: { flex: 1, minWidth: 0, color: '#111827', fontWeight: '600', fontSize: moderateScale(13), flexShrink: 1, lineHeight: moderateScale(19) },
   guideCard: { marginTop: 16, height: 62, borderRadius: 18, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6', paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
   guideText: { flex: 1, minWidth: 0, color: '#2563EB', fontWeight: '600', fontSize: moderateScale(13) },
   pwRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6 },
   pwText: { flex: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '700' },
   summary: { marginTop: 10, color: '#374151', fontWeight: '700', lineHeight: 18 },
-  actionsRow: { marginTop: 12, flexDirection: 'row', gap: 10 },
-  actionBtn: { flex: 1, height: 36, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  actionsRow: { marginTop: 12, flexDirection: 'row', gap: 10, flexWrap: 'wrap', alignItems: 'stretch' },
+  actionBtn: { flex: 1, flexGrow: 1, flexShrink: 1, minWidth: 128, minHeight: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10, paddingVertical: 8 },
   actionBtnDisabled: { backgroundColor: '#E5E7EB' },
-  actionText: { fontWeight: '900', color: '#FFFFFF', fontSize: 12 },
+  actionText: { flexShrink: 1, fontWeight: '900', color: '#FFFFFF', fontSize: 12, lineHeight: 16, textAlign: 'center' },
 })

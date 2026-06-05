@@ -27,6 +27,7 @@ import ContactDetailScreen from '../screens/contacts/ContactDetailScreen'
 import ProfileEditScreen from '../screens/me/ProfileEditScreen'
 import AccountScreen from '../screens/me/AccountScreen'
 import ChangePasswordScreen from '../screens/me/ChangePasswordScreen'
+import ExpenseCenterScreen from '../screens/me/ExpenseCenterScreen'
 import TaskDetailScreen from '../screens/tasks/TaskDetailScreen'
 import FeedbackFormScreen from '../screens/tasks/FeedbackFormScreen'
 import SuppliesFormScreen from '../screens/tasks/SuppliesFormScreen'
@@ -91,6 +92,7 @@ export type MeStackParamList = {
   ProfileEdit: undefined
   Account: undefined
   ChangePassword: undefined
+  ExpenseCenter: undefined
 }
 
 function pickTaskRouteIdFromNoticeData(data0: any) {
@@ -253,6 +255,7 @@ function MeStackNavigator() {
       <MeStack.Screen name="ProfileEdit" component={ProfileEditScreen} options={{ title: t('profile_edit') }} />
       <MeStack.Screen name="Account" component={AccountScreen} options={{ title: t('account_manage') }} />
       <MeStack.Screen name="ChangePassword" component={ChangePasswordScreen} options={{ title: '修改密码' }} />
+      <MeStack.Screen name="ExpenseCenter" component={ExpenseCenterScreen} options={{ title: '支出录入' }} />
     </MeStack.Navigator>
   )
 }

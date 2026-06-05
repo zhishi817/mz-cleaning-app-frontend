@@ -61,9 +61,9 @@ export default function ContactDetailScreen(props: Props) {
               <Text style={styles.avatarText}>{initials(effective.name)}</Text>
             </View>
           )}
-          <View style={{ flex: 1 }}>
-            <Text style={styles.name}>{effective.name}</Text>
-            {effective.source === 'system' ? <Text style={styles.meta}>{`${effective.username || ''}${effective.role ? ` · ${effective.role}` : ''}`}</Text> : null}
+          <View style={styles.main}>
+            <Text style={styles.name} numberOfLines={2}>{effective.name}</Text>
+            {effective.source === 'system' ? <Text style={styles.meta} numberOfLines={2}>{`${effective.username || ''}${effective.role ? ` · ${effective.role}` : ''}`}</Text> : null}
           </View>
         </View>
 
@@ -71,7 +71,7 @@ export default function ContactDetailScreen(props: Props) {
 
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>澳洲手机号</Text>
-          <Text style={styles.infoValue}>{effective.phone_au || '-'}</Text>
+          <Text style={styles.infoValue} numberOfLines={2}>{effective.phone_au || '-'}</Text>
         </View>
         <Pressable accessibilityRole="button" accessibilityLabel="call-contact" onPress={call} style={({ pressed }) => [styles.callBtn, pressed ? styles.pressed : null]}>
           <Ionicons name="call" size={moderateScale(18)} color="#FFFFFF" />
@@ -91,7 +91,8 @@ const styles = StyleSheet.create({
     borderWidth: hairline(),
     borderColor: '#EEF0F6',
   },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, minWidth: 0 },
+  main: { flex: 1, minWidth: 0 },
   avatar: {
     width: 60,
     height: 60,
@@ -105,20 +106,21 @@ const styles = StyleSheet.create({
   name: { fontSize: 18, fontWeight: '900', color: '#111827' },
   meta: { marginTop: 6, color: '#6B7280', fontWeight: '700' },
   line: { marginTop: 14, height: hairline(), backgroundColor: '#EEF0F6' },
-  infoRow: { marginTop: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  infoRow: { marginTop: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
   infoLabel: { color: '#9CA3AF', fontWeight: '900' },
-  infoValue: { color: '#111827', fontWeight: '900' },
+  infoValue: { flexShrink: 1, color: '#111827', fontWeight: '900', textAlign: 'right' },
   callBtn: {
     marginTop: 14,
     backgroundColor: '#2563EB',
     borderRadius: 14,
     paddingVertical: 12,
+    paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
   },
   pressed: { opacity: 0.92 },
-  callText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
+  callText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15, textAlign: 'center' },
   title: { fontSize: 16, fontWeight: '800', color: '#111827' },
 })

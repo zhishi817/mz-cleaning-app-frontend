@@ -7,6 +7,7 @@ import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { defaultProfileFromUser, getProfile, type Profile } from '../../lib/profileStore'
 import { getMyProfile } from '../../lib/api'
+import { hasAnyPermission } from '../../lib/roles'
 import { hairline } from '../../lib/scale'
 import type { MeStackParamList } from '../../navigation/RootNavigator'
 
@@ -25,6 +26,20 @@ export default function MeScreen(props: Props) {
   const { user, token, signOut } = useAuth()
   const { locale, setLocale, t } = useI18n()
   const [profile, setProfile] = useState<Profile>(() => defaultProfileFromUser(user))
+  const canOpenExpenseCenter = useMemo(
+    () =>
+      hasAnyPermission(user, [
+        'cleaning_app.expense.company.submit',
+        'cleaning_app.expense.company.view.self',
+        'cleaning_app.expense.company.edit.self',
+        'cleaning_app.expense.company.delete.self',
+        'cleaning_app.expense.property.submit',
+        'cleaning_app.expense.property.view.self',
+        'cleaning_app.expense.property.edit.self',
+        'cleaning_app.expense.property.delete.self',
+      ]),
+    [user],
+  )
 
   useFocusEffect(
     useCallback(() => {
@@ -82,9 +97,9 @@ export default function MeScreen(props: Props) {
               <Text style={styles.avatarText}>{initials}</Text>
             </View>
           )}
-          <View style={{ flex: 1 }}>
-            <Text style={styles.username}>{profile?.display_name || user?.username || '-'}</Text>
-            <Text style={styles.role}>{user?.role || '-'}</Text>
+          <View style={styles.profileTextWrap}>
+            <Text style={styles.username} numberOfLines={1}>{profile?.display_name || user?.username || '-'}</Text>
+            <Text style={styles.role} numberOfLines={1}>{user?.role || '-'}</Text>
           </View>
         </View>
       </View>
@@ -117,6 +132,15 @@ export default function MeScreen(props: Props) {
           <Ionicons name="settings-outline" size={20} color="#2563EB" />
           <Text style={styles.itemText}>{t('me_account')}</Text>
         </Pressable>
+        {canOpenExpenseCenter ? (
+          <>
+            <View style={styles.sep} />
+            <Pressable onPress={() => props.navigation.navigate('ExpenseCenter')} style={({ pressed }) => [styles.listItem, pressed ? styles.pressed : null]}>
+              <Ionicons name="receipt-outline" size={20} color="#2563EB" />
+              <Text style={styles.itemText}>支出录入</Text>
+            </Pressable>
+          </>
+        ) : null}
       </View>
 
       <Pressable style={({ pressed }) => [styles.logoutBtn, pressed ? styles.logoutPressed : null]} onPress={onLogout}>
@@ -135,7 +159,8 @@ const styles = StyleSheet.create({
     borderWidth: hairline(),
     borderColor: '#EEF0F6',
   },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, minWidth: 0 },
+  profileTextWrap: { flex: 1, minWidth: 0 },
   avatar: {
     width: 56,
     height: 56,
@@ -156,15 +181,15 @@ const styles = StyleSheet.create({
     borderColor: '#EEF0F6',
     overflow: 'hidden',
   },
-  listRow: { paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  listLabel: { fontSize: 14, fontWeight: '900', color: '#111827' },
-  langWrap: { flexDirection: 'row', gap: 8 },
-  langChip: { height: 30, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  listRow: { paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' },
+  listLabel: { flexShrink: 1, fontSize: 14, fontWeight: '900', color: '#111827' },
+  langWrap: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' },
+  langChip: { minHeight: 30, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   langChipActive: { backgroundColor: '#2563EB' },
   langText: { fontSize: 12, fontWeight: '900', color: '#6B7280' },
   langTextActive: { color: '#FFFFFF' },
   listItem: { paddingHorizontal: 14, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  itemText: { fontSize: 14, fontWeight: '900', color: '#111827' },
+  itemText: { flex: 1, minWidth: 0, fontSize: 14, fontWeight: '900', color: '#111827' },
   sep: { height: hairline(), backgroundColor: '#EEF0F6' },
   logoutBtn: {
     marginTop: 16,

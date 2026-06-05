@@ -279,8 +279,8 @@ const styles = StyleSheet.create({
   linkCardText: { flex: 1, minWidth: 0 },
   linkCardTitle: { color: '#1D4ED8', fontWeight: '900' },
   linkCardSubtitle: { marginTop: 4, color: '#475569', fontWeight: '700', lineHeight: 18 },
-  actionsRow: { marginTop: 14, flexDirection: 'row', gap: 10 },
-  actionBtn: { flex: 1, height: 38, borderRadius: 14, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
-  actionText: { color: '#FFFFFF', fontWeight: '800' },
+  actionsRow: { marginTop: 14, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  actionBtn: { flex: 1, minWidth: 128, minHeight: 40, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
+  actionText: { color: '#FFFFFF', fontWeight: '800', textAlign: 'center' },
   pressed: { opacity: 0.92 },
 })

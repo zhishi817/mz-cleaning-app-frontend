@@ -47,8 +47,8 @@ const styles = StyleSheet.create({
     borderColor: '#EEF0F6',
     overflow: 'hidden',
   },
-  btn: { paddingVertical: 14, paddingHorizontal: 14, backgroundColor: '#FFFFFF' },
-  btnText: { fontSize: 15, fontWeight: '900', color: '#111827' },
+  btn: { minHeight: 48, justifyContent: 'center', paddingVertical: 14, paddingHorizontal: 14, backgroundColor: '#FFFFFF' },
+  btnText: { fontSize: 15, fontWeight: '900', color: '#111827', textAlign: 'center' },
   sep: { height: hairline(), backgroundColor: '#EEF0F6' },
   pressed: { opacity: 0.92 },
 })
