@@ -34,6 +34,7 @@ type TimePickerTarget = 'project_started_at' | 'project_ended_at' | 'draft_start
 type AreaOption = (typeof AREA_OPTIONS)[number]
 type DeepCleaningAreaOption = (typeof DEEP_CLEANING_AREA_OPTIONS)[number]
 type DailyStatusOption = (typeof DAILY_STATUS_OPTIONS)[number]['value']
+type PhotoUploadOptions = { continuousCamera?: boolean }
 
 type MaintenanceDraft = {
   clientId: string
@@ -834,35 +835,40 @@ export default function FeedbackFormScreen(props: Props) {
     return `${line1}\n${line2}`.trim()
   }
 
-  async function uploadPhotoUrls(source: 'camera' | 'library'): Promise<string[]> {
+  async function uploadPhotoUrls(source: 'camera' | 'library', options: PhotoUploadOptions = {}): Promise<string[]> {
     if (!token) return []
     const ok = source === 'camera' ? await ensureCameraPerm() : await ensureLibraryPerm()
     if (!ok) {
       Alert.alert(t('common_error'), source === 'camera' ? '请先开启相机权限' : '请先开启相册权限')
       return []
     }
+    const continuousCamera = source === 'camera' && options.continuousCamera === true
+    const uploaded: string[] = []
     try {
-      const res =
-        source === 'camera'
-          ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1 })
-          : await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 1, allowsMultipleSelection: true, selectionLimit: 0, orderedSelection: true })
-      if (res.canceled || !res.assets?.length) return []
-      const uploaded: string[] = []
-      for (const asset of res.assets as any[]) {
-        const uri = String(asset?.uri || '').trim()
-        if (!uri) continue
-        const capturedAt = new Date().toISOString()
-        const up = await uploadCleaningMedia(
-          token,
-          { uri, name: String(asset?.fileName || uri.split('/').pop() || `feedback-${Date.now()}.jpg`), mimeType: String(asset?.mimeType || 'image/jpeg') },
-          { watermark: '1', purpose: 'feedback', property_code: propertyCode, captured_at: capturedAt, watermark_text: buildWatermarkText(capturedAt) },
-        )
-        if (up?.url) uploaded.push(up.url)
+      let keepCapturing = true
+      while (keepCapturing) {
+        const res =
+          source === 'camera'
+            ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1, allowsEditing: false })
+            : await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 1, allowsMultipleSelection: true, selectionLimit: 0, orderedSelection: true })
+        if (res.canceled || !res.assets?.length) return uploaded
+        for (const asset of res.assets as any[]) {
+          const uri = String(asset?.uri || '').trim()
+          if (!uri) continue
+          const capturedAt = new Date().toISOString()
+          const up = await uploadCleaningMedia(
+            token,
+            { uri, name: String(asset?.fileName || uri.split('/').pop() || `feedback-${Date.now()}.jpg`), mimeType: String(asset?.mimeType || 'image/jpeg') },
+            { watermark: '1', purpose: 'feedback', property_code: propertyCode, captured_at: capturedAt, watermark_text: buildWatermarkText(capturedAt) },
+          )
+          if (up?.url) uploaded.push(up.url)
+        }
+        keepCapturing = continuousCamera
       }
       return uploaded
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '上传失败'))
-      return []
+      return uploaded
     }
   }
 
@@ -879,7 +885,7 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   async function appendDeepCleaningPhoto(clientId: string, field: 'media' | 'completionAfterPhotos', source: 'camera' | 'library') {
-    const urls = await uploadPhotoUrls(source)
+    const urls = await uploadPhotoUrls(source, { continuousCamera: true })
     if (!urls.length) return
     const next = deepCleaningDrafts.map((draft) => (
       draft.clientId === clientId
@@ -896,8 +902,8 @@ export default function FeedbackFormScreen(props: Props) {
     updateDailyDraft(clientId, (draft) => ({ ...draft, media: [...draft.media, ...urls] }))
   }
 
-  async function appendProjectPhoto(field: 'before_photos' | 'after_photos', source: 'camera' | 'library') {
-    const urls = await uploadPhotoUrls(source)
+  async function appendProjectPhoto(field: 'before_photos' | 'after_photos', source: 'camera' | 'library', options: PhotoUploadOptions = {}) {
+    const urls = await uploadPhotoUrls(source, options)
     if (!urls.length) return
     setProjectForm((prev) => ({ ...prev, [field]: [...prev[field], ...urls] }))
   }
@@ -1837,12 +1843,18 @@ export default function FeedbackFormScreen(props: Props) {
                     </>
                   )}
                   <Text style={styles.label}>{recordEditFeedback.kind === 'deep_cleaning' ? '深度清洁前照片' : '维修前照片'}</Text>
-                  <UploadButtons onCamera={() => appendProjectPhoto('before_photos', 'camera')} onLibrary={() => appendProjectPhoto('before_photos', 'library')} />
+                  <UploadButtons
+                    onCamera={() => appendProjectPhoto('before_photos', 'camera', { continuousCamera: recordEditFeedback?.kind === 'deep_cleaning' })}
+                    onLibrary={() => appendProjectPhoto('before_photos', 'library')}
+                  />
                   <PhotoStrip urls={projectForm.before_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('before_photos', photoIndex)} />
                   <Text style={styles.label}>{recordEditFeedback.kind === 'deep_cleaning' ? '处理备注（可选）' : '维修备注（可选）'}</Text>
                   <TextInput value={String(projectForm.note || '')} onChangeText={(v) => setProjectForm((prev) => ({ ...prev, note: v }))} style={[styles.input, styles.textarea]} placeholder="处理说明" placeholderTextColor="#9CA3AF" multiline />
                   <Text style={styles.label}>{recordEditFeedback.kind === 'deep_cleaning' ? '深度清洁后照片（可选）' : '维修后照片（可选）'}</Text>
-                  <UploadButtons onCamera={() => appendProjectPhoto('after_photos', 'camera')} onLibrary={() => appendProjectPhoto('after_photos', 'library')} />
+                  <UploadButtons
+                    onCamera={() => appendProjectPhoto('after_photos', 'camera', { continuousCamera: recordEditFeedback?.kind === 'deep_cleaning' })}
+                    onLibrary={() => appendProjectPhoto('after_photos', 'library')}
+                  />
                   <PhotoStrip urls={projectForm.after_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('after_photos', photoIndex)} />
                   </>
                 ) : (
@@ -1907,10 +1919,16 @@ export default function FeedbackFormScreen(props: Props) {
                   {actionMode === 'complete' ? (
                     <>
                       <Text style={styles.label}>{actionFeedback?.kind === 'deep_cleaning' ? '前照片（必填）' : '前照片（可选）'}</Text>
-                      <UploadButtons onCamera={() => appendProjectPhoto('before_photos', 'camera')} onLibrary={() => appendProjectPhoto('before_photos', 'library')} />
+                      <UploadButtons
+                        onCamera={() => appendProjectPhoto('before_photos', 'camera', { continuousCamera: actionFeedback?.kind === 'deep_cleaning' })}
+                        onLibrary={() => appendProjectPhoto('before_photos', 'library')}
+                      />
                       <PhotoStrip urls={projectForm.before_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('before_photos', photoIndex)} />
                       <Text style={styles.label}>后照片（必填）</Text>
-                      <UploadButtons onCamera={() => appendProjectPhoto('after_photos', 'camera')} onLibrary={() => appendProjectPhoto('after_photos', 'library')} />
+                      <UploadButtons
+                        onCamera={() => appendProjectPhoto('after_photos', 'camera', { continuousCamera: actionFeedback?.kind === 'deep_cleaning' })}
+                        onLibrary={() => appendProjectPhoto('after_photos', 'library')}
+                      />
                       <PhotoStrip urls={projectForm.after_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('after_photos', photoIndex)} />
                     </>
                   ) : null}

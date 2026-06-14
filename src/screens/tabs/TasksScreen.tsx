@@ -10,12 +10,12 @@ import { hairline, moderateScale } from '../../lib/scale'
 import { reorderCleaningTasks, reorderWorkTasks } from '../../lib/api'
 import { markGuestCheckedOutByOrder, markGuestCheckedOutByTasks } from '../../lib/api'
 import { listMzappAlerts, markMzappAlertRead } from '../../lib/api'
-import { createCustomerServiceMemo, deleteCustomerServiceMemo, listCustomerServiceMemos, updateCustomerServiceMemo } from '../../lib/api'
 import { getMyProfile } from '../../lib/api'
 import { listDayEndHandover } from '../../lib/api'
 import { listCleaningAppTasks } from '../../lib/api'
 import { processDayEndHandoverQueue } from '../../lib/dayEndHandoverQueue'
 import { processKeyUploadQueue } from '../../lib/keyUploadQueue'
+import GuestLuggageCard from '../../components/GuestLuggageCard'
 import { getNoticesSnapshot, initNoticesStore, prependNotice } from '../../lib/noticesStore'
 import { getProfile, setProfile, type Profile } from '../../lib/profileStore'
 import { effectiveInspectionMode, inspectionModeLabel, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
@@ -27,6 +27,7 @@ import {
   initWorkTasksStore,
   makeWorkTasksBucketKey,
   patchWorkTaskItem,
+  patchWorkTaskItems,
   refreshWorkTasksFromServer,
   subscribeWorkTasks,
   type WorkTaskItem,
@@ -35,18 +36,6 @@ import {
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 
 type Period = 'today' | 'week' | 'month'
-type ManagerMemoItem = {
-  id: string
-  text: string
-  done: boolean
-  alert: boolean
-  createdAt: number
-  updatedAt: number
-  sortIndex: number
-  reminderAt: string | null
-  reminderSentAt: string | null
-}
-
 type Props = NativeStackScreenProps<TasksStackParamList, 'TasksList'>
 
 function pad2(n: number) {
@@ -66,86 +55,6 @@ function addDays(d: Date, days: number) {
   const nd = new Date(d)
   nd.setDate(nd.getDate() + days)
   return nd
-}
-
-function managerMemoStorageKey(userId: string) {
-  return `tasks_manager_memo_${String(userId || '').trim() || 'anonymous'}`
-}
-
-function mapCustomerServiceMemo(item: any): ManagerMemoItem {
-  const createdAt = Date.parse(String(item?.created_at || '')) || Date.now()
-  const updatedAt = Date.parse(String(item?.updated_at || '')) || createdAt
-  return {
-    id: String(item?.id || ''),
-    text: String(item?.content || '').trim(),
-    done: !!item?.is_done,
-    alert: !!item?.is_alert,
-    createdAt,
-    updatedAt,
-    sortIndex: Number.isFinite(Number(item?.sort_index)) ? Number(item.sort_index) : 0,
-    reminderAt: item?.reminder_at ? String(item.reminder_at || '') : null,
-    reminderSentAt: item?.reminder_sent_at ? String(item.reminder_sent_at || '') : null,
-  }
-}
-
-function parseLegacyManagerMemoRaw(raw: string): { text: string; done: boolean; alert: boolean; createdAt: number; sortIndex: number }[] {
-  const text = String(raw || '').trim()
-  if (!text) return []
-  try {
-    const parsed = JSON.parse(text)
-    const rows = Array.isArray(parsed?.items) ? parsed.items : []
-    return rows
-      .map((item: any, index: number) => ({
-        text: String(item?.text || '').trim(),
-        done: !!item?.done,
-        alert: !!item?.alert,
-        createdAt: Number(item?.createdAt || Date.now()),
-        sortIndex: Number.isFinite(Number(item?.sortIndex)) ? Number(item.sortIndex) : index,
-      }))
-      .filter((item: any) => !!item.text)
-  } catch {
-    return text
-      .split('\n')
-      .map((line, index) => ({
-        text: String(line || '').trim(),
-        done: false,
-        alert: false,
-        createdAt: Date.now(),
-        sortIndex: index,
-      }))
-      .filter((item) => !!item.text)
-  }
-}
-
-function formatMemoReminderLabel(raw: string | null | undefined) {
-  const s = String(raw || '').trim()
-  if (!s) return ''
-  const ms = Date.parse(s)
-  if (!Number.isFinite(ms)) return ''
-  const d = new Date(ms)
-  return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
-}
-
-function todayReminderIso(hour: number, minute: number) {
-  const now = new Date()
-  const dt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0)
-  return dt.toISOString()
-}
-
-function normalizeManagerMemoText(raw: string) {
-  return String(raw || '')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .toLowerCase()
-}
-
-const MEMO_PICKER_ITEM_HEIGHT = 32
-const MEMO_PICKER_ITEM_GAP = 4
-const MEMO_PICKER_LIST_PADDING = 6
-
-function memoPickerOffset(index: number) {
-  const safeIndex = Math.max(0, Number.isFinite(index) ? index : 0)
-  return Math.max(0, MEMO_PICKER_LIST_PADDING + safeIndex * (MEMO_PICKER_ITEM_HEIGHT + MEMO_PICKER_ITEM_GAP) - MEMO_PICKER_ITEM_HEIGHT)
 }
 
 function isBeforeToday(taskDate0: any) {
@@ -416,6 +325,9 @@ function statusLabelForTask(task: WorkTaskItem, roleNames: string[]) {
   const source = String(task.source_type || '').trim().toLowerCase()
   const kind = String(task.task_kind || '').trim().toLowerCase()
   if (source === 'cleaning_tasks' && kind === 'inspection') {
+    if (s === 'cleaned' || s === 'restock_pending' || s === 'restocked') {
+      return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+    }
     return meta
   }
   if (source === 'cleaning_tasks' && kind === 'cleaning') {
@@ -446,7 +358,7 @@ function statusLabelForTask(task: WorkTaskItem, roleNames: string[]) {
 
 function isDoneLikeStatus(status0: string) {
   const s = String(status0 || '').trim().toLowerCase()
-  return s === 'done' || s === 'completed' || s === 'ready' || s === 'keys_hung' || s === 'cleaned' || s === 'restocked' || s === 'inspected'
+  return s === 'done' || s === 'completed' || s === 'ready' || s === 'keys_hung' || s === 'cleaned' || s === 'restock_pending' || s === 'restocked' || s === 'inspected'
 }
 
 function taskKindLabel(kind: string) {
@@ -528,12 +440,6 @@ export default function TasksScreen(props: Props) {
   const [dayEndOverviewUsers, setDayEndOverviewUsers] = useState<Array<{ userId: string; userName: string; roles: string[]; roomCodes: string[]; complete: boolean | null }>>([])
   const bannerTimerRef = useRef<any>(null)
   const [search, setSearch] = useState('')
-  const [managerMemoDraft, setManagerMemoDraft] = useState('')
-  const [managerMemoItems, setManagerMemoItems] = useState<ManagerMemoItem[]>([])
-  const [managerMemoReminderEditorId, setManagerMemoReminderEditorId] = useState<string | null>(null)
-  const [managerMemoReminderPickerOpen, setManagerMemoReminderPickerOpen] = useState(false)
-  const [managerMemoReminderHour, setManagerMemoReminderHour] = useState(new Date().getHours())
-  const [managerMemoReminderMinute, setManagerMemoReminderMinute] = useState(0)
   const weekRowRef = useRef<ScrollView>(null)
   const weekPagerRef = useRef<ScrollView>(null)
   const weekPagerAdjustingRef = useRef(false)
@@ -588,161 +494,9 @@ export default function TasksScreen(props: Props) {
     if (!raw) return 'User'
     return raw.includes('@') ? raw.split('@')[0] || raw : raw
   }, [user?.username])
-  const isCustomerServiceRole = useMemo(() => roleNames.includes('customer_service'), [roleNames])
-  const managerMemoKey = useMemo(() => managerMemoStorageKey(String((user as any)?.id || '').trim()), [user])
-
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      if (!(canManagerMode && mode === 'manager' && isCustomerServiceRole) || !token) {
-        setManagerMemoDraft('')
-        setManagerMemoItems([])
-        setManagerMemoReminderEditorId(null)
-        setManagerMemoReminderPickerOpen(false)
-        return
-      }
-      try {
-        let rows = await listCustomerServiceMemos(token)
-        if (!rows.length) {
-          const raw = String((await AsyncStorage.getItem(managerMemoKey)) || '').trim()
-          const legacyItems = parseLegacyManagerMemoRaw(raw)
-          if (legacyItems.length) {
-            for (const item of legacyItems) {
-              await createCustomerServiceMemo(token, {
-                content: item.text,
-                is_done: item.done,
-                is_alert: item.alert,
-                sort_index: item.sortIndex,
-              })
-            }
-            try { await AsyncStorage.removeItem(managerMemoKey) } catch {}
-            rows = await listCustomerServiceMemos(token)
-          }
-        }
-        if (!cancelled) {
-          setManagerMemoDraft('')
-          setManagerMemoItems((Array.isArray(rows) ? rows : []).map(mapCustomerServiceMemo))
-          setManagerMemoReminderEditorId(null)
-          setManagerMemoReminderPickerOpen(false)
-        }
-      } catch {
-        if (!cancelled) {
-          setManagerMemoDraft('')
-          setManagerMemoItems([])
-          setManagerMemoReminderEditorId(null)
-          setManagerMemoReminderPickerOpen(false)
-        }
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [canManagerMode, isCustomerServiceRole, managerMemoKey, mode, token])
-
   useEffect(() => {
     if (!(canManagerMode && mode === 'manager' && period === 'today') && search) setSearch('')
   }, [canManagerMode, mode, period, search])
-
-  const addManagerMemoItem = useCallback(async () => {
-    const text = String(managerMemoDraft || '').trim()
-    if (!text || !token) return
-    const textKey = normalizeManagerMemoText(text)
-    const hasDuplicate = managerMemoItems.some((item) => !item.done && normalizeManagerMemoText(item.text) === textKey)
-    if (hasDuplicate) {
-      showBanner('不能重复添加', '已经有相同的未完成备忘录了')
-      return
-    }
-    try {
-      const created = await createCustomerServiceMemo(token, { content: text, sort_index: 0 })
-      setManagerMemoItems((prev) => [mapCustomerServiceMemo(created), ...prev])
-      setManagerMemoDraft('')
-    } catch (e: any) {
-      showBanner('保存失败', String(e?.message || '备忘录保存失败'))
-    }
-  }, [managerMemoDraft, managerMemoItems, token])
-
-  const toggleManagerMemoDone = useCallback(async (id: string) => {
-    if (!token) return
-    const current = managerMemoItems.find((item) => item.id === id)
-    if (!current) return
-    const nextDone = !current.done
-    setManagerMemoItems((prev) => prev.map((item) => (item.id === id ? { ...item, done: nextDone } : item)))
-    try {
-      const updated = await updateCustomerServiceMemo(token, id, { is_done: nextDone })
-      setManagerMemoItems((prev) => prev.map((item) => (item.id === id ? mapCustomerServiceMemo(updated) : item)))
-    } catch (e: any) {
-      setManagerMemoItems((prev) => prev.map((item) => (item.id === id ? current : item)))
-      showBanner('保存失败', String(e?.message || '备忘录保存失败'))
-    }
-  }, [managerMemoItems, token])
-
-  const toggleManagerMemoAlert = useCallback(async (id: string) => {
-    if (!token) return
-    const current = managerMemoItems.find((item) => item.id === id)
-    if (!current) return
-    const nextAlert = !current.alert
-    setManagerMemoItems((prev) => prev.map((item) => (item.id === id ? { ...item, alert: nextAlert } : item)))
-    try {
-      const updated = await updateCustomerServiceMemo(token, id, { is_alert: nextAlert })
-      setManagerMemoItems((prev) => prev.map((item) => (item.id === id ? mapCustomerServiceMemo(updated) : item)))
-    } catch (e: any) {
-      setManagerMemoItems((prev) => prev.map((item) => (item.id === id ? current : item)))
-      showBanner('保存失败', String(e?.message || '备忘录保存失败'))
-    }
-  }, [managerMemoItems, token])
-
-  const removeManagerMemoItem = useCallback(async (id: string) => {
-    if (!token) return
-    const prev = managerMemoItems
-    setManagerMemoItems((items) => items.filter((item) => item.id !== id))
-    try {
-      await deleteCustomerServiceMemo(token, id)
-      if (managerMemoReminderEditorId === id) {
-        setManagerMemoReminderEditorId(null)
-        setManagerMemoReminderPickerOpen(false)
-      }
-    } catch (e: any) {
-      setManagerMemoItems(prev)
-      showBanner('删除失败', String(e?.message || '备忘录删除失败'))
-    }
-  }, [managerMemoItems, managerMemoReminderEditorId, token])
-
-  const openManagerMemoReminderEditor = useCallback((item: ManagerMemoItem) => {
-    const ms = item.reminderAt ? Date.parse(item.reminderAt) : NaN
-    const now = new Date()
-    const base = Number.isFinite(ms) ? new Date(ms) : now
-    setManagerMemoReminderEditorId(item.id)
-    setManagerMemoReminderHour(base.getHours())
-    setManagerMemoReminderMinute(Math.round(base.getMinutes() / 5) * 5 >= 60 ? 55 : Math.round(base.getMinutes() / 5) * 5)
-    setManagerMemoReminderPickerOpen(true)
-  }, [managerMemoReminderEditorId])
-
-  const saveManagerMemoReminder = useCallback(async (id: string) => {
-    if (!token) return
-    const nextReminderAt = todayReminderIso(managerMemoReminderHour, managerMemoReminderMinute)
-    try {
-      const updated = await updateCustomerServiceMemo(token, id, { reminder_at: nextReminderAt })
-      setManagerMemoItems((prev) => prev.map((item) => (item.id === id ? mapCustomerServiceMemo(updated) : item)))
-      setManagerMemoReminderEditorId(null)
-      setManagerMemoReminderPickerOpen(false)
-      showBanner('已保存', `今天 ${String(managerMemoReminderHour).padStart(2, '0')}:${String(managerMemoReminderMinute).padStart(2, '0')} 提醒`)
-    } catch (e: any) {
-      showBanner('保存失败', String(e?.message || '提醒保存失败'))
-    }
-  }, [managerMemoReminderHour, managerMemoReminderMinute, token])
-
-  const clearManagerMemoReminder = useCallback(async (id: string) => {
-    if (!token) return
-    try {
-      const updated = await updateCustomerServiceMemo(token, id, { reminder_at: null })
-      setManagerMemoItems((prev) => prev.map((item) => (item.id === id ? mapCustomerServiceMemo(updated) : item)))
-      setManagerMemoReminderEditorId(null)
-      setManagerMemoReminderPickerOpen(false)
-      showBanner('已保存', '提醒已清除')
-    } catch (e: any) {
-      showBanner('保存失败', String(e?.message || '提醒保存失败'))
-    }
-  }, [token])
 
   useEffect(() => {
     let alive = true
@@ -1654,22 +1408,32 @@ function showBanner(title: string, message: string) {
       const cleanerGroups: string[][] = []
       const inspectorGroups: string[][] = []
       const workTaskIds: string[] = []
-      for (const { task } of marks) {
+      const localPatches: Array<{ id: string; patch: Partial<WorkTaskItem> }> = []
+      for (const { task, mark } of marks) {
         if (!isReorderableTask(task)) continue
         if (task.source_type !== 'cleaning_tasks') {
           workTaskIds.push(String(task.id))
+          localPatches.push({ id: String(task.id), patch: { sort_index: mark } as Partial<WorkTaskItem> })
           continue
         }
         const ids = Array.isArray((task as any).source_ids) && (task as any).source_ids.length ? (task as any).source_ids.map((x: any) => String(x)) : [String(task.source_id)]
-        if (task.task_kind === 'cleaning') cleanerGroups.push(ids)
-        else if (task.task_kind === 'inspection') inspectorGroups.push(ids)
+        if (task.task_kind === 'cleaning') {
+          cleanerGroups.push(ids)
+          localPatches.push({ id: String(task.id), patch: { sort_index: mark, sort_index_cleaner: mark } as Partial<WorkTaskItem> })
+        } else if (task.task_kind === 'inspection') {
+          inspectorGroups.push(ids)
+          localPatches.push({ id: String(task.id), patch: { sort_index: mark, sort_index_inspector: mark } as Partial<WorkTaskItem> })
+        }
       }
-      if (workTaskIds.length) await reorderWorkTasks(token, { date: selectedDate, task_ids: workTaskIds })
-      if (cleanerGroups.length) await reorderCleaningTasks(token, { kind: 'cleaner', date: selectedDate, groups: cleanerGroups })
-      if (inspectorGroups.length) await reorderCleaningTasks(token, { kind: 'inspector', date: selectedDate, groups: inspectorGroups })
-      await refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: canManagerMode && mode === 'manager' ? view : 'mine' })
+      await Promise.all([
+        workTaskIds.length ? reorderWorkTasks(token, { date: selectedDate, task_ids: workTaskIds }) : Promise.resolve(null),
+        cleanerGroups.length ? reorderCleaningTasks(token, { kind: 'cleaner', date: selectedDate, groups: cleanerGroups }) : Promise.resolve(null),
+        inspectorGroups.length ? reorderCleaningTasks(token, { kind: 'inspector', date: selectedDate, groups: inspectorGroups }) : Promise.resolve(null),
+      ])
+      await patchWorkTaskItems(localPatches)
       setReorderMode(false)
       showBanner('已保存', '顺序已保存')
+      void refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: canManagerMode && mode === 'manager' ? view : 'mine' }).catch(() => null)
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
     } finally {
@@ -1868,61 +1632,6 @@ function showBanner(title: string, message: string) {
           </View>
         ) : null}
 
-        {canManagerMode && mode === 'manager' && isCustomerServiceRole ? (
-          <View style={styles.memoCard}>
-            <View style={styles.memoHeader}>
-              <Text style={styles.memoTitle}>客服备忘录</Text>
-              <Text style={styles.memoHint}>待办/提醒，自动保存</Text>
-            </View>
-            <View style={styles.memoComposer}>
-              <TextInput
-                value={managerMemoDraft}
-                onChangeText={setManagerMemoDraft}
-                style={styles.memoInput}
-                placeholder="输入一条待办、记录或提醒"
-                placeholderTextColor="#9CA3AF"
-                returnKeyType="done"
-                onSubmitEditing={addManagerMemoItem}
-              />
-              <Pressable onPress={addManagerMemoItem} style={({ pressed }) => [styles.memoAddBtn, pressed ? styles.segmentPressed : null, !managerMemoDraft.trim() ? styles.memoAddBtnDisabled : null]} disabled={!managerMemoDraft.trim()}>
-                <Ionicons name="add" size={moderateScale(16)} color="#FFFFFF" />
-              </Pressable>
-            </View>
-            {managerMemoItems.length ? (
-              <View style={styles.memoList}>
-                {managerMemoItems.map((item) => (
-                  <View key={item.id} style={[styles.memoItem, item.alert ? styles.memoItemAlert : null, item.done ? styles.memoItemDone : null]}>
-                    <Pressable onPress={() => toggleManagerMemoDone(item.id)} style={({ pressed }) => [styles.memoCheckBtn, pressed ? styles.segmentPressed : null]}>
-                      <Ionicons name={item.done ? 'checkmark-circle' : 'ellipse-outline'} size={moderateScale(20)} color={item.done ? '#16A34A' : '#9CA3AF'} />
-                    </Pressable>
-                    <View style={styles.memoItemMain}>
-                      <Text style={[styles.memoItemText, item.done ? styles.memoItemTextDone : null, item.alert ? styles.memoItemTextAlert : null]}>{item.text}</Text>
-                      {item.reminderAt ? (
-                        <Text style={[styles.memoReminderMeta, item.reminderSentAt ? styles.memoReminderMetaSent : null]}>
-                          {item.reminderSentAt ? `已提醒 ${formatMemoReminderLabel(item.reminderAt)}` : `提醒 ${formatMemoReminderLabel(item.reminderAt)}`}
-                        </Text>
-                      ) : null}
-                    </View>
-                    <View style={styles.memoItemActions}>
-                      <Pressable onPress={() => openManagerMemoReminderEditor(item)} style={({ pressed }) => [styles.memoBellBtn, item.reminderAt ? styles.memoBellBtnActive : null, pressed ? styles.segmentPressed : null]}>
-                        <Ionicons name={item.reminderAt ? 'notifications' : 'notifications-outline'} size={moderateScale(14)} color={item.reminderAt ? '#FFFFFF' : '#2563EB'} />
-                      </Pressable>
-                      <Pressable onPress={() => toggleManagerMemoAlert(item.id)} style={({ pressed }) => [styles.memoFlagBtn, item.alert ? styles.memoFlagBtnActive : null, pressed ? styles.segmentPressed : null]}>
-                        <Ionicons name="flag" size={moderateScale(14)} color={item.alert ? '#FFFFFF' : '#DC2626'} />
-                      </Pressable>
-                      <Pressable onPress={() => removeManagerMemoItem(item.id)} style={({ pressed }) => [styles.memoDeleteBtn, pressed ? styles.segmentPressed : null]}>
-                        <Ionicons name="trash-outline" size={moderateScale(14)} color="#6B7280" />
-                      </Pressable>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            ) : (
-              <Text style={styles.memoEmpty}>还没有备忘内容，新增后会自动同步到当前客服账号。</Text>
-            )}
-          </View>
-        ) : null}
-
         {canManagerMode && mode === 'manager' && period === 'today' ? (
           <Pressable
             onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, overviewMode: true, overviewUsers: dayEndOverviewUsers.map((entry) => ({ ...entry, complete: null })) })}
@@ -2027,6 +1736,7 @@ function showBanner(title: string, message: string) {
               const oldCode = String((task as any).old_code || '').trim()
               const newCode = String((task as any).new_code || '').trim()
               const guestSpecialRequest = String((task as any).guest_special_request || '').trim()
+              const guestLuggage = (task as any).guest_luggage || null
               const taskNote = String((task as any).note || '').trim()
               const urgency = urgencyMeta(task.urgency)
               const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
@@ -2054,6 +1764,8 @@ function showBanner(title: string, message: string) {
               const isInspectorUser = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
               const cleanerName = String((task as any).cleaner_name || '').trim()
               const inspectorName = String((task as any).inspector_name || '').trim()
+              const cleanerExecName = cleanerName || '-'
+              const inspectorExecName = isDirectCompleteEligible || isPendingInspectionDecision ? '无' : (inspectorName || '-')
               const cleanerOrderRaw = (task as any).sort_index_cleaner
               const inspectorOrderRaw = (task as any).sort_index_inspector
               const cleanerOrder = cleanerOrderRaw == null ? null : Number(cleanerOrderRaw)
@@ -2098,14 +1810,14 @@ function showBanner(title: string, message: string) {
               const keysRequiredBase = Number((task as any)?.keys_required ?? 0)
               const keysCheckout = Number((task as any)?.keys_required_checkout ?? keysRequiredBase)
               const keysCheckin = Number((task as any)?.keys_required_checkin ?? keysRequiredBase)
-              const checkoutSets = keyTags
-                ? (keyTags.checkout_sets == null ? 0 : Number(keyTags.checkout_sets))
-                : (Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : 0)
-              const checkinSets = keyTags
-                ? (keyTags.checkin_sets == null ? 0 : Number(keyTags.checkin_sets))
-                : (Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : 0)
-              const showCheckout = keyTags ? keyTags.show_checkout === true : (isCleaningSource && !isCheckedOut && checkoutSets >= 2)
-              const showCheckin = keyTags ? keyTags.show_checkin === true : (isCleaningSource && checkinSets >= 2)
+              const checkoutSetsFromFields = Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : 0
+              const checkinSetsFromFields = Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : 0
+              const checkoutSetsFromTags = keyTags && keyTags.checkout_sets != null ? Number(keyTags.checkout_sets) : 0
+              const checkinSetsFromTags = keyTags && keyTags.checkin_sets != null ? Number(keyTags.checkin_sets) : 0
+              const checkoutSets = Math.max(checkoutSetsFromFields, Number.isFinite(checkoutSetsFromTags) ? Math.trunc(checkoutSetsFromTags) : 0)
+              const checkinSets = Math.max(checkinSetsFromFields, Number.isFinite(checkinSetsFromTags) ? Math.trunc(checkinSetsFromTags) : 0)
+              const showCheckout = isCleaningSource && !isCheckedOut && (checkoutSets >= 2 || keyTags?.show_checkout === true)
+              const showCheckin = isCleaningSource && (checkinSets >= 2 || keyTags?.show_checkin === true)
               const selfInspectorOnlyUser = isInspectorOnlyRole(roleNames)
               const offlineDetail = (() => {
                 if (!isOfflineTask) return null
@@ -2251,23 +1963,37 @@ function showBanner(title: string, message: string) {
                   {isCleaningSource ? (
                     <>
                       <View style={styles.execCard}>
-                        <View style={styles.execBadges}>
-                          <View style={styles.execBadgeClean}>
-                            <Text style={styles.execBadgeText}>清</Text>
+                        <Text style={styles.execLabel}>执行人员</Text>
+                        <View style={styles.execPeople}>
+                          <View style={styles.execPerson}>
+                            <View style={styles.execBadgeClean}>
+                              <Text style={styles.execBadgeText}>清</Text>
+                            </View>
+                            <View style={styles.execPersonText}>
+                              <Text style={[styles.execPersonRole, styles.execPersonRoleClean]}>清洁</Text>
+                              <Text style={styles.execPersonName} numberOfLines={1}>{cleanerExecName}</Text>
+                            </View>
                           </View>
-                          <View style={styles.execBadgeInspect}>
-                            <Text style={styles.execBadgeText}>检</Text>
+                          <View style={styles.execPerson}>
+                            <View style={styles.execBadgeInspect}>
+                              <Text style={styles.execBadgeText}>检</Text>
+                            </View>
+                            <View style={styles.execPersonText}>
+                              <Text style={[styles.execPersonRole, styles.execPersonRoleInspect]}>检查</Text>
+                              <Text style={styles.execPersonName} numberOfLines={1}>{inspectorExecName}</Text>
+                            </View>
                           </View>
                         </View>
-                        <View style={styles.execTextWrap}>
-                          <Text style={styles.execLabel}>执行人员</Text>
-                          <Text style={styles.execNames} numberOfLines={1}>{`清洁: ${cleanerName || '-'} · 检查: ${isDirectCompleteEligible || isPendingInspectionDecision ? '无' : (inspectorName || '-')}`}</Text>
-                          {isManager || isInspectorUser ? (
+                        {isManager || isInspectorUser ? (
+                          <View style={styles.execOrderRow}>
                             <Text style={styles.execOrder} numberOfLines={1}>
-                              {`清洁顺序：${cleanerOrderN == null ? '-' : String(cleanerOrderN)}  检查顺序：${inspectorOrderN == null ? '-' : String(inspectorOrderN)}`}
+                              {`清洁顺序：${cleanerOrderN == null ? '-' : String(cleanerOrderN)}`}
                             </Text>
-                          ) : null}
-                        </View>
+                            <Text style={styles.execOrder} numberOfLines={1}>
+                              {`检查顺序：${inspectorOrderN == null ? '-' : String(inspectorOrderN)}`}
+                            </Text>
+                          </View>
+                        ) : null}
                       </View>
 
                       {!isOfflineTask && unitType ? (
@@ -2352,6 +2078,15 @@ function showBanner(title: string, message: string) {
                           </View>
                         </View>
                       ) : null}
+
+                      <GuestLuggageCard
+                        notice={guestLuggage}
+                        token={token}
+                        compact
+                        showAcknowledge={!isManager && (isCleanerRole(roleNames) || isInspectorUser)}
+                        showAcknowledgementSummary={isManager}
+                        onChanged={(notice) => patchWorkTaskItem(String(task.id), { guest_luggage: notice } as any)}
+                      />
 
                       {taskNote ? (
                         <View style={styles.guestRow}>
@@ -2495,16 +2230,16 @@ function showBanner(title: string, message: string) {
                         <Text style={styles.actionText}>检查与补充</Text>
                       </Pressable>
                       <Pressable
-                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                      >
-                        <Text style={styles.actionText}>房源问题反馈</Text>
-                      </Pressable>
-                      <Pressable
                         onPress={() => props.navigation.navigate('InspectionComplete', { taskId: task.id })}
                         style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
                       >
                         <Text style={styles.actionText}>标记已完成</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
+                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={styles.actionText}>房源问题反馈</Text>
                       </Pressable>
                     </View>
                   ) : isCleaningTask ? (
@@ -2519,12 +2254,6 @@ function showBanner(title: string, message: string) {
                         </Pressable>
                       ) : null}
                       <Pressable
-                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                      >
-                        <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-                      </Pressable>
-                      <Pressable
                         onPress={() => {
                           if (isPendingInspectionDecision) return
                           props.navigation.navigate(isDirectCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)
@@ -2538,6 +2267,12 @@ function showBanner(title: string, message: string) {
                               ? (isDirectCompleteEligible ? '完成记录' : '补品记录')
                               : (isStayoverTask ? '标记已完成' : (isSelfCompleteEligible ? '补充与完成' : '补品填报'))}
                         </Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
+                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
                       </Pressable>
                     </View>
                   ) : null}
@@ -2589,105 +2324,6 @@ function showBanner(title: string, message: string) {
           </View>
         )}
       </ScrollView>
-      <Modal
-        visible={managerMemoReminderPickerOpen && !!managerMemoReminderEditorId}
-        transparent
-        presentationStyle="overFullScreen"
-        animationType="slide"
-        onRequestClose={() => {
-          setManagerMemoReminderPickerOpen(false)
-          setManagerMemoReminderEditorId(null)
-        }}
-      >
-        <View style={styles.memoPickerRoot}>
-          <View style={styles.memoPickerCard}>
-            <View style={styles.memoPickerTop}>
-              <Text style={styles.memoPickerTitle}>选择提醒时间</Text>
-              <Pressable
-                onPress={() => {
-                  setManagerMemoReminderPickerOpen(false)
-                  setManagerMemoReminderEditorId(null)
-                }}
-              >
-                <Text style={styles.memoPickerClose}>关闭</Text>
-              </Pressable>
-            </View>
-            <View style={styles.memoPickerBody}>
-              <Text style={styles.memoPickerLabel}>日期</Text>
-              <View style={styles.memoPickerDateBox}>
-                <Text style={styles.memoPickerDateText}>{`${ymd(new Date())}（今天）`}</Text>
-              </View>
-              <View style={styles.memoPickerWheelRow}>
-                <View style={styles.memoPickerWheelCol}>
-                  <Text style={styles.memoPickerLabel}>小时</Text>
-                  <ScrollView
-                    style={styles.memoPickerWheel}
-                    showsVerticalScrollIndicator={false}
-                    contentOffset={{ x: 0, y: memoPickerOffset(managerMemoReminderHour) }}
-                  >
-                    {Array.from({ length: 24 }, (_, idx) => idx).map((hour) => (
-                      <Pressable
-                        key={`memo-hour-${hour}`}
-                        onPress={() => setManagerMemoReminderHour(hour)}
-                        style={({ pressed }) => [
-                          styles.memoPickerWheelItem,
-                          managerMemoReminderHour === hour ? styles.memoPickerWheelItemActive : null,
-                          pressed ? styles.segmentPressed : null,
-                        ]}
-                      >
-                        <Text style={[styles.memoPickerWheelText, managerMemoReminderHour === hour ? styles.memoPickerWheelTextActive : null]}>
-                          {String(hour).padStart(2, '0')}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </ScrollView>
-                </View>
-                <View style={styles.memoPickerWheelCol}>
-                  <Text style={styles.memoPickerLabel}>分钟</Text>
-                  <ScrollView
-                    style={styles.memoPickerWheel}
-                    showsVerticalScrollIndicator={false}
-                    contentOffset={{ x: 0, y: memoPickerOffset(Math.round(managerMemoReminderMinute / 5)) }}
-                  >
-                    {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((minute) => (
-                      <Pressable
-                        key={`memo-minute-${minute}`}
-                        onPress={() => setManagerMemoReminderMinute(minute)}
-                        style={({ pressed }) => [
-                          styles.memoPickerWheelItem,
-                          managerMemoReminderMinute === minute ? styles.memoPickerWheelItemActive : null,
-                          pressed ? styles.segmentPressed : null,
-                        ]}
-                      >
-                        <Text style={[styles.memoPickerWheelText, managerMemoReminderMinute === minute ? styles.memoPickerWheelTextActive : null]}>
-                          {String(minute).padStart(2, '0')}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </ScrollView>
-                </View>
-              </View>
-              <View style={styles.memoPickerPreview}>
-                <Text style={styles.memoPickerPreviewText}>{`今天 ${String(managerMemoReminderHour).padStart(2, '0')}:${String(managerMemoReminderMinute).padStart(2, '0')} 提醒`}</Text>
-              </View>
-              <View style={styles.memoPickerActions}>
-                <Pressable
-                  onPress={() => (managerMemoReminderEditorId ? clearManagerMemoReminder(managerMemoReminderEditorId) : null)}
-                  style={({ pressed }) => [styles.memoPickerGhostBtn, pressed ? styles.segmentPressed : null]}
-                >
-                  <Text style={styles.memoPickerGhostText}>清除</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => (managerMemoReminderEditorId ? saveManagerMemoReminder(managerMemoReminderEditorId) : null)}
-                  style={({ pressed }) => [styles.memoPickerPrimaryBtn, pressed ? styles.segmentPressed : null]}
-                >
-                  <Text style={styles.memoPickerPrimaryText}>确认时间</Text>
-                </Pressable>
-              </View>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   )
 }
@@ -2735,55 +2371,6 @@ const styles = StyleSheet.create({
   dayEndTitle: { fontWeight: '900', color: '#111827' },
   dayEndTaskCard: { backgroundColor: '#F8FBFF', borderColor: '#DCEAFE' },
   dayEndMsg: { marginTop: 4, color: '#4B5563', fontWeight: '700' },
-  memoCard: { marginTop: 10, backgroundColor: '#FFFFFF', borderRadius: 14, padding: 10, borderWidth: hairline(), borderColor: '#EEF0F6' },
-  memoHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  memoTitle: { fontWeight: '900', color: '#111827', fontSize: 13 },
-  memoHint: { flex: 1, minWidth: 0, textAlign: 'right', color: '#9CA3AF', fontWeight: '700', fontSize: 11 },
-  memoComposer: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  memoInput: { flex: 1, minWidth: 0, height: 38, borderRadius: 12, borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F9FAFB', paddingHorizontal: 12, color: '#111827', fontWeight: '700' },
-  memoAddBtn: { width: 38, height: 38, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
-  memoAddBtnDisabled: { backgroundColor: '#93C5FD' },
-  memoList: { marginTop: 8, gap: 8 },
-  memoItem: { borderRadius: 12, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F9FAFB', paddingHorizontal: 10, paddingVertical: 8, flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  memoItemAlert: { borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' },
-  memoItemDone: { opacity: 0.78 },
-  memoCheckBtn: { marginTop: 1 },
-  memoItemMain: { flex: 1, minWidth: 0 },
-  memoItemText: { color: '#111827', fontWeight: '700', lineHeight: 18, fontSize: 13 },
-  memoItemTextDone: { color: '#9CA3AF', textDecorationLine: 'line-through' },
-  memoItemTextAlert: { color: '#B91C1C' },
-  memoReminderMeta: { marginTop: 4, color: '#2563EB', fontWeight: '700', fontSize: 11 },
-  memoReminderMetaSent: { color: '#6B7280' },
-  memoItemActions: { flexDirection: 'row', gap: 6, marginTop: 1 },
-  memoBellBtn: { width: 24, height: 24, borderRadius: 12, borderWidth: hairline(), borderColor: '#93C5FD', alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
-  memoBellBtnActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
-  memoFlagBtn: { width: 24, height: 24, borderRadius: 12, borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
-  memoFlagBtnActive: { backgroundColor: '#DC2626', borderColor: '#DC2626' },
-  memoDeleteBtn: { width: 24, height: 24, borderRadius: 12, borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
-  memoEmpty: { marginTop: 8, color: '#9CA3AF', fontWeight: '700', fontSize: 12 },
-  memoPickerRoot: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.28)', justifyContent: 'flex-end' },
-  memoPickerCard: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 16 },
-  memoPickerTop: { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8, borderBottomWidth: hairline(), borderBottomColor: '#EEF0F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  memoPickerTitle: { fontWeight: '900', color: '#111827', fontSize: 16 },
-  memoPickerClose: { color: '#2563EB', fontWeight: '800' },
-  memoPickerBody: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 0 },
-  memoPickerLabel: { marginTop: 4, marginBottom: 6, color: '#374151', fontWeight: '800', fontSize: 12 },
-  memoPickerDateBox: { height: 36, borderRadius: 10, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#E5E7EB', paddingHorizontal: 10, justifyContent: 'center' },
-  memoPickerDateText: { color: '#111827', fontWeight: '800' },
-  memoPickerWheelRow: { marginTop: 2, flexDirection: 'row', gap: 10 },
-  memoPickerWheelCol: { flex: 1, minWidth: 0 },
-  memoPickerWheel: { maxHeight: 160, borderRadius: 12, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F8FAFC', padding: 6 },
-  memoPickerWheelItem: { height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 4, backgroundColor: '#FFFFFF' },
-  memoPickerWheelItemActive: { backgroundColor: '#2563EB' },
-  memoPickerWheelText: { color: '#374151', fontWeight: '800', fontSize: 14 },
-  memoPickerWheelTextActive: { color: '#FFFFFF' },
-  memoPickerPreview: { marginTop: 12, padding: 10, borderRadius: 10, backgroundColor: '#F8FAFC' },
-  memoPickerPreviewText: { color: '#111827', fontWeight: '800' },
-  memoPickerActions: { marginTop: 12, flexDirection: 'row', gap: 10 },
-  memoPickerGhostBtn: { flex: 1, height: 38, borderRadius: 10, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
-  memoPickerGhostText: { color: '#6B7280', fontWeight: '800' },
-  memoPickerPrimaryBtn: { flex: 1.2, height: 38, borderRadius: 10, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
-  memoPickerPrimaryText: { color: '#FFFFFF', fontWeight: '900' },
   searchWrap: { marginTop: 10, height: 44, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#EEF0F6', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
   searchInput: { flex: 1, minWidth: 0, height: 44, color: '#111827', fontWeight: '800' },
   searchClear: { height: 44, width: 34, alignItems: 'center', justifyContent: 'center' },
@@ -2916,17 +2503,22 @@ const styles = StyleSheet.create({
   row: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 },
   addr: { flex: 1, minWidth: 0, flexShrink: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600' },
   linkInline: { flex: 1, minWidth: 0, flexShrink: 1, color: '#2563EB', fontSize: moderateScale(13), fontWeight: '800' },
-  execCard: { marginTop: 12, padding: 14, borderRadius: 18, backgroundColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', gap: 12 },
-  execBadges: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  execBadgeClean: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
-  execBadgeInspect: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#7C3AED', alignItems: 'center', justifyContent: 'center' },
-  execBadgeText: { color: '#FFFFFF', fontWeight: '800' },
-  execTextWrap: { flex: 1, minWidth: 0 },
+  execCard: { marginTop: 12, padding: 12, borderRadius: 18, backgroundColor: '#F3F4F6', gap: 8 },
   execLabel: { color: '#6B7280', fontWeight: '600', fontSize: moderateScale(12) },
-  execNames: { marginTop: 4, color: '#111827', fontWeight: '600', fontSize: moderateScale(13) },
-  execOrder: { marginTop: 4, color: '#6B7280', fontWeight: '600', fontSize: moderateScale(12) },
-  unitTypeRow: { marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 12, minWidth: 0 },
-  unitTypeCell: { flex: 1, minWidth: 0 },
+  execPeople: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  execPerson: { flexGrow: 1, flexShrink: 1, flexBasis: 130, minWidth: 120, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  execBadgeClean: { width: 32, height: 32, borderRadius: 16, flexShrink: 0, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  execBadgeInspect: { width: 32, height: 32, borderRadius: 16, flexShrink: 0, backgroundColor: '#7C3AED', alignItems: 'center', justifyContent: 'center' },
+  execBadgeText: { color: '#FFFFFF', fontWeight: '800', fontSize: 13 },
+  execPersonText: { flex: 1, minWidth: 0 },
+  execPersonRole: { fontWeight: '800', fontSize: moderateScale(11), lineHeight: moderateScale(15) },
+  execPersonRoleClean: { color: '#2563EB' },
+  execPersonRoleInspect: { color: '#7C3AED' },
+  execPersonName: { minWidth: 0, flexShrink: 1, color: '#111827', fontWeight: '700', fontSize: moderateScale(13), lineHeight: moderateScale(18) },
+  execOrderRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, columnGap: 16 },
+  execOrder: { flexGrow: 1, flexBasis: 120, color: '#6B7280', fontWeight: '600', fontSize: moderateScale(11), lineHeight: moderateScale(16) },
+  unitTypeRow: { alignSelf: 'flex-start', marginTop: 12, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, backgroundColor: '#F8FAFC', flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '100%' },
+  unitTypeCell: { flexShrink: 1, minWidth: 0 },
   unitTypeText: { flexShrink: 1, color: '#111827', fontSize: moderateScale(13), fontWeight: '600' },
   addrRow: { marginTop: 16, flexDirection: 'row', alignItems: 'flex-start', gap: 10, minWidth: 0 },
   addrText: { flex: 1, minWidth: 0, flexShrink: 1, color: '#111827', fontSize: moderateScale(13), fontWeight: '600', lineHeight: moderateScale(19) },

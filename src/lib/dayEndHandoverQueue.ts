@@ -215,41 +215,40 @@ export async function processDayEndHandoverQueue(token: string) {
         }
 
         if (nextDraft.pending_submit) {
-          const payload = {
-            date: nextDraft.date,
-            key_photos: (nextDraft.key_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
-            return_wash_photos: (nextDraft.return_wash_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
-            dirty_linen_photos: (nextDraft.return_wash_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
-            warehouse_key_photos: (nextDraft.warehouse_key_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
-            consumable_photos: (nextDraft.consumable_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
-            no_warehouse_key: !!nextDraft.no_warehouse_key,
-            reject_items: (nextDraft.reject_items || [])
-              .map((item) => ({
-                linen_type: String(item.linen_type || '').trim(),
-                quantity: Number(item.quantity || 0) || 0,
-                used_room: String(item.used_room || '').trim(),
-                photos: (item.photos || []).map((p) => ({ url: String(p.uploaded_url || '').trim(), captured_at: p.captured_at })).filter((p) => !!p.url),
-              }))
-              .filter((item) => item.linen_type && item.quantity > 0 && item.used_room && item.photos.length > 0),
+          nextDraft.pending_submit = false
+        }
+
+        const payload = {
+          date: nextDraft.date,
+          key_photos: (nextDraft.key_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
+          return_wash_photos: (nextDraft.return_wash_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
+          dirty_linen_photos: (nextDraft.return_wash_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
+          warehouse_key_photos: (nextDraft.warehouse_key_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
+          consumable_photos: (nextDraft.consumable_items || []).map((x) => ({ url: String(x.uploaded_url || '').trim(), captured_at: x.captured_at })).filter((x) => !!x.url),
+          no_warehouse_key: !!nextDraft.no_warehouse_key,
+          reject_items: (nextDraft.reject_items || [])
+            .map((item) => ({
+              linen_type: String(item.linen_type || '').trim(),
+              quantity: Number(item.quantity || 0) || 0,
+              used_room: String(item.used_room || '').trim(),
+              photos: (item.photos || []).map((p) => ({ url: String(p.uploaded_url || '').trim(), captured_at: p.captured_at })).filter((p) => !!p.url),
+            }))
+            .filter((item) => item.linen_type && item.quantity > 0 && item.used_room && item.photos.length > 0),
+        }
+        const sectionPayloads = [
+          payload.key_photos.length ? { ...payload, section: 'key' as const } : null,
+          payload.return_wash_photos.length ? { ...payload, section: 'return_wash' as const } : null,
+          payload.warehouse_key_photos.length || payload.no_warehouse_key ? { ...payload, section: 'warehouse_key' as const } : null,
+          payload.consumable_photos.length ? { ...payload, section: 'consumable' as const } : null,
+          payload.reject_items.length ? { ...payload, section: 'reject' as const } : null,
+        ].filter(Boolean)
+        if (sectionPayloads.length) {
+          for (const sectionPayload of sectionPayloads) {
+            await uploadDayEndHandover(token, sectionPayload as any)
           }
-          const sectionPayload =
-            payload.key_photos.length && payload.return_wash_photos.length
-              ? { ...payload, section: 'all' as const }
-              : payload.warehouse_key_photos.length || payload.no_warehouse_key
-                ? { ...payload, section: 'warehouse_key' as const }
-                : payload.consumable_photos.length
-                  ? { ...payload, section: 'consumable' as const }
-                  : payload.key_photos.length
-                    ? { ...payload, section: 'key' as const }
-                    : payload.return_wash_photos.length
-                      ? { ...payload, section: 'return_wash' as const }
-                      : null
-          if (sectionPayload) {
-            await uploadDayEndHandover(token, sectionPayload)
-            await clearDayEndHandoverDraft(nextDraft.user_id, nextDraft.date)
-            processed++
-            continue
-          }
+          await clearDayEndHandoverDraft(nextDraft.user_id, nextDraft.date)
+          processed++
+          continue
         }
 
         drafts[k] = nextDraft

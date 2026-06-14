@@ -8,7 +8,7 @@ import * as Notifications from 'expo-notifications'
 import Constants from 'expo-constants'
 import { useAuth } from '../lib/auth'
 import { useI18n } from '../lib/i18n'
-import { findWorkTaskItemByAnyId, getWorkTasksSnapshot } from '../lib/workTasksStore'
+import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, subscribeWorkTaskRealtimeNotices } from '../lib/workTasksStore'
 import { getNoticesSnapshot, initNoticesStore, prependNotice, subscribeNotices, upsertNotices } from '../lib/noticesStore'
 import { listInboxNotifications, registerExpoPushToken } from '../lib/api'
 import { resolveNoticeCreatedAt } from '../lib/noticeTime'
@@ -37,6 +37,15 @@ import CleaningSelfCompleteScreen from '../screens/tasks/CleaningSelfCompleteScr
 import ManagerDailyTaskScreen from '../screens/tasks/ManagerDailyTaskScreen'
 import DayEndBackupKeysScreen from '../screens/tasks/DayEndBackupKeysScreen'
 
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+})
+
 export type AuthStackParamList = {
   Login: undefined
   ForgotPassword: undefined
@@ -60,7 +69,7 @@ export type TasksStackParamList = {
   TasksList: undefined
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
   InspectionPanel: { taskId: string }
-  InspectionComplete: { taskId: string }
+  InspectionComplete: { taskId: string; skipInspectionPhotos?: boolean }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
   DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; overviewMode?: boolean; overviewUsers?: Array<{ userId: string; userName: string; roles: string[]; roomCodes: string[]; complete: boolean | null }> }
@@ -74,7 +83,7 @@ export type NoticesStackParamList = {
   InfoCenterDetail: { kind: 'property' | 'secret' | 'task' | 'announcement' | 'guide' | 'warehouse_guide'; title: string; subtitle?: string; body?: string; contentRaw?: string | null; guideRole?: CompanyGuideRole | null; url?: string | null; copyText?: string | null; secretId?: string }
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
   InspectionPanel: { taskId: string }
-  InspectionComplete: { taskId: string }
+  InspectionComplete: { taskId: string; skipInspectionPhotos?: boolean }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
   DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; overviewMode?: boolean; overviewUsers?: Array<{ userId: string; userName: string; roles: string[]; roomCodes: string[]; complete: boolean | null }> }
@@ -354,6 +363,24 @@ export default function RootNavigator() {
   const statusRef = useRef(status)
   const tokenRef = useRef(token)
   const userRef = useRef(user)
+  const pendingLocalNoticeTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const recentRealtimeNoticeIdsRef = useRef(new Map<string, number>())
+
+  const realtimeNoticeKey = (data0: any) => {
+    const data = data0 && typeof data0 === 'object' ? data0 : {}
+    const kind = String(data?.kind || '').trim()
+    const propertyCode = String(data?.property_code || '').trim()
+    if (kind && propertyCode) return `${kind}:${propertyCode}`
+    return String(data?.event_id || '').trim()
+  }
+
+  const cancelPendingLocalNotice = (data: any) => {
+    const key = realtimeNoticeKey(data)
+    if (!key) return
+    const timer = pendingLocalNoticeTimersRef.current.get(key)
+    if (timer) clearTimeout(timer)
+    pendingLocalNoticeTimersRef.current.delete(key)
+  }
 
   useEffect(() => {
     statusRef.current = status
@@ -363,14 +390,14 @@ export default function RootNavigator() {
   }, [status, token, user])
 
   async function registerForPush() {
-    Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowBanner: true,
-        shouldShowList: true,
-        shouldPlaySound: true,
-        shouldSetBadge: true,
-      }),
-    })
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: '默认通知',
+        importance: Notifications.AndroidImportance.MAX,
+        sound: 'default',
+        vibrationPattern: [0, 250, 250, 250],
+      })
+    }
     const { status } = await Notifications.requestPermissionsAsync()
     if (status !== 'granted') return
     const projectId =
@@ -408,6 +435,58 @@ export default function RootNavigator() {
   }, [status, token, user?.id])
 
   useEffect(() => {
+    if (status !== 'signedIn' || !String(user?.id || '').trim()) return
+    const unsubscribe = subscribeWorkTaskRealtimeNotices((notice) => {
+      const currentUserId = String(userRef.current?.id || '').trim()
+      if (notice.causedByUserId && notice.causedByUserId === currentUserId) return
+      if (!shouldShowTaskNoticeForCurrentUser(notice.data, userRef.current)) return
+
+      const now = Date.now()
+      const lastSeenAt = recentRealtimeNoticeIdsRef.current.get(notice.id) || 0
+      if (now - lastSeenAt < 10_000) return
+      recentRealtimeNoticeIdsRef.current.set(notice.id, now)
+      for (const [id, seenAt] of recentRealtimeNoticeIdsRef.current) {
+        if (now - seenAt > 60_000) recentRealtimeNoticeIdsRef.current.delete(id)
+      }
+
+      const data: Record<string, any> = { ...(notice.data || {}), event_id: String(notice.data?.event_id || notice.id) }
+      const key = realtimeNoticeKey(data) || notice.id
+      const previousTimer = pendingLocalNoticeTimersRef.current.get(key)
+      if (previousTimer) clearTimeout(previousTimer)
+      const timer = setTimeout(() => {
+        pendingLocalNoticeTimersRef.current.delete(key)
+        ;(async () => {
+          const formatted = formatIncomingNotice(notice.title, notice.body, data)
+          await initNoticesStore().catch(() => null)
+          await prependNotice({
+            id: String(data.event_id || notice.id),
+            type: String(data.kind || '').includes('key') || Number(data.keys_required || 0) >= 2 ? 'key' : 'update',
+            title: formatted.title,
+            summary: formatted.summary,
+            content: formatted.content,
+            data,
+          }).catch(() => null)
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: notice.title,
+              body: notice.body,
+              sound: 'default',
+              data,
+            },
+            trigger: null,
+          }).catch(() => null)
+        })()
+      }, 1200)
+      pendingLocalNoticeTimersRef.current.set(key, timer)
+    })
+    return () => {
+      unsubscribe()
+      for (const timer of pendingLocalNoticeTimersRef.current.values()) clearTimeout(timer)
+      pendingLocalNoticeTimersRef.current.clear()
+    }
+  }, [status, user?.id])
+
+  useEffect(() => {
     if (pushListenerRef.current || pushResponseListenerRef.current) return
     pushListenerRef.current = Notifications.addNotificationReceivedListener((n) => {
       ;(async () => {
@@ -423,6 +502,7 @@ export default function RootNavigator() {
           const eventId = String(data?.event_id || '').trim()
           const fieldsKey = String(data?.fields_key || '').trim()
           const reqId = String((n as any)?.request?.identifier || '').trim()
+          cancelPendingLocalNotice(data)
           const formatted = formatIncomingNotice(title, body, data)
           if (!shouldShowTaskNoticeForCurrentUser(data, userRef.current)) return
           const id0 =

@@ -16,12 +16,14 @@ import { getWorkTasksSnapshot, subscribeWorkTasks } from '../../lib/workTasksSto
 import {
   listCompanyAnnouncementsForApp,
   listCompanySecretsForApp,
+  listCustomerServiceManualsForApp,
   listInboxNotifications,
   listWarehouseGuidesForApp,
   listWorkGuidesForApp,
   listWorkTasks,
   markInboxNotificationsRead,
   type CompanyAnnouncement,
+  type CustomerServiceManual,
   type CompanyGuide,
   type CompanyGuideRole,
   type InboxNotificationItem,
@@ -50,7 +52,7 @@ type SearchResult = {
 }
 
 type SearchSection = {
-  key: 'property' | 'task' | 'announcement' | 'guide' | 'warehouse_guide'
+  key: 'property' | 'task' | 'announcement' | 'guide' | 'customer_service_manual' | 'warehouse_guide'
   title: string
   emptyText: string
   items: SearchResult[]
@@ -68,6 +70,7 @@ type CompanySecretSummary = {
 type CompanyContentCache = {
   announcements: CompanyAnnouncement[]
   workGuides: CompanyGuide[]
+  customerServiceManuals: CustomerServiceManual[]
   warehouseGuides: WarehouseGuide[]
   secrets: CompanySecretSummary[]
 }
@@ -229,6 +232,7 @@ export default function NoticesScreen(props: Props) {
   const [announcements, setAnnouncements] = useState<CompanyAnnouncement[]>([])
   const [announcementIndex, setAnnouncementIndex] = useState(0)
   const [workGuides, setWorkGuides] = useState<CompanyGuide[]>([])
+  const [customerServiceManuals, setCustomerServiceManuals] = useState<CustomerServiceManual[]>([])
   const [warehouseGuides, setWarehouseGuides] = useState<WarehouseGuide[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
   const [hasMoreRemote, setHasMoreRemote] = useState(true)
@@ -279,11 +283,13 @@ export default function NoticesScreen(props: Props) {
         if (Array.isArray(cachedContent.secrets)) setSecrets(cachedContent.secrets)
         if (Array.isArray(cachedContent.announcements)) setAnnouncements(cachedContent.announcements)
         if (Array.isArray(cachedContent.workGuides)) setWorkGuides(cachedContent.workGuides)
+        if (Array.isArray(cachedContent.customerServiceManuals)) setCustomerServiceManuals(cachedContent.customerServiceManuals)
         if (Array.isArray(cachedContent.warehouseGuides)) setWarehouseGuides(cachedContent.warehouseGuides)
         companyContentLoadedRef.current =
           Array.isArray(cachedContent.secrets) ||
           Array.isArray(cachedContent.announcements) ||
           Array.isArray(cachedContent.workGuides) ||
+          Array.isArray(cachedContent.customerServiceManuals) ||
           Array.isArray(cachedContent.warehouseGuides)
       }
       setCompanyContentHydrated(true)
@@ -301,30 +307,35 @@ export default function NoticesScreen(props: Props) {
   async function loadCompanyContent(options?: { force?: boolean }) {
     if (!token) return
     if (!options?.force && companyContentLoadedRef.current) return
-    const [secretRows, announceRows, guideRows, warehouseRows] = await Promise.allSettled([
+    const [secretRows, announceRows, guideRows, manualRows, warehouseRows] = await Promise.allSettled([
       listCompanySecretsForApp(token),
       listCompanyAnnouncementsForApp(token),
       listWorkGuidesForApp(token),
+      listCustomerServiceManualsForApp(token),
       listWarehouseGuidesForApp(token),
     ])
     if (secretRows.status === 'fulfilled' && Array.isArray(secretRows.value)) setSecrets(secretRows.value)
     if (announceRows.status === 'fulfilled' && Array.isArray(announceRows.value)) setAnnouncements(announceRows.value)
     if (guideRows.status === 'fulfilled' && Array.isArray(guideRows.value)) setWorkGuides(guideRows.value)
+    if (manualRows.status === 'fulfilled' && Array.isArray(manualRows.value)) setCustomerServiceManuals(manualRows.value)
     if (warehouseRows.status === 'fulfilled' && Array.isArray(warehouseRows.value)) setWarehouseGuides(warehouseRows.value)
     const nextSecrets = secretRows.status === 'fulfilled' && Array.isArray(secretRows.value) ? secretRows.value : secrets
     const nextAnnouncements = announceRows.status === 'fulfilled' && Array.isArray(announceRows.value) ? announceRows.value : announcements
     const nextWorkGuides = guideRows.status === 'fulfilled' && Array.isArray(guideRows.value) ? guideRows.value : workGuides
+    const nextCustomerServiceManuals = manualRows.status === 'fulfilled' && Array.isArray(manualRows.value) ? manualRows.value : customerServiceManuals
     const nextWarehouseGuides = warehouseRows.status === 'fulfilled' && Array.isArray(warehouseRows.value) ? warehouseRows.value : warehouseGuides
     if (
       (secretRows.status === 'fulfilled' && Array.isArray(secretRows.value)) ||
       (announceRows.status === 'fulfilled' && Array.isArray(announceRows.value)) ||
       (guideRows.status === 'fulfilled' && Array.isArray(guideRows.value)) ||
+      (manualRows.status === 'fulfilled' && Array.isArray(manualRows.value)) ||
       (warehouseRows.status === 'fulfilled' && Array.isArray(warehouseRows.value))
     ) {
       await setJson<CompanyContentCache>(COMPANY_CONTENT_CACHE_KEY, {
         secrets: nextSecrets,
         announcements: nextAnnouncements,
         workGuides: nextWorkGuides,
+        customerServiceManuals: nextCustomerServiceManuals,
         warehouseGuides: nextWarehouseGuides,
       })
     }
@@ -332,6 +343,7 @@ export default function NoticesScreen(props: Props) {
       (secretRows.status === 'fulfilled' && Array.isArray(secretRows.value)) ||
       (announceRows.status === 'fulfilled' && Array.isArray(announceRows.value)) ||
       (guideRows.status === 'fulfilled' && Array.isArray(guideRows.value)) ||
+      (manualRows.status === 'fulfilled' && Array.isArray(manualRows.value)) ||
       (warehouseRows.status === 'fulfilled' && Array.isArray(warehouseRows.value))
         ? true
         : companyContentLoadedRef.current
@@ -489,6 +501,7 @@ export default function NoticesScreen(props: Props) {
     const taskResults: SearchResult[] = []
     const announcementResults: SearchResult[] = []
     const guideResults: SearchResult[] = []
+    const customerServiceManualResults: SearchResult[] = []
     const warehouseGuideResults: SearchResult[] = []
     const seen = new Set<string>()
 
@@ -594,6 +607,27 @@ export default function NoticesScreen(props: Props) {
       if (guideResults.length >= 8) break
     }
 
+    for (const manual of customerServiceManuals) {
+      const title = String(manual.title || '').trim()
+      const body = companyContentBody(manual.content)
+      const summary = companyContentSummary(manual.content, '客服手册')
+      const hay = `${title} ${summary} ${body}`.toLowerCase()
+      if (!hay.includes(q)) continue
+      const key = String(manual.id || '').trim()
+      if (!key || seen.has(`customer-service-manual:${key}`)) continue
+      seen.add(`customer-service-manual:${key}`)
+      customerServiceManualResults.push({
+        id: `customer-service-manual:${key}`,
+        kind: 'guide',
+        title: title || '客服手册',
+        subtitle: summary,
+        body,
+        contentRaw: manual.content || null,
+        icon: 'document-text-outline',
+      })
+      if (customerServiceManualResults.length >= 10) break
+    }
+
     for (const guide of warehouseGuides) {
       const title = String(guide.title || '').trim()
       const body = companyContentBody(guide.content)
@@ -620,9 +654,10 @@ export default function NoticesScreen(props: Props) {
       { key: 'task', title: '历史任务', emptyText: `最近 ${HISTORY_SEARCH_WINDOWS[historyWindowIndex]} 个月内没有匹配的历史任务。`, items: taskResults },
       { key: 'announcement', title: '公司公告', emptyText: '没有匹配的公司公告。', items: announcementResults },
       { key: 'guide', title: '工作指南', emptyText: '没有匹配的工作指南。', items: guideResults },
+      { key: 'customer_service_manual', title: '客服手册/规定', emptyText: '没有匹配的客服手册或规定。', items: customerServiceManualResults },
       { key: 'warehouse_guide', title: '仓库指南', emptyText: '没有匹配的仓库指南。', items: warehouseGuideResults },
     ] satisfies SearchSection[]
-  }, [announcements, historyTasks, historyWindowIndex, orderedWorkGuides, query, warehouseGuides])
+  }, [announcements, customerServiceManuals, historyTasks, historyWindowIndex, orderedWorkGuides, query, warehouseGuides])
 
   function openSearchResult(item: SearchResult) {
     if (item.kind === 'task' && item.taskId) {
@@ -736,6 +771,40 @@ export default function NoticesScreen(props: Props) {
           <Ionicons name="chevron-forward" size={moderateScale(16)} color="#9CA3AF" />
         </View>
       </Pressable>
+    )
+  }
+
+  function renderNoticeListHeader() {
+    return (
+      <>
+        {renderAnnouncementRail()}
+        {renderGuideRail()}
+
+        <View style={styles.noticeSectionHead}>
+          <Text style={styles.sectionTitle}>通知消息</Text>
+          <View style={styles.filterMiniWrap}>
+            <Pressable
+              onPress={() => setShowUnreadOnly(false)}
+              style={({ pressed }) => [styles.filterMiniChip, !showUnreadOnly ? styles.filterMiniChipActive : null, pressed ? styles.rowPressed : null]}
+            >
+              <Text style={[styles.filterMiniText, !showUnreadOnly ? styles.filterMiniTextActive : null]}>{t('notices_all')}</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setShowUnreadOnly(true)}
+              style={({ pressed }) => [styles.filterMiniChip, showUnreadOnly ? styles.filterMiniChipActive : null, pressed ? styles.rowPressed : null]}
+            >
+              <Text style={[styles.filterMiniText, showUnreadOnly ? styles.filterMiniTextActive : null]}>{t('notices_unread')}</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        {!hasInit && (
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator />
+            <Text style={styles.loadingText}>{t('common_loading')}</Text>
+          </View>
+        )}
+      </>
     )
   }
 
@@ -933,7 +1002,7 @@ export default function NoticesScreen(props: Props) {
           value={query}
           onChangeText={setQuery}
           style={styles.searchInput}
-          placeholder="输入关键词搜索历史任务、仓库指南、工作指南、公告、房源信息..."
+          placeholder="输入关键词搜索历史任务、客服手册、仓库指南、工作指南、公告、房源信息..."
           placeholderTextColor="#9CA3AF"
           autoCapitalize="none"
           autoCorrect={false}
@@ -951,59 +1020,31 @@ export default function NoticesScreen(props: Props) {
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           >
             {searchSections.map(renderSearchSection)}
-            {!hasAnySearchMatches ? <Text style={styles.emptyText}>暂无匹配内容，可试试房号、地址、Wi-Fi、公告标题或指南关键词。</Text> : null}
+            {!hasAnySearchMatches ? <Text style={styles.emptyText}>暂无匹配内容，可试试房号、地址、Wi-Fi、客服规定、公告标题或指南关键词。</Text> : null}
           </ScrollView>
         </View>
       ) : (
-        <>
-          {renderAnnouncementRail()}
-          {renderGuideRail()}
-
-          <View style={styles.noticeSectionHead}>
-            <Text style={styles.sectionTitle}>通知消息</Text>
-            <View style={styles.filterMiniWrap}>
-              <Pressable
-                onPress={() => setShowUnreadOnly(false)}
-                style={({ pressed }) => [styles.filterMiniChip, !showUnreadOnly ? styles.filterMiniChipActive : null, pressed ? styles.rowPressed : null]}
-              >
-                <Text style={[styles.filterMiniText, !showUnreadOnly ? styles.filterMiniTextActive : null]}>{t('notices_all')}</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setShowUnreadOnly(true)}
-                style={({ pressed }) => [styles.filterMiniChip, showUnreadOnly ? styles.filterMiniChipActive : null, pressed ? styles.rowPressed : null]}
-              >
-                <Text style={[styles.filterMiniText, showUnreadOnly ? styles.filterMiniTextActive : null]}>{t('notices_unread')}</Text>
-              </Pressable>
-            </View>
-          </View>
-
-          {!hasInit && (
-            <View style={styles.loadingWrap}>
-              <ActivityIndicator />
-              <Text style={styles.loadingText}>{t('common_loading')}</Text>
-            </View>
-          )}
-
-          <FlatList
-            data={items}
-            keyExtractor={it => it.id}
-            renderItem={renderNoticeItem}
-            contentContainerStyle={styles.listContent}
-            ItemSeparatorComponent={() => <View style={styles.sep} />}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-            onEndReachedThreshold={0.2}
-            onEndReached={onLoadMore}
-            ListEmptyComponent={!hasInit ? null : <Text style={styles.emptyText}>暂无通知消息。</Text>}
-            ListFooterComponent={
-              loadingMore ? (
-                <View style={styles.footer}>
-                  <ActivityIndicator />
-                  <Text style={styles.footerText}>{t('common_loading')}</Text>
-                </View>
-              ) : null
-            }
-          />
-        </>
+        <FlatList
+          style={styles.noticeList}
+          data={items}
+          keyExtractor={it => it.id}
+          renderItem={(info) => <View style={styles.noticeItemWrap}>{renderNoticeItem(info)}</View>}
+          contentContainerStyle={styles.listContent}
+          ListHeaderComponent={renderNoticeListHeader}
+          ItemSeparatorComponent={() => <View style={styles.sep} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          onEndReachedThreshold={0.2}
+          onEndReached={onLoadMore}
+          ListEmptyComponent={!hasInit ? null : <Text style={styles.emptyText}>暂无通知消息。</Text>}
+          ListFooterComponent={
+            loadingMore ? (
+              <View style={styles.footer}>
+                <ActivityIndicator />
+                <Text style={styles.footerText}>{t('common_loading')}</Text>
+              </View>
+            ) : null
+          }
+        />
       )}
     </SafeAreaView>
   )
@@ -1213,7 +1254,9 @@ const styles = StyleSheet.create({
   loadingWrap: { paddingHorizontal: 16, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
   loadingText: { color: '#6B7280', fontWeight: '700' },
 
-  listContent: { paddingHorizontal: 16, paddingBottom: 16, paddingTop: 10, flexGrow: 1 },
+  noticeList: { flex: 1 },
+  listContent: { paddingBottom: 16, flexGrow: 1 },
+  noticeItemWrap: { paddingHorizontal: 16 },
   sep: { height: 10 },
   rowPressed: { opacity: 0.92 },
   noticeRow: {

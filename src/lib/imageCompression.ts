@@ -1,5 +1,13 @@
 import { Image } from 'react-native'
-import { manipulateAsync, SaveFormat } from 'expo-image-manipulator'
+
+type ImageManipulatorModule = {
+  manipulateAsync?: (
+    uri: string,
+    actions: Array<{ resize: { width: number } }>,
+    saveOptions: { compress: number; format: string },
+  ) => Promise<{ uri?: string | null }>
+  SaveFormat?: { JPEG?: string }
+}
 
 async function getImageSize(uri: string): Promise<{ width: number; height: number } | null> {
   return await new Promise((resolve) => {
@@ -16,11 +24,17 @@ export async function compressImageForUpload(uri: string) {
   if (!u) throw new Error('missing uri')
   const size = await getImageSize(u)
   const width = Number(size?.width || 0)
-  const actions = width > 2560 ? [{ resize: { width: 2560 } }] : []
-  const r = await manipulateAsync(
-    u,
-    actions,
-    { compress: 0.92, format: SaveFormat.JPEG },
-  )
-  return r.uri
+  const actions = width > 1920 ? [{ resize: { width: 1920 } }] : []
+  try {
+    const mod = (await import('expo-image-manipulator')) as ImageManipulatorModule
+    if (typeof mod?.manipulateAsync !== 'function') return u
+    const r = await mod.manipulateAsync(
+      u,
+      actions,
+      { compress: 0.76, format: mod.SaveFormat?.JPEG || 'jpeg' },
+    )
+    return String(r?.uri || '').trim() || u
+  } catch {
+    return u
+  }
 }

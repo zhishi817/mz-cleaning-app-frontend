@@ -13,6 +13,7 @@ import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, refre
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import { deleteKeyPhoto, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadMzappMedia } from '../../lib/api'
 import { enqueueKeyUpload } from '../../lib/keyUploadQueue'
+import GuestLuggageCard from '../../components/GuestLuggageCard'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
 
@@ -34,6 +35,9 @@ function statusLabelForTask(task: WorkTaskItem, roleNames: string[]) {
   const meta = statusLabel(s)
   const source = String(task.source_type || '').trim().toLowerCase()
   const kind = String(task.task_kind || '').trim().toLowerCase()
+  if (source === 'cleaning_tasks' && kind === 'inspection' && (s === 'cleaned' || s === 'restock_pending' || s === 'restocked')) {
+    return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+  }
   if (source === 'cleaning_tasks' && kind === 'cleaning') {
     const isCleanerView = isCleanerRole(roleNames)
     const inspectionStatus = String((task as any).inspection_status || '').trim().toLowerCase()
@@ -249,6 +253,7 @@ export default function TaskDetailScreen(props: Props) {
   const task = useMemo<WorkTaskItem | null>(() => findWorkTaskItemByAnyId(id), [id, items])
   const previewSize = useMemo(() => ({ width, height }), [height, width])
   const isCompactLayout = isCompactWidth(width)
+  const guestLuggage = (task as any)?.guest_luggage || null
 
   useEffect(() => {
     if (!task) return
@@ -303,7 +308,7 @@ export default function TaskDetailScreen(props: Props) {
 
     let res: ImagePicker.ImagePickerResult
     try {
-      res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1 })
+      res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
     } catch (e: any) {
       Alert.alert(t('common_error'), '无法打开相机（模拟器不支持相机拍照，请用真机测试）')
       return
@@ -408,31 +413,44 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_error'), source === 'camera' ? '请先开启相机权限' : '请先开启相册权限')
       return
     }
+    const uploaded: string[] = []
+    let applied = false
+    const applyUploaded = () => {
+      if (!uploaded.length || applied) return
+      applied = true
+      setMarkPhotoUrls((prev) => normalizePhotoUrls([...prev, ...uploaded]))
+    }
     try {
       setMarking(true)
-      const res =
-        source === 'camera'
-          ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1 })
-          : await ImagePicker.launchImageLibraryAsync({
-              mediaTypes: 'images',
-              quality: 1,
-              allowsMultipleSelection: true,
-              selectionLimit: 0,
-            })
-      if (res.canceled || !res.assets?.length) return
-      const uploaded: string[] = []
-      for (const asset of res.assets as any[]) {
-        const uri = String(asset?.uri || '').trim()
-        if (!uri) continue
-        const name = String(asset?.fileName || uri.split('/').pop() || `task-${Date.now()}.jpg`)
-        const mimeType = String(asset?.mimeType || 'image/jpeg')
-        const up = await uploadMzappMedia(token, { uri, name, mimeType })
-        uploaded.push(up.url)
+      const continuousCamera = source === 'camera' && String(task.task_kind || '').trim().toLowerCase() === 'deep_cleaning'
+      let keepCapturing = true
+      while (keepCapturing) {
+        const res =
+          source === 'camera'
+            ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+            : await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: 'images',
+                quality: 0.75,
+                allowsEditing: false,
+                allowsMultipleSelection: true,
+                selectionLimit: 0,
+              })
+        if (res.canceled || !res.assets?.length) break
+        for (const asset of res.assets as any[]) {
+          const uri = String(asset?.uri || '').trim()
+          if (!uri) continue
+          const name = String(asset?.fileName || uri.split('/').pop() || `task-${Date.now()}.jpg`)
+          const mimeType = String(asset?.mimeType || 'image/jpeg')
+          const up = await uploadMzappMedia(token, { uri, name, mimeType })
+          uploaded.push(up.url)
+        }
+        keepCapturing = continuousCamera
       }
       if (!uploaded.length) return
-      setMarkPhotoUrls((prev) => normalizePhotoUrls([...prev, ...uploaded]))
-      Alert.alert(t('common_ok'), uploaded.length > 1 ? `已上传 ${uploaded.length} 张照片` : '照片已上传')
+      applyUploaded()
+      if (!continuousCamera) Alert.alert(t('common_ok'), uploaded.length > 1 ? `已上传 ${uploaded.length} 张照片` : '照片已上传')
     } catch (e: any) {
+      applyUploaded()
       Alert.alert(t('common_error'), String(e?.message || '上传失败'))
     } finally {
       setMarking(false)
@@ -571,14 +589,14 @@ export default function TaskDetailScreen(props: Props) {
   const keysRequiredBase = Number((task as any).keys_required ?? 0)
   const keysCheckout = Number((task as any).keys_required_checkout ?? keysRequiredBase)
   const keysCheckin = Number((task as any).keys_required_checkin ?? keysRequiredBase)
-  const checkoutSets = keyTags
-    ? (keyTags.checkout_sets == null ? 0 : Number(keyTags.checkout_sets))
-    : (Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : 0)
-  const checkinSets = keyTags
-    ? (keyTags.checkin_sets == null ? 0 : Number(keyTags.checkin_sets))
-    : (Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : 0)
-  const showCheckout = keyTags ? keyTags.show_checkout === true : (isCleaningSource && !isCheckedOut && checkoutSets >= 2)
-  const showCheckin = keyTags ? keyTags.show_checkin === true : (isCleaningSource && checkinSets >= 2)
+  const checkoutSetsFromFields = Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : 0
+  const checkinSetsFromFields = Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : 0
+  const checkoutSetsFromTags = keyTags && keyTags.checkout_sets != null ? Number(keyTags.checkout_sets) : 0
+  const checkinSetsFromTags = keyTags && keyTags.checkin_sets != null ? Number(keyTags.checkin_sets) : 0
+  const checkoutSets = Math.max(checkoutSetsFromFields, Number.isFinite(checkoutSetsFromTags) ? Math.trunc(checkoutSetsFromTags) : 0)
+  const checkinSets = Math.max(checkinSetsFromFields, Number.isFinite(checkinSetsFromTags) ? Math.trunc(checkinSetsFromTags) : 0)
+  const showCheckout = isCleaningSource && !isCheckedOut && (checkoutSets >= 2 || keyTags?.show_checkout === true)
+  const showCheckin = isCleaningSource && (checkinSets >= 2 || keyTags?.show_checkin === true)
   const restockItems = Array.isArray((task as any).restock_items) ? ((task as any).restock_items as any[]) : []
   const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
   const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
@@ -619,6 +637,14 @@ export default function TaskDetailScreen(props: Props) {
   return (
     <>
     <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, moderateScale(20)) + moderateScale(12) }]} showsVerticalScrollIndicator={false}>
+      <GuestLuggageCard
+        notice={guestLuggage}
+        token={token}
+        showAcknowledge={!canManagerView && roleNames.some((role) => ['cleaner', 'cleaner_inspector', 'cleaning_inspector'].includes(role))}
+        showAcknowledgementSummary={canManagerView}
+        onChanged={(notice) => task ? patchWorkTaskItem(task.id, { guest_luggage: notice } as any) : undefined}
+      />
+
       <View style={styles.card}>
         <View style={[styles.titleRow, isCompactLayout ? styles.titleRowCompact : null]}>
           <Text style={styles.title}>{title2}</Text>
@@ -862,12 +888,6 @@ export default function TaskDetailScreen(props: Props) {
                   </Pressable>
                 ) : null}
                 <Pressable
-                  onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                  style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null]}
-                >
-                  <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-                </Pressable>
-                <Pressable
                   onPress={() => {
                     if (isPendingInspectionDecision) return
                     props.navigation.navigate(isDirectCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)
@@ -881,6 +901,12 @@ export default function TaskDetailScreen(props: Props) {
                         ? (isDirectCompleteEligible ? '完成记录' : '补品记录')
                         : (isStayoverTask ? '标记已完成' : (isSelfCompleteEligible ? '补充与完成' : '补品填报'))}
                   </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
+                  style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null]}
+                >
+                  <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
                 </Pressable>
               </>
             )}

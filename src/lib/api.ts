@@ -477,6 +477,31 @@ export type WorkTaskProperty = {
   router_location?: string | null
 }
 
+export type GuestLuggageAcknowledgement = {
+  user_id: string
+  user_name: string
+  acknowledged: boolean
+  acknowledged_at?: string | null
+}
+
+export type GuestLuggageNotice = {
+  id: string
+  property_id: string
+  task_date: string
+  note?: string | null
+  photo_urls: string[]
+  version: number
+  created_by?: string | null
+  updated_by?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  current_user_acknowledged: boolean
+  acknowledgements: {
+    cleaners: GuestLuggageAcknowledgement[]
+    inspectors: GuestLuggageAcknowledgement[]
+  }
+}
+
 export type WorkTask = {
   id: string
   task_kind: string
@@ -507,6 +532,7 @@ export type WorkTask = {
   old_code?: string | null
   new_code?: string | null
   guest_special_request?: string | null
+  guest_luggage?: GuestLuggageNotice | null
   note?: string | null
   completion_photo_urls?: string[] | null
   completion_note?: string | null
@@ -579,6 +605,56 @@ export async function updateCleaningTaskManagerFields(
     throw new Error(msg)
   }
   return (await parseJsonOrThrow(res)) as any
+}
+
+export async function saveGuestLuggageNotice(
+  token: string,
+  params: { task_ids: string[]; note?: string | null; photo_urls: string[] },
+) {
+  const urls = buildUrlCandidates('mzapp/cleaning-tasks/guest-luggage')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      },
+      20000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: boolean; changed: boolean; guest_luggage: GuestLuggageNotice }
+}
+
+export async function deleteGuestLuggageNotice(token: string, noticeId: string) {
+  const urls = buildUrlCandidates(`mzapp/cleaning-tasks/guest-luggage/${encodeURIComponent(noticeId)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: boolean }
+}
+
+export async function acknowledgeGuestLuggageNotice(token: string, noticeId: string) {
+  const urls = buildUrlCandidates(`mzapp/cleaning-tasks/guest-luggage/${encodeURIComponent(noticeId)}/ack`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: boolean; guest_luggage: GuestLuggageNotice }
 }
 
 export async function updateCleaningOrderKeysRequired(token: string, params: { order_id: string; keys_required: 1 | 2 }) {
@@ -1001,6 +1077,20 @@ export async function completePropertyFeedbackProject(
   throw new Error(msg || '提交完成失败')
 }
 
+async function prepareImageUploadUri(uri: string) {
+  const sourceUri = String(uri || '').trim()
+  if (!sourceUri) throw new Error('missing uri')
+  try {
+    const mod = await import('./imageCompression')
+    const fn = (mod as any)?.compressImageForUpload
+    if (typeof fn !== 'function') return sourceUri
+    const compressedUri = await fn(sourceUri)
+    return String(compressedUri || '').trim() || sourceUri
+  } catch {
+    return sourceUri
+  }
+}
+
 export async function uploadCleaningMedia(
   token: string,
   file: { uri: string; name: string; mimeType: string },
@@ -1008,8 +1098,7 @@ export async function uploadCleaningMedia(
 ) {
   const urls = buildUrlCandidates('cleaning-app/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const { compressImageForUpload } = await import('./imageCompression')
-  const compressedUri = await compressImageForUpload(file.uri)
+  const compressedUri = await prepareImageUploadUri(file.uri)
   const form = new FormData()
   if (meta) {
     for (const [k, v] of Object.entries(meta)) {
@@ -1654,11 +1743,12 @@ export async function listCompanySecretsForApp(token: string) {
 
 export type CompanyContentAudienceScope = 'all_staff' | 'cleaners' | 'warehouse_staff' | 'maintenance_staff' | 'managers'
 export type CompanyContentPageType = 'announce' | 'doc' | 'warehouse'
-export type CompanyContentCategory = 'company_rule' | 'work_guide'
+export type CompanyContentCategory = 'company_rule' | 'starter_guide' | 'role_guide' | 'work_guide' | 'customer_service_manual'
 export type CompanyGuideRole = 'cleaner' | 'cleaning_inspector'
 
 export type CompanyContentItem = {
   id: string
+  slug?: string | null
   title?: string | null
   content?: string | null
   published_at?: string | null
@@ -1675,6 +1765,7 @@ export type CompanyContentItem = {
 
 export type CompanyAnnouncement = CompanyContentItem & { page_type?: 'announce' | null }
 export type CompanyGuide = CompanyContentItem & { page_type?: 'doc' | null; category?: 'work_guide' | null }
+export type CustomerServiceManual = CompanyContentItem & { page_type?: 'doc' | null; category?: 'customer_service_manual' | null }
 export type WarehouseGuide = CompanyContentItem & { page_type?: 'warehouse' | null }
 
 async function listCompanyContentForApp(
@@ -1705,6 +1796,69 @@ export async function listCompanyAnnouncementsForApp(token: string) {
 
 export async function listWorkGuidesForApp(token: string) {
   return (await listCompanyContentForApp(token, { type: 'doc', category: 'work_guide' })) as CompanyGuide[]
+}
+
+function parseCompanyContentBlocks(content: string | null | undefined): any[] {
+  const raw = String(content || '').trim()
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : [{ type: 'legacy_html', html: raw }]
+  } catch {
+    return [{ type: 'legacy_html', html: raw }]
+  }
+}
+
+function customerServiceManualSortValue(row: CustomerServiceManual) {
+  const slug = String(row.slug || '').trim().toLowerCase()
+  if (slug === 'cs-manual:overview') return 0
+  if (slug === 'cs-manual:quick-nav') return 1
+  const numbered = slug.match(/^cs-manual:(\d+)(?:-(\d+))?/)
+  if (numbered) return Number(numbered[1]) * 100 + Number(numbered[2] || 0)
+  const reply = slug.match(/^cs-manual:t(\d+)/)
+  if (reply) return 12000 + Number(reply[1])
+  const review = slug.match(/^cs-manual:r(\d+)/)
+  if (review) return 13000 + Number(review[1])
+  return 99000
+}
+
+function customerServiceManualHeadingLevel(row: CustomerServiceManual) {
+  const title = String(row.title || '').trim()
+  const slug = String(row.slug || '').trim().toLowerCase()
+  if (/^cs-manual:(11|12|13|14)-/.test(slug)) return 3
+  if (/^cs-manual:[tr]\d{2}/.test(slug)) return 3
+  if (/^\d+\./.test(title) || /^[TR]\d{2}\b/i.test(title)) return 3
+  return 2
+}
+
+function normalizeCustomerServiceManuals(rows: CustomerServiceManual[]) {
+  const persisted = rows.find((row) => String(row.slug || '').trim() === 'cs-manual')
+  if (persisted) return [persisted]
+  if (rows.length <= 1) return rows
+  const sorted = [...rows].sort((a, b) => customerServiceManualSortValue(a) - customerServiceManualSortValue(b))
+  const blocks: any[] = []
+  for (const row of sorted) {
+    const title = String(row.title || '').trim()
+    if (title) blocks.push({ type: 'heading', text: title, level: customerServiceManualHeadingLevel(row) })
+    blocks.push(...parseCompanyContentBlocks(row.content))
+  }
+  const updatedAt = sorted.map((row) => String(row.updated_at || '')).filter(Boolean).sort().pop()
+  return [{
+    id: 'cs-manual-combined',
+    slug: 'cs-manual',
+    title: sorted.find((row) => String(row.title || '').includes('客服培训与实操手册'))?.title || '客服培训与实操手册',
+    content: JSON.stringify(blocks),
+    status: 'published',
+    audience_scope: 'managers',
+    page_type: 'doc',
+    category: 'customer_service_manual',
+    updated_at: updatedAt || sorted[0]?.updated_at || null,
+  } as CustomerServiceManual]
+}
+
+export async function listCustomerServiceManualsForApp(token: string) {
+  const rows = (await listCompanyContentForApp(token, { type: 'doc', category: 'customer_service_manual' })) as CustomerServiceManual[]
+  return normalizeCustomerServiceManuals(rows)
 }
 
 export async function listWarehouseGuidesForApp(token: string) {
@@ -1825,18 +1979,6 @@ export type MzappAlert = {
   read_at?: string | null
 }
 
-export type CustomerServiceMemo = {
-  id: string
-  content: string
-  is_done: boolean
-  is_alert: boolean
-  sort_index: number
-  reminder_at?: string | null
-  reminder_sent_at?: string | null
-  created_at: string
-  updated_at: string
-}
-
 export async function listMzappAlerts(token: string, params?: { unread?: boolean; kind?: string; limit?: number }) {
   const q = new URLSearchParams()
   if (params?.unread) q.set('unread', '1')
@@ -1861,81 +2003,6 @@ export async function markMzappAlertRead(token: string, alertId: string) {
   let lastRes: Response | null = null
   for (const url of urls) {
     lastRes = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }, 15000)
-    if (lastRes.status !== 404) break
-  }
-  const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as { ok: boolean }
-}
-
-export async function listCustomerServiceMemos(token: string) {
-  const urls = buildUrlCandidates('mzapp/customer-service-memos')
-  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  let lastRes: Response | null = null
-  for (const url of urls) {
-    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
-    if (lastRes.status !== 404) break
-  }
-  const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as CustomerServiceMemo[]
-}
-
-export async function createCustomerServiceMemo(
-  token: string,
-  params: { content: string; is_done?: boolean; is_alert?: boolean; sort_index?: number; reminder_at?: string | null },
-) {
-  const urls = buildUrlCandidates('mzapp/customer-service-memos')
-  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  let lastRes: Response | null = null
-  for (const url of urls) {
-    lastRes = await fetchWithTimeout(
-      url,
-      {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(params),
-      },
-      15000,
-    )
-    if (lastRes.status !== 404) break
-  }
-  const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as CustomerServiceMemo
-}
-
-export async function updateCustomerServiceMemo(
-  token: string,
-  memoId: string,
-  params: { content?: string; is_done?: boolean; is_alert?: boolean; sort_index?: number; reminder_at?: string | null },
-) {
-  const urls = buildUrlCandidates(`mzapp/customer-service-memos/${encodeURIComponent(memoId)}`)
-  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  let lastRes: Response | null = null
-  for (const url of urls) {
-    lastRes = await fetchWithTimeout(
-      url,
-      {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(params),
-      },
-      15000,
-    )
-    if (lastRes.status !== 404) break
-  }
-  const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as CustomerServiceMemo
-}
-
-export async function deleteCustomerServiceMemo(token: string, memoId: string) {
-  const urls = buildUrlCandidates(`mzapp/customer-service-memos/${encodeURIComponent(memoId)}`)
-  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  let lastRes: Response | null = null
-  for (const url of urls) {
-    lastRes = await fetchWithTimeout(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, 15000)
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
@@ -2000,8 +2067,7 @@ export async function uploadMzappMedia(
 ) {
   const urls = buildUrlCandidates('mzapp/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const { compressImageForUpload } = await import('./imageCompression')
-  const compressedUri = await compressImageForUpload(file.uri)
+  const compressedUri = await prepareImageUploadUri(file.uri)
   const form = new FormData()
   if (meta) {
     for (const [k, v] of Object.entries(meta)) {
@@ -2046,8 +2112,7 @@ export async function uploadMzappExpenseReceipt(
 ) {
   const urls = buildUrlCandidates('mzapp/expenses/receipts/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const { compressImageForUpload } = await import('./imageCompression')
-  const compressedUri = await compressImageForUpload(file.uri)
+  const compressedUri = await prepareImageUploadUri(file.uri)
   const form = new FormData()
   form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
   let lastRes: Response | null = null
@@ -2202,8 +2267,7 @@ export async function uploadMzappExpenseReceiptImage(
 ) {
   const urls = buildUrlCandidates('mzapp/expense-receipts/images/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const { compressImageForUpload } = await import('./imageCompression')
-  const compressedUri = await compressImageForUpload(file.uri)
+  const compressedUri = await prepareImageUploadUri(file.uri)
   const form = new FormData()
   form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
   let lastRes: Response | null = null

@@ -48,6 +48,16 @@ type WorkTaskStreamEvent = {
   change_scope?: string
   changed_fields?: string[]
   payload?: Record<string, any> | null
+  occurred_at?: string
+  caused_by_user_id?: string | null
+}
+
+export type WorkTaskRealtimeNotice = {
+  id: string
+  title: string
+  body: string
+  data: Record<string, any>
+  causedByUserId: string | null
 }
 
 const STORAGE_PREFIX = 'mzstay.work_tasks.store.v1:'
@@ -69,6 +79,7 @@ const SAFE_PATCH_FIELDS = new Set([
   'old_code',
   'new_code',
   'guest_special_request',
+  'guest_luggage',
   'note',
   'checked_out_at',
   'key_photo_url',
@@ -94,6 +105,7 @@ const SAFE_PATCH_FIELDS = new Set([
 ])
 
 const listeners = new Set<() => void>()
+const realtimeNoticeListeners = new Set<(notice: WorkTaskRealtimeNotice) => void>()
 let state: StoreState = {
   items: [],
   bucketKey: null,
@@ -117,6 +129,10 @@ let fullSyncQueued = false
 
 function emit() {
   for (const cb of listeners) cb()
+}
+
+function emitRealtimeNotice(notice: WorkTaskRealtimeNotice) {
+  for (const cb of realtimeNoticeListeners) cb(notice)
 }
 
 function normalizeBase(base: string) {
@@ -329,14 +345,34 @@ function mergePatchIntoTask(task: WorkTaskItem, event: WorkTaskStreamEvent) {
       next.property = { ...(next.property || { id: '', code: '', address: '', unit_type: '' }), [key]: value }
       continue
     }
-    ;(next as any)[field] = value
+    ;(next as any)[field] = field === 'status' ? projectCleaningStatusForTask(next, value) : value
   }
   const date = String(next.scheduled_date || '').slice(0, 10)
   next.date = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : task.date
   return next
 }
 
-function findTaskIndexForEvent(event: WorkTaskStreamEvent) {
+function projectCleaningStatusForTask(task: WorkTaskItem, value: any) {
+  const raw = String(value || '').trim().toLowerCase()
+  if (!raw) return value
+  if (String(task.source_type || '').trim().toLowerCase() !== 'cleaning_tasks') return value
+  const kind = String(task.task_kind || '').trim().toLowerCase()
+  if (kind === 'inspection') {
+    if (raw === 'keys_hung') return 'keys_hung'
+    if (raw === 'inspected' || raw === 'done' || raw === 'completed' || raw === 'ready') return 'done'
+    if (raw === 'cleaned' || raw === 'restock_pending' || raw === 'restocked') return 'to_inspect'
+    if (raw === 'in_progress' || String((task as any).key_photo_url || '').trim()) return 'in_progress'
+    if (raw === 'assigned' || String((task as any).inspector_id || '').trim()) return 'assigned'
+    return raw
+  }
+  if (kind === 'cleaning') {
+    if (raw === 'cleaned' || raw === 'restock_pending' || raw === 'restocked') return 'done'
+    if (raw === 'inspected' || raw === 'ready' || raw === 'keys_hung') return 'done'
+  }
+  return value
+}
+
+function findTaskIndexesForEvent(event: WorkTaskStreamEvent) {
   const ids = Array.from(
     new Set(
       [event.task_id, ...(Array.isArray(event.source_ref_ids) ? event.source_ref_ids : [])]
@@ -344,8 +380,12 @@ function findTaskIndexForEvent(event: WorkTaskStreamEvent) {
         .filter(Boolean),
     ),
   )
-  if (!ids.length) return -1
-  return state.items.findIndex((task) => matchTaskIds(task, ids))
+  if (!ids.length) return []
+  const indexes: number[] = []
+  state.items.forEach((task, index) => {
+    if (matchTaskIds(task, ids)) indexes.push(index)
+  })
+  return indexes
 }
 
 function shouldIgnoreByVersion(task: WorkTaskItem, event: WorkTaskStreamEvent) {
@@ -401,16 +441,21 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
     scheduleFullSync(eventType || 'unsafe_patch')
     return
   }
-  const index = findTaskIndexForEvent(event)
-  if (index < 0) {
+  const indexes = findTaskIndexesForEvent(event)
+  if (!indexes.length) {
     scheduleFullSync('task_missing_for_patch')
     return
   }
-  const prev = state.items[index]
-  if (shouldIgnoreByVersion(prev, event)) return
-  const nextTask = mergePatchIntoTask(prev, event)
   const items = state.items.slice()
-  items[index] = nextTask
+  let changed = false
+  for (const index of indexes) {
+    const prev = items[index]
+    if (!prev) continue
+    if (shouldIgnoreByVersion(prev, event)) continue
+    items[index] = mergePatchIntoTask(prev, event)
+    changed = true
+  }
+  if (!changed) return
   state = {
     ...state,
     items,
@@ -418,6 +463,92 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
   }
   void persist()
   emit()
+}
+
+function buildRealtimeNotice(event: WorkTaskStreamEvent): WorkTaskRealtimeNotice | null {
+  const payload = event.payload && typeof event.payload === 'object' ? event.payload : {}
+  const rawNotice = payload.notice && typeof payload.notice === 'object' ? payload.notice : null
+  const causedByUserId = String(event.caused_by_user_id || '').trim() || null
+  if (rawNotice) {
+    const data = rawNotice.data && typeof rawNotice.data === 'object' ? { ...rawNotice.data } : {}
+    const id = String(rawNotice.id || data.event_id || event.event_id || '').trim()
+    const title = String(rawNotice.title || '').trim()
+    const body = String(rawNotice.body || '').trim()
+    if (!id || !title) return null
+    return {
+      id,
+      title,
+      body,
+      data: { ...data, event_id: String(data.event_id || id) },
+      causedByUserId,
+    }
+  }
+
+  const fields = new Set((Array.isArray(event.changed_fields) ? event.changed_fields : []).map((field) => String(field || '').trim()))
+  const patch = payload.patch && typeof payload.patch === 'object' ? payload.patch : {}
+  const taskIndex = findTaskIndexesForEvent(event)[0]
+  const task = Number.isInteger(taskIndex) ? state.items[taskIndex] : null
+  const propertyCode = String(task?.property?.code || '').trim()
+  const taskIds = Array.from(
+    new Set(
+      [event.task_id, ...(Array.isArray(event.source_ref_ids) ? event.source_ref_ids : [])]
+        .map((value) => String(value || '').replace(/^cleaning_task:/, '').trim())
+        .filter(Boolean),
+    ),
+  )
+  const baseData = {
+    entity: 'cleaning_task',
+    entityId: taskIds[0] || '',
+    action: 'open_task',
+    task_ids: taskIds,
+    property_code: propertyCode,
+    event_id: String(event.event_id || '').trim(),
+  }
+
+  if (fields.has('checked_out_at')) {
+    const checkedOutAt = patch.checked_out_at == null ? null : String(patch.checked_out_at)
+    const cancelled = !checkedOutAt
+    const keysRequired = Number((task as any)?.keys_required || 0)
+    return {
+      id: String(event.event_id || `guest_checkout:${propertyCode}:${checkedOutAt || 'cancelled'}`),
+      title: propertyCode ? `${cancelled ? '待退房' : '已退房'}：${propertyCode}` : (cancelled ? '待退房' : '已退房'),
+      body: cancelled ? '房源还未退房，待退房' : (keysRequired >= 2 ? `已退房（${keysRequired}把钥匙）` : '已退房'),
+      data: {
+        ...baseData,
+        kind: cancelled ? 'guest_checked_out_cancelled' : 'guest_checked_out',
+        checked_out_at: checkedOutAt,
+        keys_required: Number.isFinite(keysRequired) && keysRequired > 0 ? keysRequired : null,
+      },
+      causedByUserId,
+    }
+  }
+
+  const keyFields = ['keys_required', 'keys_required_checkout', 'keys_required_checkin', 'key_tags']
+  if (keyFields.some((field) => fields.has(field))) {
+    const keysRequired = Number(patch.keys_required ?? patch.keys_required_checkin ?? patch.keys_required_checkout ?? (task as any)?.keys_required ?? 1)
+    const count = Number.isFinite(keysRequired) ? Math.max(1, Math.min(2, Math.trunc(keysRequired))) : 1
+    return {
+      id: String(event.event_id || `manager_keys:${propertyCode}:${count}`),
+      title: propertyCode ? `任务信息更新：${propertyCode}` : '任务信息更新',
+      body: `需挂钥匙套数：${count}`,
+      data: { ...baseData, kind: 'cleaning_task_manager_fields_updated', keys_required: count },
+      causedByUserId,
+    }
+  }
+
+  if (fields.has('status') && String(patch.status || '').trim().toLowerCase() === 'keys_hung') {
+    const keysRequired = Number((task as any)?.keys_required || 1)
+    const count = Number.isFinite(keysRequired) ? Math.max(1, Math.min(2, Math.trunc(keysRequired))) : 1
+    return {
+      id: String(event.event_id || `keys_hung:${propertyCode}`),
+      title: propertyCode ? `已挂钥匙：${propertyCode}` : '已挂钥匙',
+      body: count >= 2 ? '已挂2套钥匙' : '已挂钥匙',
+      data: { ...baseData, kind: 'keys_hung', keys_required: count },
+      causedByUserId,
+    }
+  }
+
+  return null
 }
 
 function processSseBlock(block: { type?: string; data?: string | null; lastEventId?: string | null }) {
@@ -446,6 +577,8 @@ function processSseBlock(block: { type?: string; data?: string | null; lastEvent
   setConnectionState('open')
   const normalizedEvent = data && typeof data === 'object' ? ({ ...data, event_id: (data as any).event_id || eventId } as WorkTaskStreamEvent) : ({ event_id: eventId } as WorkTaskStreamEvent)
   applyWorkTaskEvent(normalizedEvent)
+  const realtimeNotice = buildRealtimeNotice(normalizedEvent)
+  if (realtimeNotice) emitRealtimeNotice(realtimeNotice)
 }
 
 function connectWorkTasksRealtime(forceReconnect = false) {
@@ -539,6 +672,11 @@ export function subscribeWorkTasks(cb: () => void) {
   return () => listeners.delete(cb)
 }
 
+export function subscribeWorkTaskRealtimeNotices(cb: (notice: WorkTaskRealtimeNotice) => void) {
+  realtimeNoticeListeners.add(cb)
+  return () => realtimeNoticeListeners.delete(cb)
+}
+
 export function getWorkTasksSnapshot() {
   return state
 }
@@ -582,6 +720,26 @@ export async function patchWorkTaskItem(id0: string, patch: Partial<WorkTaskItem
   const next = { ...prev, ...patch }
   const items = state.items.slice()
   items[idx] = next
+  state = { ...state, items, updatedAt: new Date().toISOString() }
+  await persist()
+  emit()
+}
+
+export async function patchWorkTaskItems(patches0: Array<{ id: string; patch: Partial<WorkTaskItem> }>) {
+  const patches = (Array.isArray(patches0) ? patches0 : [])
+    .map((item) => ({ id: String(item?.id || '').trim(), patch: item?.patch || {} }))
+    .filter((item) => !!item.id && item.patch && typeof item.patch === 'object' && Object.keys(item.patch).length > 0)
+  if (!patches.length) return
+  const patchById = new Map<string, Partial<WorkTaskItem>>()
+  for (const item of patches) patchById.set(item.id, { ...(patchById.get(item.id) || {}), ...item.patch })
+  let changed = false
+  const items = state.items.map((task) => {
+    const patch = patchById.get(String(task.id || '').trim())
+    if (!patch) return task
+    changed = true
+    return { ...task, ...patch }
+  })
+  if (!changed) return
   state = { ...state, items, updatedAt: new Date().toISOString() }
   await persist()
   emit()
@@ -643,6 +801,21 @@ function normalizeLine(s: any) {
   return String(s ?? '').replace(/\s+/g, ' ').trim()
 }
 
+function normalizeKeyCountForNotice(task: any) {
+  const keyTags = task?.key_tags && typeof task.key_tags === 'object' ? task.key_tags : null
+  const candidates = [
+    task?.keys_required,
+    task?.keys_required_checkout,
+    task?.keys_required_checkin,
+    keyTags?.checkout_sets,
+    keyTags?.checkin_sets,
+  ]
+    .map((x) => Number(x ?? 0))
+    .filter((x) => Number.isFinite(x) && x > 0)
+  const n = candidates.length ? Math.max(...candidates) : 1
+  return Math.max(1, Math.min(2, Math.trunc(n)))
+}
+
 function formatUpdatedFields(prev: WorkTaskItem, next: WorkTaskItem) {
   const prevCheckout = normalizeLine((prev as any)?.start_time)
   const nextCheckout = normalizeLine((next as any)?.start_time)
@@ -654,6 +827,8 @@ function formatUpdatedFields(prev: WorkTaskItem, next: WorkTaskItem) {
   const nextNew = normalizeLine((next as any)?.new_code)
   const prevNeed = normalizeLine((prev as any)?.guest_special_request)
   const nextNeed = normalizeLine((next as any)?.guest_special_request)
+  const prevKeys = normalizeKeyCountForNotice(prev)
+  const nextKeys = normalizeKeyCountForNotice(next)
 
   const lines: string[] = []
   if (prevCheckout !== nextCheckout) lines.push(`退房时间：${nextCheckout || '-'}（原：${prevCheckout || '-'}）`)
@@ -661,7 +836,8 @@ function formatUpdatedFields(prev: WorkTaskItem, next: WorkTaskItem) {
   if (prevOld !== nextOld) lines.push(`旧密码：${nextOld || '-'}（原：${prevOld || '-'}）`)
   if (prevNew !== nextNew) lines.push(`新密码：${nextNew || '-'}（原：${prevNew || '-'}）`)
   if (prevNeed !== nextNeed) lines.push(`客人需求：${nextNeed || '-'}（原：${prevNeed || '-'}）`)
-  return { lines, nextFieldsKey: hashText(JSON.stringify({ nextCheckout, nextCheckin, nextOld, nextNew, nextNeed })) }
+  if (prevKeys !== nextKeys) lines.push(`需挂钥匙套数：${nextKeys}（原：${prevKeys}）`)
+  return { lines, nextFieldsKey: hashText(JSON.stringify({ nextCheckout, nextCheckin, nextOld, nextNew, nextNeed, nextKeys })) }
 }
 
 export async function refreshWorkTasksFromServer(params: {
@@ -729,6 +905,7 @@ export async function refreshWorkTasksFromServer(params: {
           old_code: String((prev as any)?.old_code || ''),
           new_code: String((prev as any)?.new_code || ''),
           guest_special_request: String((prev as any)?.guest_special_request || ''),
+          keys_required: normalizeKeyCountForNotice(prev),
         })
         const nextFields = JSON.stringify({
           checkout_time: String((it as any)?.start_time || ''),
@@ -736,6 +913,7 @@ export async function refreshWorkTasksFromServer(params: {
           old_code: String((it as any)?.old_code || ''),
           new_code: String((it as any)?.new_code || ''),
           guest_special_request: String((it as any)?.guest_special_request || ''),
+          keys_required: normalizeKeyCountForNotice(it),
         })
         if (prevFields !== nextFields) {
           const detail = formatUpdatedFields(prev as any, it as any)

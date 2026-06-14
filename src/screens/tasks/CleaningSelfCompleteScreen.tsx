@@ -9,7 +9,7 @@ import { useAuth } from '../../lib/auth'
 import { effectiveInspectionMode } from '../../lib/cleaningInspection'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
+import { getWorkTasksSnapshot, patchWorkTaskItem } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import { getCompletionPhotos, listChecklistItems, selfCompleteCleaningTask, submitCleaningConsumables, uploadCleaningMedia, uploadCleaningVideo, uploadSelfLockboxVideo, saveCompletionPhotos, type ChecklistItem } from '../../lib/api'
 import { API_BASE_URL } from '../../config/env'
@@ -249,7 +249,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     if (!token) throw new Error('请先登录')
     const ok = await ensureCameraPerm()
     if (!ok) throw new Error('需要相机权限')
-    const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1, allowsEditing: true, aspect: [4, 3] })
+    const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
     if (res.canceled || !res.assets?.length) return null
     const a = res.assets[0] as any
     const uri = String(a.uri || '').trim()
@@ -275,7 +275,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         Alert.alert(t('common_error'), '需要相机权限')
         return
       }
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1 })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -298,7 +298,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         Alert.alert(t('common_error'), '需要相机权限')
         return
       }
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1 })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -324,8 +324,8 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       }
       const res =
         source === 'camera'
-          ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1, allowsEditing: true, aspect: [4, 3] })
-          : await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 1, allowsEditing: true, aspect: [4, 3] })
+          ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+          : await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -366,7 +366,11 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     } as any)
     try {
       setSuppliesSubmitting(true)
-      await submitCleaningConsumables(token, cleaningTaskId, { living_room_photo_url: String(livingRoomPhotoUrl || '').trim(), items: out })
+      const updated = await submitCleaningConsumables(token, cleaningTaskId, { living_room_photo_url: String(livingRoomPhotoUrl || '').trim(), items: out })
+      const nextStatus = String((updated as any)?.status || '').trim()
+      if (task?.id && nextStatus) {
+        await patchWorkTaskItem(String(task.id), { status: nextStatus } as any)
+      }
       setSuppliesSubmitted(true)
       Alert.alert(t('common_ok'), '提交成功')
     } catch (e: any) {

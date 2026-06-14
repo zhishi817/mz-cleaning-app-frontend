@@ -7,7 +7,7 @@ import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getJson, setJson } from '../../lib/storage'
-import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
+import { getWorkTasksSnapshot, patchWorkTaskItem } from '../../lib/workTasksStore'
 import { getCleaningConsumables, listChecklistItems, submitCleaningConsumables, uploadCleaningMedia, type ChecklistItem } from '../../lib/api'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 
@@ -236,7 +236,7 @@ export default function SuppliesFormScreen(props: Props) {
         Alert.alert(t('common_error'), '需要相机权限')
         return
       }
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1 })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -261,7 +261,7 @@ export default function SuppliesFormScreen(props: Props) {
         Alert.alert(t('common_error'), '需要相机权限')
         return
       }
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1 })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -285,7 +285,7 @@ export default function SuppliesFormScreen(props: Props) {
         Alert.alert(t('common_error'), '需要相机权限')
         return
       }
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1, allowsEditing: true, aspect: [4, 3] })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -312,7 +312,7 @@ export default function SuppliesFormScreen(props: Props) {
         return
       }
       for (const item of targets) {
-        const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1, allowsEditing: true, aspect: [4, 3] })
+        const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
         if (res.canceled || !res.assets?.length) return
         const a = res.assets[0] as any
         const uri = String(a.uri || '').trim()
@@ -338,7 +338,7 @@ export default function SuppliesFormScreen(props: Props) {
         Alert.alert(t('common_error'), '需要相机权限')
         return
       }
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1, allowsEditing: true, aspect: [4, 3] })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -381,7 +381,7 @@ export default function SuppliesFormScreen(props: Props) {
       }
       const targets: Array<'tv' | 'ac'> = ['tv', 'ac']
       for (const kind of targets) {
-        const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 1, allowsEditing: true, aspect: [4, 3] })
+        const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
         if (res.canceled || !res.assets?.length) return
         const a = res.assets[0] as any
         const uri = String(a.uri || '').trim()
@@ -491,7 +491,11 @@ export default function SuppliesFormScreen(props: Props) {
     }
     try {
       setSubmitting(true)
-      await submitCleaningConsumables(token, cleaningTaskId, { living_room_photo_url: String(livingRoomPhotoUrl || '').trim(), items: out })
+      const updated = await submitCleaningConsumables(token, cleaningTaskId, { living_room_photo_url: String(livingRoomPhotoUrl || '').trim(), items: out })
+      const nextStatus = String((updated as any)?.status || '').trim()
+      if (task?.id && nextStatus) {
+        await patchWorkTaskItem(String(task.id), { status: nextStatus } as any)
+      }
       Alert.alert(t('common_ok'), hasExistingRecord ? '补品记录已更新' : '提交成功')
       props.navigation.goBack()
     } catch (e: any) {
