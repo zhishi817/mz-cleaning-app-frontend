@@ -1,9 +1,9 @@
 import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react'
-import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import { hairline, moderateScale } from '../../lib/scale'
-import { getNoticesSnapshot, initNoticesStore, markNoticeRead } from '../../lib/noticesStore'
+import { getNoticesSnapshot, initNoticesStore, markNoticeRead, subscribeNotices, type Notice } from '../../lib/noticesStore'
 import { getPresentedNotice } from '../../lib/noticePresentation'
 import type { NoticesStackParamList } from '../../navigation/RootNavigator'
 import { useI18n } from '../../lib/i18n'
@@ -76,6 +76,8 @@ export default function NoticeDetailScreen(props: Props) {
   const id = props.route.params.id
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
+  const [storeReady, setStoreReady] = useState(false)
+  const [rawNotice, setRawNotice] = useState<Notice | null>(null)
 
   useLayoutEffect(() => {
     props.navigation.setOptions({
@@ -103,22 +105,42 @@ export default function NoticeDetailScreen(props: Props) {
     })
   }, [props.navigation])
 
-  const notice = useMemo(() => {
-    const raw = getNoticesSnapshot().items.find(n => n.id === id) || null
-    return raw ? getPresentedNotice(raw) : null
-  }, [id])
+  const notice = useMemo(() => (rawNotice ? getPresentedNotice(rawNotice) : null), [rawNotice])
 
   useEffect(() => {
+    let alive = true
+    let unsub: (() => void) | null = null
+    const update = () => {
+      if (!alive) return
+      setRawNotice(getNoticesSnapshot().items.find((item) => item.id === id) || null)
+    }
     ;(async () => {
       await initNoticesStore()
+      if (!alive) return
+      update()
+      setStoreReady(true)
+      unsub = subscribeNotices(update)
       await markNoticeRead(id)
       try {
         const token = await getAuthToken()
-        const serverId = String((notice as any)?.data?._server_id || '').trim()
+        const current = getNoticesSnapshot().items.find((item) => item.id === id) || null
+        const serverId = String((current as any)?.data?._server_id || '').trim()
         if (token && serverId) await markInboxNotificationsRead(String(token), { ids: [serverId] })
       } catch {}
     })()
-  }, [id, notice])
+    return () => {
+      alive = false
+      if (unsub) unsub()
+    }
+  }, [id])
+
+  if (!storeReady) {
+    return (
+      <View style={styles.page}>
+        <ActivityIndicator style={styles.loading} color="#2563EB" />
+      </View>
+    )
+  }
 
   if (!notice) {
     return (
@@ -259,6 +281,7 @@ export default function NoticeDetailScreen(props: Props) {
 
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#F6F7FB' },
+  loading: { marginTop: 48 },
   content: { padding: 16 },
   card: {
     backgroundColor: '#FFFFFF',

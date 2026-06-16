@@ -204,6 +204,114 @@ test('replace sync merges same semantic notice even when remote id and type diff
   expect(snap.unreadIds['local-mf-1']).toBe(true)
 })
 
+test('manager field notifications merge realtime, local push, and inbox variants', async () => {
+  jest.resetModules()
+  const AsyncStorage = require('@react-native-async-storage/async-storage')
+  await (AsyncStorage as any).clear()
+  const mod = require('./noticesStore') as typeof import('./noticesStore')
+
+  await mod.initNoticesStore()
+  await mod.prependNotice({
+    id: 'manager_fields:Aura2707:keys_required:2',
+    type: 'key',
+    title: '任务信息更新：Aura2707',
+    summary: '需挂钥匙套数：2',
+    content: '需挂钥匙套数：2',
+    data: {
+      kind: 'cleaning_task_manager_fields_updated',
+      property_code: 'Aura2707',
+      keys_required: 2,
+    },
+  })
+  await mod.prependNotice({
+    id: 'local-push-request',
+    type: 'update',
+    title: '任务信息更新：Aura2707',
+    summary: '需挂钥匙套数：2（原：1）',
+    content: '需挂钥匙套数：2（原：1）',
+    data: {
+      kind: 'cleaning_task_manager_fields_updated',
+      property_code: 'Aura2707',
+    },
+  })
+  await mod.upsertNotices([
+    {
+      id: 'manager_fields:Aura2707:2144401991',
+      type: 'key',
+      title: '任务信息更新：Aura2707',
+      summary: '需挂钥匙套数：2（原：1）',
+      content: '需挂钥匙套数：2（原：1）',
+      createdAt: '2026-06-15T10:18:21.334Z',
+      unread: true,
+      data: {
+        kind: 'cleaning_task_manager_fields_updated',
+        property_code: 'Aura2707',
+        fields_key: '2144401991',
+        _server_id: 'server-notice-1',
+      },
+    },
+  ])
+
+  const snap = mod.getNoticesSnapshot()
+  expect(snap.items).toHaveLength(1)
+  expect(snap.items[0]?.data?._server_id).toBe('server-notice-1')
+})
+
+test('initialization removes already cached manager field duplicates', async () => {
+  jest.resetModules()
+  const AsyncStorage = require('@react-native-async-storage/async-storage')
+  await (AsyncStorage as any).clear()
+  const mod = require('./noticesStore') as typeof import('./noticesStore')
+  const createdAt = '2026-06-15T10:18:21.334Z'
+  await (AsyncStorage as any).setItem(
+    mod.NOTICES_STORAGE_KEY,
+    JSON.stringify({
+      items: [
+        {
+          id: 'server-event',
+          type: 'key',
+          title: '任务信息更新：Aura2707',
+          summary: '需挂钥匙套数：2（原：1）',
+          content: '需挂钥匙套数：2（原：1）',
+          createdAt,
+          data: {
+            kind: 'cleaning_task_manager_fields_updated',
+            property_code: 'Aura2707',
+            fields_key: '2144401991',
+            _server_id: 'server-notice-1',
+          },
+        },
+        {
+          id: 'local-push',
+          type: 'update',
+          title: '任务信息更新：Aura2707',
+          summary: '需挂钥匙套数：2（原：1）',
+          content: '需挂钥匙套数：2（原：1）',
+          createdAt,
+          data: { kind: 'cleaning_task_manager_fields_updated', property_code: 'Aura2707' },
+        },
+        {
+          id: 'realtime-event',
+          type: 'key',
+          title: '任务信息更新：Aura2707',
+          summary: '需挂钥匙套数：2',
+          content: '需挂钥匙套数：2',
+          createdAt,
+          data: { kind: 'cleaning_task_manager_fields_updated', property_code: 'Aura2707', keys_required: 2 },
+        },
+      ],
+      unreadIds: { 'server-event': true, 'local-push': true, 'realtime-event': true },
+      readIds: {},
+    }),
+  )
+
+  await mod.initNoticesStore()
+  const snap = mod.getNoticesSnapshot()
+  expect(snap.items).toHaveLength(1)
+  expect(snap.items[0]?.id).toBe('server-event')
+  expect(snap.unreadIds['server-event']).toBe(true)
+})
+
 test('notices store drops system notices from legacy state', async () => {
   jest.resetModules()
   const AsyncStorage = require('@react-native-async-storage/async-storage')

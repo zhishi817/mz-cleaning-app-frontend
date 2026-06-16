@@ -14,6 +14,8 @@ import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import { deleteKeyPhoto, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadMzappMedia } from '../../lib/api'
 import { enqueueKeyUpload } from '../../lib/keyUploadQueue'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
+import { normalizeHttpUrl } from '../../lib/urls'
+import { resolveKeyRequirementTags } from '../../lib/keyRequirementTags'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
 
@@ -72,18 +74,6 @@ function taskKindLabel(kind: string) {
   if (s === 'offline') return '线下'
   if (s) return s
   return '任务'
-}
-
-function normalizeHttpUrl(raw: string | null | undefined) {
-  const s0 = String(raw || '').trim()
-  if (!s0) return null
-  const mHref = s0.match(/href\s*=\s*["']([^"']+)["']/i)
-  const s = (mHref?.[1] || s0).trim()
-  const mHttp = s.match(/https?:\/\/[^\s"'<>]+/i)
-  const u = (mHttp?.[0] || s).trim()
-  if (!u) return null
-  if (/^https?:\/\//i.test(u)) return u
-  return `https://${u}`
 }
 
 function extractFirstUrl(text: any) {
@@ -584,19 +574,11 @@ export default function TaskDetailScreen(props: Props) {
   const isCheckedOut = !!checkedOutAt
   const taskDate = String(task.scheduled_date || task.date || '').trim()
   const isHistoricalTask = isBeforeToday(taskDate)
-  const keyTagsRaw = (task as any)?.key_tags
-  const keyTags = keyTagsRaw && typeof keyTagsRaw === 'object' ? keyTagsRaw : null
-  const keysRequiredBase = Number((task as any).keys_required ?? 0)
-  const keysCheckout = Number((task as any).keys_required_checkout ?? keysRequiredBase)
-  const keysCheckin = Number((task as any).keys_required_checkin ?? keysRequiredBase)
-  const checkoutSetsFromFields = Number.isFinite(keysCheckout) && keysCheckout >= 2 ? Math.trunc(keysCheckout) : 0
-  const checkinSetsFromFields = Number.isFinite(keysCheckin) && keysCheckin >= 2 ? Math.trunc(keysCheckin) : 0
-  const checkoutSetsFromTags = keyTags && keyTags.checkout_sets != null ? Number(keyTags.checkout_sets) : 0
-  const checkinSetsFromTags = keyTags && keyTags.checkin_sets != null ? Number(keyTags.checkin_sets) : 0
-  const checkoutSets = Math.max(checkoutSetsFromFields, Number.isFinite(checkoutSetsFromTags) ? Math.trunc(checkoutSetsFromTags) : 0)
-  const checkinSets = Math.max(checkinSetsFromFields, Number.isFinite(checkinSetsFromTags) ? Math.trunc(checkinSetsFromTags) : 0)
-  const showCheckout = isCleaningSource && !isCheckedOut && (checkoutSets >= 2 || keyTags?.show_checkout === true)
-  const showCheckin = isCleaningSource && (checkinSets >= 2 || keyTags?.show_checkin === true)
+  const keyRequirementTags = resolveKeyRequirementTags(task, { hasCheckout, hasCheckin, isCheckedOut })
+  const checkoutSets = keyRequirementTags.checkoutSets
+  const checkinSets = keyRequirementTags.checkinSets
+  const showCheckout = isCleaningSource && keyRequirementTags.showCheckout
+  const showCheckin = isCleaningSource && keyRequirementTags.showCheckin
   const restockItems = Array.isArray((task as any).restock_items) ? ((task as any).restock_items as any[]) : []
   const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
   const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'

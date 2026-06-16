@@ -35,6 +35,10 @@ export function isTaskManagerUser(user: any) {
   return hasAnyRole(user, ['admin', 'offline_manager', 'customer_service'])
 }
 
+export function canSwitchTaskMode(user: any) {
+  return isTaskManagerUser(user) && hasAnyRole(user, ['cleaner', 'cleaner_inspector'])
+}
+
 export function isTaskInspectorUser(user: any) {
   return hasAnyRole(user, ['cleaning_inspector', 'cleaner_inspector'])
 }

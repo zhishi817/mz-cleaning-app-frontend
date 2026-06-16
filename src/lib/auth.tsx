@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { AppState } from 'react-native'
 import { forgotPasswordApi, loginApi, meApi, unregisterExpoPushToken } from './api'
 import { API_BASE_URL, LOCAL_LOGIN_ENABLED, LOCAL_LOGIN_PASSWORD, LOCAL_LOGIN_ROLE, LOCAL_LOGIN_USERNAME } from '../config/env'
 import {
@@ -168,6 +169,16 @@ export function AuthProvider(props: { children: React.ReactNode }) {
   useEffect(() => {
     bootstrap()
   }, [bootstrap])
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'active' || status !== 'signedIn' || !token || token.startsWith('local:')) return
+      meApi(token)
+        .then((remoteUser) => applySignedInState(token, remoteUser))
+        .catch(() => null)
+    })
+    return () => subscription.remove()
+  }, [applySignedInState, status, token])
 
   useEffect(() => {
     return subscribeAuthInvalidated(() => {

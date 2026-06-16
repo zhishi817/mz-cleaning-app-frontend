@@ -1,7 +1,6 @@
 import { getJson, setJson } from './storage'
 import { API_BASE_URL } from '../config/env'
 import { listWorkTasks, type WorkTask } from './api'
-import { prependNotice } from './noticesStore'
 import EventSource from 'react-native-sse'
 import { notifyAuthInvalidated } from './authEvents'
 
@@ -52,14 +51,6 @@ type WorkTaskStreamEvent = {
   caused_by_user_id?: string | null
 }
 
-export type WorkTaskRealtimeNotice = {
-  id: string
-  title: string
-  body: string
-  data: Record<string, any>
-  causedByUserId: string | null
-}
-
 const STORAGE_PREFIX = 'mzstay.work_tasks.store.v1:'
 const RECONNECT_DELAY_MS = 1500
 const HEALTH_CHECK_INTERVAL_MS = 15000
@@ -105,7 +96,6 @@ const SAFE_PATCH_FIELDS = new Set([
 ])
 
 const listeners = new Set<() => void>()
-const realtimeNoticeListeners = new Set<(notice: WorkTaskRealtimeNotice) => void>()
 let state: StoreState = {
   items: [],
   bucketKey: null,
@@ -116,7 +106,6 @@ let state: StoreState = {
   sseConnectionState: 'idle',
 }
 let initializedKey: string | null = null
-const hydratedBuckets = new Set<string>()
 let activeRealtimeParams: ActiveRealtimeParams | null = null
 let activeStreamIdentity: StreamIdentity | null = null
 let streamEs: EventSource<'connected' | 'ping' | 'resync_required' | 'work_task_event'> | null = null
@@ -129,10 +118,6 @@ let fullSyncQueued = false
 
 function emit() {
   for (const cb of listeners) cb()
-}
-
-function emitRealtimeNotice(notice: WorkTaskRealtimeNotice) {
-  for (const cb of realtimeNoticeListeners) cb(notice)
 }
 
 function normalizeBase(base: string) {
@@ -465,92 +450,6 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
   emit()
 }
 
-function buildRealtimeNotice(event: WorkTaskStreamEvent): WorkTaskRealtimeNotice | null {
-  const payload = event.payload && typeof event.payload === 'object' ? event.payload : {}
-  const rawNotice = payload.notice && typeof payload.notice === 'object' ? payload.notice : null
-  const causedByUserId = String(event.caused_by_user_id || '').trim() || null
-  if (rawNotice) {
-    const data = rawNotice.data && typeof rawNotice.data === 'object' ? { ...rawNotice.data } : {}
-    const id = String(rawNotice.id || data.event_id || event.event_id || '').trim()
-    const title = String(rawNotice.title || '').trim()
-    const body = String(rawNotice.body || '').trim()
-    if (!id || !title) return null
-    return {
-      id,
-      title,
-      body,
-      data: { ...data, event_id: String(data.event_id || id) },
-      causedByUserId,
-    }
-  }
-
-  const fields = new Set((Array.isArray(event.changed_fields) ? event.changed_fields : []).map((field) => String(field || '').trim()))
-  const patch = payload.patch && typeof payload.patch === 'object' ? payload.patch : {}
-  const taskIndex = findTaskIndexesForEvent(event)[0]
-  const task = Number.isInteger(taskIndex) ? state.items[taskIndex] : null
-  const propertyCode = String(task?.property?.code || '').trim()
-  const taskIds = Array.from(
-    new Set(
-      [event.task_id, ...(Array.isArray(event.source_ref_ids) ? event.source_ref_ids : [])]
-        .map((value) => String(value || '').replace(/^cleaning_task:/, '').trim())
-        .filter(Boolean),
-    ),
-  )
-  const baseData = {
-    entity: 'cleaning_task',
-    entityId: taskIds[0] || '',
-    action: 'open_task',
-    task_ids: taskIds,
-    property_code: propertyCode,
-    event_id: String(event.event_id || '').trim(),
-  }
-
-  if (fields.has('checked_out_at')) {
-    const checkedOutAt = patch.checked_out_at == null ? null : String(patch.checked_out_at)
-    const cancelled = !checkedOutAt
-    const keysRequired = Number((task as any)?.keys_required || 0)
-    return {
-      id: String(event.event_id || `guest_checkout:${propertyCode}:${checkedOutAt || 'cancelled'}`),
-      title: propertyCode ? `${cancelled ? '待退房' : '已退房'}：${propertyCode}` : (cancelled ? '待退房' : '已退房'),
-      body: cancelled ? '房源还未退房，待退房' : (keysRequired >= 2 ? `已退房（${keysRequired}把钥匙）` : '已退房'),
-      data: {
-        ...baseData,
-        kind: cancelled ? 'guest_checked_out_cancelled' : 'guest_checked_out',
-        checked_out_at: checkedOutAt,
-        keys_required: Number.isFinite(keysRequired) && keysRequired > 0 ? keysRequired : null,
-      },
-      causedByUserId,
-    }
-  }
-
-  const keyFields = ['keys_required', 'keys_required_checkout', 'keys_required_checkin', 'key_tags']
-  if (keyFields.some((field) => fields.has(field))) {
-    const keysRequired = Number(patch.keys_required ?? patch.keys_required_checkin ?? patch.keys_required_checkout ?? (task as any)?.keys_required ?? 1)
-    const count = Number.isFinite(keysRequired) ? Math.max(1, Math.min(2, Math.trunc(keysRequired))) : 1
-    return {
-      id: String(event.event_id || `manager_keys:${propertyCode}:${count}`),
-      title: propertyCode ? `任务信息更新：${propertyCode}` : '任务信息更新',
-      body: `需挂钥匙套数：${count}`,
-      data: { ...baseData, kind: 'cleaning_task_manager_fields_updated', keys_required: count },
-      causedByUserId,
-    }
-  }
-
-  if (fields.has('status') && String(patch.status || '').trim().toLowerCase() === 'keys_hung') {
-    const keysRequired = Number((task as any)?.keys_required || 1)
-    const count = Number.isFinite(keysRequired) ? Math.max(1, Math.min(2, Math.trunc(keysRequired))) : 1
-    return {
-      id: String(event.event_id || `keys_hung:${propertyCode}`),
-      title: propertyCode ? `已挂钥匙：${propertyCode}` : '已挂钥匙',
-      body: count >= 2 ? '已挂2套钥匙' : '已挂钥匙',
-      data: { ...baseData, kind: 'keys_hung', keys_required: count },
-      causedByUserId,
-    }
-  }
-
-  return null
-}
-
 function processSseBlock(block: { type?: string; data?: string | null; lastEventId?: string | null }) {
   const eventName = String((block as any)?.type || 'message').trim()
   const eventId = String((block as any)?.lastEventId || '').trim()
@@ -577,8 +476,6 @@ function processSseBlock(block: { type?: string; data?: string | null; lastEvent
   setConnectionState('open')
   const normalizedEvent = data && typeof data === 'object' ? ({ ...data, event_id: (data as any).event_id || eventId } as WorkTaskStreamEvent) : ({ event_id: eventId } as WorkTaskStreamEvent)
   applyWorkTaskEvent(normalizedEvent)
-  const realtimeNotice = buildRealtimeNotice(normalizedEvent)
-  if (realtimeNotice) emitRealtimeNotice(realtimeNotice)
 }
 
 function connectWorkTasksRealtime(forceReconnect = false) {
@@ -670,11 +567,6 @@ export function makeWorkTasksBucketKey(params: { userId: string; date_from: stri
 export function subscribeWorkTasks(cb: () => void) {
   listeners.add(cb)
   return () => listeners.delete(cb)
-}
-
-export function subscribeWorkTaskRealtimeNotices(cb: (notice: WorkTaskRealtimeNotice) => void) {
-  realtimeNoticeListeners.add(cb)
-  return () => realtimeNoticeListeners.delete(cb)
 }
 
 export function getWorkTasksSnapshot() {
@@ -783,63 +675,6 @@ function mapRemoteTask(t: WorkTask): WorkTaskItem {
   }
 }
 
-function titleForTask(t: WorkTaskItem) {
-  const code = String(t?.property?.code || '').trim()
-  if (code) return code
-  const title = String(t?.title || '').trim()
-  if (title) return title
-  return '任务'
-}
-
-function hashText(s: string) {
-  let h = 0
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
-  return String(h)
-}
-
-function normalizeLine(s: any) {
-  return String(s ?? '').replace(/\s+/g, ' ').trim()
-}
-
-function normalizeKeyCountForNotice(task: any) {
-  const keyTags = task?.key_tags && typeof task.key_tags === 'object' ? task.key_tags : null
-  const candidates = [
-    task?.keys_required,
-    task?.keys_required_checkout,
-    task?.keys_required_checkin,
-    keyTags?.checkout_sets,
-    keyTags?.checkin_sets,
-  ]
-    .map((x) => Number(x ?? 0))
-    .filter((x) => Number.isFinite(x) && x > 0)
-  const n = candidates.length ? Math.max(...candidates) : 1
-  return Math.max(1, Math.min(2, Math.trunc(n)))
-}
-
-function formatUpdatedFields(prev: WorkTaskItem, next: WorkTaskItem) {
-  const prevCheckout = normalizeLine((prev as any)?.start_time)
-  const nextCheckout = normalizeLine((next as any)?.start_time)
-  const prevCheckin = normalizeLine((prev as any)?.end_time)
-  const nextCheckin = normalizeLine((next as any)?.end_time)
-  const prevOld = normalizeLine((prev as any)?.old_code)
-  const nextOld = normalizeLine((next as any)?.old_code)
-  const prevNew = normalizeLine((prev as any)?.new_code)
-  const nextNew = normalizeLine((next as any)?.new_code)
-  const prevNeed = normalizeLine((prev as any)?.guest_special_request)
-  const nextNeed = normalizeLine((next as any)?.guest_special_request)
-  const prevKeys = normalizeKeyCountForNotice(prev)
-  const nextKeys = normalizeKeyCountForNotice(next)
-
-  const lines: string[] = []
-  if (prevCheckout !== nextCheckout) lines.push(`退房时间：${nextCheckout || '-'}（原：${prevCheckout || '-'}）`)
-  if (prevCheckin !== nextCheckin) lines.push(`入住时间：${nextCheckin || '-'}（原：${prevCheckin || '-'}）`)
-  if (prevOld !== nextOld) lines.push(`旧密码：${nextOld || '-'}（原：${prevOld || '-'}）`)
-  if (prevNew !== nextNew) lines.push(`新密码：${nextNew || '-'}（原：${prevNew || '-'}）`)
-  if (prevNeed !== nextNeed) lines.push(`客人需求：${nextNeed || '-'}（原：${prevNeed || '-'}）`)
-  if (prevKeys !== nextKeys) lines.push(`需挂钥匙套数：${nextKeys}（原：${prevKeys}）`)
-  return { lines, nextFieldsKey: hashText(JSON.stringify({ nextCheckout, nextCheckin, nextOld, nextNew, nextNeed, nextKeys })) }
-}
-
 export async function refreshWorkTasksFromServer(params: {
   token: string
   userId: string
@@ -849,102 +684,8 @@ export async function refreshWorkTasksFromServer(params: {
 }) {
   const bucketKey = makeWorkTasksBucketKey({ userId: params.userId, date_from: params.date_from, date_to: params.date_to, view: params.view })
   await initWorkTasksStore({ bucketKey })
-  const prevItems = state.items || []
-  const shouldEmitDiffNotices = hydratedBuckets.has(bucketKey)
   const remote = await listWorkTasks(params.token, { date_from: params.date_from, date_to: params.date_to, view: params.view })
   const items = remote.map(mapRemoteTask).filter((t) => t.date !== 'unknown')
-
-  try {
-    if (shouldEmitDiffNotices) {
-      const prevById = new Map(prevItems.map((x) => [x.id, x]))
-      for (const it of items) {
-        const prev = prevById.get(it.id) || null
-        if (!prev) continue
-        if (String(it.source_type || '').toLowerCase() !== 'cleaning_tasks') continue
-        const code = titleForTask(it)
-        const addr = String(it?.property?.address || '').trim()
-
-        const prevCheckedOut = String((prev as any)?.checked_out_at || '').trim()
-        const nextCheckedOut = String((it as any)?.checked_out_at || '').trim()
-        if (!prevCheckedOut && nextCheckedOut) {
-          const body = [code ? `房源：${code}` : '', addr ? `地址：${addr}` : '', '状态：已退房'].filter(Boolean).join('\n')
-          await prependNotice({
-            id: `guest_checked_out:${code}:${nextCheckedOut}`,
-            type: 'update',
-            title: `已退房：${code}`,
-            summary: '已退房',
-            content: body || '已退房',
-            data: {
-              kind: 'guest_checked_out',
-              task_ids: Array.isArray((it as any)?.source_ids) ? (it as any).source_ids : [],
-              property_code: code,
-              checked_out_at: nextCheckedOut,
-            },
-          })
-        }
-        if (prevCheckedOut && !nextCheckedOut) {
-          const body = [code ? `房源：${code}` : '', addr ? `地址：${addr}` : '', '状态：房源还未退房，待退房'].filter(Boolean).join('\n')
-          await prependNotice({
-            id: `guest_checked_out_cancelled:${code}:${prevCheckedOut}`,
-            type: 'update',
-            title: `待退房：${code}`,
-            summary: '房源还未退房，待退房',
-            content: body || '房源还未退房，待退房',
-            data: {
-              kind: 'guest_checked_out_cancelled',
-              task_ids: Array.isArray((it as any)?.source_ids) ? (it as any).source_ids : [],
-              property_code: code,
-              checked_out_at: prevCheckedOut,
-            },
-          })
-        }
-
-        const prevFields = JSON.stringify({
-          checkout_time: String((prev as any)?.start_time || ''),
-          checkin_time: String((prev as any)?.end_time || ''),
-          old_code: String((prev as any)?.old_code || ''),
-          new_code: String((prev as any)?.new_code || ''),
-          guest_special_request: String((prev as any)?.guest_special_request || ''),
-          keys_required: normalizeKeyCountForNotice(prev),
-        })
-        const nextFields = JSON.stringify({
-          checkout_time: String((it as any)?.start_time || ''),
-          checkin_time: String((it as any)?.end_time || ''),
-          old_code: String((it as any)?.old_code || ''),
-          new_code: String((it as any)?.new_code || ''),
-          guest_special_request: String((it as any)?.guest_special_request || ''),
-          keys_required: normalizeKeyCountForNotice(it),
-        })
-        if (prevFields !== nextFields) {
-          const detail = formatUpdatedFields(prev as any, it as any)
-          const body = [
-            code ? `房源：${code}` : '',
-            addr ? `地址：${addr}` : '',
-            '任务信息已更新：',
-            ...(detail.lines.length ? detail.lines : ['时间/密码/客需（已更新）']),
-          ]
-            .filter(Boolean)
-            .join('\n')
-          await prependNotice({
-            id: `manager_fields:${code}:${detail.nextFieldsKey}`,
-            type: 'update',
-            title: `任务信息更新：${code}`,
-            summary: detail.lines[0] ? detail.lines[0].slice(0, 30) : '信息已更新',
-            content: body,
-            data: {
-              kind: 'cleaning_task_manager_fields_updated',
-              entity: 'cleaning_task',
-              entityId: String((it as any)?.source_id || it.id || ''),
-              task_ids: Array.isArray((it as any)?.source_ids) ? (it as any).source_ids : [],
-              property_code: code,
-              fields_key: detail.nextFieldsKey,
-              event_id: `manager_fields:${code}:${detail.nextFieldsKey}`,
-            },
-          })
-        }
-      }
-    }
-  } catch {}
 
   const now = new Date().toISOString()
   clearBucketDirty(bucketKey)
@@ -956,6 +697,5 @@ export async function refreshWorkTasksFromServer(params: {
     lastFullSyncTimestamp: now,
   }
   await persist()
-  hydratedBuckets.add(bucketKey)
   emit()
 }

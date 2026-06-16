@@ -8,10 +8,10 @@ import * as Notifications from 'expo-notifications'
 import Constants from 'expo-constants'
 import { useAuth } from '../lib/auth'
 import { useI18n } from '../lib/i18n'
-import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, subscribeWorkTaskRealtimeNotices } from '../lib/workTasksStore'
-import { getNoticesSnapshot, initNoticesStore, prependNotice, subscribeNotices, upsertNotices } from '../lib/noticesStore'
-import { listInboxNotifications, registerExpoPushToken } from '../lib/api'
-import { resolveNoticeCreatedAt } from '../lib/noticeTime'
+import { findWorkTaskItemByAnyId, getWorkTasksSnapshot } from '../lib/workTasksStore'
+import { getNoticesSnapshot, initNoticesStore, subscribeNotices } from '../lib/noticesStore'
+import { registerExpoPushToken } from '../lib/api'
+import { syncInboxNotifications } from '../lib/notificationInbox'
 import { getPushDeviceId, setRegisteredExpoPushToken } from '../lib/pushTokenStorage'
 import { isTaskManagerUser } from '../lib/roles'
 import type { CompanyGuideRole } from '../lib/api'
@@ -127,35 +127,6 @@ function resolveTaskNoticeNavigation(params: { taskRouteId: string; role: string
   if (isManager && isCleaningTask) return { screen: 'ManagerDailyTask', params: { taskId: params.taskRouteId } }
   if (isInspector && isInspection) return { screen: 'InspectionPanel', params: { taskId: params.taskRouteId } }
   return { screen: 'TaskDetail', params: { id: params.taskRouteId } }
-}
-
-function formatIncomingNotice(title0: string, body0: string, data0: any) {
-  const data = data0 && typeof data0 === 'object' ? data0 : {}
-  const kind = String(data?.kind || '').trim()
-  const propertyCode = String(data?.property_code || '').trim()
-  const photoUrl = String(data?.photo_url || '').trim()
-  const photoUrls = Array.isArray(data?.photo_urls) ? data.photo_urls.map((item: any) => String(item || '').trim()).filter(Boolean) : []
-  if (kind !== 'key_photo_uploaded') {
-    const summary = body0.split('\n')[0]?.slice(0, 60) || body0.slice(0, 60) || '通知'
-    const contentLines = [body0 || title0 || '通知']
-    if (kind === 'inspection_complete' && propertyCode && !/^房源[:：]/.test(contentLines[0] || '')) contentLines.unshift(`房源：${propertyCode}`)
-    if ((photoUrl || photoUrls.length) && kind === 'inspection_complete') {
-      contentLines.push(`照片数：${photoUrls.length || 1}`)
-    }
-    return {
-      title: title0 || '通知',
-      summary,
-      content: contentLines.filter(Boolean).join('\n'),
-    }
-  }
-  const title = propertyCode ? `钥匙已上传：${propertyCode}` : (title0 || '钥匙已上传')
-  const lines = [propertyCode ? `房源：${propertyCode}` : '', body0 || '清洁员已上传钥匙照片', photoUrl ? `照片：${photoUrl}` : ''].filter(Boolean)
-  const content = lines.join('\n')
-  return {
-    title,
-    summary: propertyCode ? `房源：${propertyCode}` : (body0 || '清洁员已上传钥匙照片'),
-    content,
-  }
 }
 
 function BootScreen() {
@@ -363,25 +334,6 @@ export default function RootNavigator() {
   const statusRef = useRef(status)
   const tokenRef = useRef(token)
   const userRef = useRef(user)
-  const pendingLocalNoticeTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
-  const recentRealtimeNoticeIdsRef = useRef(new Map<string, number>())
-
-  const realtimeNoticeKey = (data0: any) => {
-    const data = data0 && typeof data0 === 'object' ? data0 : {}
-    const kind = String(data?.kind || '').trim()
-    const propertyCode = String(data?.property_code || '').trim()
-    if (kind && propertyCode) return `${kind}:${propertyCode}`
-    return String(data?.event_id || '').trim()
-  }
-
-  const cancelPendingLocalNotice = (data: any) => {
-    const key = realtimeNoticeKey(data)
-    if (!key) return
-    const timer = pendingLocalNoticeTimersRef.current.get(key)
-    if (timer) clearTimeout(timer)
-    pendingLocalNoticeTimersRef.current.delete(key)
-  }
-
   useEffect(() => {
     statusRef.current = status
     tokenRef.current = token
@@ -435,112 +387,19 @@ export default function RootNavigator() {
   }, [status, token, user?.id])
 
   useEffect(() => {
-    if (status !== 'signedIn' || !String(user?.id || '').trim()) return
-    const unsubscribe = subscribeWorkTaskRealtimeNotices((notice) => {
-      const currentUserId = String(userRef.current?.id || '').trim()
-      if (notice.causedByUserId && notice.causedByUserId === currentUserId) return
-      if (!shouldShowTaskNoticeForCurrentUser(notice.data, userRef.current)) return
-
-      const now = Date.now()
-      const lastSeenAt = recentRealtimeNoticeIdsRef.current.get(notice.id) || 0
-      if (now - lastSeenAt < 10_000) return
-      recentRealtimeNoticeIdsRef.current.set(notice.id, now)
-      for (const [id, seenAt] of recentRealtimeNoticeIdsRef.current) {
-        if (now - seenAt > 60_000) recentRealtimeNoticeIdsRef.current.delete(id)
-      }
-
-      const data: Record<string, any> = { ...(notice.data || {}), event_id: String(notice.data?.event_id || notice.id) }
-      const key = realtimeNoticeKey(data) || notice.id
-      const previousTimer = pendingLocalNoticeTimersRef.current.get(key)
-      if (previousTimer) clearTimeout(previousTimer)
-      const timer = setTimeout(() => {
-        pendingLocalNoticeTimersRef.current.delete(key)
-        ;(async () => {
-          const formatted = formatIncomingNotice(notice.title, notice.body, data)
-          await initNoticesStore().catch(() => null)
-          await prependNotice({
-            id: String(data.event_id || notice.id),
-            type: String(data.kind || '').includes('key') || Number(data.keys_required || 0) >= 2 ? 'key' : 'update',
-            title: formatted.title,
-            summary: formatted.summary,
-            content: formatted.content,
-            data,
-          }).catch(() => null)
-          await Notifications.scheduleNotificationAsync({
-            content: {
-              title: notice.title,
-              body: notice.body,
-              sound: 'default',
-              data,
-            },
-            trigger: null,
-          }).catch(() => null)
-        })()
-      }, 1200)
-      pendingLocalNoticeTimersRef.current.set(key, timer)
-    })
-    return () => {
-      unsubscribe()
-      for (const timer of pendingLocalNoticeTimersRef.current.values()) clearTimeout(timer)
-      pendingLocalNoticeTimersRef.current.clear()
-    }
-  }, [status, user?.id])
-
-  useEffect(() => {
     if (pushListenerRef.current || pushResponseListenerRef.current) return
     pushListenerRef.current = Notifications.addNotificationReceivedListener((n) => {
       ;(async () => {
         try {
           if (statusRef.current !== 'signedIn' || !tokenRef.current || !String(userRef.current?.id || '').trim()) return
-          await initNoticesStore()
-          const title = String(n?.request?.content?.title || '').trim() || '通知'
-          const body = String(n?.request?.content?.body || '').trim()
           const data: any = n?.request?.content?.data || {}
-          const kind = String(data?.kind || '').trim()
-          const propertyCode = String(data?.property_code || '').trim()
-          const checkedOutAt = String(data?.checked_out_at || '').trim()
-          const eventId = String(data?.event_id || '').trim()
-          const fieldsKey = String(data?.fields_key || '').trim()
-          const reqId = String((n as any)?.request?.identifier || '').trim()
-          cancelPendingLocalNotice(data)
-          const formatted = formatIncomingNotice(title, body, data)
           if (!shouldShowTaskNoticeForCurrentUser(data, userRef.current)) return
-          const id0 =
-            kind === 'guest_checked_out' && propertyCode && checkedOutAt
-              ? `guest_checked_out:${propertyCode}:${checkedOutAt}`
-              : kind === 'guest_checked_out_cancelled' && propertyCode
-                ? `guest_checked_out_cancelled:${propertyCode}:${checkedOutAt || ''}`
-                : kind === 'cleaning_task_manager_fields_updated' && propertyCode && fieldsKey
-                  ? `manager_fields:${propertyCode}:${fieldsKey}`
-                  : eventId || reqId || `${Date.now()}`
-          await prependNotice({
-            id: String(id0),
-            type: 'update',
-            title: formatted.title,
-            summary: formatted.summary,
-            content: formatted.content,
-            data,
+          await syncInboxNotifications({
+            token: tokenRef.current,
+            limit: 30,
+            replace: true,
+            include: (notice) => shouldShowTaskNoticeForCurrentUser(notice.data, userRef.current),
           })
-          try {
-            if (tokenRef.current) {
-              const { items } = await listInboxNotifications(tokenRef.current, { limit: 30 })
-              const list = (items || []).map((it: any) => {
-                const ch = Array.isArray(it?.changes) ? it.changes.map((v: any) => String(v || '').toLowerCase()) : []
-                const type: 'key' | 'update' = String(it?.type || '').toUpperCase().includes('KEY') || ch.includes('keys') ? 'key' : 'update'
-                return {
-                  id: String(it?.event_id || it?.id || ''),
-                  type,
-                  title: String(it?.title || '通知'),
-                  summary: String(it?.body || ''),
-                  content: String(it?.body || ''),
-                  data: { ...(it?.data && typeof it.data === 'object' ? it.data : {}), _server_id: String(it?.id || ''), event_id: String(it?.event_id || '') },
-                  createdAt: resolveNoticeCreatedAt(it?.created_at, it?.event_id, it?.id) || new Date().toISOString(),
-                  unread: !it?.read_at,
-                }
-              }).filter((it: any) => shouldShowTaskNoticeForCurrentUser(it?.data || {}, userRef.current))
-              await upsertNotices(list, { replace: true })
-            }
-          } catch {}
         } catch {}
       })()
     })
@@ -548,60 +407,22 @@ export default function RootNavigator() {
       ;(async () => {
         try {
           if (statusRef.current !== 'signedIn' || !tokenRef.current || !String(userRef.current?.id || '').trim()) return
-          await initNoticesStore()
           const n: any = r?.notification
-          const title = String(n?.request?.content?.title || '').trim() || '通知'
-          const body = String(n?.request?.content?.body || '').trim()
           const data: any = n?.request?.content?.data || {}
-          const kind = String(data?.kind || '').trim()
-          const propertyCode = String(data?.property_code || '').trim()
-          const checkedOutAt = String(data?.checked_out_at || '').trim()
           const eventId = String(data?.event_id || '').trim()
-          const fieldsKey = String(data?.fields_key || '').trim()
-          const reqId = String(n?.request?.identifier || '').trim()
-          const formatted = formatIncomingNotice(title, body, data)
           if (!shouldShowTaskNoticeForCurrentUser(data, userRef.current)) return
-          const id0 =
-            kind === 'guest_checked_out' && propertyCode && checkedOutAt
-              ? `guest_checked_out:${propertyCode}:${checkedOutAt}`
-              : kind === 'guest_checked_out_cancelled' && propertyCode
-                ? `guest_checked_out_cancelled:${propertyCode}:${checkedOutAt || ''}`
-                : kind === 'cleaning_task_manager_fields_updated' && propertyCode && fieldsKey
-                  ? `manager_fields:${propertyCode}:${fieldsKey}`
-                  : eventId || reqId || `${Date.now()}`
-          await prependNotice({
-            id: String(id0),
-            type: 'update',
-            title: formatted.title,
-            summary: formatted.summary,
-            content: formatted.content,
-            data,
+          const { notices } = await syncInboxNotifications({
+            token: tokenRef.current,
+            limit: 30,
+            replace: true,
+            include: (notice) => shouldShowTaskNoticeForCurrentUser(notice.data, userRef.current),
           })
-          try {
-            if (tokenRef.current) {
-              const { items } = await listInboxNotifications(tokenRef.current, { limit: 30 })
-              const list = (items || []).map((it: any) => {
-                const ch = Array.isArray(it?.changes) ? it.changes.map((v: any) => String(v || '').toLowerCase()) : []
-                const type: 'key' | 'update' = String(it?.type || '').toUpperCase().includes('KEY') || ch.includes('keys') ? 'key' : 'update'
-                return {
-                  id: String(it?.event_id || it?.id || ''),
-                  type,
-                  title: String(it?.title || '通知'),
-                  summary: String(it?.body || ''),
-                  content: String(it?.body || ''),
-                  data: { ...(it?.data && typeof it.data === 'object' ? it.data : {}), _server_id: String(it?.id || ''), event_id: String(it?.event_id || '') },
-                  createdAt: resolveNoticeCreatedAt(it?.created_at, it?.event_id, it?.id) || new Date().toISOString(),
-                  unread: !it?.read_at,
-                }
-              }).filter((it: any) => shouldShowTaskNoticeForCurrentUser(it?.data || {}, userRef.current))
-              await upsertNotices(list, { replace: true })
-            }
-          } catch {}
+          const targetId = notices.find((notice) => String(notice.data?.event_id || notice.id) === eventId)?.id || ''
           if (navRef.isReady()) {
             navRef.navigate('Notices', { screen: 'NoticesList' } as any)
-            setTimeout(() => {
+            if (targetId) setTimeout(() => {
               try {
-                navRef.navigate('Notices', { screen: 'NoticeDetail', params: { id: String(id0) } } as any)
+                navRef.navigate('Notices', { screen: 'NoticeDetail', params: { id: targetId } } as any)
               } catch {}
             }, 0)
           }

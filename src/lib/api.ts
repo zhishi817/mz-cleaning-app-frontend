@@ -1338,6 +1338,72 @@ export async function uploadDayEndHandover(
   return (await parseJsonOrThrow(res)) as any
 }
 
+export type WarehouseKeyAction = 'borrow' | 'return' | 'handover'
+
+export type WarehouseKeyStatus = {
+  key: {
+    key_code: string
+    label: string
+    status: string
+    holder_user_id: string | null
+    holder_name: string | null
+    holder_phone_au?: string | null
+    updated_at: string | null
+    updated_by?: string | null
+  }
+  events: {
+    id: string
+    key_code: string
+    action: WarehouseKeyAction | string
+    actor_user_id: string
+    actor_name: string
+    from_user_id?: string | null
+    from_name?: string | null
+    to_user_id?: string | null
+    to_name?: string | null
+    note?: string | null
+    task_date?: string | null
+    created_at?: string | null
+  }[]
+  candidates: { id: string; name: string; role?: string }[]
+}
+
+export async function getWarehouseKeyStatus(token: string, params?: { key_code?: string; date?: string }) {
+  const sp = new URLSearchParams()
+  sp.set('key', String(params?.key_code || 'msq'))
+  if (params?.date) sp.set('date', String(params.date || '').slice(0, 10))
+  const urls = buildUrlCandidates(`cleaning-app/warehouse-key/status?${sp.toString()}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as WarehouseKeyStatus
+}
+
+export async function createWarehouseKeyEvent(
+  token: string,
+  params: { key_code?: string; action: WarehouseKeyAction; to_user_id?: string; note?: string; task_date?: string },
+) {
+  const urls = buildUrlCandidates('cleaning-app/warehouse-key/events')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      20000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
 export async function uploadLockboxVideo(token: string, cleaningTaskId: string, params: { media_url: string }) {
   const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/lockbox-video`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')

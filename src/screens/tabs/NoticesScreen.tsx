@@ -8,16 +8,16 @@ import { companyContentBody, companyContentSummary, companyGuideRoleLabel } from
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getJson, setJson } from '../../lib/storage'
-import { getNoticesSnapshot, initNoticesStore, markNoticeRead, refreshNotices, subscribeNotices, type Notice, upsertNotices } from '../../lib/noticesStore'
+import { getNoticesSnapshot, initNoticesStore, markNoticeRead, refreshNotices, subscribeNotices, type Notice } from '../../lib/noticesStore'
 import { getPresentedNotice } from '../../lib/noticePresentation'
-import { resolveNoticeCreatedAt } from '../../lib/noticeTime'
+import { syncInboxNotifications } from '../../lib/notificationInbox'
 import { isTaskInspectorUser, isTaskManagerUser, roleNamesOf } from '../../lib/roles'
+import { normalizeHttpUrl } from '../../lib/urls'
 import { getWorkTasksSnapshot, subscribeWorkTasks } from '../../lib/workTasksStore'
 import {
   listCompanyAnnouncementsForApp,
   listCompanySecretsForApp,
   listCustomerServiceManualsForApp,
-  listInboxNotifications,
   listWarehouseGuidesForApp,
   listWorkGuidesForApp,
   listWorkTasks,
@@ -26,7 +26,6 @@ import {
   type CustomerServiceManual,
   type CompanyGuide,
   type CompanyGuideRole,
-  type InboxNotificationItem,
   type WarehouseGuide,
   type WorkTask,
 } from '../../lib/api'
@@ -89,31 +88,6 @@ function typeMeta(type: Notice['type']) {
   if (type === 'update') return { bg: '#EFF6FF', fg: '#2563EB' }
   if (type === 'key') return { bg: '#DCFCE7', fg: '#16A34A' }
   return { bg: '#F3F4F6', fg: '#374151' }
-}
-
-function formatKeyPhotoNotice(title0: string, body0: string, data0: any) {
-  const data = data0 && typeof data0 === 'object' ? data0 : {}
-  const kind = String(data?.kind || '').trim()
-  const propertyCode = String(data?.property_code || '').trim()
-  const photoUrl = String(data?.photo_url || '').trim()
-  if (kind !== 'key_photo_uploaded') {
-    return { title: title0, summary: body0, content: body0 }
-  }
-  const title = propertyCode ? `钥匙已上传：${propertyCode}` : (title0 || '钥匙已上传')
-  const lines = [propertyCode ? `房源：${propertyCode}` : '', body0 || '清洁员已上传钥匙照片', photoUrl ? `照片：${photoUrl}` : ''].filter(Boolean)
-  const content = lines.join('\n')
-  return {
-    title,
-    summary: propertyCode ? `房源：${propertyCode}` : (body0 || '清洁员已上传钥匙照片'),
-    content,
-  }
-}
-
-function normalizeHttpUrl(raw: string | null | undefined) {
-  const u = String(raw || '').trim()
-  if (!u) return null
-  if (/^https?:\/\//i.test(u)) return u
-  return `https://${u}`
 }
 
 function taskStatusLabel(task: WorkTask) {
@@ -416,41 +390,13 @@ export default function NoticesScreen(props: Props) {
     return () => {}
   }, [isFocused, token, hasInit])
 
-  function inboxNoticeType(it: InboxNotificationItem): Notice['type'] {
-    const t0 = String(it.type || '').toUpperCase()
-    const changes = Array.isArray(it.changes) ? it.changes.map(v => String(v || '').toLowerCase()) : []
-    if (t0.includes('KEY') || changes.includes('keys')) return 'key'
-    return 'update'
-  }
-
-  function inboxToNotice(it: InboxNotificationItem) {
-    const createdAt = resolveNoticeCreatedAt(it.created_at, it.event_id, it.id) || new Date().toISOString()
-    const body = String(it.body || '').trim()
-    const title = String(it.title || '').trim() || '通知'
-    const unread = !it.read_at
-    const data = it.data && typeof it.data === 'object' ? it.data : {}
-    const formatted = formatKeyPhotoNotice(title, body, data)
-    return {
-      id: String(it.event_id || it.id || '').trim(),
-      type: inboxNoticeType(it),
-      title: formatted.title,
-      summary: formatted.summary,
-      content: formatted.content,
-      data: { ...data, _server_id: String(it.id || '').trim(), event_id: String(it.event_id || '').trim() },
-      createdAt,
-      unread,
-    }
-  }
-
   async function syncInbox(reset: boolean) {
     if (!token) return
     if (!hasMoreRemote && !reset) return
     const cur = reset ? null : cursor
-    const { items: rows, next_cursor } = await listInboxNotifications(token, { limit: 50, cursor: cur })
-    const list = (rows || []).map(inboxToNotice).filter(n => !!n.id)
-    await upsertNotices(list, { replace: reset })
-    setCursor(next_cursor)
-    setHasMoreRemote(!!next_cursor)
+    const { nextCursor } = await syncInboxNotifications({ token, limit: 50, cursor: cur, replace: reset })
+    setCursor(nextCursor)
+    setHasMoreRemote(!!nextCursor)
   }
 
   async function onRefresh() {
