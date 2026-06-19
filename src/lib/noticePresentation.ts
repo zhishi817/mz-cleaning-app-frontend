@@ -224,9 +224,9 @@ export function getPresentedNotice(notice: Notice) {
     const restockLabels = restockEntries.map((item: { label: string; qty: number | null }) => (item.qty != null ? `${item.label} x${item.qty}` : item.label))
     summary = restockLabels.length ? `${restockLabels.length} 项需要补货` : (kind === 'consumables_updated' ? '补品记录已更新' : '待检查')
     if (restockLabels.length) addDetail(contentLines, '待补货', restockLabels.join('、'))
-  } else if (kind === 'inspection_complete') {
-    title = eventTitle(propertyCode, '检查已完成')
-    summary = '检查结果和凭证已提交'
+  } else if (kind === 'inspection_complete' || kind === 'keys_hung') {
+    title = eventTitle(propertyCode, '房间已挂钥匙')
+    summary = '挂钥匙视频已上传，房间钥匙已挂好'
   } else if (kind === 'issue_reported') {
     title = eventTitle(propertyCode, '发现房源问题')
     summary = cleanText((data as any).issue_title) || cleanText(notice.summary).replace(/^收到新的问题反馈[:：]\s*/, '') || '请查看问题详情'
@@ -240,8 +240,8 @@ export function getPresentedNotice(notice: Notice) {
     title = eventTitle(propertyCode, '房间照片已提交')
     summary = '清洁完成照片已上传'
   } else if (kind === 'lockbox_video_uploaded') {
-    title = eventTitle(propertyCode, '挂钥匙视频已上传')
-    summary = '等待后续确认'
+    title = eventTitle(propertyCode, '房间已挂钥匙')
+    summary = '挂钥匙视频已上传，房间钥匙已挂好'
   } else if (kind === 'self_completed') {
     title = eventTitle(propertyCode, '清洁任务已完成')
     summary = '等待检查或确认'
