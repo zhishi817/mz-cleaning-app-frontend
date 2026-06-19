@@ -22,7 +22,7 @@ import {
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { prependNotice } from '../../lib/noticesStore'
-import { hasAnyRole, hasRole } from '../../lib/roles'
+import { hasAnyRole } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
 import { findWorkTaskItemByAnyId, patchWorkTaskItem, refreshWorkTasksFromServer, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
@@ -281,7 +281,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
   }, [])
 
   const task = useMemo(() => findWorkTaskItemByAnyId(props.route.params.taskId), [props.route.params.taskId, storeVersion])
-  const isCustomerService = hasRole(user, 'customer_service')
+  const canEditManagerFields = hasAnyRole(user, ['customer_service', 'admin', 'offline_manager'])
   const canSeeUnclean = hasAnyRole(user, ['admin', 'offline_manager'])
 
   const [checkoutTime, setCheckoutTime] = useState('')
@@ -435,7 +435,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
   async function onSave() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!task) return
-    if (!isCustomerService) return
+    if (!canEditManagerFields) return
     const ids = Array.isArray((task as any)?.source_ids) && (task as any).source_ids.length ? (task as any).source_ids : [String((task as any)?.source_id || '')]
     const taskIds = ids.map((x: any) => String(x || '').trim()).filter(Boolean)
     try {
@@ -671,9 +671,9 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const taskDate = String((task as any)?.scheduled_date || (task as any)?.date || '').trim()
   const isHistoricalTask = isBeforeToday(taskDate)
   const isTodayTask = taskDate.slice(0, 10) === ymd(new Date())
-  const canEditGeneralInfo = isCustomerService && !saving && !isHistoricalTask
+  const canEditGeneralInfo = canEditManagerFields && !saving && !isHistoricalTask
   const canEditLuggage = hasAnyRole(user, ['customer_service', 'admin', 'offline_manager']) && isTodayTask
-  const canEditKeysOnly = isCustomerService && !saving
+  const canEditKeysOnly = canEditManagerFields && !saving
 
   const uncleanPhotos = inspectionItems.filter((x) => x.area === 'unclean')
   const roomPhotoAreas = ['living', 'sofa', 'bedroom', 'kitchen'] as const
@@ -737,7 +737,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
 
   async function onToggleCheckedOut() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
-    if (!isCustomerService) return
+    if (!canEditManagerFields) return
     if (!task) return
     const taskId = String(task.id)
     const nextCheckedOutAt = checkedOutAt ? null : new Date().toISOString()
@@ -794,7 +794,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
         <View style={styles.card}>
           <View style={styles.sectionHead}>
             <Text style={styles.sectionTitle}>客服信息</Text>
-            {!isCustomerService ? <Text style={styles.mutedSmall}>仅客服可编辑</Text> : null}
+            {!canEditManagerFields ? <Text style={styles.mutedSmall}>仅客服、admin、线下经理可编辑</Text> : null}
           </View>
           {isHistoricalTask ? <Text style={styles.mutedSmall}>历史任务仅可修改需挂钥匙套数；时间、密码、客需不可修改</Text> : null}
           <View style={styles.row2Compact}>
@@ -858,8 +858,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
           </View>
           <Pressable
             onPress={onSave}
-            disabled={!isCustomerService || saving}
-            style={({ pressed }) => [styles.primaryBtnFull, !isCustomerService || saving ? styles.primaryBtnDisabled : null, pressed ? styles.pressed : null]}
+            disabled={!canEditManagerFields || saving}
+            style={({ pressed }) => [styles.primaryBtnFull, !canEditManagerFields || saving ? styles.primaryBtnDisabled : null, pressed ? styles.pressed : null]}
           >
             <Text style={styles.primaryText}>{saving ? t('common_loading') : '保存修改'}</Text>
           </Pressable>

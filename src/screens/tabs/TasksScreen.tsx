@@ -2038,7 +2038,7 @@ function showBanner(title: string, message: string) {
               const checkedOutAt = String((task as any).checked_out_at || '').trim()
               const isCheckedOut = !!checkedOutAt
               const isHistoricalTask = isBeforeToday(String(task.scheduled_date || (task as any).date || ''))
-              const isCustomerService = roleNames.includes('customer_service')
+              const canEditManagerFields = roleNames.includes('customer_service') || roleNames.includes('admin') || roleNames.includes('offline_manager')
               const isManager = canManagerMode && mode === 'manager'
               const isInspectorUser = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
               const cleanerName = String((task as any).cleaner_name || '').trim()
@@ -2450,7 +2450,7 @@ function showBanner(title: string, message: string) {
 
                   {isCleaningSource && isManager ? (
                     <View style={styles.actionsRow}>
-                      {isCustomerService && isCheckoutTask ? (
+                      {canEditManagerFields && isCheckoutTask ? (
                         <Pressable
                           onPress={async () => {
                             if (isHistoricalTask) return
