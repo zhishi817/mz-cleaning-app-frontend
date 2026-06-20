@@ -63,6 +63,26 @@ test('cleaning and inspection notices show no guest request and hide the default
   }
 })
 
+test('keys hung notice uses room-code title and clear summary', () => {
+  const presented = getPresentedNotice(notice({
+    type: 'key',
+    title: '房间已挂钥匙',
+    summary: '检查员已上传挂钥匙视频，房间钥匙已挂好',
+    content: '检查员已上传挂钥匙视频，房间钥匙已挂好',
+    data: {
+      kind: 'keys_hung',
+      property_code: 'Aura2707',
+      task_date: '2026-06-15',
+      actor_name: '检查员 A',
+    },
+  }))
+
+  expect(presented.title).toBe('Aura2707 · 房间已挂钥匙')
+  expect(presented.summary).toBe('挂钥匙视频已上传，房间钥匙已挂好')
+  expect(presented.content).toContain('时间：2026-06-15')
+  expect(presented.content).toContain('操作人：检查员 A')
+})
+
 test('key requirement change uses concise before and after values', () => {
   const presented = getPresentedNotice(notice({
     type: 'key',

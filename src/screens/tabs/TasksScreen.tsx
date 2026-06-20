@@ -1510,8 +1510,9 @@ function showBanner(title: string, message: string) {
       for (const t of fresh) notifiedInspectionsRef.current[`hung:${t.id}`] = true
       const first = fresh[0]
       const code = String(first.property?.code || first.title || '').trim()
-      const msg = fresh.length > 1 ? `${code} 等 ${fresh.length} 个已挂钥匙` : `${code} 已挂钥匙`
-      showBanner('已挂钥匙', msg)
+      const title = code ? `${code} · 房间已挂钥匙` : '房间已挂钥匙'
+      const msg = fresh.length > 1 ? `${code} 等 ${fresh.length} 个房间已挂钥匙` : '挂钥匙视频已上传，房间钥匙已挂好'
+      showBanner(title, msg)
       for (const t of fresh) {
         const code2 = String(t.property?.code || t.title || '').trim()
         const addr2 = String(t.property?.address || '').trim()
@@ -1519,9 +1520,10 @@ function showBanner(title: string, message: string) {
         await prependNotice({
           id: `insp:keys_hung:${t.id}`,
           type: 'key',
-          title: code2 ? `已挂钥匙：${code2}` : '已挂钥匙',
-          summary: '检查完成',
+          title: code2 ? `${code2} · 房间已挂钥匙` : '房间已挂钥匙',
+          summary: '挂钥匙视频已上传，房间钥匙已挂好',
           content: body || '状态：已挂钥匙',
+          data: { kind: 'keys_hung', property_code: code2 || undefined, task_id: t.id },
         })
       }
     })()
