@@ -319,6 +319,7 @@ function statusLabel(status: string) {
   if (s === 'keys_hung') return { text: '已挂钥匙', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
   if (s === 'in_progress') return { text: '进行中', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
   if (s === 'assigned') return { text: '已分配', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
+  if (s === 'todo' || s === 'pending' || s === 'unassigned') return { text: '未分配', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
   if (s === 'cancelled' || s === 'canceled') return { text: '已取消', pill: styles.statusGray, textStyle: styles.statusTextGray }
   return { text: '待处理', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
 }
@@ -336,6 +337,9 @@ function statusLabelForTask(task: WorkTaskItem, roleNames: string[]) {
   }
   if (source === 'cleaning_tasks' && kind === 'cleaning') {
     const isCleanerView = isCleanerRole(roleNames)
+    const cleanerName = String((task as any).cleaner_name || '').trim()
+    const inspectorName = String((task as any).inspector_name || '').trim()
+    const hasExecutor = !!(cleanerName || inspectorName || String((task as any).assignee_id || '').trim() || String((task as any).inspector_id || '').trim())
     const inspectionStatus = String((task as any).inspection_status || '').trim().toLowerCase()
     const hasInspection = Array.isArray((task as any).inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
     const inspectionMode = effectiveInspectionMode(task as any)
@@ -351,6 +355,7 @@ function statusLabelForTask(task: WorkTaskItem, roleNames: string[]) {
     }
     const checkedOutAt = String((task as any).checked_out_at || '').trim()
     if (s === 'in_progress' || s === 'cleaning') return { text: '进行中', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
+    if (!hasExecutor && !checkedOutAt) return { text: '未分配', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
     if (s !== 'cancelled' && s !== 'canceled') {
       if (checkedOutAt) return { text: '已退房', pill: styles.statusPurple, textStyle: styles.statusTextPurple }
       return { text: '已分配', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
