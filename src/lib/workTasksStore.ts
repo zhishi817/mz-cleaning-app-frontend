@@ -61,6 +61,8 @@ const SAFE_PATCH_FIELDS = new Set([
   'scheduled_date',
   'start_time',
   'end_time',
+  'checkout_time',
+  'checkin_time',
   'urgency',
   'title',
   'summary',
@@ -331,6 +333,26 @@ function mergePatchIntoTask(task: WorkTaskItem, event: WorkTaskStreamEvent) {
       continue
     }
     ;(next as any)[field] = field === 'status' ? projectCleaningStatusForTask(next, value) : value
+  }
+  if (changedFields.includes('checkout_time') && !changedFields.includes('start_time')) {
+    ;(next as any).start_time = (next as any).checkout_time ?? null
+  }
+  if (changedFields.includes('checkin_time') && !changedFields.includes('end_time')) {
+    ;(next as any).end_time = (next as any).checkin_time ?? null
+  }
+  if (
+    !changedFields.includes('summary') &&
+    (changedFields.includes('checkout_time') || changedFields.includes('checkin_time') || changedFields.includes('start_time') || changedFields.includes('end_time'))
+  ) {
+    const checkoutTime = String((next as any).start_time || (next as any).checkout_time || '').trim()
+    const checkinTime = String((next as any).end_time || (next as any).checkin_time || '').trim()
+    ;(next as any).summary = checkoutTime && checkinTime
+      ? `${checkoutTime}退房 ${checkinTime}入住`
+      : checkoutTime
+        ? `${checkoutTime}退房`
+        : checkinTime
+          ? `${checkinTime}入住`
+          : (next as any).summary
   }
   const date = String(next.scheduled_date || '').slice(0, 10)
   next.date = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : task.date

@@ -607,6 +607,68 @@ export async function updateCleaningTaskManagerFields(
   return (await parseJsonOrThrow(res)) as any
 }
 
+export async function createManualCleaningTask(
+  token: string,
+  params: {
+    create_mode: 'checkout' | 'checkin' | 'turnover' | 'stayover'
+    task_date: string
+    property_id: string
+    status?: 'pending' | 'assigned'
+    old_code?: string | null
+    new_code?: string | null
+    checkout_time?: string | null
+    checkin_time?: string | null
+    keys_required?: 1 | 2 | null
+    nights_override?: number | null
+    guest_special_request?: string | null
+  },
+) {
+  const urls = buildUrlCandidates('cleaning/tasks')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function createCleaningOfflineTask(
+  token: string,
+  params: {
+    date: string
+    task_type: 'property' | 'company' | 'other'
+    title: string
+    content?: string | null
+    kind: string
+    status: 'todo' | 'done'
+    urgency: 'low' | 'medium' | 'high' | 'urgent'
+    property_id?: string | null
+    assignee_id?: string | null
+  },
+) {
+  const urls = buildUrlCandidates('cleaning/offline-tasks')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
 export async function saveGuestLuggageNotice(
   token: string,
   params: { task_ids: string[]; note?: string | null; photo_urls: string[] },
@@ -1299,7 +1361,7 @@ export async function listCleaningAppPropertyCodes(token: string, params?: { q?:
   }
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as Array<{ id: string; code: string }>
+  return (await parseJsonOrThrow(res)) as Array<{ id: string; code: string; region?: string | null }>
 }
 
 export async function uploadDayEndHandover(
@@ -1830,7 +1892,8 @@ export type CompanyContentItem = {
 }
 
 export type CompanyAnnouncement = CompanyContentItem & { page_type?: 'announce' | null }
-export type CompanyGuide = CompanyContentItem & { page_type?: 'doc' | null; category?: 'work_guide' | null }
+export type CompanyDocument = CompanyContentItem & { page_type?: 'doc' | null; category?: CompanyContentCategory | null }
+export type CompanyGuide = CompanyDocument
 export type CustomerServiceManual = CompanyContentItem & { page_type?: 'doc' | null; category?: 'customer_service_manual' | null }
 export type WarehouseGuide = CompanyContentItem & { page_type?: 'warehouse' | null }
 
@@ -1858,6 +1921,10 @@ async function listCompanyContentForApp(
 
 export async function listCompanyAnnouncementsForApp(token: string) {
   return (await listCompanyContentForApp(token, { type: 'announce' })) as CompanyAnnouncement[]
+}
+
+export async function listCompanyDocsForApp(token: string) {
+  return (await listCompanyContentForApp(token, { type: 'doc' })) as CompanyDocument[]
 }
 
 export async function listWorkGuidesForApp(token: string) {

@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { reorderCleaningTasks, reorderWorkTasks } from '../../lib/api'
+import { createCleaningOfflineTask, createManualCleaningTask, listCleaningAppPropertyCodes, reorderCleaningTasks, reorderWorkTasks } from '../../lib/api'
 import { markGuestCheckedOutByOrder, markGuestCheckedOutByTasks } from '../../lib/api'
 import { listMzappAlerts, markMzappAlertRead } from '../../lib/api'
 import { getMyProfile } from '../../lib/api'
@@ -40,6 +40,8 @@ import {
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 
 type Period = 'today' | 'week' | 'month'
+type QuickCreateMode = 'checkout' | 'checkin' | 'offline'
+type QuickCreatePropertyOption = { id: string; code: string; region?: string | null }
 type Props = NativeStackScreenProps<TasksStackParamList, 'TasksList'>
 
 function pad2(n: number) {
@@ -475,6 +477,20 @@ export default function TasksScreen(props: Props) {
   const [warehouseKeyBusy, setWarehouseKeyBusy] = useState(false)
   const [warehouseTransferOpen, setWarehouseTransferOpen] = useState(false)
   const [warehouseNote, setWarehouseNote] = useState('')
+  const [quickCreateOpen, setQuickCreateOpen] = useState(false)
+  const [quickCreateMode, setQuickCreateMode] = useState<QuickCreateMode>('checkin')
+  const [quickCreateBusy, setQuickCreateBusy] = useState(false)
+  const [quickCreateProperty, setQuickCreateProperty] = useState('')
+  const [quickCreateDate, setQuickCreateDate] = useState(() => ymd(new Date()))
+  const [quickCreateTime, setQuickCreateTime] = useState('3pm')
+  const [quickCreateOldCode, setQuickCreateOldCode] = useState('')
+  const [quickCreateNewCode, setQuickCreateNewCode] = useState('')
+  const [quickCreateNights, setQuickCreateNights] = useState('')
+  const [quickCreateGuestNote, setQuickCreateGuestNote] = useState('')
+  const [quickCreateOfflineTitle, setQuickCreateOfflineTitle] = useState('')
+  const [quickCreateOfflineContent, setQuickCreateOfflineContent] = useState('')
+  const [quickCreateUrgency, setQuickCreateUrgency] = useState<'low' | 'medium' | 'high' | 'urgent'>('medium')
+  const [quickCreatePropertyOptions, setQuickCreatePropertyOptions] = useState<QuickCreatePropertyOption[]>([])
   const bannerTimerRef = useRef<any>(null)
   const [search, setSearch] = useState('')
   const weekRowRef = useRef<ScrollView>(null)
@@ -1360,6 +1376,113 @@ function showBanner(title: string, message: string) {
     bannerTimerRef.current = setTimeout(() => setBanner(null), 4000)
   }
 
+  function openQuickCreate(mode0: QuickCreateMode = 'checkin') {
+    setQuickCreateMode(mode0)
+    setQuickCreateDate(selectedDate)
+    setQuickCreateTime(mode0 === 'checkout' ? '10am' : '3pm')
+    setQuickCreateProperty('')
+    setQuickCreateOldCode('')
+    setQuickCreateNewCode('')
+    setQuickCreateNights('')
+    setQuickCreateGuestNote('')
+    setQuickCreateOfflineTitle('')
+    setQuickCreateOfflineContent('')
+    setQuickCreateUrgency('medium')
+    setQuickCreateOpen(true)
+  }
+
+  function resolveQuickCreateProperty(value: string) {
+    const raw = String(value || '').trim()
+    if (!raw) return null
+    const upper = raw.toUpperCase()
+    return quickCreatePropertyOptions.find((item) => String(item.code || '').trim().toUpperCase() === upper || String(item.id || '').trim().toUpperCase() === upper) || null
+  }
+
+  async function submitQuickCreate() {
+    if (!token || !user?.id) return
+    const property = String(quickCreateProperty || '').trim()
+    const date = String(quickCreateDate || '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      Alert.alert(t('common_error'), '日期格式应为 YYYY-MM-DD')
+      return
+    }
+    try {
+      setQuickCreateBusy(true)
+      if (quickCreateMode === 'offline') {
+        const title = String(quickCreateOfflineTitle || '').trim()
+        if (!title) {
+          Alert.alert(t('common_error'), '请填写线下任务标题')
+          return
+        }
+        const propertyOption = property ? resolveQuickCreateProperty(property) : null
+        if (property && !propertyOption) {
+          Alert.alert(t('common_error'), '请从房号提示中选择房号')
+          return
+        }
+        await createCleaningOfflineTask(token, {
+          date,
+          task_type: 'other',
+          title,
+          content: String(quickCreateOfflineContent || '').trim(),
+          kind: 'manual',
+          status: 'todo',
+          urgency: quickCreateUrgency,
+          property_id: propertyOption?.id || null,
+          assignee_id: null,
+        })
+      } else {
+        if (!property) {
+          Alert.alert(t('common_error'), '请填写房号')
+          return
+        }
+        const propertyOption = resolveQuickCreateProperty(property)
+        if (!propertyOption) {
+          Alert.alert(t('common_error'), '请从房号提示中选择房号')
+          return
+        }
+        const time = String(quickCreateTime || '').trim() || (quickCreateMode === 'checkout' ? '10am' : '3pm')
+        const nightsRaw = Number(String(quickCreateNights || '').trim())
+        const nights = Number.isFinite(nightsRaw) && nightsRaw >= 0 ? Math.trunc(nightsRaw) : null
+        await createManualCleaningTask(token, {
+          create_mode: quickCreateMode,
+          task_date: date,
+          property_id: propertyOption.id,
+          status: 'pending',
+          keys_required: 1,
+          old_code: quickCreateMode === 'checkout' ? (String(quickCreateOldCode || '').trim() || null) : null,
+          new_code: quickCreateMode === 'checkin' ? (String(quickCreateNewCode || '').trim() || null) : null,
+          checkout_time: quickCreateMode === 'checkout' ? time : null,
+          checkin_time: quickCreateMode === 'checkin' ? time : null,
+          nights_override: quickCreateMode === 'checkin' ? nights : null,
+          guest_special_request: String(quickCreateGuestNote || '').trim() || null,
+        })
+      }
+      setQuickCreateOpen(false)
+      showBanner('已新增', quickCreateMode === 'offline' ? '线下任务已新增。' : '清洁任务已新增，订单同步后会自动关联。')
+      await refreshTasksData({ silent: true, preserveError: true })
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '新增失败'))
+    } finally {
+      setQuickCreateBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!quickCreateOpen || !token) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const rows = await listCleaningAppPropertyCodes(token)
+        if (!cancelled) setQuickCreatePropertyOptions(rows)
+      } catch {
+        if (!cancelled) setQuickCreatePropertyOptions([])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [quickCreateOpen, token])
+
   function isTaskOwnedByCurrentUser(task: WorkTaskItem) {
     const uid = String((user as any)?.id || '').trim()
     if (!uid) return false
@@ -1619,6 +1742,14 @@ function showBanner(title: string, message: string) {
     warehouseLatest?.created_at || warehouseKeyRow?.updated_at,
     dayEndDate,
   )
+  const quickCreatePropertyMatches = useMemo(() => {
+    const q = String(quickCreateProperty || '').trim().toLowerCase()
+    if (!q) return []
+    const rows = quickCreatePropertyOptions.filter((item) => {
+      return String(item.code || '').toLowerCase().includes(q) || String(item.id || '').toLowerCase().includes(q)
+    })
+    return rows.slice(0, 20)
+  }, [quickCreateProperty, quickCreatePropertyOptions])
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -1851,6 +1982,15 @@ function showBanner(title: string, message: string) {
           <Text style={styles.sectionTitle}>{sectionTitle}</Text>
           <View style={styles.sectionRight}>
             {canManagerMode && mode === 'manager' ? (
+              <Pressable
+                onPress={() => openQuickCreate('checkin')}
+                style={({ pressed }) => [styles.addTaskBtn, pressed ? styles.segmentPressed : null]}
+              >
+                <Ionicons name="add" size={moderateScale(15)} color="#FFFFFF" />
+                <Text style={styles.addTaskBtnText}>新增</Text>
+              </Pressable>
+            ) : null}
+            {canManagerMode && mode === 'manager' ? (
               <View style={styles.viewSegment}>
                 <Pressable onPress={() => setView('all')} style={({ pressed }) => [styles.viewSegmentItem, view === 'all' ? styles.viewSegmentItemActive : null, pressed ? styles.segmentPressed : null]}>
                   <Text style={[styles.viewSegmentText, view === 'all' ? styles.viewSegmentTextActive : null]}>{t('common_all')}</Text>
@@ -1994,6 +2134,125 @@ function showBanner(title: string, message: string) {
           </View>
         </Modal>
 
+        <Modal visible={quickCreateOpen} transparent animationType="fade" onRequestClose={() => setQuickCreateOpen(false)}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.createTaskModal}>
+              <View style={styles.transferHeader}>
+                <Text style={styles.transferTitle}>新增任务</Text>
+                <Pressable onPress={() => setQuickCreateOpen(false)} disabled={quickCreateBusy} style={({ pressed }) => [styles.transferClose, pressed ? styles.segmentPressed : null]}>
+                  <Ionicons name="close" size={moderateScale(18)} color="#111827" />
+                </Pressable>
+              </View>
+              <View style={styles.createModeRow}>
+                {[
+                  { key: 'checkin', label: '待同步入住' },
+                  { key: 'checkout', label: '待同步退房' },
+                  { key: 'offline', label: '线下任务' },
+                ].map((item) => (
+                  <Pressable
+                    key={item.key}
+                    disabled={quickCreateBusy}
+                    onPress={() => {
+                      const mode0 = item.key as QuickCreateMode
+                      setQuickCreateMode(mode0)
+                      setQuickCreateTime(mode0 === 'checkout' ? '10am' : '3pm')
+                    }}
+                    style={({ pressed }) => [styles.createModeBtn, quickCreateMode === item.key ? styles.createModeBtnOn : null, pressed ? styles.segmentPressed : null]}
+                  >
+                    <Text style={[styles.createModeText, quickCreateMode === item.key ? styles.createModeTextOn : null]}>{item.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              <ScrollView style={styles.createTaskBody} contentContainerStyle={{ gap: 12 }} keyboardShouldPersistTaps="handled">
+                <View style={styles.createField}>
+                  <Text style={styles.createLabel}>日期</Text>
+                  <TextInput value={quickCreateDate} onChangeText={setQuickCreateDate} editable={!quickCreateBusy} style={styles.createInput} placeholder="YYYY-MM-DD" placeholderTextColor="#9CA3AF" />
+                </View>
+                <View style={styles.createField}>
+                  <Text style={styles.createLabel}>{quickCreateMode === 'offline' ? '房号（可选）' : '房号'}</Text>
+                  <TextInput value={quickCreateProperty} onChangeText={setQuickCreateProperty} editable={!quickCreateBusy} style={styles.createInput} placeholder="例如 2607" placeholderTextColor="#9CA3AF" autoCapitalize="characters" />
+                  {quickCreatePropertyMatches.length ? (
+                    <View style={styles.propertySuggestList}>
+                      {quickCreatePropertyMatches.map((item) => (
+                        <Pressable
+                          key={item.id || item.code}
+                          disabled={quickCreateBusy}
+                          onPress={() => setQuickCreateProperty(item.code || item.id)}
+                          style={({ pressed }) => [styles.propertySuggestItem, pressed ? styles.segmentPressed : null]}
+                        >
+                          <Text style={styles.propertySuggestText}>{item.code || item.id}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : null}
+                </View>
+
+                {quickCreateMode === 'offline' ? (
+                  <>
+                    <View style={styles.createField}>
+                      <Text style={styles.createLabel}>标题</Text>
+                      <TextInput value={quickCreateOfflineTitle} onChangeText={setQuickCreateOfflineTitle} editable={!quickCreateBusy} style={styles.createInput} placeholder="例如 临时送物 / 联系客人" placeholderTextColor="#9CA3AF" />
+                    </View>
+                    <View style={styles.createField}>
+                      <Text style={styles.createLabel}>内容</Text>
+                      <TextInput value={quickCreateOfflineContent} onChangeText={setQuickCreateOfflineContent} editable={!quickCreateBusy} style={[styles.createInput, styles.createTextArea]} placeholder="补充说明" placeholderTextColor="#9CA3AF" multiline />
+                    </View>
+                    <View style={styles.createField}>
+                      <Text style={styles.createLabel}>紧急度</Text>
+                      <View style={styles.createModeRow}>
+                        {[
+                          { key: 'low', label: '低' },
+                          { key: 'medium', label: '中' },
+                          { key: 'high', label: '高' },
+                          { key: 'urgent', label: '紧急' },
+                        ].map((item) => (
+                          <Pressable
+                            key={item.key}
+                            disabled={quickCreateBusy}
+                            onPress={() => setQuickCreateUrgency(item.key as any)}
+                            style={({ pressed }) => [styles.createModeBtn, quickCreateUrgency === item.key ? styles.createModeBtnOn : null, pressed ? styles.segmentPressed : null]}
+                          >
+                            <Text style={[styles.createModeText, quickCreateUrgency === item.key ? styles.createModeTextOn : null]}>{item.label}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    <View style={styles.createField}>
+                      <Text style={styles.createLabel}>{quickCreateMode === 'checkout' ? '退房时间' : '入住时间'}</Text>
+                      <TextInput value={quickCreateTime} onChangeText={setQuickCreateTime} editable={!quickCreateBusy} style={styles.createInput} placeholder={quickCreateMode === 'checkout' ? '10am' : '3pm'} placeholderTextColor="#9CA3AF" />
+                    </View>
+                    <View style={styles.createField}>
+                      <Text style={styles.createLabel}>{quickCreateMode === 'checkout' ? '旧密码' : '新密码'}</Text>
+                      <TextInput value={quickCreateMode === 'checkout' ? quickCreateOldCode : quickCreateNewCode} onChangeText={quickCreateMode === 'checkout' ? setQuickCreateOldCode : setQuickCreateNewCode} editable={!quickCreateBusy} style={styles.createInput} placeholder={quickCreateMode === 'checkout' ? '旧密码' : '新密码'} placeholderTextColor="#9CA3AF" />
+                    </View>
+                    {quickCreateMode === 'checkin' ? (
+                      <View style={styles.createField}>
+                        <Text style={styles.createLabel}>入住天数（可选）</Text>
+                        <TextInput value={quickCreateNights} onChangeText={setQuickCreateNights} editable={!quickCreateBusy} style={styles.createInput} keyboardType="number-pad" placeholder="例如 3" placeholderTextColor="#9CA3AF" />
+                      </View>
+                    ) : null}
+                    <View style={styles.createField}>
+                      <Text style={styles.createLabel}>客人需求</Text>
+                      <TextInput value={quickCreateGuestNote} onChangeText={setQuickCreateGuestNote} editable={!quickCreateBusy} style={[styles.createInput, styles.createTextArea]} placeholder="需要同步给现场的信息" placeholderTextColor="#9CA3AF" multiline />
+                    </View>
+                    <Text style={styles.createHint}>手动新增的入住/退房任务会保持待同步；订单同步后自动关联。</Text>
+                  </>
+                )}
+              </ScrollView>
+              <Pressable
+                disabled={quickCreateBusy}
+                onPress={submitQuickCreate}
+                style={({ pressed }) => [styles.createSubmitBtn, pressed ? styles.segmentPressed : null, quickCreateBusy ? styles.actionBtnDisabled : null]}
+              >
+                <Text style={[styles.actionText, quickCreateBusy ? { color: '#6B7280' } : null]}>{quickCreateBusy ? '新增中' : '确认新增'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
         {!hasInit ? (
           <View style={styles.emptyCard}>
             <Text style={styles.emptyText}>{t('common_loading')}</Text>
@@ -2021,9 +2280,8 @@ function showBanner(title: string, message: string) {
               const guideUrl = normalizeHttpUrl(task.property?.access_guide_link)
               const oldCode = String((task as any).old_code || '').trim()
               const newCode = String((task as any).new_code || '').trim()
-              const guestSpecialRequest = String((task as any).guest_special_request || '').trim()
+              const guestSpecialRequest = String((task as any).guest_special_request || (task as any).note || '').trim()
               const guestLuggage = (task as any).guest_luggage || null
-              const taskNote = String((task as any).note || '').trim()
               const urgency = urgencyMeta(task.urgency)
               const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
               const detailPreview = !isOfflineTask && task.source_type !== 'cleaning_tasks' ? stripPhotoLines(task.summary) : ''
@@ -2366,20 +2624,6 @@ function showBanner(title: string, message: string) {
                         onChanged={(notice) => patchWorkTaskItem(String(task.id), { guest_luggage: notice } as any)}
                       />
 
-                      {taskNote ? (
-                        <View style={styles.guestRow}>
-                          <View style={styles.guestIconWrap}>
-                            <Ionicons name="document-text-outline" size={moderateScale(20)} color="#2563EB" />
-                          </View>
-                          <View style={styles.guestCell}>
-                            <Text style={styles.guestLabel}>备注：</Text>
-                            <Text style={styles.guestValue} numberOfLines={3}>
-                              {taskNote}
-                            </Text>
-                          </View>
-                        </View>
-                      ) : null}
-
                       {!isOfflineTask ? (
                         guideUrl ? (
                           <Pressable
@@ -2671,6 +2915,22 @@ const styles = StyleSheet.create({
   transferOptionBody: { flex: 1, minWidth: 0 },
   transferOptionName: { color: '#111827', fontWeight: '900', fontSize: moderateScale(14), lineHeight: moderateScale(18) },
   transferOptionRole: { marginTop: 2, color: '#6B7280', fontWeight: '700', fontSize: moderateScale(12), lineHeight: moderateScale(16) },
+  createTaskModal: { maxHeight: '86%', backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14 },
+  createTaskBody: { marginTop: 12, maxHeight: 520 },
+  createModeRow: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  createModeBtn: { flexGrow: 1, minHeight: 34, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  createModeBtnOn: { backgroundColor: '#DBEAFE', borderWidth: hairline(), borderColor: '#93C5FD' },
+  createModeText: { color: '#6B7280', fontSize: moderateScale(12), fontWeight: '900' },
+  createModeTextOn: { color: '#1D4ED8' },
+  createField: { gap: 6 },
+  createLabel: { color: '#4B5563', fontSize: moderateScale(12), fontWeight: '900' },
+  createInput: { minHeight: 42, borderRadius: 12, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#E5E7EB', paddingHorizontal: 12, color: '#111827', fontWeight: '800' },
+  createTextArea: { minHeight: 82, paddingTop: 10, textAlignVertical: 'top' },
+  createHint: { color: '#9CA3AF', fontSize: moderateScale(12), fontWeight: '700', lineHeight: moderateScale(17) },
+  createSubmitBtn: { marginTop: 12, minHeight: 42, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  propertySuggestList: { marginTop: 2, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' },
+  propertySuggestItem: { minHeight: 36, paddingHorizontal: 12, justifyContent: 'center', borderBottomWidth: hairline(), borderBottomColor: '#F3F4F6' },
+  propertySuggestText: { color: '#111827', fontSize: moderateScale(13), fontWeight: '800' },
   searchWrap: { marginTop: 10, height: 44, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#EEF0F6', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
   searchInput: { flex: 1, minWidth: 0, height: 44, color: '#111827', fontWeight: '800' },
   searchClear: { height: 44, width: 34, alignItems: 'center', justifyContent: 'center' },
@@ -2752,6 +3012,8 @@ const styles = StyleSheet.create({
   viewSegmentItemActive: { backgroundColor: '#FFFFFF' },
   viewSegmentText: { fontSize: moderateScale(12), fontWeight: '800', color: '#6B7280' },
   viewSegmentTextActive: { color: '#111827' },
+  addTaskBtn: { height: 30, paddingHorizontal: 10, borderRadius: 11, backgroundColor: '#2563EB', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  addTaskBtnText: { fontSize: moderateScale(12), fontWeight: '900', color: '#FFFFFF' },
   reorderBtn: { height: 28, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   reorderBtnDisabled: { backgroundColor: '#E5E7EB' },
   reorderBtnText: { fontSize: moderateScale(12), fontWeight: '900', color: '#111827' },
