@@ -4,7 +4,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useIsFocused } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth'
-import { companyContentBody, companyContentSummary, companyGuideRoleLabel } from '../../lib/companyContent'
+import { companyContentBody, companyContentCategoryLabel, companyContentSummary, companyGuideRoleLabel } from '../../lib/companyContent'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getJson, setJson } from '../../lib/storage'
@@ -16,15 +16,16 @@ import { normalizeHttpUrl } from '../../lib/urls'
 import { getWorkTasksSnapshot, subscribeWorkTasks } from '../../lib/workTasksStore'
 import {
   listCompanyAnnouncementsForApp,
+  listCompanyDocsForApp,
   listCompanySecretsForApp,
   listCustomerServiceManualsForApp,
   listWarehouseGuidesForApp,
-  listWorkGuidesForApp,
   listWorkTasks,
   markInboxNotificationsRead,
   type CompanyAnnouncement,
+  type CompanyContentCategory,
+  type CompanyDocument,
   type CustomerServiceManual,
-  type CompanyGuide,
   type CompanyGuideRole,
   type WarehouseGuide,
   type WorkTask,
@@ -47,11 +48,12 @@ type SearchResult = {
   copyText?: string | null
   secretId?: string
   contentRaw?: string | null
+  docCategory?: CompanyContentCategory | null
   guideRole?: CompanyGuideRole | null
 }
 
 type SearchSection = {
-  key: 'property' | 'task' | 'announcement' | 'guide' | 'customer_service_manual' | 'warehouse_guide'
+  key: 'property' | 'task' | 'announcement' | 'company_doc' | 'warehouse_guide'
   title: string
   emptyText: string
   items: SearchResult[]
@@ -68,7 +70,8 @@ type CompanySecretSummary = {
 
 type CompanyContentCache = {
   announcements: CompanyAnnouncement[]
-  workGuides: CompanyGuide[]
+  companyDocs?: CompanyDocument[]
+  workGuides?: CompanyDocument[]
   customerServiceManuals: CustomerServiceManual[]
   warehouseGuides: WarehouseGuide[]
   secrets: CompanySecretSummary[]
@@ -166,28 +169,48 @@ function preferredGuideRoleOf(user: any): CompanyGuideRole {
   return currentGuideRoleOf(user) || 'cleaner'
 }
 
-function sortGuidesForRole(guides: CompanyGuide[], preferredRole: CompanyGuideRole) {
-  return guides
-    .map((guide, idx) => ({ guide, idx }))
+const COMPANY_DOC_CATEGORY_ORDER: CompanyContentCategory[] = ['starter_guide', 'role_guide', 'work_guide', 'company_rule', 'customer_service_manual']
+
+function sortCompanyDocsForRole(docs: CompanyDocument[], preferredRole: CompanyGuideRole) {
+  return docs
+    .map((doc, idx) => ({ doc, idx }))
     .sort((a, b) => {
       const rank = (role: CompanyGuideRole | null | undefined) => {
         if (role === preferredRole) return 0
         if (!role) return 1
         return 2
       }
-      const diff = rank(a.guide.guide_role) - rank(b.guide.guide_role)
-      if (diff !== 0) return diff
+      const roleDiff = rank(a.doc.guide_role) - rank(b.doc.guide_role)
+      if (roleDiff !== 0) return roleDiff
+      const categoryRank = (category: CompanyContentCategory | null | undefined) => {
+        const idx = COMPANY_DOC_CATEGORY_ORDER.indexOf(category as CompanyContentCategory)
+        return idx >= 0 ? idx : 99
+      }
+      const categoryDiff = categoryRank(a.doc.category) - categoryRank(b.doc.category)
+      if (categoryDiff !== 0) return categoryDiff
       return a.idx - b.idx
     })
-    .map((item) => item.guide)
+    .map((item) => item.doc)
 }
 
-function filterGuidesForCurrentRole(guides: CompanyGuide[], currentRole: CompanyGuideRole | null) {
-  if (!currentRole) return guides
-  return guides.filter((guide) => {
-    const role = guide.guide_role || null
+function filterCompanyDocsForCurrentRole(docs: CompanyDocument[], currentRole: CompanyGuideRole | null) {
+  if (!currentRole) return docs
+  return docs.filter((doc) => {
+    const role = doc.guide_role || null
     return !role || role === currentRole
   })
+}
+
+function mergeCompanyDocs(docRows: CompanyDocument[], manualRows: CustomerServiceManual[]) {
+  const docs = Array.isArray(docRows) ? docRows : []
+  const manuals = (Array.isArray(manualRows) ? manualRows : []).map((manual) => ({
+    ...manual,
+    page_type: 'doc' as const,
+    category: 'customer_service_manual' as const,
+  }))
+  if (!manuals.length) return docs
+  const docsWithoutManual = docs.filter((doc) => doc.category !== 'customer_service_manual')
+  return [...docsWithoutManual, ...manuals]
 }
 
 export default function NoticesScreen(props: Props) {
@@ -205,7 +228,7 @@ export default function NoticesScreen(props: Props) {
   const [historyTasks, setHistoryTasks] = useState<WorkTask[]>([])
   const [announcements, setAnnouncements] = useState<CompanyAnnouncement[]>([])
   const [announcementIndex, setAnnouncementIndex] = useState(0)
-  const [workGuides, setWorkGuides] = useState<CompanyGuide[]>([])
+  const [companyDocs, setCompanyDocs] = useState<CompanyDocument[]>([])
   const [customerServiceManuals, setCustomerServiceManuals] = useState<CustomerServiceManual[]>([])
   const [warehouseGuides, setWarehouseGuides] = useState<WarehouseGuide[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
@@ -218,13 +241,13 @@ export default function NoticesScreen(props: Props) {
   const canSearchAllTaskHistory = isTaskManagerUser(user)
   const currentGuideRole = useMemo(() => currentGuideRoleOf(user), [user])
   const preferredGuideRole = useMemo(() => preferredGuideRoleOf(user), [user])
-  const visibleWorkGuides = useMemo(() => filterGuidesForCurrentRole(workGuides, currentGuideRole), [currentGuideRole, workGuides])
-  const orderedWorkGuides = useMemo(() => sortGuidesForRole(visibleWorkGuides, preferredGuideRole), [preferredGuideRole, visibleWorkGuides])
+  const visibleCompanyDocs = useMemo(() => filterCompanyDocsForCurrentRole(companyDocs, currentGuideRole), [companyDocs, currentGuideRole])
+  const orderedCompanyDocs = useMemo(() => sortCompanyDocsForRole(visibleCompanyDocs, preferredGuideRole), [preferredGuideRole, visibleCompanyDocs])
 
   const snap = getNoticesSnapshot()
   const hasAnyUnread = Object.keys(snap.unreadIds || {}).length > 0
   const announcementCardWidth = useMemo(() => Math.max(280, windowWidth - 32), [windowWidth])
-  const featuredGuides = orderedWorkGuides.slice(0, 5)
+  const featuredCompanyDocs = orderedCompanyDocs.slice(0, 8)
 
   useEffect(() => {
     if (!announcements.length) {
@@ -256,13 +279,15 @@ export default function NoticesScreen(props: Props) {
       if (cachedContent) {
         if (Array.isArray(cachedContent.secrets)) setSecrets(cachedContent.secrets)
         if (Array.isArray(cachedContent.announcements)) setAnnouncements(cachedContent.announcements)
-        if (Array.isArray(cachedContent.workGuides)) setWorkGuides(cachedContent.workGuides)
+        const cachedDocs = Array.isArray(cachedContent.companyDocs) ? cachedContent.companyDocs : cachedContent.workGuides
+        const cachedManuals = Array.isArray(cachedContent.customerServiceManuals) ? cachedContent.customerServiceManuals : []
+        if (Array.isArray(cachedDocs)) setCompanyDocs(mergeCompanyDocs(cachedDocs, cachedManuals))
         if (Array.isArray(cachedContent.customerServiceManuals)) setCustomerServiceManuals(cachedContent.customerServiceManuals)
         if (Array.isArray(cachedContent.warehouseGuides)) setWarehouseGuides(cachedContent.warehouseGuides)
         companyContentLoadedRef.current =
           Array.isArray(cachedContent.secrets) ||
           Array.isArray(cachedContent.announcements) ||
-          Array.isArray(cachedContent.workGuides) ||
+          Array.isArray(cachedDocs) ||
           Array.isArray(cachedContent.customerServiceManuals) ||
           Array.isArray(cachedContent.warehouseGuides)
       }
@@ -284,20 +309,24 @@ export default function NoticesScreen(props: Props) {
     const [secretRows, announceRows, guideRows, manualRows, warehouseRows] = await Promise.allSettled([
       listCompanySecretsForApp(token),
       listCompanyAnnouncementsForApp(token),
-      listWorkGuidesForApp(token),
+      listCompanyDocsForApp(token),
       listCustomerServiceManualsForApp(token),
       listWarehouseGuidesForApp(token),
     ])
     if (secretRows.status === 'fulfilled' && Array.isArray(secretRows.value)) setSecrets(secretRows.value)
     if (announceRows.status === 'fulfilled' && Array.isArray(announceRows.value)) setAnnouncements(announceRows.value)
-    if (guideRows.status === 'fulfilled' && Array.isArray(guideRows.value)) setWorkGuides(guideRows.value)
     if (manualRows.status === 'fulfilled' && Array.isArray(manualRows.value)) setCustomerServiceManuals(manualRows.value)
     if (warehouseRows.status === 'fulfilled' && Array.isArray(warehouseRows.value)) setWarehouseGuides(warehouseRows.value)
     const nextSecrets = secretRows.status === 'fulfilled' && Array.isArray(secretRows.value) ? secretRows.value : secrets
     const nextAnnouncements = announceRows.status === 'fulfilled' && Array.isArray(announceRows.value) ? announceRows.value : announcements
-    const nextWorkGuides = guideRows.status === 'fulfilled' && Array.isArray(guideRows.value) ? guideRows.value : workGuides
     const nextCustomerServiceManuals = manualRows.status === 'fulfilled' && Array.isArray(manualRows.value) ? manualRows.value : customerServiceManuals
+    const rawCompanyDocs = guideRows.status === 'fulfilled' && Array.isArray(guideRows.value) ? guideRows.value : companyDocs
+    const nextCompanyDocs = mergeCompanyDocs(rawCompanyDocs, nextCustomerServiceManuals)
     const nextWarehouseGuides = warehouseRows.status === 'fulfilled' && Array.isArray(warehouseRows.value) ? warehouseRows.value : warehouseGuides
+    if (
+      (guideRows.status === 'fulfilled' && Array.isArray(guideRows.value)) ||
+      (manualRows.status === 'fulfilled' && Array.isArray(manualRows.value))
+    ) setCompanyDocs(nextCompanyDocs)
     if (
       (secretRows.status === 'fulfilled' && Array.isArray(secretRows.value)) ||
       (announceRows.status === 'fulfilled' && Array.isArray(announceRows.value)) ||
@@ -308,7 +337,7 @@ export default function NoticesScreen(props: Props) {
       await setJson<CompanyContentCache>(COMPANY_CONTENT_CACHE_KEY, {
         secrets: nextSecrets,
         announcements: nextAnnouncements,
-        workGuides: nextWorkGuides,
+        companyDocs: nextCompanyDocs,
         customerServiceManuals: nextCustomerServiceManuals,
         warehouseGuides: nextWarehouseGuides,
       })
@@ -446,8 +475,7 @@ export default function NoticesScreen(props: Props) {
     const propertyResults: SearchResult[] = []
     const taskResults: SearchResult[] = []
     const announcementResults: SearchResult[] = []
-    const guideResults: SearchResult[] = []
-    const customerServiceManualResults: SearchResult[] = []
+    const companyDocResults: SearchResult[] = []
     const warehouseGuideResults: SearchResult[] = []
     const seen = new Set<string>()
 
@@ -530,48 +558,29 @@ export default function NoticesScreen(props: Props) {
       if (announcementResults.length >= 8) break
     }
 
-    for (const guide of orderedWorkGuides) {
-      const title = String(guide.title || '').trim()
-      const body = companyContentBody(guide.content)
-      const summary = companyContentSummary(guide.content, '工作指南')
-      const roleLabel = companyGuideRoleLabel(guide.guide_role)
-      const hay = `${title} ${roleLabel} ${summary} ${body}`.toLowerCase()
+    for (const doc of orderedCompanyDocs) {
+      const title = String(doc.title || '').trim()
+      const body = companyContentBody(doc.content)
+      const categoryLabel = companyContentCategoryLabel(doc.category)
+      const summary = companyContentSummary(doc.content, categoryLabel)
+      const roleLabel = companyGuideRoleLabel(doc.guide_role)
+      const hay = `${title} ${categoryLabel} ${roleLabel} ${summary} ${body}`.toLowerCase()
       if (!hay.includes(q)) continue
-      const key = String(guide.id || '').trim()
-      if (!key || seen.has(`guide:${key}`)) continue
-      seen.add(`guide:${key}`)
-      guideResults.push({
-        id: `guide:${key}`,
+      const key = String(doc.id || '').trim()
+      if (!key || seen.has(`company-doc:${key}`)) continue
+      seen.add(`company-doc:${key}`)
+      companyDocResults.push({
+        id: `company-doc:${key}`,
         kind: 'guide',
-        title: title || '工作指南',
-        subtitle: roleLabel ? `${roleLabel} · ${summary}` : summary,
+        title: title || categoryLabel,
+        subtitle: [categoryLabel, roleLabel, summary].filter(Boolean).join(' · '),
         body,
-        contentRaw: guide.content || null,
-        guideRole: guide.guide_role || null,
+        contentRaw: doc.content || null,
+        docCategory: doc.category || null,
+        guideRole: doc.guide_role || null,
         icon: 'book-outline',
       })
-      if (guideResults.length >= 8) break
-    }
-
-    for (const manual of customerServiceManuals) {
-      const title = String(manual.title || '').trim()
-      const body = companyContentBody(manual.content)
-      const summary = companyContentSummary(manual.content, '客服手册')
-      const hay = `${title} ${summary} ${body}`.toLowerCase()
-      if (!hay.includes(q)) continue
-      const key = String(manual.id || '').trim()
-      if (!key || seen.has(`customer-service-manual:${key}`)) continue
-      seen.add(`customer-service-manual:${key}`)
-      customerServiceManualResults.push({
-        id: `customer-service-manual:${key}`,
-        kind: 'guide',
-        title: title || '客服手册',
-        subtitle: summary,
-        body,
-        contentRaw: manual.content || null,
-        icon: 'document-text-outline',
-      })
-      if (customerServiceManualResults.length >= 10) break
+      if (companyDocResults.length >= 12) break
     }
 
     for (const guide of warehouseGuides) {
@@ -599,11 +608,10 @@ export default function NoticesScreen(props: Props) {
       { key: 'property', title: '房源信息', emptyText: '没有匹配的房源信息，可试试房号、地址、Wi-Fi 或入住指南。', items: propertyResults },
       { key: 'task', title: '历史任务', emptyText: `最近 ${HISTORY_SEARCH_WINDOWS[historyWindowIndex]} 个月内没有匹配的历史任务。`, items: taskResults },
       { key: 'announcement', title: '公司公告', emptyText: '没有匹配的公司公告。', items: announcementResults },
-      { key: 'guide', title: '工作指南', emptyText: '没有匹配的工作指南。', items: guideResults },
-      { key: 'customer_service_manual', title: '客服手册/规定', emptyText: '没有匹配的客服手册或规定。', items: customerServiceManualResults },
+      { key: 'company_doc', title: '公司文档', emptyText: '没有匹配的公司文档。', items: companyDocResults },
       { key: 'warehouse_guide', title: '仓库指南', emptyText: '没有匹配的仓库指南。', items: warehouseGuideResults },
     ] satisfies SearchSection[]
-  }, [announcements, customerServiceManuals, historyTasks, historyWindowIndex, orderedWorkGuides, query, warehouseGuides])
+  }, [announcements, historyTasks, historyWindowIndex, orderedCompanyDocs, query, warehouseGuides])
 
   function openSearchResult(item: SearchResult) {
     if (item.kind === 'task' && item.taskId) {
@@ -628,6 +636,7 @@ export default function NoticesScreen(props: Props) {
       subtitle: item.subtitle,
       body: item.body,
       contentRaw: item.contentRaw || null,
+      docCategory: item.docCategory || null,
       guideRole: item.guideRole || null,
       url: item.url || null,
       copyText: item.copyText || null,
@@ -724,7 +733,7 @@ export default function NoticesScreen(props: Props) {
     return (
       <>
         {renderAnnouncementRail()}
-        {renderGuideRail()}
+        {renderCompanyDocsRail()}
 
         <View style={styles.noticeSectionHead}>
           <Text style={styles.sectionTitle}>通知消息</Text>
@@ -766,6 +775,7 @@ export default function NoticesScreen(props: Props) {
             title: String(item.title || '公司公告'),
             subtitle: `${item.urgent ? '紧急公告 · ' : ''}${item.published_at ? formatTime(`${item.published_at}T00:00:00`).split(' ')[0] : '已发布'}`,
             body,
+            contentRaw: item.content || null,
           })
         }
         style={({ pressed }) => [styles.announcementCard, { width: announcementCardWidth }, pressed ? styles.rowPressed : null]}
@@ -850,31 +860,33 @@ export default function NoticesScreen(props: Props) {
     )
   }
 
-  function renderGuideRail() {
+  function renderCompanyDocsRail() {
     return (
       <View style={styles.sectionBlock}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>工作指南</Text>
+          <Text style={styles.sectionTitle}>公司文档</Text>
         </View>
-        {featuredGuides.length ? (
+        {featuredCompanyDocs.length ? (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.guideRail}>
-            {featuredGuides.map((guide) => {
-              const title = String(guide.title || '工作指南')
-              const body = companyContentBody(guide.content)
-              const summary = companyContentSummary(guide.content, '点击查看工作指南')
-              const roleLabel = companyGuideRoleLabel(guide.guide_role)
-              const isRecommended = !!currentGuideRole && guide.guide_role === currentGuideRole
+            {featuredCompanyDocs.map((doc) => {
+              const categoryLabel = companyContentCategoryLabel(doc.category)
+              const title = String(doc.title || categoryLabel)
+              const body = companyContentBody(doc.content)
+              const summary = companyContentSummary(doc.content, `点击查看${categoryLabel}`)
+              const roleLabel = companyGuideRoleLabel(doc.guide_role)
+              const isRecommended = !!currentGuideRole && doc.guide_role === currentGuideRole
               return (
                 <Pressable
-                  key={String(guide.id || title)}
+                  key={String(doc.id || title)}
                   onPress={() =>
                     props.navigation.navigate('InfoCenterDetail', {
                       kind: 'guide',
                       title,
-                      subtitle: guide.updated_at ? `更新于 ${formatTime(String(guide.updated_at)).replace('/', '-').replace('/', '-')}` : '工作指南',
+                      subtitle: doc.updated_at ? `${categoryLabel} · 更新于 ${formatTime(String(doc.updated_at)).replace('/', '-').replace('/', '-')}` : categoryLabel,
                       body,
-                      contentRaw: guide.content || null,
-                      guideRole: guide.guide_role || null,
+                      contentRaw: doc.content || null,
+                      docCategory: doc.category || null,
+                      guideRole: doc.guide_role || null,
                     })
                   }
                   style={({ pressed }) => [styles.guideCard, pressed ? styles.rowPressed : null]}
@@ -885,20 +897,21 @@ export default function NoticesScreen(props: Props) {
                     </View>
                     <Ionicons name="chevron-forward" size={moderateScale(14)} color="#9CA3AF" />
                   </View>
-                  {roleLabel || isRecommended ? (
-                    <View style={styles.guideBadgeRow}>
-                      {roleLabel ? (
-                        <View style={styles.guideBadge}>
-                          <Text style={styles.guideBadgeText}>{roleLabel}</Text>
-                        </View>
-                      ) : null}
-                      {isRecommended ? (
-                        <View style={[styles.guideBadge, styles.guideBadgePrimary]}>
-                          <Text style={[styles.guideBadgeText, styles.guideBadgePrimaryText]}>适合你</Text>
-                        </View>
-                      ) : null}
+                  <View style={styles.guideBadgeRow}>
+                    <View style={styles.guideBadge}>
+                      <Text style={styles.guideBadgeText}>{categoryLabel}</Text>
                     </View>
-                  ) : null}
+                    {roleLabel ? (
+                      <View style={styles.guideBadge}>
+                        <Text style={styles.guideBadgeText}>{roleLabel}</Text>
+                      </View>
+                    ) : null}
+                    {isRecommended ? (
+                      <View style={[styles.guideBadge, styles.guideBadgePrimary]}>
+                        <Text style={[styles.guideBadgeText, styles.guideBadgePrimaryText]}>适合你</Text>
+                      </View>
+                    ) : null}
+                  </View>
                   <Text style={styles.guideTitle} numberOfLines={2}>
                     {title}
                   </Text>
@@ -915,8 +928,8 @@ export default function NoticesScreen(props: Props) {
               <Ionicons name="book-outline" size={moderateScale(18)} color="#2563EB" />
             </View>
             <View style={styles.guidePlaceholderText}>
-              <Text style={styles.guidePlaceholderTitle}>工作指南暂未发布</Text>
-              <Text style={styles.guidePlaceholderSummary}>发布后会显示在这里，方便快速查看。</Text>
+              <Text style={styles.guidePlaceholderTitle}>公司文档暂未发布</Text>
+              <Text style={styles.guidePlaceholderSummary}>发布后会按制度、新手指南、角色说明和现场指南显示在这里。</Text>
             </View>
           </View>
         )}
@@ -948,7 +961,7 @@ export default function NoticesScreen(props: Props) {
           value={query}
           onChangeText={setQuery}
           style={styles.searchInput}
-          placeholder="输入关键词搜索历史任务、客服手册、仓库指南、工作指南、公告、房源信息..."
+          placeholder="输入关键词搜索历史任务、公司文档、客服手册、仓库指南、公告、房源信息..."
           placeholderTextColor="#9CA3AF"
           autoCapitalize="none"
           autoCorrect={false}

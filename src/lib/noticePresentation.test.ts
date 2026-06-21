@@ -36,7 +36,7 @@ test('checkout notice shows guest request and only calls out non-default keys', 
   expect(presented.title).toBe('Aura2707 · 客人已退房')
   expect(presented.summary).toBe('清洁任务可以开始')
   expect(presented.content).not.toContain('房源：Aura2707')
-  expect(presented.content).toContain('时间：2026-06-15')
+  expect(presented.content).toContain('任务日期：2026-06-15')
   expect(presented.content).toContain('操作人：客服 A')
   expect(presented.content).toContain('任务要求：保留客人行李')
   expect(presented.content).toContain('钥匙要求：需挂 2 套钥匙')
@@ -57,7 +57,7 @@ test('cleaning and inspection notices show no guest request and hide the default
     }))
 
     expect(presented.content).not.toContain('房源：Aura2707')
-    expect(presented.content).toContain('时间：2026-06-15')
+    expect(presented.content).toContain('任务日期：2026-06-15')
     expect(presented.content).toContain('任务要求：无')
     expect(presented.content).not.toContain('钥匙要求')
   }
@@ -79,7 +79,7 @@ test('keys hung notice uses room-code title and clear summary', () => {
 
   expect(presented.title).toBe('Aura2707 · 房间已挂钥匙')
   expect(presented.summary).toBe('挂钥匙视频已上传，房间钥匙已挂好')
-  expect(presented.content).toContain('时间：2026-06-15')
+  expect(presented.content).toContain('任务日期：2026-06-15')
   expect(presented.content).toContain('操作人：检查员 A')
 })
 

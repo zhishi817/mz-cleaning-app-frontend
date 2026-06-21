@@ -206,6 +206,11 @@ function isEarlyCheckinTime(value: any) {
   return mins != null && mins < 15 * 60
 }
 
+function isLateCheckoutTime(value: any) {
+  const mins = parseTimeMinutes(value)
+  return mins != null && mins > 10 * 60
+}
+
 export default function TaskDetailScreen(props: Props) {
   const { t } = useI18n()
   const { user, token } = useAuth()
@@ -564,6 +569,7 @@ export default function TaskDetailScreen(props: Props) {
   const routerLocation = String((task as any)?.property?.router_location || '').trim()
   const hasCheckout = !!checkoutTime
   const hasCheckin = !!checkinTime
+  const isLateCheckout = hasCheckout && isLateCheckoutTime(checkoutTime)
   const isEarlyCheckin = hasCheckin && isEarlyCheckinTime(checkinTime)
   const titleSuffix = hasCheckout || hasCheckin ? `${hasCheckout ? '退房' : ''}${hasCheckout && hasCheckin ? ' ' : ''}${hasCheckin ? '入住' : ''}` : ''
   const title2 = `${title}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
@@ -655,9 +661,14 @@ export default function TaskDetailScreen(props: Props) {
                   <Text style={styles.tagWarnText}>{`需挂${checkinSets}套钥匙`}</Text>
                 </View>
               ) : null}
+              {isLateCheckout ? (
+                <View style={styles.tagLate}>
+                  <Text style={styles.tagLateText}>晚退房</Text>
+                </View>
+              ) : null}
               {isEarlyCheckin ? (
-                <View style={styles.tagWarn}>
-                  <Text style={styles.tagWarnText}>早入住</Text>
+                <View style={styles.tagEarly}>
+                  <Text style={styles.tagEarlyText}>早入住</Text>
                 </View>
               ) : null}
               <View style={inspectionMode === 'pending_decision' ? styles.tagWarn : styles.tag}>
@@ -1049,6 +1060,10 @@ const styles = StyleSheet.create({
   tagKeyText: { fontSize: 11, fontWeight: '900', color: '#B91C1C' },
   tagWarn: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FFFBEB', borderWidth: hairline(), borderColor: '#FDE68A', alignItems: 'center', justifyContent: 'center' },
   tagWarnText: { fontSize: 11, fontWeight: '900', color: '#B45309' },
+  tagLate: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FEE2E2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
+  tagLateText: { fontSize: 11, fontWeight: '900', color: '#B91C1C' },
+  tagEarly: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#DBEAFE', borderWidth: hairline(), borderColor: '#93C5FD', alignItems: 'center', justifyContent: 'center' },
+  tagEarlyText: { fontSize: 11, fontWeight: '900', color: '#1D4ED8' },
   row: { marginTop: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
   rowText: { flex: 1, minWidth: 0, flexShrink: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600', lineHeight: moderateScale(19) },
   actionsRow: { marginTop: 14, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },

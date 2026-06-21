@@ -190,7 +190,7 @@ export function getPresentedNotice(notice: Notice) {
     'key_upload_sla',
   ])
   if (cleaningTaskKinds.has(kind)) {
-    addDetail(contentLines, '时间', taskDate)
+    addDetail(contentLines, '任务日期', taskDate)
     addDetail(contentLines, '操作人', actorName || '系统')
     addDetail(contentLines, '任务要求', guestSpecialRequest || '无')
     if (keysRequired && keysRequired > 1) addDetail(contentLines, '钥匙要求', `需挂 ${keysRequired} 套钥匙`)
@@ -218,7 +218,7 @@ export function getPresentedNotice(notice: Notice) {
       .filter((line) => /^(退房时间|入住时间|旧密码|新密码|客人需求|需挂钥匙套数|需要挂钥匙数)[:：]/.test(line))
       .every((line) => /^(需挂钥匙套数|需要挂钥匙数)[:：]/.test(line))
     title = eventTitle(propertyCode, keysOnly ? '钥匙要求已修改' : '任务要求已修改')
-    summary = changes[0] || '任务信息已更新'
+    summary = [taskDate, changes[0] || '任务信息已更新'].filter(Boolean).join(' · ')
     for (const change of changes) addDetail(contentLines, '变更', change)
   } else if (kind === 'consumables_submitted' || kind === 'consumables_updated') {
     title = eventTitle(propertyCode, kind === 'consumables_updated' ? '补品记录已更新' : '清洁已完成')

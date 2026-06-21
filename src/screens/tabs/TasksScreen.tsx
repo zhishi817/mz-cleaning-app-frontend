@@ -2478,8 +2478,8 @@ function showBanner(title: string, message: string) {
                           </View>
                         ) : null}
                         {isEarlyCheckin ? (
-                          <View style={styles.tagWarn}>
-                            <Text style={styles.tagWarnText}>早入住</Text>
+                          <View style={styles.tagEarly}>
+                            <Text style={styles.tagEarlyText}>早入住</Text>
                           </View>
                         ) : null}
                         {showInspectionPlanTag ? (
@@ -3060,8 +3060,10 @@ const styles = StyleSheet.create({
   tagKeyText: { fontSize: 11, fontWeight: '900', color: '#B91C1C' },
   tagWarn: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FFFBEB', borderWidth: hairline(), borderColor: '#FDE68A', alignItems: 'center', justifyContent: 'center' },
   tagWarnText: { fontSize: 11, fontWeight: '900', color: '#B45309' },
-  tagLate: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#F3E8FF', borderWidth: hairline(), borderColor: '#D8B4FE', alignItems: 'center', justifyContent: 'center' },
-  tagLateText: { fontSize: 11, fontWeight: '900', color: '#7C3AED' },
+  tagLate: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FEE2E2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
+  tagLateText: { fontSize: 11, fontWeight: '900', color: '#B91C1C' },
+  tagEarly: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#DBEAFE', borderWidth: hairline(), borderColor: '#93C5FD', alignItems: 'center', justifyContent: 'center' },
+  tagEarlyText: { fontSize: 11, fontWeight: '900', color: '#1D4ED8' },
   row: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 },
   addr: { flex: 1, minWidth: 0, flexShrink: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600' },
   linkInline: { flex: 1, minWidth: 0, flexShrink: 1, color: '#2563EB', fontSize: moderateScale(13), fontWeight: '800' },

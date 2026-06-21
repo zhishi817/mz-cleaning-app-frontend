@@ -14,7 +14,7 @@ import { registerExpoPushToken } from '../lib/api'
 import { syncInboxNotifications } from '../lib/notificationInbox'
 import { getPushDeviceId, setRegisteredExpoPushToken } from '../lib/pushTokenStorage'
 import { isTaskManagerUser } from '../lib/roles'
-import type { CompanyGuideRole } from '../lib/api'
+import type { CompanyContentCategory, CompanyGuideRole } from '../lib/api'
 import LoginScreen from '../screens/LoginScreen'
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen'
 import TasksScreen from '../screens/tabs/TasksScreen'
@@ -80,7 +80,7 @@ export type TasksStackParamList = {
 export type NoticesStackParamList = {
   NoticesList: undefined
   NoticeDetail: { id: string }
-  InfoCenterDetail: { kind: 'property' | 'secret' | 'task' | 'announcement' | 'guide' | 'warehouse_guide'; title: string; subtitle?: string; body?: string; contentRaw?: string | null; guideRole?: CompanyGuideRole | null; url?: string | null; copyText?: string | null; secretId?: string }
+  InfoCenterDetail: { kind: 'property' | 'secret' | 'task' | 'announcement' | 'guide' | 'warehouse_guide'; title: string; subtitle?: string; body?: string; contentRaw?: string | null; docCategory?: CompanyContentCategory | null; guideRole?: CompanyGuideRole | null; url?: string | null; copyText?: string | null; secretId?: string }
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
   InspectionPanel: { taskId: string }
   InspectionComplete: { taskId: string; skipInspectionPhotos?: boolean }
