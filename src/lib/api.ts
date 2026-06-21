@@ -258,15 +258,170 @@ export type CleaningAppProperty = {
   access_guide_link?: string | null
 }
 
+export type MzappExpenseScope = 'company' | 'property'
+
+export type MzappExpenseCategoryOption = {
+  value: string
+  label: string
+}
+
+export type MzappExpensePropertyOption = {
+  id: string
+  code: string
+  address?: string | null
+  region?: string | null
+}
+
+export type MzappExpenseBootstrap = {
+  permissions: string[]
+  scopes: MzappExpenseScope[]
+  categories: Record<MzappExpenseScope, MzappExpenseCategoryOption[]>
+  properties: MzappExpensePropertyOption[]
+}
+
+export type MzappExpenseReceipt = {
+  id: string
+  url: string
+  file_name?: string | null
+  mime_type?: string | null
+  file_size?: number | null
+  created_at?: string | null
+}
+
+export type MzappExpenseListItem = {
+  id: string
+  scope: MzappExpenseScope
+  property_id?: string | null
+  property_code?: string | null
+  property_address?: string | null
+  property_region?: string | null
+  occurred_at: string
+  amount: number
+  currency?: string | null
+  category?: string | null
+  category_detail?: string | null
+  expense_name?: string | null
+  note?: string | null
+  invoice_url?: string | null
+  created_at?: string | null
+  created_by?: string | null
+}
+
+export type MzappExpenseDetail = MzappExpenseListItem & {
+  due_date?: string | null
+  paid_date?: string | null
+  month_key?: string | null
+  receipts: MzappExpenseReceipt[]
+}
+
+export type MzappExpenseOcrResult = {
+  expense_name?: string | null
+  amount?: number | null
+  occurred_at?: string | null
+}
+
+export type MzappExpenseOcrResponse = {
+  available?: boolean
+  reason?: string
+  suggestion: MzappExpenseOcrResult
+}
+
+export type MzappExpenseCreatePayload = {
+  scope: MzappExpenseScope
+  property_id?: string
+  occurred_at: string
+  amount: number
+  category: string
+  category_detail?: string
+  expense_name?: string
+  note?: string
+  receipt_urls?: string[]
+}
+
+export type MzappExpenseUpdatePayload = Partial<Omit<MzappExpenseCreatePayload, 'scope'>> & {
+  receipt_urls?: string[]
+}
+
+export type MzappExpenseReceiptImage = {
+  id: string
+  receipt_id?: string
+  url: string
+  sort_index?: number | null
+  created_at?: string | null
+  created_by?: string | null
+}
+
+export type MzappExpenseReceiptItem = {
+  id?: string
+  line_no?: number | null
+  scope: MzappExpenseScope
+  property_id?: string | null
+  property_code?: string | null
+  property_address?: string | null
+  property_region?: string | null
+  expense_name: string
+  amount: number
+  category: string
+  category_detail?: string | null
+  note?: string | null
+  company_expense_id?: string | null
+  property_expense_id?: string | null
+}
+
+export type MzappExpenseReceiptRecord = {
+  id: string
+  receipt_date: string
+  receipt_total_amount: number
+  currency?: string | null
+  note?: string | null
+  created_at?: string | null
+  created_by?: string | null
+  first_image_url?: string | null
+  item_count: number
+  scope_summary: string
+}
+
+export type MzappExpenseReceiptDetail = MzappExpenseReceiptRecord & {
+  updated_at?: string | null
+  generated_from?: string | null
+  deleted_at?: string | null
+  deleted_by?: string | null
+  delete_source?: string | null
+  images: MzappExpenseReceiptImage[]
+  items: MzappExpenseReceiptItem[]
+}
+
+export type MzappExpenseReceiptCreatePayload = {
+  receipt_date: string
+  receipt_total_amount: number
+  note?: string
+  receipt_urls: string[]
+  items: Array<{
+    id?: string
+    scope: MzappExpenseScope
+    property_id?: string
+    expense_name: string
+    amount: number
+    category: string
+    category_detail?: string
+    note?: string
+  }>
+}
+
+export type MzappExpenseReceiptUpdatePayload = MzappExpenseReceiptCreatePayload
+
 export type CleaningAppTask = {
   id: string
   task_id: string
   date: string
   task_date: string
+  task_type?: string | null
   status: string
   assignee_id: string | null
   cleaner_id?: string | null
   inspector_id: string | null
+  inspection_mode?: 'pending_decision' | 'same_day' | 'self_complete' | 'deferred' | null
+  inspection_due_date?: string | null
   cleaner_name?: string | null
   inspector_name?: string | null
   checkout_time: string | null
@@ -322,6 +477,31 @@ export type WorkTaskProperty = {
   router_location?: string | null
 }
 
+export type GuestLuggageAcknowledgement = {
+  user_id: string
+  user_name: string
+  acknowledged: boolean
+  acknowledged_at?: string | null
+}
+
+export type GuestLuggageNotice = {
+  id: string
+  property_id: string
+  task_date: string
+  note?: string | null
+  photo_urls: string[]
+  version: number
+  created_by?: string | null
+  updated_by?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  current_user_acknowledged: boolean
+  acknowledgements: {
+    cleaners: GuestLuggageAcknowledgement[]
+    inspectors: GuestLuggageAcknowledgement[]
+  }
+}
+
 export type WorkTask = {
   id: string
   task_kind: string
@@ -342,13 +522,21 @@ export type WorkTask = {
   task_type?: string | null
   assignee_id: string | null
   inspector_id?: string | null
+  inspection_mode?: 'pending_decision' | 'same_day' | 'self_complete' | 'deferred' | null
+  inspection_due_date?: string | null
   status: string
   cleaning_status?: string | null
   inspection_status?: string | null
   urgency: string
+  sort_index?: number | null
   old_code?: string | null
   new_code?: string | null
   guest_special_request?: string | null
+  guest_luggage?: GuestLuggageNotice | null
+  note?: string | null
+  completion_photo_urls?: string[] | null
+  completion_note?: string | null
+  completion_reason?: string | null
   keys_required?: number | null
   keys_required_checkout?: number | null
   keys_required_checkin?: number | null
@@ -417,6 +605,118 @@ export async function updateCleaningTaskManagerFields(
     throw new Error(msg)
   }
   return (await parseJsonOrThrow(res)) as any
+}
+
+export async function createManualCleaningTask(
+  token: string,
+  params: {
+    create_mode: 'checkout' | 'checkin' | 'turnover' | 'stayover'
+    task_date: string
+    property_id: string
+    status?: 'pending' | 'assigned'
+    old_code?: string | null
+    new_code?: string | null
+    checkout_time?: string | null
+    checkin_time?: string | null
+    keys_required?: 1 | 2 | null
+    nights_override?: number | null
+    guest_special_request?: string | null
+  },
+) {
+  const urls = buildUrlCandidates('cleaning/tasks')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function createCleaningOfflineTask(
+  token: string,
+  params: {
+    date: string
+    task_type: 'property' | 'company' | 'other'
+    title: string
+    content?: string | null
+    kind: string
+    status: 'todo' | 'done'
+    urgency: 'low' | 'medium' | 'high' | 'urgent'
+    property_id?: string | null
+    assignee_id?: string | null
+  },
+) {
+  const urls = buildUrlCandidates('cleaning/offline-tasks')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function saveGuestLuggageNotice(
+  token: string,
+  params: { task_ids: string[]; note?: string | null; photo_urls: string[] },
+) {
+  const urls = buildUrlCandidates('mzapp/cleaning-tasks/guest-luggage')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      },
+      20000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: boolean; changed: boolean; guest_luggage: GuestLuggageNotice }
+}
+
+export async function deleteGuestLuggageNotice(token: string, noticeId: string) {
+  const urls = buildUrlCandidates(`mzapp/cleaning-tasks/guest-luggage/${encodeURIComponent(noticeId)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: boolean }
+}
+
+export async function acknowledgeGuestLuggageNotice(token: string, noticeId: string) {
+  const urls = buildUrlCandidates(`mzapp/cleaning-tasks/guest-luggage/${encodeURIComponent(noticeId)}/ack`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: boolean; guest_luggage: GuestLuggageNotice }
 }
 
 export async function updateCleaningOrderKeysRequired(token: string, params: { order_id: string; keys_required: 1 | 2 }) {
@@ -538,6 +838,7 @@ export type PropertyFeedback = {
   areas?: string[] | null
   category?: string | null
   detail: string
+  invoice_description_en?: string | null
   item_name?: string | null
   quantity?: number | null
   note?: string | null
@@ -838,6 +1139,20 @@ export async function completePropertyFeedbackProject(
   throw new Error(msg || '提交完成失败')
 }
 
+async function prepareImageUploadUri(uri: string) {
+  const sourceUri = String(uri || '').trim()
+  if (!sourceUri) throw new Error('missing uri')
+  try {
+    const mod = await import('./imageCompression')
+    const fn = (mod as any)?.compressImageForUpload
+    if (typeof fn !== 'function') return sourceUri
+    const compressedUri = await fn(sourceUri)
+    return String(compressedUri || '').trim() || sourceUri
+  } catch {
+    return sourceUri
+  }
+}
+
 export async function uploadCleaningMedia(
   token: string,
   file: { uri: string; name: string; mimeType: string },
@@ -845,8 +1160,7 @@ export async function uploadCleaningMedia(
 ) {
   const urls = buildUrlCandidates('cleaning-app/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const { compressImageForUpload } = await import('./imageCompression')
-  const compressedUri = await compressImageForUpload(file.uri)
+  const compressedUri = await prepareImageUploadUri(file.uri)
   const form = new FormData()
   if (meta) {
     for (const [k, v] of Object.entries(meta)) {
@@ -999,6 +1313,7 @@ export async function listDayEndHandover(token: string, params: { date: string; 
     key_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
     dirty_linen_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
     return_wash_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
+    warehouse_key_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
     consumable_photos: Array<{ id: string; url: string; captured_at?: string | null; created_at?: string | null }>
     reject_items: Array<{
       id: string
@@ -1010,7 +1325,13 @@ export async function listDayEndHandover(token: string, params: { date: string; 
       updated_at?: string | null
     }>
     no_dirty_linen: boolean
+    no_warehouse_key: boolean
     submitted_at?: string | null
+    key_submitted_at?: string | null
+    dirty_linen_submitted_at?: string | null
+    warehouse_key_submitted_at?: string | null
+    consumable_submitted_at?: string | null
+    reject_submitted_at?: string | null
     updated_at?: string | null
   }
 }
@@ -1040,16 +1361,18 @@ export async function listCleaningAppPropertyCodes(token: string, params?: { q?:
   }
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as Array<{ id: string; code: string }>
+  return (await parseJsonOrThrow(res)) as Array<{ id: string; code: string; region?: string | null }>
 }
 
 export async function uploadDayEndHandover(
   token: string,
   params: {
     date: string
-    key_photos: Array<{ url: string; captured_at?: string }>
-    dirty_linen_photos: Array<{ url: string; captured_at?: string }>
+    section?: 'all' | 'key' | 'dirty_linen' | 'return_wash' | 'warehouse_key' | 'consumable' | 'reject'
+    key_photos?: Array<{ url: string; captured_at?: string }>
+    dirty_linen_photos?: Array<{ url: string; captured_at?: string }>
     return_wash_photos?: Array<{ url: string; captured_at?: string }>
+    warehouse_key_photos?: Array<{ url: string; captured_at?: string }>
     consumable_photos?: Array<{ url: string; captured_at?: string }>
     reject_items?: Array<{
       linen_type: string
@@ -1058,9 +1381,76 @@ export async function uploadDayEndHandover(
       photos: Array<{ url: string; captured_at?: string }>
     }>
     no_dirty_linen?: boolean
+    no_warehouse_key?: boolean
   },
 ) {
   const urls = buildUrlCandidates('cleaning-app/day-end/handover')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      20000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export type WarehouseKeyAction = 'borrow' | 'return' | 'handover'
+
+export type WarehouseKeyStatus = {
+  key: {
+    key_code: string
+    label: string
+    status: string
+    holder_user_id: string | null
+    holder_name: string | null
+    holder_phone_au?: string | null
+    updated_at: string | null
+    updated_by?: string | null
+  }
+  events: {
+    id: string
+    key_code: string
+    action: WarehouseKeyAction | string
+    actor_user_id: string
+    actor_name: string
+    from_user_id?: string | null
+    from_name?: string | null
+    to_user_id?: string | null
+    to_name?: string | null
+    note?: string | null
+    task_date?: string | null
+    created_at?: string | null
+  }[]
+  candidates: { id: string; name: string; role?: string }[]
+}
+
+export async function getWarehouseKeyStatus(token: string, params?: { key_code?: string; date?: string }) {
+  const sp = new URLSearchParams()
+  sp.set('key', String(params?.key_code || 'msq'))
+  if (params?.date) sp.set('date', String(params.date || '').slice(0, 10))
+  const urls = buildUrlCandidates(`cleaning-app/warehouse-key/status?${sp.toString()}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as WarehouseKeyStatus
+}
+
+export async function createWarehouseKeyEvent(
+  token: string,
+  params: { key_code?: string; action: WarehouseKeyAction; to_user_id?: string; note?: string; task_date?: string },
+) {
+  const urls = buildUrlCandidates('cleaning-app/warehouse-key/events')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
   for (const url of urls) {
@@ -1163,16 +1553,21 @@ export async function getRestockProof(token: string, cleaningTaskId: string) {
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
-    items: Array<{ item_id: string; proof_url: string | null; status?: string | null; qty?: number | null; note?: string | null; created_at?: string | null }>
+    items: Array<{ item_id: string; proof_url: string | null; proof_urls?: string[]; status?: string | null; qty?: number | null; note?: string | null; created_at?: string | null }>
+    confirmed_sufficient?: boolean
+    confirmed_at?: string | null
   }
 }
 
 export async function saveRestockProof(
   token: string,
   cleaningTaskId: string,
-  params: { items: Array<{ item_id: string; status: 'restocked' | 'unavailable'; qty?: number | null; note?: string | null; proof_url: string | null }> },
+  params: {
+    items: Array<{ item_id: string; status: 'restocked' | 'unavailable'; qty?: number | null; note?: string | null; proof_url: string | null; proof_urls?: string[] }>
+    confirmed_sufficient?: boolean
+  },
 ) {
-  const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/restock-proof`)
+  const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/restock-proof`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
   for (const url of urls) {
@@ -1188,7 +1583,7 @@ export async function saveRestockProof(
   return (await parseJsonOrThrow(res)) as any
 }
 
-export type CompletionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen'
+export type CompletionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'vacuum_used'
 
 export async function getCompletionPhotos(token: string, cleaningTaskId: string) {
   const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/completion-photos`)
@@ -1385,7 +1780,7 @@ export async function markInboxNotificationsRead(token: string, params: { ids?: 
 export async function submitCleaningConsumables(
   token: string,
   taskId: string,
-  params: { living_room_photo_url: string; items: Array<{ item_id: string; status: 'ok' | 'low'; qty?: number; note?: string; photo_url?: string }> },
+  params: { living_room_photo_url: string; items: Array<{ item_id: string; status: 'ok' | 'low'; qty?: number; note?: string; photo_url?: string; photo_urls?: string[] }> },
 ) {
   const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(taskId)}/consumables`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -1429,7 +1824,7 @@ export async function getCleaningConsumables(
   if (!res.ok) throw new Error(await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
     living_room_photo_url?: string | null
-    items: Array<{ id: string; item_id: string; qty: number; need_restock: boolean; note?: string | null; status?: string | null; photo_url?: string | null; item_label?: string | null; created_at?: string | null }>
+    items: Array<{ id: string; item_id: string; qty: number; need_restock: boolean; note?: string | null; status?: string | null; photo_url?: string | null; photo_urls?: string[]; item_label?: string | null; created_at?: string | null }>
   }
 }
 
@@ -1476,10 +1871,12 @@ export async function listCompanySecretsForApp(token: string) {
 
 export type CompanyContentAudienceScope = 'all_staff' | 'cleaners' | 'warehouse_staff' | 'maintenance_staff' | 'managers'
 export type CompanyContentPageType = 'announce' | 'doc' | 'warehouse'
-export type CompanyContentCategory = 'company_rule' | 'work_guide'
+export type CompanyContentCategory = 'company_rule' | 'starter_guide' | 'role_guide' | 'work_guide' | 'customer_service_manual'
+export type CompanyGuideRole = 'cleaner' | 'cleaning_inspector'
 
 export type CompanyContentItem = {
   id: string
+  slug?: string | null
   title?: string | null
   content?: string | null
   published_at?: string | null
@@ -1489,12 +1886,15 @@ export type CompanyContentItem = {
   audience_scope?: CompanyContentAudienceScope | null
   page_type?: CompanyContentPageType | null
   category?: CompanyContentCategory | null
+  guide_role?: CompanyGuideRole | null
   expires_at?: string | null
   created_at?: string | null
 }
 
 export type CompanyAnnouncement = CompanyContentItem & { page_type?: 'announce' | null }
-export type CompanyGuide = CompanyContentItem & { page_type?: 'doc' | null; category?: 'work_guide' | null }
+export type CompanyDocument = CompanyContentItem & { page_type?: 'doc' | null; category?: CompanyContentCategory | null }
+export type CompanyGuide = CompanyDocument
+export type CustomerServiceManual = CompanyContentItem & { page_type?: 'doc' | null; category?: 'customer_service_manual' | null }
 export type WarehouseGuide = CompanyContentItem & { page_type?: 'warehouse' | null }
 
 async function listCompanyContentForApp(
@@ -1523,8 +1923,75 @@ export async function listCompanyAnnouncementsForApp(token: string) {
   return (await listCompanyContentForApp(token, { type: 'announce' })) as CompanyAnnouncement[]
 }
 
+export async function listCompanyDocsForApp(token: string) {
+  return (await listCompanyContentForApp(token, { type: 'doc' })) as CompanyDocument[]
+}
+
 export async function listWorkGuidesForApp(token: string) {
   return (await listCompanyContentForApp(token, { type: 'doc', category: 'work_guide' })) as CompanyGuide[]
+}
+
+function parseCompanyContentBlocks(content: string | null | undefined): any[] {
+  const raw = String(content || '').trim()
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : [{ type: 'legacy_html', html: raw }]
+  } catch {
+    return [{ type: 'legacy_html', html: raw }]
+  }
+}
+
+function customerServiceManualSortValue(row: CustomerServiceManual) {
+  const slug = String(row.slug || '').trim().toLowerCase()
+  if (slug === 'cs-manual:overview') return 0
+  if (slug === 'cs-manual:quick-nav') return 1
+  const numbered = slug.match(/^cs-manual:(\d+)(?:-(\d+))?/)
+  if (numbered) return Number(numbered[1]) * 100 + Number(numbered[2] || 0)
+  const reply = slug.match(/^cs-manual:t(\d+)/)
+  if (reply) return 12000 + Number(reply[1])
+  const review = slug.match(/^cs-manual:r(\d+)/)
+  if (review) return 13000 + Number(review[1])
+  return 99000
+}
+
+function customerServiceManualHeadingLevel(row: CustomerServiceManual) {
+  const title = String(row.title || '').trim()
+  const slug = String(row.slug || '').trim().toLowerCase()
+  if (/^cs-manual:(11|12|13|14)-/.test(slug)) return 3
+  if (/^cs-manual:[tr]\d{2}/.test(slug)) return 3
+  if (/^\d+\./.test(title) || /^[TR]\d{2}\b/i.test(title)) return 3
+  return 2
+}
+
+function normalizeCustomerServiceManuals(rows: CustomerServiceManual[]) {
+  const persisted = rows.find((row) => String(row.slug || '').trim() === 'cs-manual')
+  if (persisted) return [persisted]
+  if (rows.length <= 1) return rows
+  const sorted = [...rows].sort((a, b) => customerServiceManualSortValue(a) - customerServiceManualSortValue(b))
+  const blocks: any[] = []
+  for (const row of sorted) {
+    const title = String(row.title || '').trim()
+    if (title) blocks.push({ type: 'heading', text: title, level: customerServiceManualHeadingLevel(row) })
+    blocks.push(...parseCompanyContentBlocks(row.content))
+  }
+  const updatedAt = sorted.map((row) => String(row.updated_at || '')).filter(Boolean).sort().pop()
+  return [{
+    id: 'cs-manual-combined',
+    slug: 'cs-manual',
+    title: sorted.find((row) => String(row.title || '').includes('客服培训与实操手册'))?.title || '客服培训与实操手册',
+    content: JSON.stringify(blocks),
+    status: 'published',
+    audience_scope: 'managers',
+    page_type: 'doc',
+    category: 'customer_service_manual',
+    updated_at: updatedAt || sorted[0]?.updated_at || null,
+  } as CustomerServiceManual]
+}
+
+export async function listCustomerServiceManualsForApp(token: string) {
+  const rows = (await listCompanyContentForApp(token, { type: 'doc', category: 'customer_service_manual' })) as CustomerServiceManual[]
+  return normalizeCustomerServiceManuals(rows)
 }
 
 export async function listWarehouseGuidesForApp(token: string) {
@@ -1700,6 +2167,32 @@ export async function reorderCleaningTasks(
   return (await parseJsonOrThrow(res)) as any
 }
 
+export async function reorderWorkTasks(
+  token: string,
+  params: { date: string; task_ids: string[] },
+) {
+  const task_ids = Array.from(new Set((Array.isArray(params.task_ids) ? params.task_ids : []).map((x) => String(x || '').trim()).filter(Boolean)))
+  if (!task_ids.length) throw new Error('缺少任务ID')
+  const urls = buildUrlCandidates('mzapp/work-tasks/reorder')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: params.date, task_ids }),
+      },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
 export async function uploadMzappMedia(
   token: string,
   file: { uri: string; name: string; mimeType: string },
@@ -1707,8 +2200,7 @@ export async function uploadMzappMedia(
 ) {
   const urls = buildUrlCandidates('mzapp/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const { compressImageForUpload } = await import('./imageCompression')
-  const compressedUri = await compressImageForUpload(file.uri)
+  const compressedUri = await prepareImageUploadUri(file.uri)
   const form = new FormData()
   if (meta) {
     for (const [k, v] of Object.entries(meta)) {
@@ -1734,10 +2226,289 @@ export async function uploadMzappMedia(
   return { url: u }
 }
 
+export async function getMzappExpenseBootstrap(token: string) {
+  const urls = buildUrlCandidates('mzapp/expenses/bootstrap')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseBootstrap
+}
+
+export async function uploadMzappExpenseReceipt(
+  token: string,
+  file: { uri: string; name: string; mimeType: string },
+) {
+  const urls = buildUrlCandidates('mzapp/expenses/receipts/upload')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  const compressedUri = await prepareImageUploadUri(file.uri)
+  const form = new FormData()
+  form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form as any }, 30000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { url: string }
+}
+
+export async function ocrMzappExpenseReceipt(
+  token: string,
+  params: { scope: MzappExpenseScope; receipt_url: string },
+) {
+  const urls = buildUrlCandidates('mzapp/expenses/ocr')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      },
+      30000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  const data = (await parseJsonOrThrow(res)) as any
+  return {
+    available: data?.available,
+    reason: data?.reason,
+    suggestion: (data?.suggestion || {}) as MzappExpenseOcrResult,
+  } as MzappExpenseOcrResponse
+}
+
+export async function createMzappExpense(token: string, payload: MzappExpenseCreatePayload) {
+  const urls = buildUrlCandidates('mzapp/expenses')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      20000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseDetail
+}
+
+export async function listMyMzappExpenses(
+  token: string,
+  params?: { scope?: MzappExpenseScope; limit?: number; offset?: number },
+) {
+  const urls = buildUrlCandidates('mzapp/expenses/mine')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  const qs = new URLSearchParams()
+  if (params?.scope) qs.set('scope', params.scope)
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  if (params?.offset != null) qs.set('offset', String(params.offset))
+  const fullUrls = urls.map((url) => (qs.size ? `${url}?${qs.toString()}` : url))
+  let lastRes: Response | null = null
+  for (const url of fullUrls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { items: MzappExpenseListItem[]; total: number }
+}
+
+export async function getMyMzappExpense(token: string, scope: MzappExpenseScope, id: string) {
+  const urls = buildUrlCandidates(`mzapp/expenses/mine/${encodeURIComponent(scope)}/${encodeURIComponent(id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseDetail
+}
+
+export async function updateMyMzappExpense(
+  token: string,
+  scope: MzappExpenseScope,
+  id: string,
+  payload: MzappExpenseUpdatePayload,
+) {
+  const urls = buildUrlCandidates(`mzapp/expenses/mine/${encodeURIComponent(scope)}/${encodeURIComponent(id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      20000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseDetail
+}
+
+export async function deleteMyMzappExpense(token: string, scope: MzappExpenseScope, id: string) {
+  const urls = buildUrlCandidates(`mzapp/expenses/mine/${encodeURIComponent(scope)}/${encodeURIComponent(id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: true }
+}
+
+export async function getMzappExpenseReceiptBootstrap(token: string) {
+  const urls = buildUrlCandidates('mzapp/expense-receipts/bootstrap')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseBootstrap
+}
+
+export async function uploadMzappExpenseReceiptImage(
+  token: string,
+  file: { uri: string; name: string; mimeType: string },
+) {
+  const urls = buildUrlCandidates('mzapp/expense-receipts/images/upload')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  const compressedUri = await prepareImageUploadUri(file.uri)
+  const form = new FormData()
+  form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form as any }, 30000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { url: string }
+}
+
+export async function createMzappExpenseReceipt(token: string, payload: MzappExpenseReceiptCreatePayload) {
+  const urls = buildUrlCandidates('mzapp/expense-receipts')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      20000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseReceiptDetail
+}
+
+export async function listMyMzappExpenseReceipts(
+  token: string,
+  params?: { limit?: number; offset?: number },
+) {
+  const urls = buildUrlCandidates('mzapp/expense-receipts/mine')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  const qs = new URLSearchParams()
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  if (params?.offset != null) qs.set('offset', String(params.offset))
+  const fullUrls = urls.map((url) => (qs.size ? `${url}?${qs.toString()}` : url))
+  let lastRes: Response | null = null
+  for (const url of fullUrls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { items: MzappExpenseReceiptRecord[]; total: number }
+}
+
+export async function getMyMzappExpenseReceipt(token: string, id: string) {
+  const urls = buildUrlCandidates(`mzapp/expense-receipts/mine/${encodeURIComponent(id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseReceiptDetail
+}
+
+export async function updateMyMzappExpenseReceipt(
+  token: string,
+  id: string,
+  payload: MzappExpenseReceiptUpdatePayload,
+) {
+  const urls = buildUrlCandidates(`mzapp/expense-receipts/mine/${encodeURIComponent(id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      20000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MzappExpenseReceiptDetail
+}
+
+export async function deleteMyMzappExpenseReceipt(token: string, id: string) {
+  const urls = buildUrlCandidates(`mzapp/expense-receipts/mine/${encodeURIComponent(id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: true }
+}
+
 export async function markWorkTask(
   token: string,
   taskId: string,
-  params: { action: 'done' | 'defer'; photo_url?: string | null; note?: string | null; reason?: string | null; defer_to?: string | null },
+  params: { action: 'done' | 'defer'; photo_url?: string | null; photo_urls?: string[] | null; note?: string | null; reason?: string | null; defer_to?: string | null },
 ) {
   const urls = buildUrlCandidates(`mzapp/work-tasks/${encodeURIComponent(taskId)}/mark`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')

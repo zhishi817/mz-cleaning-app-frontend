@@ -1,7 +1,6 @@
 import { getJson, setJson } from './storage'
 import { API_BASE_URL } from '../config/env'
 import { listWorkTasks, type WorkTask } from './api'
-import { prependNotice } from './noticesStore'
 import EventSource from 'react-native-sse'
 import { notifyAuthInvalidated } from './authEvents'
 
@@ -48,6 +47,8 @@ type WorkTaskStreamEvent = {
   change_scope?: string
   changed_fields?: string[]
   payload?: Record<string, any> | null
+  occurred_at?: string
+  caused_by_user_id?: string | null
 }
 
 const STORAGE_PREFIX = 'mzstay.work_tasks.store.v1:'
@@ -60,12 +61,19 @@ const SAFE_PATCH_FIELDS = new Set([
   'scheduled_date',
   'start_time',
   'end_time',
+  'checkout_time',
+  'checkin_time',
   'urgency',
   'title',
   'summary',
+  'completion_photo_urls',
+  'completion_note',
+  'completion_reason',
   'old_code',
   'new_code',
   'guest_special_request',
+  'guest_luggage',
+  'note',
   'checked_out_at',
   'key_photo_url',
   'lockbox_video_url',
@@ -74,6 +82,8 @@ const SAFE_PATCH_FIELDS = new Set([
   'sort_index_inspector',
   'cleaner_name',
   'inspector_name',
+  'inspection_mode',
+  'inspection_due_date',
   'keys_required',
   'keys_required_checkout',
   'keys_required_checkin',
@@ -98,7 +108,6 @@ let state: StoreState = {
   sseConnectionState: 'idle',
 }
 let initializedKey: string | null = null
-const hydratedBuckets = new Set<string>()
 let activeRealtimeParams: ActiveRealtimeParams | null = null
 let activeStreamIdentity: StreamIdentity | null = null
 let streamEs: EventSource<'connected' | 'ping' | 'resync_required' | 'work_task_event'> | null = null
@@ -207,7 +216,7 @@ function stopHealthTimer() {
   healthTimer = null
 }
 
-function closeStream(advanceRequestId = true) {
+function closeStream() {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
@@ -219,6 +228,20 @@ function closeStream(advanceRequestId = true) {
     } catch {}
   }
   streamEs = null
+}
+
+export function deactivateWorkTasksRealtime() {
+  activeRealtimeParams = null
+  activeStreamIdentity = null
+  closeStream()
+  stopHealthTimer()
+  if (resyncTimer) {
+    clearTimeout(resyncTimer)
+    resyncTimer = null
+  }
+  fullSyncQueued = false
+  lastStreamActivityAt = 0
+  setConnectionState('idle')
 }
 
 function scheduleReconnect() {
@@ -309,14 +332,54 @@ function mergePatchIntoTask(task: WorkTaskItem, event: WorkTaskStreamEvent) {
       next.property = { ...(next.property || { id: '', code: '', address: '', unit_type: '' }), [key]: value }
       continue
     }
-    ;(next as any)[field] = value
+    ;(next as any)[field] = field === 'status' ? projectCleaningStatusForTask(next, value) : value
+  }
+  if (changedFields.includes('checkout_time') && !changedFields.includes('start_time')) {
+    ;(next as any).start_time = (next as any).checkout_time ?? null
+  }
+  if (changedFields.includes('checkin_time') && !changedFields.includes('end_time')) {
+    ;(next as any).end_time = (next as any).checkin_time ?? null
+  }
+  if (
+    !changedFields.includes('summary') &&
+    (changedFields.includes('checkout_time') || changedFields.includes('checkin_time') || changedFields.includes('start_time') || changedFields.includes('end_time'))
+  ) {
+    const checkoutTime = String((next as any).start_time || (next as any).checkout_time || '').trim()
+    const checkinTime = String((next as any).end_time || (next as any).checkin_time || '').trim()
+    ;(next as any).summary = checkoutTime && checkinTime
+      ? `${checkoutTime}退房 ${checkinTime}入住`
+      : checkoutTime
+        ? `${checkoutTime}退房`
+        : checkinTime
+          ? `${checkinTime}入住`
+          : (next as any).summary
   }
   const date = String(next.scheduled_date || '').slice(0, 10)
   next.date = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : task.date
   return next
 }
 
-function findTaskIndexForEvent(event: WorkTaskStreamEvent) {
+function projectCleaningStatusForTask(task: WorkTaskItem, value: any) {
+  const raw = String(value || '').trim().toLowerCase()
+  if (!raw) return value
+  if (String(task.source_type || '').trim().toLowerCase() !== 'cleaning_tasks') return value
+  const kind = String(task.task_kind || '').trim().toLowerCase()
+  if (kind === 'inspection') {
+    if (raw === 'keys_hung') return 'keys_hung'
+    if (raw === 'inspected' || raw === 'done' || raw === 'completed' || raw === 'ready') return 'done'
+    if (raw === 'cleaned' || raw === 'restock_pending' || raw === 'restocked') return 'to_inspect'
+    if (raw === 'in_progress' || String((task as any).key_photo_url || '').trim()) return 'in_progress'
+    if (raw === 'assigned' || String((task as any).inspector_id || '').trim()) return 'assigned'
+    return raw
+  }
+  if (kind === 'cleaning') {
+    if (raw === 'cleaned' || raw === 'restock_pending' || raw === 'restocked') return 'done'
+    if (raw === 'inspected' || raw === 'ready' || raw === 'keys_hung') return 'done'
+  }
+  return value
+}
+
+function findTaskIndexesForEvent(event: WorkTaskStreamEvent) {
   const ids = Array.from(
     new Set(
       [event.task_id, ...(Array.isArray(event.source_ref_ids) ? event.source_ref_ids : [])]
@@ -324,8 +387,12 @@ function findTaskIndexForEvent(event: WorkTaskStreamEvent) {
         .filter(Boolean),
     ),
   )
-  if (!ids.length) return -1
-  return state.items.findIndex((task) => matchTaskIds(task, ids))
+  if (!ids.length) return []
+  const indexes: number[] = []
+  state.items.forEach((task, index) => {
+    if (matchTaskIds(task, ids)) indexes.push(index)
+  })
+  return indexes
 }
 
 function shouldIgnoreByVersion(task: WorkTaskItem, event: WorkTaskStreamEvent) {
@@ -381,16 +448,21 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
     scheduleFullSync(eventType || 'unsafe_patch')
     return
   }
-  const index = findTaskIndexForEvent(event)
-  if (index < 0) {
+  const indexes = findTaskIndexesForEvent(event)
+  if (!indexes.length) {
     scheduleFullSync('task_missing_for_patch')
     return
   }
-  const prev = state.items[index]
-  if (shouldIgnoreByVersion(prev, event)) return
-  const nextTask = mergePatchIntoTask(prev, event)
   const items = state.items.slice()
-  items[index] = nextTask
+  let changed = false
+  for (const index of indexes) {
+    const prev = items[index]
+    if (!prev) continue
+    if (shouldIgnoreByVersion(prev, event)) continue
+    items[index] = mergePatchIntoTask(prev, event)
+    changed = true
+  }
+  if (!changed) return
   state = {
     ...state,
     items,
@@ -434,7 +506,7 @@ function connectWorkTasksRealtime(forceReconnect = false) {
   if (!urls.length) return
   if (!forceReconnect && streamEs) return
 
-  closeStream(false)
+  closeStream()
   stopHealthTimer()
   setConnectionState('connecting')
   touchStreamActivity()
@@ -491,10 +563,9 @@ function connectWorkTasksRealtime(forceReconnect = false) {
     if (streamEs !== es) return
     const xhrStatus = Number((event as any)?.xhrStatus || 0)
     if (xhrStatus === 401 || xhrStatus === 403) {
-      if (xhrStatus === 401) notifyAuthInvalidated('session_expired')
       setConnectionState('error')
-      closeStream(false)
-      stopHealthTimer()
+      deactivateWorkTasksRealtime()
+      notifyAuthInvalidated('session_expired')
       return
     }
     streamEs = null
@@ -568,6 +639,26 @@ export async function patchWorkTaskItem(id0: string, patch: Partial<WorkTaskItem
   emit()
 }
 
+export async function patchWorkTaskItems(patches0: Array<{ id: string; patch: Partial<WorkTaskItem> }>) {
+  const patches = (Array.isArray(patches0) ? patches0 : [])
+    .map((item) => ({ id: String(item?.id || '').trim(), patch: item?.patch || {} }))
+    .filter((item) => !!item.id && item.patch && typeof item.patch === 'object' && Object.keys(item.patch).length > 0)
+  if (!patches.length) return
+  const patchById = new Map<string, Partial<WorkTaskItem>>()
+  for (const item of patches) patchById.set(item.id, { ...(patchById.get(item.id) || {}), ...item.patch })
+  let changed = false
+  const items = state.items.map((task) => {
+    const patch = patchById.get(String(task.id || '').trim())
+    if (!patch) return task
+    changed = true
+    return { ...task, ...patch }
+  })
+  if (!changed) return
+  state = { ...state, items, updatedAt: new Date().toISOString() }
+  await persist()
+  emit()
+}
+
 async function persist() {
   if (!state.bucketKey) return
   const toSave: StoreState = {
@@ -606,45 +697,6 @@ function mapRemoteTask(t: WorkTask): WorkTaskItem {
   }
 }
 
-function titleForTask(t: WorkTaskItem) {
-  const code = String(t?.property?.code || '').trim()
-  if (code) return code
-  const title = String(t?.title || '').trim()
-  if (title) return title
-  return '任务'
-}
-
-function hashText(s: string) {
-  let h = 0
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
-  return String(h)
-}
-
-function normalizeLine(s: any) {
-  return String(s ?? '').replace(/\s+/g, ' ').trim()
-}
-
-function formatUpdatedFields(prev: WorkTaskItem, next: WorkTaskItem) {
-  const prevCheckout = normalizeLine((prev as any)?.start_time)
-  const nextCheckout = normalizeLine((next as any)?.start_time)
-  const prevCheckin = normalizeLine((prev as any)?.end_time)
-  const nextCheckin = normalizeLine((next as any)?.end_time)
-  const prevOld = normalizeLine((prev as any)?.old_code)
-  const nextOld = normalizeLine((next as any)?.old_code)
-  const prevNew = normalizeLine((prev as any)?.new_code)
-  const nextNew = normalizeLine((next as any)?.new_code)
-  const prevNeed = normalizeLine((prev as any)?.guest_special_request)
-  const nextNeed = normalizeLine((next as any)?.guest_special_request)
-
-  const lines: string[] = []
-  if (prevCheckout !== nextCheckout) lines.push(`退房时间：${nextCheckout || '-'}（原：${prevCheckout || '-'}）`)
-  if (prevCheckin !== nextCheckin) lines.push(`入住时间：${nextCheckin || '-'}（原：${prevCheckin || '-'}）`)
-  if (prevOld !== nextOld) lines.push(`旧密码：${nextOld || '-'}（原：${prevOld || '-'}）`)
-  if (prevNew !== nextNew) lines.push(`新密码：${nextNew || '-'}（原：${prevNew || '-'}）`)
-  if (prevNeed !== nextNeed) lines.push(`客人需求：${nextNeed || '-'}（原：${prevNeed || '-'}）`)
-  return { lines, nextFieldsKey: hashText(JSON.stringify({ nextCheckout, nextCheckin, nextOld, nextNew, nextNeed })) }
-}
-
 export async function refreshWorkTasksFromServer(params: {
   token: string
   userId: string
@@ -654,100 +706,8 @@ export async function refreshWorkTasksFromServer(params: {
 }) {
   const bucketKey = makeWorkTasksBucketKey({ userId: params.userId, date_from: params.date_from, date_to: params.date_to, view: params.view })
   await initWorkTasksStore({ bucketKey })
-  const prevItems = state.items || []
-  const shouldEmitDiffNotices = hydratedBuckets.has(bucketKey)
   const remote = await listWorkTasks(params.token, { date_from: params.date_from, date_to: params.date_to, view: params.view })
   const items = remote.map(mapRemoteTask).filter((t) => t.date !== 'unknown')
-
-  try {
-    if (shouldEmitDiffNotices) {
-      const prevById = new Map(prevItems.map((x) => [x.id, x]))
-      for (const it of items) {
-        const prev = prevById.get(it.id) || null
-        if (!prev) continue
-        if (String(it.source_type || '').toLowerCase() !== 'cleaning_tasks') continue
-        const code = titleForTask(it)
-        const addr = String(it?.property?.address || '').trim()
-
-        const prevCheckedOut = String((prev as any)?.checked_out_at || '').trim()
-        const nextCheckedOut = String((it as any)?.checked_out_at || '').trim()
-        if (!prevCheckedOut && nextCheckedOut) {
-          const body = [code ? `房源：${code}` : '', addr ? `地址：${addr}` : '', '状态：已退房'].filter(Boolean).join('\n')
-          await prependNotice({
-            id: `guest_checked_out:${code}:${nextCheckedOut}`,
-            type: 'update',
-            title: `已退房：${code}`,
-            summary: '已退房',
-            content: body || '已退房',
-            data: {
-              kind: 'guest_checked_out',
-              task_ids: Array.isArray((it as any)?.source_ids) ? (it as any).source_ids : [],
-              property_code: code,
-              checked_out_at: nextCheckedOut,
-            },
-          })
-        }
-        if (prevCheckedOut && !nextCheckedOut) {
-          const body = [code ? `房源：${code}` : '', addr ? `地址：${addr}` : '', '状态：房源还未退房，待退房'].filter(Boolean).join('\n')
-          await prependNotice({
-            id: `guest_checked_out_cancelled:${code}:${prevCheckedOut}`,
-            type: 'update',
-            title: `待退房：${code}`,
-            summary: '房源还未退房，待退房',
-            content: body || '房源还未退房，待退房',
-            data: {
-              kind: 'guest_checked_out_cancelled',
-              task_ids: Array.isArray((it as any)?.source_ids) ? (it as any).source_ids : [],
-              property_code: code,
-              checked_out_at: prevCheckedOut,
-            },
-          })
-        }
-
-        const prevFields = JSON.stringify({
-          checkout_time: String((prev as any)?.start_time || ''),
-          checkin_time: String((prev as any)?.end_time || ''),
-          old_code: String((prev as any)?.old_code || ''),
-          new_code: String((prev as any)?.new_code || ''),
-          guest_special_request: String((prev as any)?.guest_special_request || ''),
-        })
-        const nextFields = JSON.stringify({
-          checkout_time: String((it as any)?.start_time || ''),
-          checkin_time: String((it as any)?.end_time || ''),
-          old_code: String((it as any)?.old_code || ''),
-          new_code: String((it as any)?.new_code || ''),
-          guest_special_request: String((it as any)?.guest_special_request || ''),
-        })
-        if (prevFields !== nextFields) {
-          const detail = formatUpdatedFields(prev as any, it as any)
-          const body = [
-            code ? `房源：${code}` : '',
-            addr ? `地址：${addr}` : '',
-            '任务信息已更新：',
-            ...(detail.lines.length ? detail.lines : ['时间/密码/客需（已更新）']),
-          ]
-            .filter(Boolean)
-            .join('\n')
-          await prependNotice({
-            id: `manager_fields:${code}:${detail.nextFieldsKey}`,
-            type: 'update',
-            title: `任务信息更新：${code}`,
-            summary: detail.lines[0] ? detail.lines[0].slice(0, 30) : '信息已更新',
-            content: body,
-            data: {
-              kind: 'cleaning_task_manager_fields_updated',
-              entity: 'cleaning_task',
-              entityId: String((it as any)?.source_id || it.id || ''),
-              task_ids: Array.isArray((it as any)?.source_ids) ? (it as any).source_ids : [],
-              property_code: code,
-              fields_key: detail.nextFieldsKey,
-              event_id: `manager_fields:${code}:${detail.nextFieldsKey}`,
-            },
-          })
-        }
-      }
-    }
-  } catch {}
 
   const now = new Date().toISOString()
   clearBucketDirty(bucketKey)
@@ -759,6 +719,5 @@ export async function refreshWorkTasksFromServer(params: {
     lastFullSyncTimestamp: now,
   }
   await persist()
-  hydratedBuckets.add(bucketKey)
   emit()
 }

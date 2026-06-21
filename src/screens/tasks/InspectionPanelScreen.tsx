@@ -9,8 +9,10 @@ import { getInspectionPhotos, getRestockProof, listChecklistItems, saveInspectio
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
+import { canSkipInspectionPhotosForGuestArrival, isEarlyCheckinTime } from '../../lib/taskTime'
+import { getWorkTasksSnapshot, patchWorkTaskItem, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
+import GuestLuggageCard from '../../components/GuestLuggageCard'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'InspectionPanel'>
 
@@ -20,13 +22,17 @@ type RestockState = {
   qty: number | null
   status: 'restocked' | 'unavailable' | null
   source_photo_url: string | null
-  proof_url: string | null
+  proof_urls: string[]
   note: string
   origin: 'task' | 'manual'
 }
 
 type UncleanPhoto = { url: string; note: string }
 type RoomPhotoArea = 'living' | 'sofa' | 'bedroom' | 'kitchen'
+
+function cleaningIssueSignature(items: UncleanPhoto[]) {
+  return JSON.stringify((items || []).slice(0, 12).map((x) => ({ url: String(x.url || '').trim(), note: String(x.note || '') })))
+}
 
 function normalizeBase(base: string) {
   return String(base || '').trim().replace(/\/+$/g, '')
@@ -57,10 +63,11 @@ function sectionTitle(icon: any, title: string) {
 
 export default function InspectionPanelScreen(props: Props) {
   const { t } = useI18n()
-  const { token, user } = useAuth()
+  const { token } = useAuth()
   const insets = useSafeAreaInsets()
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [, bumpTasksVersion] = useState(0)
   const [restockUploadingIdx, setRestockUploadingIdx] = useState<number | null>(null)
   const [expanded, setExpanded] = useState<{ restock: boolean; cleaningIssue: boolean; propertyIssue: boolean; photos: boolean }>({
     restock: true,
@@ -69,10 +76,20 @@ export default function InspectionPanelScreen(props: Props) {
     photos: true,
   })
 
-  const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
+  useEffect(() => {
+    const unsubscribe = subscribeWorkTasks(() => bumpTasksVersion((value) => value + 1))
+    return () => {
+      unsubscribe()
+    }
+  }, [])
+
+  const task = getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null
   const cleaningTaskId = String(task?.source_id || '').trim()
   const propertyCode = String(task?.property?.code || '').trim()
   const propertyAddr = String(task?.property?.address || '').trim()
+  const checkinTime = String((task as any)?.end_time || (task as any)?.checkin_time || '').trim()
+  const canSkipPhotosForGuestArrival = canSkipInspectionPhotosForGuestArrival(checkinTime)
+  const isEarlyCheckinGuest = isEarlyCheckinTime(checkinTime)
 
   const initialRestockItems = useMemo(() => {
     const list = Array.isArray((task as any)?.restock_items) ? ((task as any).restock_items as any[]) : []
@@ -86,17 +103,21 @@ export default function InspectionPanelScreen(props: Props) {
         const source_photo_url = String(x?.photo_url || '').trim() || null
         return { item_id, label, qty, source_photo_url }
       })
-      .filter(Boolean) as Array<{ item_id: string; label: string; qty: number | null; source_photo_url: string | null }>
+      .filter(Boolean) as { item_id: string; label: string; qty: number | null; source_photo_url: string | null }[]
   }, [task])
 
   const [restock, setRestock] = useState<RestockState[]>([])
+  const [restockConfirmedSufficient, setRestockConfirmedSufficient] = useState(false)
+  const [restockConfirming, setRestockConfirming] = useState(false)
   const [checklist, setChecklist] = useState<ChecklistItem[]>([])
   const [restockPickerOpen, setRestockPickerOpen] = useState(false)
   const [restockPickerQuery, setRestockPickerQuery] = useState('')
+  const [restockPickerSelectedIds, setRestockPickerSelectedIds] = useState<string[]>([])
   const areaLimits: Record<RoomPhotoArea, number> = useMemo(
     () => ({ living: 3, sofa: 2, bedroom: 8, kitchen: 2 }),
     [],
   )
+  const requiredAreaMinimum = 1
   const [roomPhotos, setRoomPhotos] = useState<Record<RoomPhotoArea, string[]>>({
     living: [],
     sofa: [],
@@ -104,14 +125,27 @@ export default function InspectionPanelScreen(props: Props) {
     kitchen: [],
   })
   const [cleaningIssue, setCleaningIssue] = useState<UncleanPhoto[]>([])
+  const roomPhotosRef = useRef(roomPhotos)
+  const cleaningIssueRef = useRef(cleaningIssue)
+  const cleaningIssueSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastSavedCleaningIssueRef = useRef(cleaningIssueSignature(cleaningIssue))
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
-  const viewerCloseRef = useRef<any>(null)
   const propertyIssueVisitedRef = useRef(false)
-  const [propertyIssueReviewed, setPropertyIssueReviewed] = useState(false)
-  const [cleaningIssueReviewed, setCleaningIssueReviewed] = useState(false)
   const guestSpecialRequest = String((task as any)?.guest_special_request || '').trim()
   const [guestNeedDone, setGuestNeedDone] = useState(false)
+
+  useEffect(() => {
+    roomPhotosRef.current = roomPhotos
+  }, [roomPhotos])
+
+  useEffect(() => {
+    cleaningIssueRef.current = cleaningIssue
+  }, [cleaningIssue])
+
+  useEffect(() => () => {
+    if (cleaningIssueSaveTimerRef.current) clearTimeout(cleaningIssueSaveTimerRef.current)
+  }, [])
 
   useEffect(() => {
     const nav: any = props.navigation as any
@@ -119,7 +153,6 @@ export default function InspectionPanelScreen(props: Props) {
     const unsub = nav.addListener('focus', () => {
       if (!propertyIssueVisitedRef.current) return
       propertyIssueVisitedRef.current = false
-      setPropertyIssueReviewed(true)
       setExpanded((p) => ({ ...p, propertyIssue: false, photos: true }))
     })
     return unsub
@@ -132,7 +165,7 @@ export default function InspectionPanelScreen(props: Props) {
       qty: x.qty,
       status: null,
       source_photo_url: x.source_photo_url,
-      proof_url: null,
+      proof_urls: [],
       note: '',
       origin: 'task',
     }))
@@ -168,17 +201,42 @@ export default function InspectionPanelScreen(props: Props) {
     return base.filter((x) => String(x.label || '').toLowerCase().includes(q) || String(x.id || '').toLowerCase().includes(q))
   }, [checklist, restockPickerQuery])
 
-  function addManualRestockItem(it: ChecklistItem) {
-    const id = String(it.id || '').trim()
-    if (!id) return
-    if (restock.some((x) => x.item_id === id)) {
-      Alert.alert(t('common_error'), '该补充项已存在')
-      return
-    }
-    const label = String(it.label || id).trim()
-    setRestock((prev) => [...prev, { item_id: id, label, qty: null, status: null, source_photo_url: null, proof_url: null, note: '', origin: 'manual' }])
+  function closeRestockPicker() {
     setRestockPickerOpen(false)
     setRestockPickerQuery('')
+    setRestockPickerSelectedIds([])
+  }
+
+  function toggleRestockPickerItem(itemId0: string) {
+    const itemId = String(itemId0 || '').trim()
+    if (!itemId) return
+    if (restock.some((x) => x.item_id === itemId)) return
+    setRestockPickerSelectedIds((prev) => (
+      prev.includes(itemId) ? prev.filter((id) => id !== itemId) : [...prev, itemId]
+    ))
+  }
+
+  function addManualRestockItems(itemIds: string[]) {
+    const ids = Array.from(new Set((itemIds || []).map((id) => String(id || '').trim()).filter(Boolean)))
+    if (!ids.length) {
+      Alert.alert(t('common_error'), '请先选择补充项')
+      return
+    }
+    const existing = new Set(restock.map((x) => x.item_id))
+    const nextItems = ids
+      .filter((id) => !existing.has(id))
+      .map((id) => {
+        const source = checklist.find((it) => String(it.id || '').trim() === id) || null
+        const label = String(source?.label || id).trim()
+        return { item_id: id, label, qty: null, status: null, source_photo_url: null, proof_urls: [], note: '', origin: 'manual' as const }
+      })
+    if (!nextItems.length) {
+      Alert.alert(t('common_error'), '所选补充项已存在')
+      return
+    }
+    setRestockConfirmedSufficient(false)
+    setRestock((prev) => [...prev, ...nextItems])
+    closeRestockPicker()
   }
 
   useEffect(() => {
@@ -190,7 +248,7 @@ export default function InspectionPanelScreen(props: Props) {
         setLoading(true)
         const [r1, r2] = await Promise.all([getInspectionPhotos(token, cleaningTaskId).catch(() => null), getRestockProof(token, cleaningTaskId).catch(() => null)])
         if (cancelled) return
-        if (r1?.items?.length) {
+        if (Array.isArray(r1?.items)) {
           const nextRoom: Record<RoomPhotoArea, string[]> = { living: [], sofa: [], bedroom: [], kitchen: [] }
           const uncleanList: UncleanPhoto[] = []
           for (const it of r1.items) {
@@ -202,44 +260,48 @@ export default function InspectionPanelScreen(props: Props) {
             else if (area in nextRoom) nextRoom[area as RoomPhotoArea].push(url)
           }
           setRoomPhotos(nextRoom)
-          setCleaningIssue(uncleanList.slice(0, 12))
-          setCleaningIssueReviewed(uncleanList.length > 0)
+          const nextUnclean = uncleanList.slice(0, 12)
+          setCleaningIssue(nextUnclean)
+          lastSavedCleaningIssueRef.current = cleaningIssueSignature(nextUnclean)
         }
-        if (r2?.items?.length) {
-          setRestock((prev) => {
-            const next = prev.map((x) => {
-              const hit = r2.items.find((y) => String(y.item_id || '').trim() === x.item_id) || null
-              if (!hit) return x
-              const st = String(hit.status || '').trim().toLowerCase()
-              const status = st === 'restocked' || st === 'unavailable' ? (st as any) : null
-              return {
-                ...x,
-                status,
-                proof_url: String(hit.proof_url || '').trim() || null,
-                qty: hit.qty == null ? x.qty : Number(hit.qty),
-                note: String(hit.note || '').trim(),
-              }
-            })
-            const existing = new Set(next.map((x) => x.item_id))
-            for (const hit of r2.items) {
-              const id = String(hit.item_id || '').trim()
-              if (!id || existing.has(id)) continue
-              const st = String(hit.status || '').trim().toLowerCase()
-              const status = st === 'restocked' || st === 'unavailable' ? (st as any) : null
-              next.push({
-                item_id: id,
-                label: id,
-                qty: hit.qty == null ? null : Number(hit.qty),
-                status,
-                source_photo_url: null,
-                proof_url: String(hit.proof_url || '').trim() || null,
-                note: String(hit.note || '').trim(),
-                origin: 'manual',
-              })
+        setRestockConfirmedSufficient(!!r2?.confirmed_sufficient)
+        setRestock((prev) => {
+          const next = prev.map((x) => {
+            const hit = r2?.items?.find((y) => String(y.item_id || '').trim() === x.item_id) || null
+            if (!hit) return x
+            const st = String(hit.status || '').trim().toLowerCase()
+            const status = st === 'restocked' || st === 'unavailable' ? (st as any) : null
+            return {
+              ...x,
+              status,
+              proof_urls: Array.isArray(hit.proof_urls) && hit.proof_urls.length
+                ? hit.proof_urls.map((url) => String(url || '').trim()).filter(Boolean)
+                : (String(hit.proof_url || '').trim() ? [String(hit.proof_url || '').trim()] : []),
+              qty: hit.qty == null ? x.qty : Number(hit.qty),
+              note: String(hit.note || '').trim(),
             }
-            return next
           })
-        }
+          const existing = new Set(next.map((x) => x.item_id))
+          for (const hit of r2?.items || []) {
+            const id = String(hit.item_id || '').trim()
+            if (!id || existing.has(id)) continue
+            const st = String(hit.status || '').trim().toLowerCase()
+            const status = st === 'restocked' || st === 'unavailable' ? (st as any) : null
+            next.push({
+              item_id: id,
+              label: id,
+              qty: hit.qty == null ? null : Number(hit.qty),
+              status,
+              source_photo_url: null,
+              proof_urls: Array.isArray(hit.proof_urls) && hit.proof_urls.length
+                ? hit.proof_urls.map((url) => String(url || '').trim()).filter(Boolean)
+                : (String(hit.proof_url || '').trim() ? [String(hit.proof_url || '').trim()] : []),
+              note: String(hit.note || '').trim(),
+              origin: 'manual',
+            })
+          }
+          return next
+        })
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -267,36 +329,61 @@ export default function InspectionPanelScreen(props: Props) {
     }
   }
 
-  async function takePhotoAndUpload(purpose: 'inspection_photo' | 'restock_proof', area?: InspectionPhotoArea) {
+  async function uploadPickedImageAsset(asset: any, purpose: 'inspection_photo' | 'restock_proof', area?: InspectionPhotoArea) {
     if (!token) throw new Error('请先登录')
-    const ok = await ensureCameraPerm()
-    if (!ok) throw new Error('需要相机权限')
-    const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
-    if (res.canceled || !res.assets?.length) return null
-    const a = res.assets[0] as any
-    const uri = String(a.uri || '').trim()
+    const uri = String(asset?.uri || '').trim()
     if (!uri) return null
-    const name = String(a.fileName || uri.split('/').pop() || `${purpose}-${Date.now()}.jpg`)
-    const mimeType = String(a.mimeType || 'image/jpeg')
+    const name = String(asset?.fileName || uri.split('/').pop() || `${purpose}-${Date.now()}.jpg`)
+    const mimeType = String(asset?.mimeType || 'image/jpeg')
     const capturedAt = new Date().toISOString()
     const up = await uploadCleaningMedia(token, { uri, name, mimeType }, { purpose, area: area || undefined, watermark: '1', property_code: propertyCode || undefined, captured_at: capturedAt })
     return { url: up.url, captured_at: capturedAt }
   }
 
-  async function pickPhotoAndUpload(purpose: 'inspection_photo' | 'restock_proof', area?: InspectionPhotoArea) {
+  async function takePhotoAndUpload(purpose: 'inspection_photo' | 'restock_proof', area?: InspectionPhotoArea) {
     if (!token) throw new Error('请先登录')
+    const ok = await ensureCameraPerm()
+    if (!ok) throw new Error('需要相机权限')
+    const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+    if (res.canceled || !res.assets?.length) return null
+    return uploadPickedImageAsset(res.assets[0] as any, purpose, area)
+  }
+
+  async function takeCleaningIssuePhotosAndUpload(limit: number) {
+    if (!token) throw new Error('请先登录')
+    if (limit <= 0) return []
+    const ok = await ensureCameraPerm()
+    if (!ok) throw new Error('需要相机权限')
+    const uploaded: Array<{ url: string; captured_at: string }> = []
+    while (uploaded.length < limit) {
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+      if (res.canceled || !res.assets?.length) break
+      const up = await uploadPickedImageAsset(res.assets[0] as any, 'inspection_photo', 'unclean')
+      if (up) uploaded.push(up)
+    }
+    return uploaded
+  }
+
+  async function pickCleaningIssuePhotosAndUpload(limit: number) {
+    if (!token) throw new Error('请先登录')
+    if (limit <= 0) return []
     const ok = await ensureLibraryPerm()
     if (!ok) throw new Error('需要相册权限')
-    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
-    if (res.canceled || !res.assets?.length) return null
-    const a = res.assets[0] as any
-    const uri = String(a.uri || '').trim()
-    if (!uri) return null
-    const name = String(a.fileName || uri.split('/').pop() || `${purpose}-${Date.now()}.jpg`)
-    const mimeType = String(a.mimeType || 'image/jpeg')
-    const capturedAt = new Date().toISOString()
-    const up = await uploadCleaningMedia(token, { uri, name, mimeType }, { purpose, area: area || undefined, watermark: '1', property_code: propertyCode || undefined, captured_at: capturedAt })
-    return { url: up.url, captured_at: capturedAt }
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images',
+      quality: 0.75,
+      allowsEditing: false,
+      allowsMultipleSelection: true,
+      selectionLimit: Math.max(1, limit),
+      orderedSelection: true,
+    })
+    if (res.canceled || !res.assets?.length) return []
+    const uploaded: Array<{ url: string; captured_at: string }> = []
+    for (const asset of (res.assets as any[]).slice(0, limit)) {
+      const up = await uploadPickedImageAsset(asset, 'inspection_photo', 'unclean')
+      if (up) uploaded.push(up)
+    }
+    return uploaded
   }
 
   async function persistInspectionMedia(nextRoom: Record<RoomPhotoArea, string[]>, nextUnclean: UncleanPhoto[]) {
@@ -306,6 +393,37 @@ export default function InspectionPanelScreen(props: Props) {
         ...nextUnclean.map((x) => ({ area: 'unclean' as const, url: x.url, note: x.note || null })),
       ],
     })
+  }
+
+  function clearCleaningIssueSaveTimer() {
+    if (!cleaningIssueSaveTimerRef.current) return
+    clearTimeout(cleaningIssueSaveTimerRef.current)
+    cleaningIssueSaveTimerRef.current = null
+  }
+
+  async function persistCleaningIssueNow(nextUnclean0: UncleanPhoto[], options: { silent?: boolean } = {}) {
+    if (!token || !cleaningTaskId) return
+    const nextUnclean = (nextUnclean0 || []).slice(0, 12)
+    const signature = cleaningIssueSignature(nextUnclean)
+    if (lastSavedCleaningIssueRef.current === signature) return
+    clearCleaningIssueSaveTimer()
+    try {
+      setSaving(true)
+      await persistInspectionMedia(roomPhotosRef.current, nextUnclean)
+      lastSavedCleaningIssueRef.current = signature
+    } catch (e: any) {
+      if (!options.silent) Alert.alert(t('common_error'), String(e?.message || '保存失败'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function scheduleCleaningIssueSave(nextUnclean: UncleanPhoto[]) {
+    clearCleaningIssueSaveTimer()
+    cleaningIssueSaveTimerRef.current = setTimeout(() => {
+      cleaningIssueSaveTimerRef.current = null
+      void persistCleaningIssueNow(nextUnclean, { silent: false })
+    }, 600)
   }
 
   async function onAddRoomPhoto(area: RoomPhotoArea) {
@@ -348,14 +466,15 @@ export default function InspectionPanelScreen(props: Props) {
   }
 
   async function onAddCleaningIssuePhoto() {
-    if (cleaningIssue.length >= 12) return
+    const remaining = 12 - cleaningIssueRef.current.length
+    if (remaining <= 0) return
     try {
       setSaving(true)
-      const up = await takePhotoAndUpload('inspection_photo', 'unclean')
-      if (!up) return
-      const nextUnclean = [...cleaningIssue, { url: up.url, note: '' }]
+      const uploaded = await takeCleaningIssuePhotosAndUpload(remaining)
+      if (!uploaded.length) return
+      const nextUnclean = [...cleaningIssueRef.current, ...uploaded.map((up) => ({ url: up.url, note: '' }))].slice(0, 12)
       setCleaningIssue(nextUnclean)
-      await persistInspectionMedia(roomPhotos, nextUnclean)
+      await persistCleaningIssueNow(nextUnclean)
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '上传失败'))
     } finally {
@@ -364,14 +483,15 @@ export default function InspectionPanelScreen(props: Props) {
   }
 
   async function onPickCleaningIssuePhoto() {
-    if (cleaningIssue.length >= 12) return
+    const remaining = 12 - cleaningIssueRef.current.length
+    if (remaining <= 0) return
     try {
       setSaving(true)
-      const up = await pickPhotoAndUpload('inspection_photo', 'unclean')
-      if (!up) return
-      const nextUnclean = [...cleaningIssue, { url: up.url, note: '' }]
+      const uploaded = await pickCleaningIssuePhotosAndUpload(remaining)
+      if (!uploaded.length) return
+      const nextUnclean = [...cleaningIssueRef.current, ...uploaded.map((up) => ({ url: up.url, note: '' }))].slice(0, 12)
       setCleaningIssue(nextUnclean)
-      await persistInspectionMedia(roomPhotos, nextUnclean)
+      await persistCleaningIssueNow(nextUnclean)
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '上传失败'))
     } finally {
@@ -379,18 +499,16 @@ export default function InspectionPanelScreen(props: Props) {
     }
   }
 
-  async function onSaveCleaningIssueNotes() {
-    try {
-      setSaving(true)
-      await persistInspectionMedia(roomPhotos, cleaningIssue)
-      setCleaningIssueReviewed(cleaningIssue.length > 0)
-      Alert.alert(t('common_ok'), '已保存')
-      setExpanded(p => ({ ...p, cleaningIssue: false, propertyIssue: true }))
-    } catch (e: any) {
-      Alert.alert(t('common_error'), String(e?.message || '保存失败'))
-    } finally {
-      setSaving(false)
-    }
+  function onRemoveCleaningIssuePhoto(idx: number) {
+    const nextUnclean = cleaningIssueRef.current.filter((_, i) => i !== idx)
+    setCleaningIssue(nextUnclean)
+    void persistCleaningIssueNow(nextUnclean)
+  }
+
+  function onChangeCleaningIssueNote(idx: number, value: string) {
+    const nextUnclean = cleaningIssueRef.current.map((it, i) => (i === idx ? { ...it, note: value.slice(0, 300) } : it))
+    setCleaningIssue(nextUnclean)
+    scheduleCleaningIssueSave(nextUnclean)
   }
 
   async function onTakeRestockProof(idx: number) {
@@ -399,7 +517,7 @@ export default function InspectionPanelScreen(props: Props) {
       setRestockUploadingIdx(idx)
       const up = await takePhotoAndUpload('restock_proof')
       if (!up) return
-      setRestock((prev) => prev.map((x, i) => (i === idx ? { ...x, proof_url: up.url } : x)))
+      setRestock((prev) => prev.map((x, i) => (i === idx ? { ...x, proof_urls: [...x.proof_urls, up.url] } : x)))
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '上传失败'))
     } finally {
@@ -414,18 +532,21 @@ export default function InspectionPanelScreen(props: Props) {
     if (!restock.length) return
     for (const it of restock) {
       if (!it.status) return Alert.alert(t('common_error'), `请确认：${it.label}`)
-      if (it.status !== 'unavailable' && !String(it.proof_url || '').trim()) return Alert.alert(t('common_error'), `请上传补充照片：${it.label}`)
+      if (it.status !== 'unavailable' && !(it.proof_urls || []).length) return Alert.alert(t('common_error'), `请上传补充照片：${it.label}`)
     }
     try {
       setSaving(true)
+      setRestockConfirmedSufficient(false)
       await saveRestockProof(token, cleaningTaskId, {
         items: restock.map((x) => ({
           item_id: x.item_id,
           status: x.status as any,
           qty: x.qty == null ? null : Number(x.qty),
           note: x.note.trim() || null,
-          proof_url: x.status === 'unavailable' ? 'no_photo' : String(x.proof_url || '').trim(),
+          proof_url: x.status === 'unavailable' ? 'no_photo' : String(x.proof_urls?.[0] || '').trim(),
+          proof_urls: x.status === 'unavailable' ? [] : x.proof_urls,
         })),
+        confirmed_sufficient: false,
       })
       Alert.alert(t('common_ok'), '已提交')
       setExpanded(p => ({ ...p, restock: false, cleaningIssue: true }))
@@ -441,17 +562,31 @@ export default function InspectionPanelScreen(props: Props) {
     }
   }
 
+  async function onConfirmRestockSufficient() {
+    if (!token) return
+    if (!cleaningTaskId) return
+    if (restockConfirming) return
+    try {
+      setRestockConfirming(true)
+      setSaving(true)
+      await saveRestockProof(token, cleaningTaskId, { items: [], confirmed_sufficient: true })
+      setRestockConfirmedSufficient(true)
+      setExpanded((p) => ({ ...p, restock: true, photos: true }))
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '提交失败'))
+    } finally {
+      setRestockConfirming(false)
+      setSaving(false)
+    }
+  }
+
   function photosReady() {
     return !!roomPhotos.living.length && !!roomPhotos.sofa.length && !!roomPhotos.bedroom.length && !!roomPhotos.kitchen.length
   }
 
-  function cleaningIssueReady() {
-    return cleaningIssueReviewed
-  }
-
   function restockReady() {
-    if (!restock.length) return true
-    return restock.every((x) => !!x.status && (x.status === 'unavailable' ? true : !!String(x.proof_url || '').trim()))
+    if (!restock.length) return restockConfirmedSufficient
+    return restock.every((x) => !!x.status && (x.status === 'unavailable' ? true : (x.proof_urls || []).length > 0))
   }
 
   function completeReady() {
@@ -461,8 +596,8 @@ export default function InspectionPanelScreen(props: Props) {
 
   const progressSteps = [
     { key: 'restock', label: '消耗品', done: restockReady() },
-    { key: 'cleaning', label: '清洁反馈', done: cleaningIssueReady() },
-    { key: 'property', label: '房源反馈', done: propertyIssueReviewed },
+    { key: 'cleaning', label: '清洁反馈', done: true },
+    { key: 'property', label: '房源反馈', done: true },
     { key: 'photos', label: '检查照片', done: photosReady() },
     { key: 'complete', label: '标记完成', done: completeReady() },
   ]
@@ -510,6 +645,13 @@ export default function InspectionPanelScreen(props: Props) {
           </View>
         </View>
 
+        <GuestLuggageCard
+          notice={(task as any).guest_luggage || null}
+          token={token}
+          showAcknowledge
+          onChanged={(notice) => patchWorkTaskItem(task.id, { guest_luggage: notice } as any)}
+        />
+
         <View style={styles.card}>
           <Pressable onPress={() => setExpanded(p => ({ ...p, restock: !p.restock }))} style={({ pressed }) => [styles.sectionHead, pressed ? styles.pressed : null]}>
             {sectionTitle('cube-outline', '1. 消耗品补充')}
@@ -518,10 +660,36 @@ export default function InspectionPanelScreen(props: Props) {
           {expanded.restock ? (
             !restock.length ? (
               <View style={styles.block}>
-                <Text style={styles.mutedSmall}>暂无待补充项</Text>
-                <Pressable onPress={() => setRestockPickerOpen(true)} style={({ pressed }) => [styles.primaryBtn, { marginTop: 12 }, pressed ? styles.pressed : null]}>
-                  <Text style={styles.primaryText}>添加补充项</Text>
-                </Pressable>
+                <Text style={styles.mutedSmall}>
+                  {restockConfirmedSufficient ? '已确认当前消耗品充足，可继续完成检测。' : '当前没有待补充项，请确认现场消耗品都充足。'}
+                </Text>
+                {restockConfirmedSufficient ? (
+                  <View style={styles.inlineSuccess}>
+                    <Ionicons name="checkmark-circle" size={moderateScale(16)} color="#16A34A" />
+                    <Text style={styles.inlineSuccessText}>消耗品已确认充足</Text>
+                  </View>
+                ) : null}
+                <View style={styles.row}>
+                  <Pressable
+                    onPress={onConfirmRestockSufficient}
+                    disabled={saving || restockConfirming}
+                    style={({ pressed }) => [
+                      styles.primaryBtn,
+                      restockConfirmedSufficient ? styles.primaryBtnSuccess : null,
+                      saving || restockConfirming ? styles.submitDisabled : null,
+                      pressed ? styles.pressed : null,
+                    ]}
+                  >
+                    <Text style={styles.primaryText}>{restockConfirming ? t('common_loading') : restockConfirmedSufficient ? '已确认充足' : '确认都充足'}</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => setRestockPickerOpen(true)}
+                    disabled={restockConfirming}
+                    style={({ pressed }) => [styles.previewBtn, restockConfirming ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={styles.previewBtnText}>添加补充项</Text>
+                  </Pressable>
+                </View>
               </View>
             ) : (
               <>
@@ -549,7 +717,7 @@ export default function InspectionPanelScreen(props: Props) {
                         <Text style={[styles.chipText, it.status === 'restocked' ? styles.chipTextActive : null]}>已补充</Text>
                       </Pressable>
                       <Pressable
-                        onPress={() => setRestock(p => p.map((x, i) => (i === idx ? { ...x, status: 'unavailable', proof_url: null } : x)))}
+                        onPress={() => setRestock(p => p.map((x, i) => (i === idx ? { ...x, status: 'unavailable', proof_urls: [] } : x)))}
                         style={({ pressed }) => [styles.chip, it.status === 'unavailable' ? styles.chipActive : null, pressed ? styles.pressed : null]}
                       >
                         <Text style={[styles.chipText, it.status === 'unavailable' ? styles.chipTextActive : null]}>无需补充</Text>
@@ -569,26 +737,26 @@ export default function InspectionPanelScreen(props: Props) {
                             <Text style={styles.proofHint} numberOfLines={1}>清洁员补货照片</Text>
                           </Pressable>
                         ) : null}
-                        {String(it.proof_url || '').trim() ? (
-                          <View style={styles.proofThumbCard}>
+                        {(it.proof_urls || []).map((proofUrl, proofIdx) => (
+                          <View key={`${proofUrl}-${proofIdx}`} style={styles.proofThumbCard}>
                             <Pressable
                               onPress={() => {
-                                setViewerUrl(String(it.proof_url))
+                                setViewerUrl(String(proofUrl))
                                 setViewerOpen(true)
                               }}
                               style={({ pressed }) => [styles.proofThumbWrap, pressed ? styles.pressed : null]}
                             >
-                              <Image source={{ uri: toAbsoluteUrl(it.proof_url) }} style={styles.proofThumb} />
-                              <Text style={styles.proofHint} numberOfLines={1}>检查补充照片</Text>
+                              <Image source={{ uri: toAbsoluteUrl(proofUrl) }} style={styles.proofThumb} />
+                              <Text style={styles.proofHint} numberOfLines={1}>{`检查补充照片 ${proofIdx + 1}`}</Text>
                             </Pressable>
                             <Pressable
-                              onPress={() => setRestock((prev) => prev.map((x, i) => (i === idx ? { ...x, proof_url: null } : x)))}
+                              onPress={() => setRestock((prev) => prev.map((x, i) => (i === idx ? { ...x, proof_urls: x.proof_urls.filter((_, urlIdx) => urlIdx !== proofIdx) } : x)))}
                               style={({ pressed }) => [styles.proofDeleteBtn, pressed ? styles.pressed : null]}
                             >
                               <Ionicons name="trash-outline" size={moderateScale(14)} color="#DC2626" />
                             </Pressable>
                           </View>
-                        ) : null}
+                        ))}
                       </View>
                       <View style={styles.restockActionCol}>
                         {it.status === 'unavailable' ? (
@@ -599,7 +767,7 @@ export default function InspectionPanelScreen(props: Props) {
                             disabled={restockUploadingIdx === idx}
                             style={({ pressed }) => [styles.photoBtn, styles.restockPhotoBtn, pressed ? styles.pressed : null, restockUploadingIdx === idx ? styles.submitDisabled : null]}
                           >
-                            <Text style={styles.photoBtnText}>{restockUploadingIdx === idx ? t('common_loading') : it.proof_url ? '重拍' : '拍照上传'}</Text>
+                            <Text style={styles.photoBtnText}>{restockUploadingIdx === idx ? t('common_loading') : it.proof_urls.length ? '继续拍照' : '拍照上传'}</Text>
                           </Pressable>
                         )}
                       </View>
@@ -632,20 +800,21 @@ export default function InspectionPanelScreen(props: Props) {
           </Pressable>
           {expanded.cleaningIssue ? (
             <View style={styles.block}>
-              <Text style={styles.mutedSmall}>清洁没做到位时，请补充照片和备注。</Text>
+              <Text style={styles.mutedSmall}>如发现清洁没做到位，可补充照片和备注。</Text>
               {cleaningIssue.map((x, idx) => (
                 <View key={`${x.url}-${idx}`} style={{ marginTop: 10 }}>
                   <View style={styles.row}>
                     <Pressable onPress={() => { setViewerUrl(x.url); setViewerOpen(true) }} style={({ pressed }) => [styles.uncleanThumbWrap, pressed ? styles.pressed : null]}>
                       <Image source={{ uri: toAbsoluteUrl(x.url) }} style={styles.uncleanThumb} />
                     </Pressable>
-                    <Pressable onPress={() => setCleaningIssue(p => p.filter((_, i) => i !== idx))} style={({ pressed }) => [styles.removeBtn, pressed ? styles.pressed : null]}>
+                    <Pressable onPress={() => onRemoveCleaningIssuePhoto(idx)} style={({ pressed }) => [styles.removeBtn, pressed ? styles.pressed : null]}>
                       <Text style={styles.removeBtnText}>删除</Text>
                     </Pressable>
                   </View>
                   <TextInput
                     value={x.note}
-                    onChangeText={(v) => setCleaningIssue(p => p.map((it, i) => (i === idx ? { ...it, note: v.slice(0, 300) } : it)))}
+                    onChangeText={(v) => onChangeCleaningIssueNote(idx, v)}
+                    onEndEditing={() => void persistCleaningIssueNow(cleaningIssueRef.current, { silent: true })}
                     style={[styles.input, styles.note]}
                     placeholder="备注（可选）"
                     placeholderTextColor="#9CA3AF"
@@ -668,9 +837,6 @@ export default function InspectionPanelScreen(props: Props) {
                 >
                   <Text style={styles.photoBtnText}>相册上传</Text>
                 </Pressable>
-                <Pressable onPress={onSaveCleaningIssueNotes} disabled={saving} style={({ pressed }) => [styles.previewBtn, pressed ? styles.pressed : null, saving ? styles.submitDisabled : null]}>
-                  <Text style={styles.previewBtnText}>保存</Text>
-                </Pressable>
               </View>
             </View>
           ) : null}
@@ -686,7 +852,7 @@ export default function InspectionPanelScreen(props: Props) {
           </Pressable>
           {expanded.propertyIssue ? (
             <View style={styles.block}>
-              <Text style={styles.mutedSmall}>发现损坏或异常时，请补充照片和备注。</Text>
+              <Text style={styles.mutedSmall}>如发现损坏或异常，可补充照片和备注。</Text>
               <Pressable
                 onPress={() => {
                   propertyIssueVisitedRef.current = true
@@ -709,16 +875,17 @@ export default function InspectionPanelScreen(props: Props) {
             <View style={styles.block}>
               <View style={styles.grid}>
                 {([
-                  { key: 'living', label: '客厅', max: areaLimits.living },
-                  { key: 'sofa', label: '沙发', max: areaLimits.sofa },
-                  { key: 'bedroom', label: '卧室', max: areaLimits.bedroom },
-                  { key: 'kitchen', label: '厨房', max: areaLimits.kitchen },
-                ] as Array<{ key: RoomPhotoArea; label: string; max: number }>).map((a) => (
+                  { key: 'living', label: '客厅', max: areaLimits.living, hint: '建议拍整体环境' },
+                  { key: 'sofa', label: '沙发', max: areaLimits.sofa, hint: '建议拍沙发表面' },
+                  { key: 'bedroom', label: '卧室', max: areaLimits.bedroom, hint: '重点拍地毯情况' },
+                  { key: 'kitchen', label: '厨房', max: areaLimits.kitchen, hint: '建议拍整体' },
+                ] as { key: RoomPhotoArea; label: string; max: number; hint: string }[]).map((a) => (
                   <View key={a.key} style={styles.photoCard}>
                     <View style={styles.photoHeadRow}>
                       <Text style={styles.photoLabel}>{a.label}</Text>
-                      <Text style={styles.photoCount}>{`${(roomPhotos[a.key] || []).length}/${a.max}`}</Text>
+                      <Text style={styles.photoCount}>{(roomPhotos[a.key] || []).length >= requiredAreaMinimum ? '可提交' : '未拍'}</Text>
                     </View>
+                    <Text style={styles.photoHint}>{a.hint}</Text>
                     <View style={styles.thumbRow}>
                       {(roomPhotos[a.key] || []).length ? (
                         roomPhotos[a.key].map((u, idx) => (
@@ -751,7 +918,23 @@ export default function InspectionPanelScreen(props: Props) {
                   </View>
                 ))}
               </View>
-              <Text style={styles.mutedSmall}>长按照片可删除。</Text>
+              <Text style={styles.mutedSmall}>每个区域至少 1 张才能提交；卧室请优先拍地毯。可继续补充更多照片，长按照片可删除。</Text>
+              {canSkipPhotosForGuestArrival ? (
+                <>
+                  <Text style={styles.mutedSmall}>如果 {checkinTime || '3pm'} 入住客人已经到达并着急入住，可以跳过本项检查照片，直接进入修改密码盒密码和拍视频步骤。</Text>
+                  <Pressable
+                    onPress={() => props.navigation.navigate('InspectionComplete', { taskId: task.id, skipInspectionPhotos: true })}
+                    disabled={!restockReady() || (!!guestSpecialRequest && !guestNeedDone)}
+                    style={({ pressed }) => [styles.urgentSkipBtn, pressed ? styles.pressed : null, !restockReady() || (!!guestSpecialRequest && !guestNeedDone) ? styles.submitDisabled : null]}
+                  >
+                    <Text style={styles.urgentSkipText}>客人已到，跳过检查照片</Text>
+                  </Pressable>
+                  {!restockReady() ? <Text style={styles.mutedSmall}>跳过检查照片前，请先完成消耗品确认。</Text> : null}
+                  {!!guestSpecialRequest && !guestNeedDone ? <Text style={styles.mutedSmall}>跳过检查照片前，请先确认客人需求已完成。</Text> : null}
+                </>
+              ) : isEarlyCheckinGuest ? (
+                <Text style={styles.warnSmall}>早入住客人到达时不可跳过检查照片，请按正常流程拍完整。</Text>
+              ) : null}
             </View>
           ) : null}
         </View>
@@ -776,11 +959,12 @@ export default function InspectionPanelScreen(props: Props) {
             ) : null}
             <Pressable
               onPress={() => props.navigation.navigate('InspectionComplete', { taskId: task.id })}
-              disabled={!photosReady() || (!!guestSpecialRequest && !guestNeedDone)}
-              style={({ pressed }) => [styles.primaryBtn, pressed ? styles.pressed : null, !photosReady() || (!!guestSpecialRequest && !guestNeedDone) ? styles.submitDisabled : null]}
+              disabled={!restockReady() || !photosReady() || (!!guestSpecialRequest && !guestNeedDone)}
+              style={({ pressed }) => [styles.primaryBtn, pressed ? styles.pressed : null, !restockReady() || !photosReady() || (!!guestSpecialRequest && !guestNeedDone) ? styles.submitDisabled : null]}
             >
               <Text style={styles.primaryText}>进入标记已完成</Text>
             </Pressable>
+            {!restockReady() ? <Text style={styles.mutedSmall}>请先提交消耗品补充，或确认当前消耗品都充足。</Text> : null}
           </View>
         </View>
 
@@ -791,26 +975,14 @@ export default function InspectionPanelScreen(props: Props) {
         visible={restockPickerOpen}
         transparent
         animationType="fade"
-        onRequestClose={() => {
-          setRestockPickerOpen(false)
-          setRestockPickerQuery('')
-        }}
+        onRequestClose={closeRestockPicker}
       >
-        <Pressable
-          style={styles.viewerMask}
-          onPress={() => {
-            setRestockPickerOpen(false)
-            setRestockPickerQuery('')
-          }}
-        >
+        <Pressable style={styles.viewerMask} onPress={closeRestockPicker}>
           <Pressable style={styles.pickerCard} onPress={() => {}}>
             <View style={styles.pickerHead}>
               <Text style={styles.pickerTitle}>选择补充项</Text>
               <Pressable
-                onPress={() => {
-                  setRestockPickerOpen(false)
-                  setRestockPickerQuery('')
-                }}
+                onPress={closeRestockPicker}
                 style={({ pressed }) => [styles.pickerClose, pressed ? styles.pressed : null]}
               >
                 <Text style={styles.pickerCloseText}>关闭</Text>
@@ -821,13 +993,39 @@ export default function InspectionPanelScreen(props: Props) {
               <TextInput value={restockPickerQuery} onChangeText={setRestockPickerQuery} placeholder="搜索消耗品" placeholderTextColor="#9CA3AF" style={styles.searchInput} />
             </View>
             <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
-              {restockPickerItems.map((it) => (
-                <Pressable key={it.id} onPress={() => addManualRestockItem(it)} style={({ pressed }) => [styles.pickerRow, pressed ? styles.pressed : null]}>
-                  <Text style={styles.pickerRowText}>{String(it.label || it.id)}</Text>
-                </Pressable>
-              ))}
+              {restockPickerItems.map((it) => {
+                const itemId = String(it.id || '').trim()
+                const alreadyAdded = restock.some((x) => x.item_id === itemId)
+                const selected = restockPickerSelectedIds.includes(itemId)
+                return (
+                  <Pressable
+                    key={it.id}
+                    onPress={() => toggleRestockPickerItem(itemId)}
+                    style={({ pressed }) => [styles.pickerRow, selected ? styles.pickerRowSelected : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={[styles.pickerRowText, alreadyAdded ? styles.pickerRowTextMuted : null]}>{String(it.label || it.id)}</Text>
+                    {alreadyAdded ? (
+                      <Text style={styles.pickerRowMeta}>已添加</Text>
+                    ) : selected ? (
+                      <Ionicons name="checkmark-circle" size={moderateScale(20)} color="#2563EB" />
+                    ) : (
+                      <Ionicons name="ellipse-outline" size={moderateScale(20)} color="#D1D5DB" />
+                    )}
+                  </Pressable>
+                )
+              })}
               {!restockPickerItems.length ? <Text style={styles.mutedSmall}>未找到</Text> : null}
             </ScrollView>
+            <View style={styles.pickerFooter}>
+              <Text style={styles.pickerFooterText}>{restockPickerSelectedIds.length ? `已选 ${restockPickerSelectedIds.length} 项` : '可先多选，再加入补充列表'}</Text>
+              <Pressable
+                onPress={() => addManualRestockItems(restockPickerSelectedIds)}
+                disabled={!restockPickerSelectedIds.length}
+                style={({ pressed }) => [styles.primaryBtn, styles.pickerConfirmBtn, !restockPickerSelectedIds.length ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
+              >
+                <Text style={styles.primaryText}>加入补充列表</Text>
+              </Pressable>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>
@@ -866,9 +1064,9 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#F6F7FB' },
   content: { padding: 16, paddingBottom: 24 },
   card: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 12, borderWidth: hairline(), borderColor: '#EEF0F6', marginBottom: 12 },
-  headRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  title: { fontSize: 16, fontWeight: '900', color: '#111827' },
-  badge: { height: 30, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '70%' },
+  headRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  title: { flex: 1, minWidth: 0, fontSize: 16, fontWeight: '900', color: '#111827' },
+  badge: { minHeight: 30, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '70%', flexShrink: 1 },
   badgeText: { color: '#2563EB', fontWeight: '900', flexShrink: 1 },
   sub: { marginTop: 8, color: '#6B7280', fontWeight: '700' },
   muted: { marginTop: 6, color: '#6B7280', fontWeight: '700' },
@@ -890,9 +1088,9 @@ const styles = StyleSheet.create({
   progressLine: { width: 8, height: hairline(), backgroundColor: '#E5E7EB', marginHorizontal: 2, flexShrink: 0 },
   progressLineOn: { backgroundColor: '#16A34A' },
 
-  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  sectionTitle: { fontWeight: '900', color: '#111827' },
+  sectionTitle: { flexShrink: 1, minWidth: 0, fontWeight: '900', color: '#111827' },
 
   block: { marginTop: 10, paddingTop: 10, borderTopWidth: hairline(), borderTopColor: '#EEF0F6' },
   label: { color: '#111827', fontWeight: '900' },
@@ -903,23 +1101,29 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#FFFFFF' },
   input: { borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, fontWeight: '700', color: '#111827' },
   note: { height: 64, paddingTop: 10, textAlignVertical: 'top', marginTop: 10 },
-  photoBtn: { height: 44, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
-  photoBtnText: { fontWeight: '900', color: '#111827' },
-  previewBtn: { height: 44, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
-  previewBtnText: { fontWeight: '900', color: '#2563EB' },
-  submitBtn: { marginTop: 12, height: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  photoBtn: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  photoBtnText: { fontWeight: '900', color: '#111827', textAlign: 'center' },
+  previewBtn: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
+  previewBtnText: { fontWeight: '900', color: '#2563EB', textAlign: 'center' },
+  urgentSkipBtn: { marginTop: 12, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: '#F59E0B', alignItems: 'center', justifyContent: 'center' },
+  urgentSkipText: { color: '#FFFFFF', fontWeight: '900', textAlign: 'center' },
+  submitBtn: { marginTop: 12, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   submitDisabled: { backgroundColor: '#93C5FD' },
-  submitText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
-  primaryBtn: { height: 44, paddingHorizontal: 14, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
-  primaryText: { color: '#FFFFFF', fontWeight: '900' },
-  linkBtn: { marginTop: 10, height: 38, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
-  linkText: { fontWeight: '900', color: '#2563EB' },
+  submitText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15, textAlign: 'center' },
+  primaryBtn: { minHeight: 44, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  primaryBtnSuccess: { backgroundColor: '#16A34A' },
+  primaryText: { color: '#FFFFFF', fontWeight: '900', textAlign: 'center' },
+  inlineSuccess: { marginTop: 10, minHeight: 36, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, backgroundColor: '#ECFDF5', borderWidth: hairline(), borderColor: '#BBF7D0', flexDirection: 'row', alignItems: 'center', gap: 8 },
+  inlineSuccessText: { flex: 1, minWidth: 0, color: '#166534', fontWeight: '900' },
+  linkBtn: { marginTop: 10, minHeight: 38, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
+  linkText: { fontWeight: '900', color: '#2563EB', textAlign: 'center' },
 
   grid: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  photoCard: { width: '48%', backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6', borderRadius: 14, padding: 10 },
-  photoHeadRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  photoLabel: { fontWeight: '900', color: '#111827' },
+  photoCard: { flexBasis: '47%', flexGrow: 1, minWidth: 120, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6', borderRadius: 14, padding: 10 },
+  photoHeadRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  photoLabel: { flex: 1, minWidth: 0, fontWeight: '900', color: '#111827' },
   photoCount: { color: '#6B7280', fontWeight: '900', fontSize: 12 },
+  photoHint: { marginTop: 4, minHeight: 16, color: '#6B7280', fontWeight: '700', fontSize: 11, lineHeight: 15 },
   photoThumbWrap: { marginTop: 10, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   photoThumb: { width: '100%', height: moderateScale(110) },
   thumbMiniEmpty: { width: 54, height: 54, borderRadius: 10, borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', gap: 2 },
@@ -929,9 +1133,10 @@ const styles = StyleSheet.create({
   thumbMini: { width: '100%', height: '100%' },
   smallBtn: { marginTop: 10, height: 34, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
   smallBtnText: { color: '#2563EB', fontWeight: '900' },
-  restockProofRow: { marginTop: 10, flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  warnSmall: { marginTop: 8, color: '#B45309', fontWeight: '900', fontSize: 12 },
+  restockProofRow: { marginTop: 10, flexDirection: 'row', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' },
   restockProofGallery: { flex: 1, minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  restockActionCol: { width: 96, alignItems: 'stretch' },
+  restockActionCol: { width: 96, minWidth: 96, alignItems: 'stretch' },
   restockPhotoBtn: { width: '100%', minHeight: 44 },
   restockNoNeedText: { marginTop: 0, textAlign: 'center' },
   proofThumbCard: { position: 'relative' },
@@ -954,8 +1159,14 @@ const styles = StyleSheet.create({
   pickerTitle: { fontSize: 16, fontWeight: '900', color: '#111827' },
   pickerClose: { height: 34, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   pickerCloseText: { fontWeight: '900', color: '#111827' },
-  pickerRow: { height: 44, justifyContent: 'center', borderBottomWidth: hairline(), borderBottomColor: '#EEF0F6', paddingHorizontal: 6 },
+  pickerRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, borderBottomWidth: hairline(), borderBottomColor: '#EEF0F6', paddingHorizontal: 6, paddingVertical: 10 },
+  pickerRowSelected: { backgroundColor: '#EFF6FF' },
   pickerRowText: { fontWeight: '800', color: '#111827' },
+  pickerRowTextMuted: { color: '#9CA3AF' },
+  pickerRowMeta: { fontSize: 12, fontWeight: '800', color: '#6B7280' },
+  pickerFooter: { marginTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' },
+  pickerFooterText: { flex: 1, minWidth: 0, fontSize: 12, fontWeight: '800', color: '#6B7280' },
+  pickerConfirmBtn: { flexGrow: 1, minWidth: 148, paddingHorizontal: 16 },
   searchWrap: { height: 44, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#EEF0F6', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
   searchInput: { flex: 1, minWidth: 0, height: 44, color: '#111827', fontWeight: '800' },
 })

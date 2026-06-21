@@ -7,7 +7,7 @@ import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getJson, setJson } from '../../lib/storage'
-import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
+import { getWorkTasksSnapshot, patchWorkTaskItem } from '../../lib/workTasksStore'
 import { getCleaningConsumables, listChecklistItems, submitCleaningConsumables, uploadCleaningMedia, type ChecklistItem } from '../../lib/api'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 
@@ -20,12 +20,12 @@ type ItemState = {
   status: 'ok' | 'low' | null
   qty: string
   note: string
-  photo_url: string | null
+  photo_urls: string[]
 }
 
 type CachedConsumablesRecord = {
   living_room_photo_url?: string | null
-  items?: Array<{ item_id: string; qty?: number | null; note?: string | null; status?: string | null; photo_url?: string | null }>
+  items?: Array<{ item_id: string; qty?: number | null; note?: string | null; status?: string | null; photo_url?: string | null; photo_urls?: string[] }>
 }
 
 const SHOWER_DRAIN_PHOTOS = [
@@ -40,6 +40,10 @@ const KITCHEN_REQUIRED_PHOTOS = [
   { id: 'toaster_photo', label: '面包机' },
 ] as const
 
+const ADDITIONAL_REQUIRED_PHOTOS = [
+  { id: 'vacuum_used_photo', label: '吸尘器使用后' },
+] as const
+
 function buildBaseItems(list: ChecklistItem[]) {
   return (list || []).map((it: ChecklistItem) => ({
     id: it.id,
@@ -48,8 +52,16 @@ function buildBaseItems(list: ChecklistItem[]) {
     status: it.id === 'other' ? ('ok' as const) : (null as any),
     qty: '1',
     note: '',
-    photo_url: null,
+    photo_urls: [] as string[],
   }))
+}
+
+function normalizePhotoUrls(raw: any, fallback?: any) {
+  const primary = Array.isArray(raw) ? raw : []
+  const next = primary.map((item) => String(item || '').trim()).filter(Boolean)
+  const fallbackUrl = String(fallback || '').trim()
+  if (fallbackUrl) next.unshift(fallbackUrl)
+  return Array.from(new Set(next))
 }
 
 function applyExistingToItems(baseMapped: ItemState[], existingItems: any[]) {
@@ -63,7 +75,7 @@ function applyExistingToItems(baseMapped: ItemState[], existingItems: any[]) {
       status: (String(prev.status || '').trim() === 'low' ? 'low' : 'ok') as 'ok' | 'low',
       qty: prev.qty != null ? String(prev.qty) : '1',
       note: String(prev.note || ''),
-      photo_url: String(prev.photo_url || '').trim() || null,
+      photo_urls: normalizePhotoUrls(prev.photo_urls, prev.photo_url),
     }
   })
 }
@@ -100,6 +112,7 @@ export default function SuppliesFormScreen(props: Props) {
     () => [
       ...SHOWER_DRAIN_PHOTOS,
       ...KITCHEN_REQUIRED_PHOTOS,
+      ...ADDITIONAL_REQUIRED_PHOTOS,
     ],
     [],
   )
@@ -223,7 +236,7 @@ export default function SuppliesFormScreen(props: Props) {
         Alert.alert(t('common_error'), '需要相机权限')
         return
       }
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -232,7 +245,7 @@ export default function SuppliesFormScreen(props: Props) {
       const mimeType = String(a.mimeType || 'image/jpeg')
       const capturedAt = new Date().toISOString()
       const up = await uploadCleaningMedia(token, { uri, name, mimeType }, { purpose: 'consumable_stock_photo', watermark: '1', watermark_text: buildWatermarkText(capturedAt), property_code: propertyCode || undefined, captured_at: capturedAt })
-      setItem(idx, { photo_url: up.url })
+      setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, photo_urls: [...x.photo_urls, up.url] } : x)))
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '上传失败'))
     } finally {
@@ -248,7 +261,7 @@ export default function SuppliesFormScreen(props: Props) {
         Alert.alert(t('common_error'), '需要相机权限')
         return
       }
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -272,7 +285,7 @@ export default function SuppliesFormScreen(props: Props) {
         Alert.alert(t('common_error'), '需要相机权限')
         return
       }
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -299,7 +312,7 @@ export default function SuppliesFormScreen(props: Props) {
         return
       }
       for (const item of targets) {
-        const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
+        const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
         if (res.canceled || !res.assets?.length) return
         const a = res.assets[0] as any
         const uri = String(a.uri || '').trim()
@@ -325,7 +338,7 @@ export default function SuppliesFormScreen(props: Props) {
         Alert.alert(t('common_error'), '需要相机权限')
         return
       }
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -340,8 +353,8 @@ export default function SuppliesFormScreen(props: Props) {
     }
   }
 
-  function removeStockPhoto(idx: number) {
-    setItem(idx, { photo_url: null })
+  function removeStockPhoto(idx: number, photoIdx: number) {
+    setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, photo_urls: x.photo_urls.filter((_, j) => j !== photoIdx) } : x)))
   }
 
   function removeLivingRoomPhoto() {
@@ -368,7 +381,7 @@ export default function SuppliesFormScreen(props: Props) {
       }
       const targets: Array<'tv' | 'ac'> = ['tv', 'ac']
       for (const kind of targets) {
-        const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
+        const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
         if (res.canceled || !res.assets?.length) return
         const a = res.assets[0] as any
         const uri = String(a.uri || '').trim()
@@ -396,12 +409,15 @@ export default function SuppliesFormScreen(props: Props) {
       if (it.status === 'low') {
         const q = Number(String(it.qty || '').trim())
         if (!Number.isFinite(q) || q < 1) return false
-        if (!String(it.photo_url || '').trim()) return false
+        if (!(it.photo_urls || []).length) return false
       }
     }
     if (!String(livingRoomPhotoUrl || '').trim()) return false
     if (!SHOWER_DRAIN_PHOTOS.some(item => String(extraPhotoUrls[item.id] || '').trim())) return false
     for (const item of KITCHEN_REQUIRED_PHOTOS) {
+      if (!String(extraPhotoUrls[item.id] || '').trim()) return false
+    }
+    for (const item of ADDITIONAL_REQUIRED_PHOTOS) {
       if (!String(extraPhotoUrls[item.id] || '').trim()) return false
     }
     if (!String(remoteTvPhotoUrl || '').trim()) return false
@@ -439,7 +455,7 @@ export default function SuppliesFormScreen(props: Props) {
       return
     }
     if (!canSubmit) {
-      Alert.alert(t('common_error'), '请完成所有消耗品检查，并按要求拍完客厅、浴室、厨房和遥控器照片（不足项需拍照）')
+      Alert.alert(t('common_error'), '请完成所有消耗品检查，并按要求拍完客厅、浴室、厨房、吸尘器使用后和电视遥控器照片（不足项需拍照）')
       return
     }
     const mirrorChecked = await confirmToiletPaperMirrorChecked()
@@ -449,7 +465,8 @@ export default function SuppliesFormScreen(props: Props) {
       status: x.status as any,
       qty: x.status === 'low' ? Number(String(x.qty || '').trim()) : undefined,
       note: x.note.trim() || undefined,
-      photo_url: x.photo_url || undefined,
+      photo_url: x.photo_urls[0] || undefined,
+      photo_urls: x.photo_urls.length ? x.photo_urls : undefined,
     }))
     if (String(remoteAcPhotoUrl || '').trim()) {
       out.push({
@@ -474,7 +491,11 @@ export default function SuppliesFormScreen(props: Props) {
     }
     try {
       setSubmitting(true)
-      await submitCleaningConsumables(token, cleaningTaskId, { living_room_photo_url: String(livingRoomPhotoUrl || '').trim(), items: out })
+      const updated = await submitCleaningConsumables(token, cleaningTaskId, { living_room_photo_url: String(livingRoomPhotoUrl || '').trim(), items: out })
+      const nextStatus = String((updated as any)?.status || '').trim()
+      if (task?.id && nextStatus) {
+        await patchWorkTaskItem(String(task.id), { status: nextStatus } as any)
+      }
       Alert.alert(t('common_ok'), hasExistingRecord ? '补品记录已更新' : '提交成功')
       props.navigation.goBack()
     } catch (e: any) {
@@ -542,7 +563,7 @@ export default function SuppliesFormScreen(props: Props) {
                         </View>
                         <View style={styles.itemToggleGroup}>
                           <Pressable
-                            onPress={() => setItem(idx, { status: 'ok', photo_url: null })}
+                            onPress={() => setItem(idx, { status: 'ok', photo_urls: [] })}
                             style={({ pressed }) => [styles.inlineChip, it.status === 'ok' ? styles.inlineChipOkActive : null, pressed ? styles.pressed : null]}
                           >
                             <Text style={[styles.inlineChipText, it.status === 'ok' ? styles.inlineChipTextActive : null]}>足够</Text>
@@ -568,29 +589,31 @@ export default function SuppliesFormScreen(props: Props) {
                               keyboardType="number-pad"
                             />
                             <Pressable
-                              onPress={() => onTakeStockPhoto(idx)}
-                              disabled={photoUploadingIdx === idx}
-                              style={({ pressed }) => [styles.photoBtn, styles.inlinePhotoBtn, photoUploadingIdx === idx ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
-                            >
-                              <Text style={styles.photoBtnText}>{photoUploadingIdx === idx ? t('common_loading') : it.photo_url ? '已拍照' : '拍照库存'}</Text>
+                            onPress={() => onTakeStockPhoto(idx)}
+                            disabled={photoUploadingIdx === idx}
+                            style={({ pressed }) => [styles.photoBtn, styles.inlinePhotoBtn, photoUploadingIdx === idx ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
+                          >
+                              <Text style={styles.photoBtnText}>{photoUploadingIdx === idx ? t('common_loading') : it.photo_urls.length ? `继续拍照 (${it.photo_urls.length})` : '拍照库存'}</Text>
                             </Pressable>
                           </View>
-                          {it.photo_url ? (
+                          {it.photo_urls.length ? (
                             <View style={styles.thumbRow}>
-                              <View style={styles.thumbMiniWrap}>
-                                <Pressable
-                                  onPress={() => {
-                                    setViewerUrl(it.photo_url)
-                                    setViewerOpen(true)
-                                  }}
-                                  style={({ pressed }) => [styles.thumbMiniPress, pressed ? styles.pressed : null]}
-                                >
-                                  <Image source={{ uri: it.photo_url }} style={styles.thumbMini} />
-                                </Pressable>
-                                <Pressable onPress={() => removeStockPhoto(idx)} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
-                                  <Ionicons name="trash-outline" size={moderateScale(12)} color="#FFFFFF" />
-                                </Pressable>
-                              </View>
+                              {it.photo_urls.map((photoUrl, photoIdx) => (
+                                <View key={`${photoUrl}-${photoIdx}`} style={styles.thumbMiniWrap}>
+                                  <Pressable
+                                    onPress={() => {
+                                      setViewerUrl(photoUrl)
+                                      setViewerOpen(true)
+                                    }}
+                                    style={({ pressed }) => [styles.thumbMiniPress, pressed ? styles.pressed : null]}
+                                  >
+                                    <Image source={{ uri: photoUrl }} style={styles.thumbMini} />
+                                  </Pressable>
+                                  <Pressable onPress={() => removeStockPhoto(idx, photoIdx)} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
+                                    <Ionicons name="trash-outline" size={moderateScale(12)} color="#FFFFFF" />
+                                  </Pressable>
+                                </View>
+                              ))}
                             </View>
                           ) : null}
                           <TextInput
@@ -627,10 +650,10 @@ export default function SuppliesFormScreen(props: Props) {
               <View style={styles.sectionHead}>
                 <View style={styles.sectionHeadMain}>
                   <Text style={styles.sectionTitle}>拍照上传</Text>
-                  <Text style={styles.sectionHint}>客厅照片、浴室点位、厨房点位和电视遥控器都要拍；空调遥控器嵌在墙上的可不拍，只支持手机现场拍照。</Text>
+                  <Text style={styles.sectionHint}>客厅照片、浴室点位、厨房点位、吸尘器使用后和电视遥控器都要拍；空调遥控器嵌在墙上的可不拍，只支持手机现场拍照。</Text>
                 </View>
                 <View style={styles.progressPill}>
-                  <Text style={styles.progressPillText}>{`${requiredPhotosReady}/8 已完成`}</Text>
+                  <Text style={styles.progressPillText}>{`${requiredPhotosReady}/9 已完成`}</Text>
                 </View>
               </View>
 
@@ -777,6 +800,61 @@ export default function SuppliesFormScreen(props: Props) {
 
               <View style={styles.photoChecklistGroup}>
                 <View style={styles.groupHead}>
+                  <Text style={styles.groupTitle}>吸尘器使用后</Text>
+                  <Pressable
+                    onPress={() => onTakeRequiredScenePhoto('vacuum_used_photo')}
+                    disabled={submitting || batchUploadingGroup !== null}
+                    style={({ pressed }) => [styles.primaryPhotoBtnSmall, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={styles.primaryPhotoBtnText}>拍照</Text>
+                  </Pressable>
+                </View>
+                <View style={styles.photoChecklistEntry}>
+                  <View style={styles.photoChecklistRow}>
+                    <View style={styles.photoChecklistTextWrap}>
+                      <Text style={styles.photoChecklistLabel}>吸尘器使用后</Text>
+                      <Text style={styles.photoChecklistHint}>现场拍摄吸尘器使用后的状态。</Text>
+                    </View>
+                    {extraPhotoUrls.vacuum_used_photo ? (
+                      <>
+                        <Text style={styles.doneTag}>已拍</Text>
+                        <Pressable
+                          onPress={() => onTakeRequiredScenePhoto('vacuum_used_photo')}
+                          disabled={submitting || batchUploadingGroup !== null}
+                          style={({ pressed }) => [styles.photoBtn, styles.photoChecklistBtn, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
+                        >
+                          <Text style={styles.photoBtnText}>重拍</Text>
+                        </Pressable>
+                      </>
+                    ) : (
+                      <Text style={styles.pendingTag}>待拍</Text>
+                    )}
+                  </View>
+                </View>
+                <View style={styles.thumbRow}>
+                  {extraPhotoUrls.vacuum_used_photo ? (
+                    <View style={styles.thumbMiniWrap}>
+                      <Pressable
+                        onPress={() => {
+                          setViewerUrl(String(extraPhotoUrls.vacuum_used_photo))
+                          setViewerOpen(true)
+                        }}
+                        style={({ pressed }) => [styles.thumbMiniPress, pressed ? styles.pressed : null]}
+                      >
+                        <Image source={{ uri: String(extraPhotoUrls.vacuum_used_photo) }} style={styles.thumbMini} />
+                      </Pressable>
+                      <Pressable onPress={() => removeRequiredScenePhoto('vacuum_used_photo')} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
+                        <Ionicons name="trash-outline" size={moderateScale(12)} color="#FFFFFF" />
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <View style={styles.thumbMiniEmpty}><Text style={styles.thumbMiniEmptyText}>吸尘器</Text></View>
+                  )}
+                </View>
+              </View>
+
+              <View style={styles.photoChecklistGroup}>
+                <View style={styles.groupHead}>
                   <Text style={styles.groupTitle}>遥控器拍照</Text>
                   <Pressable
                     onPress={onTakeRemotePhotoSequence}
@@ -913,15 +991,15 @@ const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 28 },
   card: { width: '100%', gap: 14 },
   heroCard: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 16, borderWidth: hairline(), borderColor: '#E6ECF5', shadowColor: '#0F172A', shadowOpacity: 0.04, shadowRadius: 14, shadowOffset: { width: 0, height: 4 }, elevation: 1 },
-  headRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
-  heroTextWrap: { flex: 1, gap: 4 },
+  headRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 },
+  heroTextWrap: { flex: 1, minWidth: 0, gap: 4 },
   title: { fontSize: 16, fontWeight: '900', color: '#111827' },
   heroHint: { color: '#667085', fontWeight: '700' },
-  badge: { height: 30, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '70%' },
+  badge: { minHeight: 30, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '70%', flexShrink: 1 },
   badgeText: { color: '#2563EB', fontWeight: '900', flexShrink: 1 },
   sub: { marginTop: 8, color: '#6B7280', fontWeight: '700' },
-  summaryRow: { marginTop: 14, flexDirection: 'row', gap: 10 },
-  summaryPill: { flex: 1, borderRadius: 14, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#E8EDF5', paddingVertical: 10, paddingHorizontal: 10 },
+  summaryRow: { marginTop: 14, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  summaryPill: { flex: 1, minWidth: 120, borderRadius: 14, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#E8EDF5', paddingVertical: 10, paddingHorizontal: 10 },
   summaryLabel: { color: '#667085', fontSize: 12, fontWeight: '700' },
   summaryValue: { marginTop: 4, color: '#111827', fontSize: 16, fontWeight: '900' },
   sectionCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14, borderWidth: hairline(), borderColor: '#E6ECF5', gap: 12 },
@@ -934,46 +1012,46 @@ const styles = StyleSheet.create({
   progressPillText: { color: '#2563EB', fontWeight: '900', fontSize: 12 },
   photoChecklistGroup: { gap: 8 },
   photoChecklistEntry: { gap: 8 },
-  groupHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  groupTitle: { color: '#111827', fontSize: 14, fontWeight: '900' },
+  groupHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
+  groupTitle: { flex: 1, minWidth: 0, color: '#111827', fontSize: 14, fontWeight: '900' },
   photoChecklistRow: { borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#D9E7FF', padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   photoChecklistTextWrap: { flex: 1, minWidth: 0 },
   photoChecklistLabel: { color: '#111827', fontWeight: '900' },
   photoChecklistHint: { marginTop: 2, color: '#667085', fontSize: 12, fontWeight: '700' },
-  photoChecklistBtn: { minWidth: 72, height: 34 },
+  photoChecklistBtn: { minWidth: 72, minHeight: 34 },
   itemList: { gap: 10 },
   itemCard: { borderRadius: 16, backgroundColor: '#FAFBFC', borderWidth: hairline(), borderColor: '#E8EDF5', padding: 12 },
   itemRowCard: { borderRadius: 14, backgroundColor: '#FAFBFC', borderWidth: hairline(), borderColor: '#E8EDF5', padding: 12 },
-  itemRowHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  itemRowHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
   itemNameWrap: { flex: 1, minWidth: 0 },
   itemRowLabel: { color: '#111827', fontWeight: '900', fontSize: 15 },
   itemStatusHintOk: { marginTop: 2, color: '#0F9F6E', fontSize: 12, fontWeight: '700' },
   itemStatusHintLow: { marginTop: 2, color: '#B45309', fontSize: 12, fontWeight: '700' },
-  itemToggleGroup: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  itemCardHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  itemToggleGroup: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' },
+  itemCardHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   okTag: { color: '#0F9F6E', backgroundColor: '#E9FBF4', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, overflow: 'hidden', fontSize: 12, fontWeight: '900' },
   lowTag: { color: '#B45309', backgroundColor: '#FEF3C7', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, overflow: 'hidden', fontSize: 12, fontWeight: '900' },
   doneTag: { color: '#2563EB', backgroundColor: '#EAF2FF', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, overflow: 'hidden', fontSize: 12, fontWeight: '900', flexShrink: 0 },
   pendingTag: { color: '#667085', backgroundColor: '#F3F4F6', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, overflow: 'hidden', fontSize: 12, fontWeight: '900', flexShrink: 0 },
   label: { marginBottom: 6, color: '#111827', fontWeight: '900' },
   input: { height: 38, borderRadius: 10, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 10, fontWeight: '700', color: '#111827' },
-  row: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  lowStockInlineRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  row: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  lowStockInlineRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   qty: { flex: 1 },
-  inlineChip: { minWidth: 68, height: 34, paddingHorizontal: 12, borderRadius: 999, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  inlineChip: { minWidth: 68, minHeight: 34, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   inlineChipOkActive: { backgroundColor: '#14B87A', borderColor: '#14B87A' },
   inlineChipLowActive: { backgroundColor: '#F59E0B', borderColor: '#F59E0B' },
   inlineChipText: { color: '#374151', fontWeight: '900', fontSize: 13 },
   inlineChipTextActive: { color: '#FFFFFF' },
   lowDetailBox: { marginTop: 10, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E8EDF5', padding: 10 },
   note: { height: 64, paddingTop: 10, textAlignVertical: 'top', marginTop: 8 },
-  photoBtn: { height: 38, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  photoBtn: { minHeight: 38, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   inlinePhotoBtn: { minWidth: 96 },
-  primaryPhotoBtn: { flex: 1, height: 38, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#2563EB', borderWidth: hairline(), borderColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
-  primaryPhotoBtnSmall: { minWidth: 72, height: 34, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#2563EB', borderWidth: hairline(), borderColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
-  primaryPhotoBtnText: { fontWeight: '900', color: '#FFFFFF' },
+  primaryPhotoBtn: { flex: 1, minWidth: 128, minHeight: 38, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: '#2563EB', borderWidth: hairline(), borderColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  primaryPhotoBtnSmall: { minWidth: 72, minHeight: 34, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10, backgroundColor: '#2563EB', borderWidth: hairline(), borderColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  primaryPhotoBtnText: { fontWeight: '900', color: '#FFFFFF', textAlign: 'center' },
   photoBtnDisabled: { backgroundColor: '#E5E7EB' },
-  photoBtnText: { fontWeight: '900', color: '#111827' },
+  photoBtnText: { fontWeight: '900', color: '#111827', textAlign: 'center' },
   photoPreview: { marginTop: 8, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6' },
   photo: { width: '100%', height: moderateScale(160), backgroundColor: '#F3F4F6' },
   thumbRow: { marginTop: 2, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
@@ -983,9 +1061,9 @@ const styles = StyleSheet.create({
   thumbMiniEmpty: { width: 60, height: 60, borderRadius: 10, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F8FAFC', alignItems: 'center', justifyContent: 'center', padding: 6 },
   thumbMiniEmptyText: { fontSize: 10, lineHeight: 12, color: '#98A2B3', fontWeight: '700', textAlign: 'center' },
   thumbDeleteBtn: { position: 'absolute', right: 4, top: 4, width: 18, height: 18, borderRadius: 9, backgroundColor: 'rgba(17,24,39,0.76)', alignItems: 'center', justifyContent: 'center' },
-  submitBtn: { marginTop: 12, height: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  submitBtn: { marginTop: 12, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   submitDisabled: { backgroundColor: '#93C5FD' },
-  submitText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
+  submitText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15, textAlign: 'center' },
   muted: { color: '#6B7280', fontWeight: '700' },
   pressed: { opacity: 0.92 },
   viewerMask: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)' },

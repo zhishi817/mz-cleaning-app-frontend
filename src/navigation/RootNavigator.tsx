@@ -9,10 +9,12 @@ import Constants from 'expo-constants'
 import { useAuth } from '../lib/auth'
 import { useI18n } from '../lib/i18n'
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot } from '../lib/workTasksStore'
-import { getNoticesSnapshot, initNoticesStore, prependNotice, subscribeNotices, upsertNotices } from '../lib/noticesStore'
-import { listInboxNotifications, registerExpoPushToken } from '../lib/api'
-import { resolveNoticeCreatedAt } from '../lib/noticeTime'
-import { setRegisteredExpoPushToken } from '../lib/pushTokenStorage'
+import { getNoticesSnapshot, initNoticesStore, subscribeNotices } from '../lib/noticesStore'
+import { registerExpoPushToken } from '../lib/api'
+import { syncInboxNotifications } from '../lib/notificationInbox'
+import { getPushDeviceId, setRegisteredExpoPushToken } from '../lib/pushTokenStorage'
+import { isTaskManagerUser } from '../lib/roles'
+import type { CompanyGuideRole } from '../lib/api'
 import LoginScreen from '../screens/LoginScreen'
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen'
 import TasksScreen from '../screens/tabs/TasksScreen'
@@ -25,6 +27,7 @@ import ContactDetailScreen from '../screens/contacts/ContactDetailScreen'
 import ProfileEditScreen from '../screens/me/ProfileEditScreen'
 import AccountScreen from '../screens/me/AccountScreen'
 import ChangePasswordScreen from '../screens/me/ChangePasswordScreen'
+import ExpenseCenterScreen from '../screens/me/ExpenseCenterScreen'
 import TaskDetailScreen from '../screens/tasks/TaskDetailScreen'
 import FeedbackFormScreen from '../screens/tasks/FeedbackFormScreen'
 import SuppliesFormScreen from '../screens/tasks/SuppliesFormScreen'
@@ -33,6 +36,15 @@ import InspectionCompleteScreen from '../screens/tasks/InspectionCompleteScreen'
 import CleaningSelfCompleteScreen from '../screens/tasks/CleaningSelfCompleteScreen'
 import ManagerDailyTaskScreen from '../screens/tasks/ManagerDailyTaskScreen'
 import DayEndBackupKeysScreen from '../screens/tasks/DayEndBackupKeysScreen'
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+})
 
 export type AuthStackParamList = {
   Login: undefined
@@ -57,7 +69,7 @@ export type TasksStackParamList = {
   TasksList: undefined
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
   InspectionPanel: { taskId: string }
-  InspectionComplete: { taskId: string }
+  InspectionComplete: { taskId: string; skipInspectionPhotos?: boolean }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
   DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; overviewMode?: boolean; overviewUsers?: Array<{ userId: string; userName: string; roles: string[]; roomCodes: string[]; complete: boolean | null }> }
@@ -68,10 +80,10 @@ export type TasksStackParamList = {
 export type NoticesStackParamList = {
   NoticesList: undefined
   NoticeDetail: { id: string }
-  InfoCenterDetail: { kind: 'property' | 'secret' | 'task' | 'announcement' | 'guide' | 'warehouse_guide'; title: string; subtitle?: string; body?: string; url?: string | null; copyText?: string | null; secretId?: string }
+  InfoCenterDetail: { kind: 'property' | 'secret' | 'task' | 'announcement' | 'guide' | 'warehouse_guide'; title: string; subtitle?: string; body?: string; contentRaw?: string | null; guideRole?: CompanyGuideRole | null; url?: string | null; copyText?: string | null; secretId?: string }
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
   InspectionPanel: { taskId: string }
-  InspectionComplete: { taskId: string }
+  InspectionComplete: { taskId: string; skipInspectionPhotos?: boolean }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
   DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; overviewMode?: boolean; overviewUsers?: Array<{ userId: string; userName: string; roles: string[]; roomCodes: string[]; complete: boolean | null }> }
@@ -89,6 +101,7 @@ export type MeStackParamList = {
   ProfileEdit: undefined
   Account: undefined
   ChangePassword: undefined
+  ExpenseCenter: undefined
 }
 
 function pickTaskRouteIdFromNoticeData(data0: any) {
@@ -114,35 +127,6 @@ function resolveTaskNoticeNavigation(params: { taskRouteId: string; role: string
   if (isManager && isCleaningTask) return { screen: 'ManagerDailyTask', params: { taskId: params.taskRouteId } }
   if (isInspector && isInspection) return { screen: 'InspectionPanel', params: { taskId: params.taskRouteId } }
   return { screen: 'TaskDetail', params: { id: params.taskRouteId } }
-}
-
-function formatIncomingNotice(title0: string, body0: string, data0: any) {
-  const data = data0 && typeof data0 === 'object' ? data0 : {}
-  const kind = String(data?.kind || '').trim()
-  const propertyCode = String(data?.property_code || '').trim()
-  const photoUrl = String(data?.photo_url || '').trim()
-  const photoUrls = Array.isArray(data?.photo_urls) ? data.photo_urls.map((item: any) => String(item || '').trim()).filter(Boolean) : []
-  if (kind !== 'key_photo_uploaded') {
-    const summary = body0.split('\n')[0]?.slice(0, 60) || body0.slice(0, 60) || '通知'
-    const contentLines = [body0 || title0 || '通知']
-    if (kind === 'inspection_complete' && propertyCode && !/^房源[:：]/.test(contentLines[0] || '')) contentLines.unshift(`房源：${propertyCode}`)
-    if ((photoUrl || photoUrls.length) && kind === 'inspection_complete') {
-      contentLines.push(`照片数：${photoUrls.length || 1}`)
-    }
-    return {
-      title: title0 || '通知',
-      summary,
-      content: contentLines.filter(Boolean).join('\n'),
-    }
-  }
-  const title = propertyCode ? `钥匙已上传：${propertyCode}` : (title0 || '钥匙已上传')
-  const lines = [propertyCode ? `房源：${propertyCode}` : '', body0 || '清洁员已上传钥匙照片', photoUrl ? `照片：${photoUrl}` : ''].filter(Boolean)
-  const content = lines.join('\n')
-  return {
-    title,
-    summary: propertyCode ? `房源：${propertyCode}` : (body0 || '清洁员已上传钥匙照片'),
-    content,
-  }
 }
 
 function BootScreen() {
@@ -180,8 +164,7 @@ function TasksStackNavigator() {
 }
 
 function shouldShowTaskNoticeForCurrentUser(data: any, user: any) {
-  const role = String(user?.role || '').trim()
-  if (role === 'admin' || role === 'offline_manager' || role === 'customer_service') return true
+  if (isTaskManagerUser(user)) return true
   const uid = String(user?.id || '').trim()
   if (!uid) return true
   const kind = String(data?.kind || '').trim()
@@ -252,6 +235,7 @@ function MeStackNavigator() {
       <MeStack.Screen name="ProfileEdit" component={ProfileEditScreen} options={{ title: t('profile_edit') }} />
       <MeStack.Screen name="Account" component={AccountScreen} options={{ title: t('account_manage') }} />
       <MeStack.Screen name="ChangePassword" component={ChangePasswordScreen} options={{ title: '修改密码' }} />
+      <MeStack.Screen name="ExpenseCenter" component={ExpenseCenterScreen} options={{ title: '支出录入' }} />
     </MeStack.Navigator>
   )
 }
@@ -350,7 +334,6 @@ export default function RootNavigator() {
   const statusRef = useRef(status)
   const tokenRef = useRef(token)
   const userRef = useRef(user)
-
   useEffect(() => {
     statusRef.current = status
     tokenRef.current = token
@@ -359,14 +342,14 @@ export default function RootNavigator() {
   }, [status, token, user])
 
   async function registerForPush() {
-    Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowBanner: true,
-        shouldShowList: true,
-        shouldPlaySound: true,
-        shouldSetBadge: true,
-      }),
-    })
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: '默认通知',
+        importance: Notifications.AndroidImportance.MAX,
+        sound: 'default',
+        vibrationPattern: [0, 250, 250, 250],
+      })
+    }
     const { status } = await Notifications.requestPermissionsAsync()
     if (status !== 'granted') return
     const projectId =
@@ -384,7 +367,13 @@ export default function RootNavigator() {
     if (!expoPushToken) return
     try {
       if (!token) return
-      await registerExpoPushToken(token, { expo_push_token: expoPushToken, platform: Platform.OS, ua: `mzstay/${String((Constants as any)?.expoConfig?.version || '')}` })
+      const deviceId = await getPushDeviceId()
+      await registerExpoPushToken(token, {
+        expo_push_token: expoPushToken,
+        device_id: deviceId,
+        platform: Platform.OS,
+        ua: `mzstay/${String((Constants as any)?.expoConfig?.version || '')}`,
+      })
       await setRegisteredExpoPushToken(expoPushToken)
     } catch {}
   }
@@ -403,54 +392,14 @@ export default function RootNavigator() {
       ;(async () => {
         try {
           if (statusRef.current !== 'signedIn' || !tokenRef.current || !String(userRef.current?.id || '').trim()) return
-          await initNoticesStore()
-          const title = String(n?.request?.content?.title || '').trim() || '通知'
-          const body = String(n?.request?.content?.body || '').trim()
           const data: any = n?.request?.content?.data || {}
-          const kind = String(data?.kind || '').trim()
-          const propertyCode = String(data?.property_code || '').trim()
-          const checkedOutAt = String(data?.checked_out_at || '').trim()
-          const eventId = String(data?.event_id || '').trim()
-          const fieldsKey = String(data?.fields_key || '').trim()
-          const reqId = String((n as any)?.request?.identifier || '').trim()
-          const formatted = formatIncomingNotice(title, body, data)
           if (!shouldShowTaskNoticeForCurrentUser(data, userRef.current)) return
-          const id0 =
-            kind === 'guest_checked_out' && propertyCode && checkedOutAt
-              ? `guest_checked_out:${propertyCode}:${checkedOutAt}`
-              : kind === 'guest_checked_out_cancelled' && propertyCode
-                ? `guest_checked_out_cancelled:${propertyCode}:${checkedOutAt || ''}`
-                : kind === 'cleaning_task_manager_fields_updated' && propertyCode && fieldsKey
-                  ? `manager_fields:${propertyCode}:${fieldsKey}`
-                  : eventId || reqId || `${Date.now()}`
-          await prependNotice({
-            id: String(id0),
-            type: 'update',
-            title: formatted.title,
-            summary: formatted.summary,
-            content: formatted.content,
-            data,
+          await syncInboxNotifications({
+            token: tokenRef.current,
+            limit: 30,
+            replace: true,
+            include: (notice) => shouldShowTaskNoticeForCurrentUser(notice.data, userRef.current),
           })
-          try {
-            if (tokenRef.current) {
-              const { items } = await listInboxNotifications(tokenRef.current, { limit: 30 })
-              const list = (items || []).map((it: any) => {
-                const ch = Array.isArray(it?.changes) ? it.changes.map((v: any) => String(v || '').toLowerCase()) : []
-                const type: 'key' | 'update' = String(it?.type || '').toUpperCase().includes('KEY') || ch.includes('keys') ? 'key' : 'update'
-                return {
-                  id: String(it?.event_id || it?.id || ''),
-                  type,
-                  title: String(it?.title || '通知'),
-                  summary: String(it?.body || ''),
-                  content: String(it?.body || ''),
-                  data: { ...(it?.data && typeof it.data === 'object' ? it.data : {}), _server_id: String(it?.id || ''), event_id: String(it?.event_id || '') },
-                  createdAt: resolveNoticeCreatedAt(it?.created_at, it?.event_id, it?.id) || new Date().toISOString(),
-                  unread: !it?.read_at,
-                }
-              }).filter((it: any) => shouldShowTaskNoticeForCurrentUser(it?.data || {}, userRef.current))
-              await upsertNotices(list, { replace: true })
-            }
-          } catch {}
         } catch {}
       })()
     })
@@ -458,60 +407,22 @@ export default function RootNavigator() {
       ;(async () => {
         try {
           if (statusRef.current !== 'signedIn' || !tokenRef.current || !String(userRef.current?.id || '').trim()) return
-          await initNoticesStore()
           const n: any = r?.notification
-          const title = String(n?.request?.content?.title || '').trim() || '通知'
-          const body = String(n?.request?.content?.body || '').trim()
           const data: any = n?.request?.content?.data || {}
-          const kind = String(data?.kind || '').trim()
-          const propertyCode = String(data?.property_code || '').trim()
-          const checkedOutAt = String(data?.checked_out_at || '').trim()
           const eventId = String(data?.event_id || '').trim()
-          const fieldsKey = String(data?.fields_key || '').trim()
-          const reqId = String(n?.request?.identifier || '').trim()
-          const formatted = formatIncomingNotice(title, body, data)
           if (!shouldShowTaskNoticeForCurrentUser(data, userRef.current)) return
-          const id0 =
-            kind === 'guest_checked_out' && propertyCode && checkedOutAt
-              ? `guest_checked_out:${propertyCode}:${checkedOutAt}`
-              : kind === 'guest_checked_out_cancelled' && propertyCode
-                ? `guest_checked_out_cancelled:${propertyCode}:${checkedOutAt || ''}`
-                : kind === 'cleaning_task_manager_fields_updated' && propertyCode && fieldsKey
-                  ? `manager_fields:${propertyCode}:${fieldsKey}`
-                  : eventId || reqId || `${Date.now()}`
-          await prependNotice({
-            id: String(id0),
-            type: 'update',
-            title: formatted.title,
-            summary: formatted.summary,
-            content: formatted.content,
-            data,
+          const { notices } = await syncInboxNotifications({
+            token: tokenRef.current,
+            limit: 30,
+            replace: true,
+            include: (notice) => shouldShowTaskNoticeForCurrentUser(notice.data, userRef.current),
           })
-          try {
-            if (tokenRef.current) {
-              const { items } = await listInboxNotifications(tokenRef.current, { limit: 30 })
-              const list = (items || []).map((it: any) => {
-                const ch = Array.isArray(it?.changes) ? it.changes.map((v: any) => String(v || '').toLowerCase()) : []
-                const type: 'key' | 'update' = String(it?.type || '').toUpperCase().includes('KEY') || ch.includes('keys') ? 'key' : 'update'
-                return {
-                  id: String(it?.event_id || it?.id || ''),
-                  type,
-                  title: String(it?.title || '通知'),
-                  summary: String(it?.body || ''),
-                  content: String(it?.body || ''),
-                  data: { ...(it?.data && typeof it.data === 'object' ? it.data : {}), _server_id: String(it?.id || ''), event_id: String(it?.event_id || '') },
-                  createdAt: resolveNoticeCreatedAt(it?.created_at, it?.event_id, it?.id) || new Date().toISOString(),
-                  unread: !it?.read_at,
-                }
-              }).filter((it: any) => shouldShowTaskNoticeForCurrentUser(it?.data || {}, userRef.current))
-              await upsertNotices(list, { replace: true })
-            }
-          } catch {}
+          const targetId = notices.find((notice) => String(notice.data?.event_id || notice.id) === eventId)?.id || ''
           if (navRef.isReady()) {
             navRef.navigate('Notices', { screen: 'NoticesList' } as any)
-            setTimeout(() => {
+            if (targetId) setTimeout(() => {
               try {
-                navRef.navigate('Notices', { screen: 'NoticeDetail', params: { id: String(id0) } } as any)
+                navRef.navigate('Notices', { screen: 'NoticeDetail', params: { id: targetId } } as any)
               } catch {}
             }, 0)
           }

@@ -1,17 +1,32 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import { ResizeMode, Video } from 'expo-av'
+import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { API_BASE_URL } from '../../config/env'
-import { getCleaningConsumables, getCompletionPhotos, getInspectionPhotos, getRestockProof, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, updateCleaningTaskManagerFields } from '../../lib/api'
+import { effectiveInspectionMode, inspectionModeLabel, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
+import {
+  deleteGuestLuggageNotice,
+  getCleaningConsumables,
+  getCompletionPhotos,
+  getInspectionPhotos,
+  getRestockProof,
+  markGuestCheckedOutByOrder,
+  markGuestCheckedOutByTasks,
+  saveGuestLuggageNotice,
+  updateCleaningTaskManagerFields,
+  uploadMzappMedia,
+} from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { prependNotice } from '../../lib/noticesStore'
+import { hasAnyRole } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
 import { findWorkTaskItemByAnyId, patchWorkTaskItem, refreshWorkTasksFromServer, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
+import GuestLuggageCard from '../../components/GuestLuggageCard'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'ManagerDailyTask'>
 
@@ -35,10 +50,41 @@ function toAbsoluteUrl(rawUrl: any) {
 
 const AREA_LABEL: Record<string, string> = {
   unclean: '清洁问题',
+  toilet: '卫生间',
   living: '客厅',
   sofa: '沙发',
   bedroom: '卧室',
   kitchen: '厨房',
+  shower_drain: '淋浴房下水口',
+  vacuum_used: '吸尘器使用后',
+}
+
+const CLEANING_SCENE_PHOTO_LABEL: Record<string, string> = {
+  shower_drain_photo_1: '淋浴房下水口 1',
+  shower_drain_photo_2: '淋浴房下水口 2',
+  shower_drain_photo_3: '淋浴房下水口 3',
+  coffee_machine_photo: '咖啡机',
+  kettle_photo: '烧水壶',
+  toaster_photo: '面包机',
+  vacuum_used_photo: '吸尘器使用后',
+}
+
+const CLEANING_SCENE_PHOTO_IDS = new Set(Object.keys(CLEANING_SCENE_PHOTO_LABEL))
+
+function normalizeUrlList(raw: any, fallback?: any) {
+  const values = Array.isArray(raw) ? raw : raw ? [raw] : []
+  const fallbackValues = Array.isArray(fallback) ? fallback : fallback ? [fallback] : []
+  return Array.from(
+    new Set(
+      [...values, ...fallbackValues]
+        .map((item) => String(item || '').trim())
+        .filter(Boolean),
+    ),
+  )
+}
+
+function uniqueTextList(values: any[]) {
+  return Array.from(new Set(values.map((item) => String(item || '').trim()).filter(Boolean)))
 }
 
 function ymd(d: Date) {
@@ -63,18 +109,23 @@ function buildCleaningSummary(checkoutTime: string | null, checkinTime: string |
 
 function isDoneLikeStatusZh(status0: string) {
   const s = String(status0 || '').trim().toLowerCase()
-  return s === 'done' || s === 'completed' || s === 'ready' || s === 'keys_hung' || s === 'cleaned' || s === 'restocked' || s === 'inspected'
+  return s === 'done' || s === 'completed' || s === 'ready' || s === 'keys_hung' || s === 'cleaned' || s === 'restock_pending' || s === 'restocked' || s === 'inspected'
 }
 
 function statusLabelZh(status: string, task?: WorkTaskItem | null) {
   const s = String(status || '').trim().toLowerCase()
   const source = String(task?.source_type || '').trim().toLowerCase()
   const kind = String(task?.task_kind || '').trim().toLowerCase()
+  if (source === 'cleaning_tasks' && kind === 'inspection' && (s === 'cleaned' || s === 'restock_pending' || s === 'restocked')) return '待检查'
   if (source === 'cleaning_tasks' && kind === 'cleaning') {
+    const taskType = String((task as any)?.task_type || '').trim().toLowerCase()
+    const isStayoverTask = isStayoverTaskType(taskType)
     const inspectionStatus = String((task as any)?.inspection_status || '').trim().toLowerCase()
     const hasInspection = Array.isArray((task as any)?.inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
+    const inspectionMode = effectiveInspectionMode(task as any)
     if (isDoneLikeStatusZh(s)) {
-      if (hasInspection || inspectionStatus) {
+      if (isStayoverTask) return '已完成'
+      if (inspectionMode === 'same_day' || inspectionMode === 'deferred' || hasInspection || inspectionStatus) {
         if (inspectionStatus === 'keys_hung' || inspectionStatus === 'done' || inspectionStatus === 'completed') return '已挂钥匙'
         return '待检查'
       }
@@ -129,6 +180,90 @@ function checkoutTaskIdsFromTask(task: WorkTaskItem | null) {
   )
 }
 
+function cleaningTaskIdsFromTask(task: WorkTaskItem | null) {
+  if (!task || task.source_type !== 'cleaning_tasks') return []
+  const ids = [
+    ...(Array.isArray((task as any)?.cleaning_task_ids) ? (task as any).cleaning_task_ids : []),
+    ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
+    (task as any)?.source_id,
+  ]
+  return uniqueTextList(ids)
+}
+
+function inspectionTaskIdsFromTask(task: WorkTaskItem | null) {
+  if (!task || task.source_type !== 'cleaning_tasks') return []
+  const ids = [
+    ...(Array.isArray((task as any)?.inspection_task_ids) ? (task as any).inspection_task_ids : []),
+    ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
+    (task as any)?.source_id,
+  ]
+  return uniqueTextList(ids)
+}
+
+function mergeConsumableRows(rows: any[]) {
+  const byItem = new Map<string, { item_id: string; photo_url?: string | null; photo_urls?: string[]; item_label?: string | null; status?: string | null; note?: string | null; need_restock?: boolean }>()
+  for (const x of rows || []) {
+    const itemId = String(x?.item_id || '').trim()
+    if (!itemId) continue
+    const urls = normalizeUrlList(x?.photo_urls, x?.photo_url)
+    const prev = byItem.get(itemId)
+    if (prev) {
+      const nextUrls = uniqueTextList([...(prev.photo_urls || []), ...urls])
+      const nextStatus = String(prev.status || '').trim().toLowerCase() === 'low' || String(x?.status || '').trim().toLowerCase() === 'low' ? 'low' : (prev.status || String(x?.status || '').trim() || null)
+      byItem.set(itemId, {
+        ...prev,
+        photo_url: nextUrls[0] || prev.photo_url || null,
+        photo_urls: nextUrls,
+        item_label: prev.item_label || (x?.item_label == null ? null : String(x.item_label || '').trim()),
+        status: nextStatus,
+        note: prev.note || (x?.note == null ? null : String(x.note || '').trim()),
+        need_restock: !!prev.need_restock || !!x?.need_restock || String(x?.status || '').trim().toLowerCase() === 'low',
+      })
+      continue
+    }
+    byItem.set(itemId, {
+      item_id: itemId,
+      photo_url: urls[0] || null,
+      photo_urls: urls,
+      item_label: x?.item_label == null ? null : String(x.item_label || '').trim(),
+      status: x?.status == null ? null : String(x.status || '').trim(),
+      note: x?.note == null ? null : String(x.note || '').trim(),
+      need_restock: !!x?.need_restock || String(x?.status || '').trim().toLowerCase() === 'low',
+    })
+  }
+  return Array.from(byItem.values())
+}
+
+function mergeRestockProofRows(rows: any[]) {
+  const byItem = new Map<string, { item_id: string; proof_url: string; proof_urls?: string[]; note?: string | null; status?: string | null }>()
+  for (const x of rows || []) {
+    const itemId = String(x?.item_id || '').trim()
+    if (!itemId) continue
+    const urls = normalizeUrlList(x?.proof_urls, x?.proof_url)
+    if (!urls.length) continue
+    const prev = byItem.get(itemId)
+    if (prev) {
+      const nextUrls = uniqueTextList([...(prev.proof_urls || []), ...urls])
+      byItem.set(itemId, {
+        ...prev,
+        proof_url: nextUrls[0] || prev.proof_url,
+        proof_urls: nextUrls,
+        note: prev.note || (x?.note == null ? null : String(x.note || '').trim()),
+        status: prev.status || (x?.status == null ? null : String(x.status || '').trim()),
+      })
+      continue
+    }
+    byItem.set(itemId, {
+      item_id: itemId,
+      proof_url: urls[0],
+      proof_urls: urls,
+      note: x?.note == null ? null : String(x.note || '').trim(),
+      status: x?.status == null ? null : String(x.status || '').trim(),
+    })
+  }
+  return Array.from(byItem.values())
+}
+
 export default function ManagerDailyTaskScreen(props: Props) {
   const { t } = useI18n()
   const { token, user } = useAuth()
@@ -146,26 +281,31 @@ export default function ManagerDailyTaskScreen(props: Props) {
   }, [])
 
   const task = useMemo(() => findWorkTaskItemByAnyId(props.route.params.taskId), [props.route.params.taskId, storeVersion])
-  const isCustomerService = String(user?.role || '') === 'customer_service'
-  const canSeeUnclean = String(user?.role || '') === 'admin' || String(user?.role || '') === 'offline_manager'
+  const canEditManagerFields = hasAnyRole(user, ['customer_service', 'admin', 'offline_manager'])
+  const canSeeUnclean = hasAnyRole(user, ['admin', 'offline_manager'])
 
   const [checkoutTime, setCheckoutTime] = useState('')
   const [checkinTime, setCheckinTime] = useState('')
   const [oldCode, setOldCode] = useState('')
   const [newCode, setNewCode] = useState('')
   const [guestNote, setGuestNote] = useState('')
+  const [luggageNote, setLuggageNote] = useState('')
+  const [luggagePhotoUrls, setLuggagePhotoUrls] = useState<string[]>([])
+  const [luggageSaving, setLuggageSaving] = useState(false)
+  const [luggageUploading, setLuggageUploading] = useState(false)
   const [keysRequired, setKeysRequired] = useState(1)
   const [keysDirty, setKeysDirty] = useState(false)
 
   const [photosLoading, setPhotosLoading] = useState(false)
-  const [consumableItems, setConsumableItems] = useState<Array<{ item_id: string; photo_url?: string | null; item_label?: string | null; status?: string | null; note?: string | null }>>([])
-  const [livingRoomPhotoUrl, setLivingRoomPhotoUrl] = useState<string | null>(null)
+  const [consumableItems, setConsumableItems] = useState<Array<{ item_id: string; photo_url?: string | null; photo_urls?: string[]; item_label?: string | null; status?: string | null; note?: string | null; need_restock?: boolean }>>([])
+  const [livingRoomPhotoUrls, setLivingRoomPhotoUrls] = useState<string[]>([])
   const [completionItems, setCompletionItems] = useState<Array<{ area: string; url: string; note?: string | null }>>([])
   const [inspectionItems, setInspectionItems] = useState<Array<{ area: string; url: string; note?: string | null }>>([])
-  const [restockProofs, setRestockProofs] = useState<Array<{ item_id: string; proof_url: string; note?: string | null; status?: string | null }>>([])
+  const [restockProofs, setRestockProofs] = useState<Array<{ item_id: string; proof_url: string; proof_urls?: string[]; note?: string | null; status?: string | null }>>([])
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const syncedTaskIdRef = useRef<string>('')
+  const syncedLuggageVersionRef = useRef<string>('')
 
   useEffect(() => {
     const currentTaskId = String(task?.id || '').trim()
@@ -183,6 +323,17 @@ export default function ManagerDailyTaskScreen(props: Props) {
     setKeysRequired(Number.isFinite(k) && k >= 2 ? 2 : 1)
     setKeysDirty(false)
   }, [task?.id])
+
+  useEffect(() => {
+    const currentTaskId = String(task?.id || '').trim()
+    if (!currentTaskId) return
+    const luggageVersion = String((task as any)?.guest_luggage?.version || 0)
+    const syncVersion = `${currentTaskId}:${luggageVersion}`
+    if (syncedLuggageVersionRef.current === syncVersion) return
+    syncedLuggageVersionRef.current = syncVersion
+    setLuggageNote(String((task as any)?.guest_luggage?.note || '').trim())
+    setLuggagePhotoUrls(normalizeUrlList((task as any)?.guest_luggage?.photo_urls).slice(0, 3))
+  }, [task?.id, (task as any)?.guest_luggage?.version])
 
   useEffect(() => {
     if (task) return
@@ -203,79 +354,88 @@ export default function ManagerDailyTaskScreen(props: Props) {
     }
   }, [task, token, user?.id, props.route.params.taskId])
 
-  const inspectionTaskId = useMemo(() => {
-    const ids = (task as any)?.inspection_task_ids
-    const id0 = Array.isArray(ids) && ids.length ? String(ids[0] || '').trim() : ''
-    if (id0) return id0
-    const source = String((task as any)?.source_id || '').trim()
-    return source
-  }, [task])
+  const inspectionTaskIds = useMemo(() => inspectionTaskIdsFromTask(task), [task])
+  const cleaningTaskIds = useMemo(() => cleaningTaskIdsFromTask(task), [task])
+  const inspectionTaskIdsKey = inspectionTaskIds.join('|')
+  const cleaningTaskIdsKey = cleaningTaskIds.join('|')
 
-  const cleaningTaskId = useMemo(() => {
-    const ids = (task as any)?.cleaning_task_ids
-    const id0 = Array.isArray(ids) && ids.length ? String(ids[0] || '').trim() : ''
-    if (id0) return id0
-    if (String((task as any)?.task_kind || '').trim() === 'cleaning') return String((task as any)?.source_id || '').trim()
-    return ''
-  }, [task])
+  const loadTaskPhotos = useCallback(async () => {
+    if (!token) return
+    if (!inspectionTaskIds.length && !cleaningTaskIds.length) {
+      setConsumableItems([])
+      setLivingRoomPhotoUrls([])
+      setCompletionItems([])
+      setInspectionItems([])
+      setRestockProofs([])
+      return
+    }
+    setPhotosLoading(true)
+    try {
+      const [consumablesResps, completionResps, inspectionResps, restockResps] = await Promise.all([
+        Promise.all(cleaningTaskIds.map((id) => getCleaningConsumables(token, id).catch(() => null))),
+        Promise.all(cleaningTaskIds.map((id) => getCompletionPhotos(token, id).catch(() => null))),
+        Promise.all(inspectionTaskIds.map((id) => getInspectionPhotos(token, id).catch(() => null))),
+        Promise.all(cleaningTaskIds.map((id) => getRestockProof(token, id).catch(() => null))),
+      ])
+
+      setLivingRoomPhotoUrls(uniqueTextList(consumablesResps.flatMap((resp) => normalizeUrlList((resp as any)?.living_room_photo_url))))
+      setConsumableItems(mergeConsumableRows(consumablesResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))))
+
+      const completion = completionResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))
+      const seenCompletion = new Set<string>()
+      setCompletionItems(
+        completion
+          .map((x) => ({ area: String(x.area || '').trim(), url: String(x.url || '').trim(), note: x.note ?? null }))
+          .filter((x) => {
+            if (!x.url) return false
+            const key = `${x.area}|${x.url}`
+            if (seenCompletion.has(key)) return false
+            seenCompletion.add(key)
+            return true
+          }),
+      )
+
+      const items = inspectionResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))
+      const seenInspection = new Set<string>()
+      setInspectionItems(
+        items
+          .map((x) => ({ area: String(x.area || '').trim(), url: String(x.url || '').trim(), note: x.note ?? null }))
+          .filter((x) => {
+            if (!x.url) return false
+            const key = `${x.area}|${x.url}`
+            if (seenInspection.has(key)) return false
+            seenInspection.add(key)
+            return true
+          }),
+      )
+
+      setRestockProofs(mergeRestockProofRows(restockResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))))
+    } catch {
+      setConsumableItems([])
+      setLivingRoomPhotoUrls([])
+      setCompletionItems([])
+      setInspectionItems([])
+      setRestockProofs([])
+    } finally {
+      setPhotosLoading(false)
+    }
+  }, [cleaningTaskIdsKey, inspectionTaskIdsKey, token])
+
+  useEffect(() => {
+    void loadTaskPhotos()
+  }, [loadTaskPhotos])
 
   useEffect(() => {
     const nav: any = props.navigation as any
     if (!nav || typeof nav.addListener !== 'function') return
-    const unsub = nav.addListener('focus', () => {
-      if (!token) return
-      if (!inspectionTaskId && !cleaningTaskId) return
-      setPhotosLoading(true)
-      Promise.all([
-        cleaningTaskId ? getCleaningConsumables(token, cleaningTaskId).catch(() => null) : Promise.resolve(null),
-        cleaningTaskId ? getCompletionPhotos(token, cleaningTaskId).catch(() => null) : Promise.resolve(null),
-        inspectionTaskId ? getInspectionPhotos(token, inspectionTaskId).catch(() => null) : Promise.resolve(null),
-        cleaningTaskId ? getRestockProof(token, cleaningTaskId).catch(() => null) : Promise.resolve(null),
-      ])
-        .then(([consumablesResp, completionResp, inspectionResp, restockResp]) => {
-          setLivingRoomPhotoUrl(String(consumablesResp?.living_room_photo_url || '').trim() || null)
-          const consumableRows = Array.isArray(consumablesResp?.items) ? consumablesResp.items : []
-          setConsumableItems(
-            consumableRows.map((x) => ({
-              item_id: String(x.item_id || '').trim(),
-              photo_url: String(x.photo_url || '').trim() || null,
-              item_label: x.item_label == null ? null : String(x.item_label || '').trim(),
-              status: x.status == null ? null : String(x.status || '').trim(),
-              note: x.note == null ? null : String(x.note || '').trim(),
-            })),
-          )
-          const completion = Array.isArray(completionResp?.items) ? completionResp.items : []
-          setCompletionItems(completion.map((x) => ({ area: String(x.area || '').trim(), url: String(x.url || '').trim(), note: x.note ?? null })).filter((x) => !!x.url))
-          const items = Array.isArray(inspectionResp?.items) ? inspectionResp.items : []
-          setInspectionItems(items.map((x) => ({ area: String(x.area || '').trim(), url: String(x.url || '').trim(), note: x.note ?? null })).filter((x) => !!x.url))
-          const proofs = Array.isArray(restockResp?.items) ? restockResp.items : []
-          setRestockProofs(
-            proofs
-              .map((x) => ({
-                item_id: String(x.item_id || '').trim(),
-                proof_url: String(x.proof_url || '').trim(),
-                note: x.note ?? null,
-                status: x.status == null ? null : String(x.status || '').trim(),
-              }))
-              .filter((x) => !!x.item_id && !!x.proof_url),
-          )
-        })
-        .catch(() => {
-          setConsumableItems([])
-          setLivingRoomPhotoUrl(null)
-          setCompletionItems([])
-          setInspectionItems([])
-          setRestockProofs([])
-        })
-        .finally(() => setPhotosLoading(false))
-    })
+    const unsub = nav.addListener('focus', () => void loadTaskPhotos())
     return unsub
-  }, [cleaningTaskId, inspectionTaskId, props.navigation, token])
+  }, [loadTaskPhotos, props.navigation])
 
   async function onSave() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!task) return
-    if (!isCustomerService) return
+    if (!canEditManagerFields) return
     const ids = Array.isArray((task as any)?.source_ids) && (task as any).source_ids.length ? (task as any).source_ids : [String((task as any)?.source_id || '')]
     const taskIds = ids.map((x: any) => String(x || '').trim()).filter(Boolean)
     try {
@@ -409,6 +569,84 @@ export default function ManagerDailyTaskScreen(props: Props) {
     }
   }
 
+  async function addLuggagePhotos(source: 'camera' | 'library') {
+    if (!token || !task || luggageUploading) return
+    const remaining = 3 - luggagePhotoUrls.length
+    if (remaining <= 0) return Alert.alert('已达上限', '每条临时通知最多上传 3 张照片。')
+    try {
+      const permission = source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync()
+      if (!permission.granted) return Alert.alert('需要权限', source === 'camera' ? '请开启相机权限' : '请开启相册权限')
+      const picked = source === 'camera'
+        ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: 'images',
+            quality: 0.75,
+            allowsEditing: false,
+            allowsMultipleSelection: true,
+            selectionLimit: remaining,
+            orderedSelection: true,
+          })
+      if (picked.canceled || !picked.assets?.length) return
+      setLuggageUploading(true)
+      const uploaded: string[] = []
+      for (const asset of picked.assets.slice(0, remaining)) {
+        const uri = String(asset.uri || '').trim()
+        if (!uri) continue
+        const name = String(asset.fileName || uri.split('/').pop() || `guest-luggage-${Date.now()}.jpg`)
+        const mimeType = String(asset.mimeType || 'image/jpeg')
+        const result = await uploadMzappMedia(token, { uri, name, mimeType }, { purpose: 'guest_luggage' })
+        uploaded.push(result.url)
+      }
+      if (uploaded.length) setLuggagePhotoUrls((prev) => uniqueTextList([...prev, ...uploaded]).slice(0, 3))
+    } catch (error: any) {
+      Alert.alert('上传失败', String(error?.message || '请稍后重试'))
+    } finally {
+      setLuggageUploading(false)
+    }
+  }
+
+  async function saveLuggage() {
+    if (!token || !task || luggageSaving) return
+    if (!luggagePhotoUrls.length) return Alert.alert('请上传照片', '当天任务临时通知至少需要 1 张照片。')
+    const taskIds = cleaningTaskIdsFromTask(task)
+    if (!taskIds.length) return Alert.alert('保存失败', '缺少清洁任务 ID')
+    try {
+      setLuggageSaving(true)
+      const result = await saveGuestLuggageNotice(token, {
+        task_ids: taskIds,
+        note: luggageNote.trim() || null,
+        photo_urls: luggagePhotoUrls.slice(0, 3),
+      })
+      await patchWorkTaskItem(task.id, { guest_luggage: result.guest_luggage } as any)
+      setLuggageNote(String(result.guest_luggage.note || ''))
+      setLuggagePhotoUrls(result.guest_luggage.photo_urls || [])
+      Alert.alert('已保存', '已通知相关清洁、检查、admin 和线下经理。')
+    } catch (error: any) {
+      Alert.alert('保存失败', String(error?.message || '请稍后重试'))
+    } finally {
+      setLuggageSaving(false)
+    }
+  }
+
+  async function removeLuggage() {
+    const noticeId = String((task as any)?.guest_luggage?.id || '').trim()
+    if (!token || !task || !noticeId || luggageSaving) return
+    try {
+      setLuggageSaving(true)
+      await deleteGuestLuggageNotice(token, noticeId)
+      await patchWorkTaskItem(task.id, { guest_luggage: null } as any)
+      setLuggageNote('')
+      setLuggagePhotoUrls([])
+      Alert.alert('已移除', '当天任务临时通知已移除。')
+    } catch (error: any) {
+      Alert.alert('移除失败', String(error?.message || '请稍后重试'))
+    } finally {
+      setLuggageSaving(false)
+    }
+  }
+
   if (!task) {
     return (
       <View style={styles.page}>
@@ -424,14 +662,18 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const checkedOutAt = String((task as any)?.checked_out_at || '').trim()
   const hasKeyPhoto = !!String((task as any)?.key_photo_url || '').trim()
   const lockboxUrl = String((task as any)?.lockbox_video_url || '').trim()
-  const inspectorAssigned = String((task as any)?.inspector_id || '').trim()
   const taskType = String((task as any)?.task_type || '').trim().toLowerCase()
+  const isStayoverTask = isStayoverTaskType(taskType)
   const isCheckoutLike = taskType === 'checkout_clean' || taskType === 'turnover' || !!String((task as any)?.start_time || '').trim()
-  const isSelfComplete = isCheckoutLike && !inspectorAssigned
+  const inspectionMode = effectiveInspectionMode(task as any)
+  const inspectionPlanText = inspectionModeLabel(inspectionMode, String((task as any)?.inspection_due_date || '').trim() || null)
+  const isSelfComplete = isSelfCompleteMode(task as any) && (isCheckoutLike || isStayoverTask)
   const taskDate = String((task as any)?.scheduled_date || (task as any)?.date || '').trim()
   const isHistoricalTask = isBeforeToday(taskDate)
-  const canEditGeneralInfo = isCustomerService && !saving && !isHistoricalTask
-  const canEditKeysOnly = isCustomerService && !saving
+  const isTodayTask = taskDate.slice(0, 10) === ymd(new Date())
+  const canEditGeneralInfo = canEditManagerFields && !saving && !isHistoricalTask
+  const canEditLuggage = hasAnyRole(user, ['customer_service', 'admin', 'offline_manager']) && isTodayTask
+  const canEditKeysOnly = canEditManagerFields && !saving
 
   const uncleanPhotos = inspectionItems.filter((x) => x.area === 'unclean')
   const roomPhotoAreas = ['living', 'sofa', 'bedroom', 'kitchen'] as const
@@ -440,20 +682,62 @@ export default function ManagerDailyTaskScreen(props: Props) {
     cleanerItems: completionItems.filter((x) => x.area === a),
     inspectorItems: inspectionItems.filter((x) => x.area === a),
   }))
-  const remoteTvPhotoUrl = String(consumableItems.find((x) => x.item_id === 'remote_tv')?.photo_url || '').trim() || null
-  const remoteAcPhotoUrl = String(consumableItems.find((x) => x.item_id === 'remote_ac')?.photo_url || '').trim() || null
+  const livingRoomPhotoUrl = livingRoomPhotoUrls[0] || null
+  const remoteTvRow = consumableItems.find((x) => x.item_id === 'remote_tv') || null
+  const remoteAcRow = consumableItems.find((x) => x.item_id === 'remote_ac') || null
+  const remoteTvPhotoUrl = normalizeUrlList(remoteTvRow?.photo_urls, remoteTvRow?.photo_url)[0] || null
+  const remoteAcPhotoUrl = normalizeUrlList(remoteAcRow?.photo_urls, remoteAcRow?.photo_url)[0] || null
   const restockItems = Array.isArray((task as any)?.restock_items) ? ((task as any).restock_items as any[]) : []
-  const consumablePhotoRecords = consumableItems.filter((x) => {
+  const consumableRestockPhotoRecords = consumableItems.filter((x) => {
     const itemId = String(x.item_id || '').trim()
-    const photoUrl = String(x.photo_url || '').trim()
-    if (!photoUrl) return false
+    const photoUrls = normalizeUrlList(x.photo_urls, x.photo_url)
+    if (!photoUrls.length) return false
     if (itemId === 'remote_tv' || itemId === 'remote_ac') return false
-    return true
+    if (CLEANING_SCENE_PHOTO_IDS.has(itemId)) return false
+    return !!x.need_restock || String(x.status || '').trim().toLowerCase() === 'low' || restockItems.some((item) => String(item?.item_id || '').trim() === itemId)
   })
+  const cleanerCompletionPhotoGroups = (() => {
+    const groups: Array<{ key: string; label: string; urls: string[] }> = []
+    const addGroup = (key: string, label: string, urls0: any) => {
+      const urls = normalizeUrlList(urls0)
+      if (!urls.length) return
+      groups.push({ key, label, urls })
+    }
+    addGroup('living-room-photo', '客厅照片', livingRoomPhotoUrls)
+    for (const area of ['toilet', 'living', 'sofa', 'bedroom', 'kitchen', 'shower_drain', 'vacuum_used']) {
+      const urls = completionItems.filter((x) => x.area === area).map((x) => x.url)
+      addGroup(`completion-${area}`, AREA_LABEL[area] || area, urls)
+    }
+    for (const itemId of Object.keys(CLEANING_SCENE_PHOTO_LABEL)) {
+      const row = consumableItems.find((x) => x.item_id === itemId)
+      addGroup(`scene-${itemId}`, CLEANING_SCENE_PHOTO_LABEL[itemId] || itemId, normalizeUrlList(row?.photo_urls, row?.photo_url))
+    }
+    return groups
+  })()
+  const restockPhotoGroups = (() => {
+    const itemIds = uniqueTextList([
+      ...restockItems.map((item) => item?.item_id),
+      ...consumableRestockPhotoRecords.map((item) => item.item_id),
+      ...restockProofs.map((item) => item.item_id),
+    ])
+    return itemIds.map((itemId, idx) => {
+      const restockItem = restockItems.find((item) => String(item?.item_id || '').trim() === itemId) || null
+      const cleanerRow = consumableRestockPhotoRecords.find((x) => x.item_id === itemId) || null
+      const inspectorProof = restockProofs.find((x) => x.item_id === itemId) || null
+      const label = String(restockItem?.label || cleanerRow?.item_label || itemId || `补品 ${idx + 1}`).trim()
+      return {
+        key: `${itemId || label}-${idx}`,
+        itemId,
+        label,
+        cleanerPhotoUrls: normalizeUrlList(cleanerRow?.photo_urls, cleanerRow?.photo_url || restockItem?.photo_url),
+        inspectorPhotoUrls: normalizeUrlList(inspectorProof?.proof_urls, inspectorProof?.proof_url),
+      }
+    })
+  })()
 
   async function onToggleCheckedOut() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
-    if (!isCustomerService) return
+    if (!canEditManagerFields) return
     if (!task) return
     const taskId = String(task.id)
     const nextCheckedOutAt = checkedOutAt ? null : new Date().toISOString()
@@ -483,10 +767,15 @@ export default function ManagerDailyTaskScreen(props: Props) {
         <View style={styles.card}>
           <View style={styles.headRow}>
             <Text style={styles.title}>每日清洁</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              {isSelfComplete ? (
-                <View style={[styles.pill, { backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE' }]}>
-                  <Text style={[styles.pillText, { color: '#2563EB' }]}>自完成</Text>
+            <View style={styles.headPillsRow}>
+              {isStayoverTask ? (
+                <View style={[styles.pill, { backgroundColor: '#ECFDF5', borderWidth: hairline(), borderColor: '#A7F3D0' }]}>
+                  <Text style={[styles.pillText, { color: '#047857' }]}>入住中清洁</Text>
+                </View>
+              ) : null}
+              {!isStayoverTask ? (
+                <View style={[styles.pill, inspectionMode === 'pending_decision' ? { backgroundColor: '#FEF3C7', borderWidth: hairline(), borderColor: '#F59E0B' } : { backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE' }]}>
+                  <Text style={[styles.pillText, inspectionMode === 'pending_decision' ? { color: '#B45309' } : { color: '#2563EB' }]}>{inspectionPlanText}</Text>
                 </View>
               ) : null}
               <View style={styles.pill}>
@@ -505,54 +794,56 @@ export default function ManagerDailyTaskScreen(props: Props) {
         <View style={styles.card}>
           <View style={styles.sectionHead}>
             <Text style={styles.sectionTitle}>客服信息</Text>
-            {!isCustomerService ? <Text style={styles.mutedSmall}>仅客服可编辑</Text> : null}
+            {!canEditManagerFields ? <Text style={styles.mutedSmall}>仅客服、admin、线下经理可编辑</Text> : null}
           </View>
           {isHistoricalTask ? <Text style={styles.mutedSmall}>历史任务仅可修改需挂钥匙套数；时间、密码、客需不可修改</Text> : null}
           <View style={styles.row2Compact}>
-            <View style={{ flex: 1 }}>
+            <View style={styles.formHalf}>
               <Text style={styles.label}>退房时间</Text>
               <TextInput value={checkoutTime} onChangeText={setCheckoutTime} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="例如 11am" placeholderTextColor="#9CA3AF" />
             </View>
-            <View style={{ flex: 1 }}>
+            <View style={styles.formHalf}>
               <Text style={styles.label}>入住时间</Text>
               <TextInput value={checkinTime} onChangeText={setCheckinTime} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="例如 2pm" placeholderTextColor="#9CA3AF" />
             </View>
           </View>
           <View style={styles.row2Compact}>
-            <View style={{ flex: 1 }}>
+            <View style={styles.formHalf}>
               <Text style={styles.label}>旧密码</Text>
               <TextInput value={oldCode} onChangeText={setOldCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="旧密码" placeholderTextColor="#9CA3AF" />
             </View>
-            <View style={{ flex: 1 }}>
+            <View style={styles.formHalf}>
               <Text style={styles.label}>新密码</Text>
               <TextInput value={newCode} onChangeText={setNewCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="新密码" placeholderTextColor="#9CA3AF" />
             </View>
           </View>
-          <View style={styles.fieldCompact}>
-            <Text style={styles.label}>需挂钥匙套数</Text>
-            <View style={styles.pillsRow}>
-              <Pressable
-                onPress={() => {
-                  setKeysRequired(1)
-                  setKeysDirty(true)
-                }}
-                disabled={!canEditKeysOnly}
-                style={({ pressed }) => [styles.pillBtn, keysRequired === 1 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
-              >
-                <Text style={[styles.pillBtnText, keysRequired === 1 ? styles.pillBtnTextOn : null]}>1 套</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => {
-                  setKeysRequired(2)
-                  setKeysDirty(true)
-                }}
-                disabled={!canEditKeysOnly}
-                style={({ pressed }) => [styles.pillBtn, keysRequired === 2 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
-              >
-                <Text style={[styles.pillBtnText, keysRequired === 2 ? styles.pillBtnTextOn : null]}>2 套</Text>
-              </Pressable>
+          {!isStayoverTask ? (
+            <View style={styles.fieldCompact}>
+              <Text style={styles.label}>需挂钥匙套数</Text>
+              <View style={styles.pillsRow}>
+                <Pressable
+                  onPress={() => {
+                    setKeysRequired(1)
+                    setKeysDirty(true)
+                  }}
+                  disabled={!canEditKeysOnly}
+                  style={({ pressed }) => [styles.pillBtn, keysRequired === 1 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
+                >
+                  <Text style={[styles.pillBtnText, keysRequired === 1 ? styles.pillBtnTextOn : null]}>1 套</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    setKeysRequired(2)
+                    setKeysDirty(true)
+                  }}
+                  disabled={!canEditKeysOnly}
+                  style={({ pressed }) => [styles.pillBtn, keysRequired === 2 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
+                >
+                  <Text style={[styles.pillBtnText, keysRequired === 2 ? styles.pillBtnTextOn : null]}>2 套</Text>
+                </Pressable>
+              </View>
             </View>
-          </View>
+          ) : null}
           <View style={styles.fieldCompact}>
             <Text style={styles.label}>客人特殊需求</Text>
             <TextInput
@@ -567,8 +858,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
           </View>
           <Pressable
             onPress={onSave}
-            disabled={!isCustomerService || saving}
-            style={({ pressed }) => [styles.primaryBtnFull, !isCustomerService || saving ? styles.primaryBtnDisabled : null, pressed ? styles.pressed : null]}
+            disabled={!canEditManagerFields || saving}
+            style={({ pressed }) => [styles.primaryBtnFull, !canEditManagerFields || saving ? styles.primaryBtnDisabled : null, pressed ? styles.pressed : null]}
           >
             <Text style={styles.primaryText}>{saving ? t('common_loading') : '保存修改'}</Text>
           </Pressable>
@@ -580,6 +871,86 @@ export default function ManagerDailyTaskScreen(props: Props) {
           </Pressable>
         </View>
 
+        <View style={styles.card}>
+          <View style={styles.sectionHead}>
+            <Text style={styles.sectionTitle}>当天任务临时通知</Text>
+            {!canEditLuggage ? <Text style={styles.mutedSmall}>仅当天任务可编辑</Text> : null}
+          </View>
+          <Text style={styles.luggageWarning}>用于发布仅与当天任务有关的临时事项。保存后会醒目通知相关清洁和检查人员。</Text>
+          <TextInput
+            value={luggageNote}
+            onChangeText={(value) => setLuggageNote(value.slice(0, 1500))}
+            editable={canEditLuggage && !luggageSaving}
+            style={[styles.input, styles.textarea, !canEditLuggage ? styles.inputDisabled : null]}
+            placeholder="通知说明（可选），例如：客人物品放在客厅，请勿移动"
+            placeholderTextColor="#9CA3AF"
+            multiline
+          />
+          <View style={styles.luggagePhotos}>
+            {luggagePhotoUrls.map((url, index) => (
+              <View key={`${url}-${index}`} style={styles.luggagePhotoItem}>
+                <Image source={{ uri: toAbsoluteUrl(url) }} style={styles.luggagePhoto} />
+                {canEditLuggage ? (
+                  <Pressable
+                    onPress={() => setLuggagePhotoUrls((prev) => prev.filter((_, itemIndex) => itemIndex !== index))}
+                    style={({ pressed }) => [styles.luggageRemovePhoto, pressed ? styles.pressed : null]}
+                  >
+                    <Ionicons name="close-circle" size={moderateScale(22)} color="#DC2626" />
+                  </Pressable>
+                ) : null}
+              </View>
+            ))}
+          </View>
+          {canEditLuggage && luggagePhotoUrls.length < 3 ? (
+            <View style={styles.row2Compact}>
+              <Pressable
+                onPress={() => addLuggagePhotos('camera')}
+                disabled={luggageUploading || luggageSaving}
+                style={({ pressed }) => [styles.grayBtnFull, styles.luggageAddButton, pressed ? styles.pressed : null]}
+              >
+                <Text style={styles.grayText}>{luggageUploading ? '上传中...' : '拍照'}</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => addLuggagePhotos('library')}
+                disabled={luggageUploading || luggageSaving}
+                style={({ pressed }) => [styles.grayBtnFull, styles.luggageAddButton, pressed ? styles.pressed : null]}
+              >
+                <Text style={styles.grayText}>从相册选择</Text>
+              </Pressable>
+            </View>
+          ) : null}
+          <Text style={styles.mutedSmall}>{`已选择 ${luggagePhotoUrls.length}/3 张，至少需要 1 张。`}</Text>
+          {canEditLuggage ? (
+            <View style={styles.luggageActions}>
+              <Pressable
+                onPress={saveLuggage}
+                disabled={luggageSaving || luggageUploading || !luggagePhotoUrls.length}
+                style={({ pressed }) => [styles.primaryBtnFull, luggageSaving || luggageUploading || !luggagePhotoUrls.length ? styles.primaryBtnDisabled : null, pressed ? styles.pressed : null]}
+              >
+                <Text style={styles.primaryText}>{luggageSaving ? '保存中...' : '保存并通知'}</Text>
+              </Pressable>
+              {(task as any)?.guest_luggage?.id ? (
+                <Pressable
+                  onPress={() => Alert.alert('确认移除？', '移除后执行人员将不再看到此临时通知。', [
+                    { text: '取消', style: 'cancel' },
+                    { text: '移除', style: 'destructive', onPress: removeLuggage },
+                  ])}
+                  disabled={luggageSaving}
+                  style={({ pressed }) => [styles.grayBtnFull, pressed ? styles.pressed : null]}
+                >
+                  <Text style={[styles.grayText, { color: '#DC2626' }]}>移除提醒</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
+          <GuestLuggageCard
+            notice={(task as any)?.guest_luggage || null}
+            showAcknowledgementSummary
+            compact
+          />
+        </View>
+
+        {!isStayoverTask ? (
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>钥匙与挂钥匙视频</Text>
           <Text style={styles.mutedSmall}>这里展示已上传的钥匙照片、挂钥匙视频（如有）。</Text>
@@ -603,8 +974,9 @@ export default function ManagerDailyTaskScreen(props: Props) {
           ) : null}
           {!hasKeyPhoto && !lockboxUrl ? <Text style={styles.mutedSmall}>暂无钥匙照片或挂钥匙视频</Text> : null}
         </View>
+        ) : null}
 
-        {canSeeUnclean ? (
+        {canSeeUnclean && !isStayoverTask ? (
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>清洁问题照片（检查员拍摄）</Text>
             {photosLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
@@ -688,29 +1060,29 @@ export default function ManagerDailyTaskScreen(props: Props) {
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>清洁完成照片</Text>
           {photosLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
-          {roomPhotosByArea.map((g) => (
-            <View key={`completion-${g.area}`} style={styles.group}>
-              <Text style={styles.groupTitle}>{AREA_LABEL[g.area] || g.area}</Text>
-              {g.cleanerItems.length ? (
+          {cleanerCompletionPhotoGroups.length ? (
+            cleanerCompletionPhotoGroups.map((g) => (
+              <View key={g.key} style={styles.group}>
+                <Text style={styles.groupTitle}>{g.label}</Text>
                 <View style={styles.grid}>
-                  {g.cleanerItems.map((x, idx) => (
+                  {g.urls.map((url, idx) => (
                     <Pressable
-                      key={`cleaner-${g.area}-${x.url}-${idx}`}
+                      key={`${g.key}-${url}-${idx}`}
                       onPress={() => {
-                        setViewerUrl(x.url)
+                        setViewerUrl(url)
                         setViewerOpen(true)
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <Image source={{ uri: toAbsoluteUrl(x.url) }} style={styles.gridImg} />
+                      <Image source={{ uri: toAbsoluteUrl(url) }} style={styles.gridImg} />
                     </Pressable>
                   ))}
                 </View>
-              ) : (
-                <Text style={styles.mutedSmall}>暂无</Text>
-              )}
-            </View>
-          ))}
+              </View>
+            ))
+          ) : (
+            <Text style={styles.mutedSmall}>暂无</Text>
+          )}
         </View>
 
         <View style={styles.card}>
@@ -741,49 +1113,54 @@ export default function ManagerDailyTaskScreen(props: Props) {
           ))}
         </View>
 
+        {!isStayoverTask ? (
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>补品照片记录</Text>
           {photosLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
-          {restockItems.length || consumablePhotoRecords.length || restockProofs.length ? (
-            restockItems.map((item, idx) => {
-              const itemId = String(item?.item_id || '').trim()
-              const label = String(item?.label || itemId || `补品 ${idx + 1}`).trim()
-              const cleanerRow = consumablePhotoRecords.find((x) => x.item_id === itemId) || null
-              const cleanerPhotoUrl = String(cleanerRow?.photo_url || item?.photo_url || '').trim()
-              const inspectorProof = restockProofs.find((x) => x.item_id === itemId) || null
-              const inspectorPhotoUrl = String(inspectorProof?.proof_url || '').trim()
+          {restockPhotoGroups.length ? (
+            restockPhotoGroups.map((group) => {
               return (
-                <View key={`${itemId || label}-${idx}`} style={styles.group}>
-                  <Text style={styles.groupTitle}>{label}</Text>
+                <View key={group.key} style={styles.group}>
+                  <Text style={styles.groupTitle}>{group.label}</Text>
                   <View style={styles.mediaStack}>
                     <View style={styles.mediaSection}>
                       <Text style={styles.columnTitle}>清洁拍的</Text>
-                      {cleanerPhotoUrl ? (
-                        <Pressable
-                          onPress={() => {
-                            setViewerUrl(cleanerPhotoUrl)
-                            setViewerOpen(true)
-                          }}
-                          style={({ pressed }) => [styles.fullWidthMediaCard, pressed ? styles.pressed : null]}
-                        >
-                          <Image source={{ uri: toAbsoluteUrl(cleanerPhotoUrl) }} style={styles.fullWidthImg} />
-                        </Pressable>
+                      {group.cleanerPhotoUrls.length ? (
+                        <View style={styles.grid}>
+                          {group.cleanerPhotoUrls.map((photoUrl, photoIdx) => (
+                            <Pressable
+                              key={`cleaner-proof-${group.itemId}-${photoIdx}`}
+                              onPress={() => {
+                                setViewerUrl(photoUrl)
+                                setViewerOpen(true)
+                              }}
+                              style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
+                            >
+                              <Image source={{ uri: toAbsoluteUrl(photoUrl) }} style={styles.gridImg} />
+                            </Pressable>
+                          ))}
+                        </View>
                       ) : (
                         <Text style={styles.mutedSmall}>暂无</Text>
                       )}
                     </View>
                     <View style={styles.mediaSection}>
                       <Text style={styles.columnTitle}>检查补拍</Text>
-                      {inspectorPhotoUrl ? (
-                        <Pressable
-                          onPress={() => {
-                            setViewerUrl(inspectorPhotoUrl)
-                            setViewerOpen(true)
-                          }}
-                          style={({ pressed }) => [styles.fullWidthMediaCard, pressed ? styles.pressed : null]}
-                        >
-                          <Image source={{ uri: toAbsoluteUrl(inspectorPhotoUrl) }} style={styles.fullWidthImg} />
-                        </Pressable>
+                      {group.inspectorPhotoUrls.length ? (
+                        <View style={styles.grid}>
+                          {group.inspectorPhotoUrls.map((photoUrl, photoIdx) => (
+                            <Pressable
+                              key={`inspector-proof-${group.itemId}-${photoIdx}`}
+                              onPress={() => {
+                                setViewerUrl(photoUrl)
+                                setViewerOpen(true)
+                              }}
+                              style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
+                            >
+                              <Image source={{ uri: toAbsoluteUrl(photoUrl) }} style={styles.gridImg} />
+                            </Pressable>
+                          ))}
+                        </View>
                       ) : (
                         <Text style={styles.mutedSmall}>暂无</Text>
                       )}
@@ -796,6 +1173,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
             <Text style={styles.mutedSmall}>暂无补品照片记录</Text>
           )}
         </View>
+        ) : null}
       </ScrollView>
 
       <Modal
@@ -832,18 +1210,19 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#F6F7FB' },
   content: { padding: 16 },
   card: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 12, borderWidth: hairline(), borderColor: '#EEF0F6', marginBottom: 12 },
-  headRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  title: { fontSize: 16, fontWeight: '900', color: '#111827' },
-  pill: { height: 28, paddingHorizontal: 10, borderRadius: 999, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
-  pillText: { color: '#2563EB', fontWeight: '900', fontSize: 12 },
+  headRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  headPillsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', flexShrink: 1, maxWidth: '72%' },
+  title: { flex: 1, minWidth: 0, flexShrink: 1, fontSize: 16, fontWeight: '900', color: '#111827' },
+  pill: { minHeight: 28, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center', maxWidth: '100%' },
+  pillText: { color: '#2563EB', fontWeight: '900', fontSize: 12, textAlign: 'center' },
   metaRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  metaText: { color: '#111827', fontWeight: '900', flexShrink: 1 },
+  metaText: { flex: 1, minWidth: 0, color: '#111827', fontWeight: '900', flexShrink: 1 },
   addr: { marginTop: 6, color: '#6B7280', fontWeight: '700' },
   kvRow: { marginTop: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   kvLabel: { color: '#6B7280', fontWeight: '800' },
   kvValue: { color: '#111827', fontWeight: '900', flexShrink: 1 },
 
-  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
   sectionTitle: { color: '#111827', fontWeight: '900' },
   muted: { color: '#6B7280', fontWeight: '700' },
   mutedSmall: { marginTop: 8, color: '#6B7280', fontWeight: '700', fontSize: 12 },
@@ -854,8 +1233,9 @@ const styles = StyleSheet.create({
   inputDisabled: { backgroundColor: '#F3F4F6', color: '#9CA3AF' },
   textarea: { height: 84, paddingTop: 12, textAlignVertical: 'top' },
   row2: { marginTop: 10, flexDirection: 'row', gap: 10 },
-  row2Compact: { marginTop: 8, flexDirection: 'row', gap: 10 },
-  pillsRow: { flexDirection: 'row', gap: 10 },
+  row2Compact: { marginTop: 8, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  formHalf: { flex: 1, minWidth: 130 },
+  pillsRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   pillBtn: { flex: 1, height: 40, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   pillBtnOn: { backgroundColor: '#EFF6FF', borderColor: '#DBEAFE' },
   pillBtnText: { color: '#6B7280', fontWeight: '900' },
@@ -865,12 +1245,19 @@ const styles = StyleSheet.create({
   checkoutBtnDisabled: { backgroundColor: '#BAE6FD' },
   checkoutText: { color: '#0369A1', fontWeight: '900' },
 
-  grayBtnFull: { marginTop: 10, height: 44, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
-  grayText: { color: '#111827', fontWeight: '900' },
-  primaryBtnFull: { marginTop: 12, height: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  grayBtnFull: { marginTop: 10, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  grayText: { color: '#111827', fontWeight: '900', textAlign: 'center' },
+  primaryBtnFull: { marginTop: 12, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   primaryBtnDisabled: { backgroundColor: '#93C5FD' },
-  primaryText: { color: '#FFFFFF', fontWeight: '900' },
+  primaryText: { color: '#FFFFFF', fontWeight: '900', textAlign: 'center' },
   pressed: { opacity: 0.92 },
+  luggageWarning: { marginTop: 8, color: '#B91C1C', fontWeight: '800', fontSize: 12, lineHeight: 18 },
+  luggagePhotos: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
+  luggagePhotoItem: { width: 92, height: 92, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' },
+  luggagePhoto: { width: '100%', height: '100%' },
+  luggageRemovePhoto: { position: 'absolute', top: 3, right: 3, width: 26, height: 26, borderRadius: 13, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+  luggageAddButton: { flex: 1, minWidth: 130, marginTop: 0 },
+  luggageActions: { marginTop: 2 },
 
   mediaThumbWrap: { marginTop: 10, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   mediaThumb: { width: '100%', height: 180 },
@@ -886,7 +1273,7 @@ const styles = StyleSheet.create({
   fullWidthMediaCard: { borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   fullWidthImg: { width: '100%', height: 180, backgroundColor: '#F3F4F6' },
   grid: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  gridItem: { width: '48%', borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
+  gridItem: { flexBasis: '47%', flexGrow: 1, minWidth: 120, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   gridImg: { width: '100%', height: 160, backgroundColor: '#F3F4F6' },
 
   viewerMask: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)' },

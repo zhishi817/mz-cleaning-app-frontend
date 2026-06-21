@@ -47,6 +47,7 @@ async function persist() {
 
 function dedupeLoadedState(input: StoreState) {
   const seen = new Set<string>()
+  const semanticIndexes = new Map<string, number>()
   const unreadIds: Record<string, true> = {}
   const readIds: Record<string, true> = {}
   const items: Notice[] = []
@@ -56,6 +57,29 @@ function dedupeLoadedState(input: StoreState) {
     if (seen.has(id)) continue
     seen.add(id)
     const fixed: Notice = { ...n, id }
+    const semanticKey = noticeSemanticKey(fixed)
+    const existingIndex = semanticIndexes.get(semanticKey)
+    if (existingIndex != null) {
+      const existing = items[existingIndex]
+      if (!existing) continue
+      const existingHasServerData = !!String(existing.data?._server_id || '').trim()
+      const fixedHasServerData = !!String(fixed.data?._server_id || '').trim()
+      items[existingIndex] = {
+        ...(fixedHasServerData && !existingHasServerData ? fixed : existing),
+        id: existing.id,
+        data: { ...(fixed.data || {}), ...(existing.data || {}) },
+      }
+      const wasRead = !!input.readIds?.[rawId] || !!readIds[existing.id]
+      const wasUnread = !!input.unreadIds?.[rawId] || !!unreadIds[existing.id]
+      if (wasRead) {
+        readIds[existing.id] = true
+        delete unreadIds[existing.id]
+      } else if (wasUnread) {
+        unreadIds[existing.id] = true
+      }
+      continue
+    }
+    semanticIndexes.set(semanticKey, items.length)
     items.push(fixed)
     if (input.unreadIds && (input.unreadIds as any)[rawId]) unreadIds[id] = true
     if (input.readIds && (input.readIds as any)[rawId]) readIds[id] = true
@@ -83,6 +107,29 @@ function noticeSig(n: { type?: any; title?: any; summary?: any; content?: any })
   return `${title}|${summary}|${content}`
 }
 
+function managerFieldsChangeKey(n: { summary?: any; content?: any; data?: any }) {
+  const data = n && typeof n === 'object' ? (n as any).data : null
+  const explicit = normText(data?.dedupe_key)
+  const explicitKeysMatch = explicit.match(/:keys_required:(\d+)$/)
+  if (explicitKeysMatch) return `keys_required:${explicitKeysMatch[1]}`
+  if (explicit) return explicit
+  const keysRequired = Number(data?.keys_required)
+  if (Number.isFinite(keysRequired) && keysRequired > 0) {
+    return `keys_required:${Math.max(1, Math.min(2, Math.trunc(keysRequired)))}`
+  }
+  const changeLinePattern = /^(退房时间|入住时间|旧密码|新密码|客人需求|需挂钥匙套数|需要挂钥匙数)[:：]/
+  const lines = `${normText(n.summary)}\n${String(n.content || '')}`
+    .split(/\n+/)
+    .map((line) => normText(line).replace(/（原[:：]?[^）]*）/g, '').trim())
+    .filter((line) => changeLinePattern.test(line))
+    .map((line) => {
+      const keyMatch = line.match(/^(?:需挂钥匙套数|需要挂钥匙数)[:：]\s*(\d+)/)
+      return keyMatch ? `keys_required:${keyMatch[1]}` : line
+    })
+  const changes = Array.from(new Set(lines)).sort()
+  return changes.join('|')
+}
+
 function noticeSemanticKey(n: { id?: any; title?: any; summary?: any; content?: any; data?: any }) {
   const data = n && typeof n === 'object' ? (n as any).data : null
   const kind = String(data?.kind || '').trim()
@@ -91,7 +138,11 @@ function noticeSemanticKey(n: { id?: any; title?: any; summary?: any; content?: 
   const fieldsKey = normText(data?.fields_key)
   if (kind === 'guest_checked_out' && propertyCode && checkedOutAt) return `guest_checked_out:${propertyCode}:${checkedOutAt}`
   if (kind === 'guest_checked_out_cancelled' && propertyCode) return `guest_checked_out_cancelled:${propertyCode}:${checkedOutAt}`
-  if (kind === 'cleaning_task_manager_fields_updated' && propertyCode && fieldsKey) return `manager_fields:${propertyCode}:${fieldsKey}`
+  if (kind === 'cleaning_task_manager_fields_updated' && propertyCode) {
+    const changesKey = managerFieldsChangeKey(n)
+    if (changesKey) return `manager_fields:${propertyCode}:${changesKey}`
+    if (fieldsKey) return `manager_fields:${propertyCode}:${fieldsKey}`
+  }
   return noticeSig(n)
 }
 

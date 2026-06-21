@@ -4,24 +4,28 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useIsFocused } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth'
+import { companyContentBody, companyContentSummary, companyGuideRoleLabel } from '../../lib/companyContent'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getJson, setJson } from '../../lib/storage'
-import { getNoticesSnapshot, initNoticesStore, markNoticeRead, refreshNotices, subscribeNotices, type Notice, upsertNotices } from '../../lib/noticesStore'
+import { getNoticesSnapshot, initNoticesStore, markNoticeRead, refreshNotices, subscribeNotices, type Notice } from '../../lib/noticesStore'
 import { getPresentedNotice } from '../../lib/noticePresentation'
-import { resolveNoticeCreatedAt } from '../../lib/noticeTime'
+import { syncInboxNotifications } from '../../lib/notificationInbox'
+import { isTaskInspectorUser, isTaskManagerUser, roleNamesOf } from '../../lib/roles'
+import { normalizeHttpUrl } from '../../lib/urls'
 import { getWorkTasksSnapshot, subscribeWorkTasks } from '../../lib/workTasksStore'
 import {
   listCompanyAnnouncementsForApp,
   listCompanySecretsForApp,
-  listInboxNotifications,
+  listCustomerServiceManualsForApp,
   listWarehouseGuidesForApp,
   listWorkGuidesForApp,
   listWorkTasks,
   markInboxNotificationsRead,
   type CompanyAnnouncement,
+  type CustomerServiceManual,
   type CompanyGuide,
-  type InboxNotificationItem,
+  type CompanyGuideRole,
   type WarehouseGuide,
   type WorkTask,
 } from '../../lib/api'
@@ -42,20 +46,32 @@ type SearchResult = {
   url?: string | null
   copyText?: string | null
   secretId?: string
+  contentRaw?: string | null
+  guideRole?: CompanyGuideRole | null
 }
 
 type SearchSection = {
-  key: 'property' | 'task' | 'announcement' | 'guide' | 'warehouse_guide'
+  key: 'property' | 'task' | 'announcement' | 'guide' | 'customer_service_manual' | 'warehouse_guide'
   title: string
   emptyText: string
   items: SearchResult[]
 }
 
+type CompanySecretSummary = {
+  id: string
+  title: string
+  username?: string | null
+  note?: string | null
+  secret?: string | null
+  updated_at?: string | null
+}
+
 type CompanyContentCache = {
   announcements: CompanyAnnouncement[]
   workGuides: CompanyGuide[]
+  customerServiceManuals: CustomerServiceManual[]
   warehouseGuides: WarehouseGuide[]
-  secrets: Array<{ id: string; title: string; username?: string | null; note?: string | null; secret?: string | null; updated_at?: string | null }>
+  secrets: CompanySecretSummary[]
 }
 
 const COMPANY_CONTENT_CACHE_KEY = 'mzstay.notices.company-content.v1'
@@ -72,82 +88,6 @@ function typeMeta(type: Notice['type']) {
   if (type === 'update') return { bg: '#EFF6FF', fg: '#2563EB' }
   if (type === 'key') return { bg: '#DCFCE7', fg: '#16A34A' }
   return { bg: '#F3F4F6', fg: '#374151' }
-}
-
-function formatKeyPhotoNotice(title0: string, body0: string, data0: any) {
-  const data = data0 && typeof data0 === 'object' ? data0 : {}
-  const kind = String(data?.kind || '').trim()
-  const propertyCode = String(data?.property_code || '').trim()
-  const photoUrl = String(data?.photo_url || '').trim()
-  if (kind !== 'key_photo_uploaded') {
-    return { title: title0, summary: body0, content: body0 }
-  }
-  const title = propertyCode ? `钥匙已上传：${propertyCode}` : (title0 || '钥匙已上传')
-  const lines = [propertyCode ? `房源：${propertyCode}` : '', body0 || '清洁员已上传钥匙照片', photoUrl ? `照片：${photoUrl}` : ''].filter(Boolean)
-  const content = lines.join('\n')
-  return {
-    title,
-    summary: propertyCode ? `房源：${propertyCode}` : (body0 || '清洁员已上传钥匙照片'),
-    content,
-  }
-}
-
-function normalizeHttpUrl(raw: string | null | undefined) {
-  const u = String(raw || '').trim()
-  if (!u) return null
-  if (/^https?:\/\//i.test(u)) return u
-  return `https://${u}`
-}
-
-function extractTextLinesFromContent(content: string | null | undefined): string[] {
-  const raw = String(content || '').trim()
-  if (!raw) return []
-  try {
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return raw.split(/\n+/).map(s => s.trim()).filter(Boolean)
-    const lines: string[] = []
-    for (const block of parsed) {
-      const type = String(block?.type || '').trim()
-      if (type === 'heading' || type === 'paragraph' || type === 'callout') {
-        const text = String(block?.text || '').trim()
-        if (text) lines.push(text)
-        continue
-      }
-      if (type === 'image' || type === 'video') {
-        const caption = String(block?.caption || '').trim()
-        if (caption) lines.push(caption)
-        continue
-      }
-      if (type === 'step') {
-        const title = String(block?.title || '').trim()
-        if (title) lines.push(title)
-        const contents = Array.isArray(block?.contents) ? block.contents : []
-        for (const item of contents) {
-          const text = String(item?.text || item?.caption || '').trim()
-          if (text) lines.push(text)
-        }
-      }
-    }
-    return lines.filter(Boolean)
-  } catch {
-    return raw
-      .replace(/<[^>]+>/g, ' ')
-      .split(/\n+/)
-      .map(s => s.replace(/\s+/g, ' ').trim())
-      .filter(Boolean)
-  }
-}
-
-function companyContentBody(content: string | null | undefined) {
-  return extractTextLinesFromContent(content).join('\n')
-}
-
-function companyContentSummary(content: string | null | undefined, fallback = '暂无内容') {
-  const lines = extractTextLinesFromContent(content)
-  const merged = lines.slice(0, 3).join(' ')
-  const summary = merged.replace(/\s+/g, ' ').trim()
-  if (!summary) return fallback
-  return summary.length > 84 ? `${summary.slice(0, 84).trim()}...` : summary
 }
 
 function taskStatusLabel(task: WorkTask) {
@@ -215,6 +155,41 @@ function announcementSubtitle(item: CompanyAnnouncement) {
   return `${item.urgent ? '紧急公告 · ' : ''}${item.published_at ? item.published_at : '已发布'}`
 }
 
+function currentGuideRoleOf(user: any): CompanyGuideRole | null {
+  const roleNames = roleNamesOf(user)
+  if (roleNames.includes('cleaner')) return 'cleaner'
+  if (roleNames.includes('cleaning_inspector')) return 'cleaning_inspector'
+  return null
+}
+
+function preferredGuideRoleOf(user: any): CompanyGuideRole {
+  return currentGuideRoleOf(user) || 'cleaner'
+}
+
+function sortGuidesForRole(guides: CompanyGuide[], preferredRole: CompanyGuideRole) {
+  return guides
+    .map((guide, idx) => ({ guide, idx }))
+    .sort((a, b) => {
+      const rank = (role: CompanyGuideRole | null | undefined) => {
+        if (role === preferredRole) return 0
+        if (!role) return 1
+        return 2
+      }
+      const diff = rank(a.guide.guide_role) - rank(b.guide.guide_role)
+      if (diff !== 0) return diff
+      return a.idx - b.idx
+    })
+    .map((item) => item.guide)
+}
+
+function filterGuidesForCurrentRole(guides: CompanyGuide[], currentRole: CompanyGuideRole | null) {
+  if (!currentRole) return guides
+  return guides.filter((guide) => {
+    const role = guide.guide_role || null
+    return !role || role === currentRole
+  })
+}
+
 export default function NoticesScreen(props: Props) {
   const { t } = useI18n()
   const { token, user } = useAuth()
@@ -226,11 +201,12 @@ export default function NoticesScreen(props: Props) {
   const [loadingMore, setLoadingMore] = useState(false)
   const [showUnreadOnly, setShowUnreadOnly] = useState(false)
   const [query, setQuery] = useState('')
-  const [secrets, setSecrets] = useState<Array<{ id: string; title: string; username?: string | null; note?: string | null; secret?: string | null; updated_at?: string | null }>>([])
+  const [secrets, setSecrets] = useState<CompanySecretSummary[]>([])
   const [historyTasks, setHistoryTasks] = useState<WorkTask[]>([])
   const [announcements, setAnnouncements] = useState<CompanyAnnouncement[]>([])
   const [announcementIndex, setAnnouncementIndex] = useState(0)
   const [workGuides, setWorkGuides] = useState<CompanyGuide[]>([])
+  const [customerServiceManuals, setCustomerServiceManuals] = useState<CustomerServiceManual[]>([])
   const [warehouseGuides, setWarehouseGuides] = useState<WarehouseGuide[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
   const [hasMoreRemote, setHasMoreRemote] = useState(true)
@@ -239,13 +215,16 @@ export default function NoticesScreen(props: Props) {
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false)
   const companyContentLoadedRef = useRef(false)
   const historyLoadedWindowIndexRef = useRef(-1)
-  const role = String(user?.role || '').trim()
-  const canSearchAllTaskHistory = role === 'admin' || role === 'offline_manager' || role === 'customer_service'
+  const canSearchAllTaskHistory = isTaskManagerUser(user)
+  const currentGuideRole = useMemo(() => currentGuideRoleOf(user), [user])
+  const preferredGuideRole = useMemo(() => preferredGuideRoleOf(user), [user])
+  const visibleWorkGuides = useMemo(() => filterGuidesForCurrentRole(workGuides, currentGuideRole), [currentGuideRole, workGuides])
+  const orderedWorkGuides = useMemo(() => sortGuidesForRole(visibleWorkGuides, preferredGuideRole), [preferredGuideRole, visibleWorkGuides])
 
   const snap = getNoticesSnapshot()
   const hasAnyUnread = Object.keys(snap.unreadIds || {}).length > 0
   const announcementCardWidth = useMemo(() => Math.max(280, windowWidth - 32), [windowWidth])
-  const featuredGuides = workGuides.slice(0, 5)
+  const featuredGuides = orderedWorkGuides.slice(0, 5)
 
   useEffect(() => {
     if (!announcements.length) {
@@ -278,11 +257,13 @@ export default function NoticesScreen(props: Props) {
         if (Array.isArray(cachedContent.secrets)) setSecrets(cachedContent.secrets)
         if (Array.isArray(cachedContent.announcements)) setAnnouncements(cachedContent.announcements)
         if (Array.isArray(cachedContent.workGuides)) setWorkGuides(cachedContent.workGuides)
+        if (Array.isArray(cachedContent.customerServiceManuals)) setCustomerServiceManuals(cachedContent.customerServiceManuals)
         if (Array.isArray(cachedContent.warehouseGuides)) setWarehouseGuides(cachedContent.warehouseGuides)
         companyContentLoadedRef.current =
           Array.isArray(cachedContent.secrets) ||
           Array.isArray(cachedContent.announcements) ||
           Array.isArray(cachedContent.workGuides) ||
+          Array.isArray(cachedContent.customerServiceManuals) ||
           Array.isArray(cachedContent.warehouseGuides)
       }
       setCompanyContentHydrated(true)
@@ -300,30 +281,35 @@ export default function NoticesScreen(props: Props) {
   async function loadCompanyContent(options?: { force?: boolean }) {
     if (!token) return
     if (!options?.force && companyContentLoadedRef.current) return
-    const [secretRows, announceRows, guideRows, warehouseRows] = await Promise.allSettled([
+    const [secretRows, announceRows, guideRows, manualRows, warehouseRows] = await Promise.allSettled([
       listCompanySecretsForApp(token),
       listCompanyAnnouncementsForApp(token),
       listWorkGuidesForApp(token),
+      listCustomerServiceManualsForApp(token),
       listWarehouseGuidesForApp(token),
     ])
     if (secretRows.status === 'fulfilled' && Array.isArray(secretRows.value)) setSecrets(secretRows.value)
     if (announceRows.status === 'fulfilled' && Array.isArray(announceRows.value)) setAnnouncements(announceRows.value)
     if (guideRows.status === 'fulfilled' && Array.isArray(guideRows.value)) setWorkGuides(guideRows.value)
+    if (manualRows.status === 'fulfilled' && Array.isArray(manualRows.value)) setCustomerServiceManuals(manualRows.value)
     if (warehouseRows.status === 'fulfilled' && Array.isArray(warehouseRows.value)) setWarehouseGuides(warehouseRows.value)
     const nextSecrets = secretRows.status === 'fulfilled' && Array.isArray(secretRows.value) ? secretRows.value : secrets
     const nextAnnouncements = announceRows.status === 'fulfilled' && Array.isArray(announceRows.value) ? announceRows.value : announcements
     const nextWorkGuides = guideRows.status === 'fulfilled' && Array.isArray(guideRows.value) ? guideRows.value : workGuides
+    const nextCustomerServiceManuals = manualRows.status === 'fulfilled' && Array.isArray(manualRows.value) ? manualRows.value : customerServiceManuals
     const nextWarehouseGuides = warehouseRows.status === 'fulfilled' && Array.isArray(warehouseRows.value) ? warehouseRows.value : warehouseGuides
     if (
       (secretRows.status === 'fulfilled' && Array.isArray(secretRows.value)) ||
       (announceRows.status === 'fulfilled' && Array.isArray(announceRows.value)) ||
       (guideRows.status === 'fulfilled' && Array.isArray(guideRows.value)) ||
+      (manualRows.status === 'fulfilled' && Array.isArray(manualRows.value)) ||
       (warehouseRows.status === 'fulfilled' && Array.isArray(warehouseRows.value))
     ) {
       await setJson<CompanyContentCache>(COMPANY_CONTENT_CACHE_KEY, {
         secrets: nextSecrets,
         announcements: nextAnnouncements,
         workGuides: nextWorkGuides,
+        customerServiceManuals: nextCustomerServiceManuals,
         warehouseGuides: nextWarehouseGuides,
       })
     }
@@ -331,6 +317,7 @@ export default function NoticesScreen(props: Props) {
       (secretRows.status === 'fulfilled' && Array.isArray(secretRows.value)) ||
       (announceRows.status === 'fulfilled' && Array.isArray(announceRows.value)) ||
       (guideRows.status === 'fulfilled' && Array.isArray(guideRows.value)) ||
+      (manualRows.status === 'fulfilled' && Array.isArray(manualRows.value)) ||
       (warehouseRows.status === 'fulfilled' && Array.isArray(warehouseRows.value))
         ? true
         : companyContentLoadedRef.current
@@ -403,41 +390,13 @@ export default function NoticesScreen(props: Props) {
     return () => {}
   }, [isFocused, token, hasInit])
 
-  function inboxNoticeType(it: InboxNotificationItem): Notice['type'] {
-    const t0 = String(it.type || '').toUpperCase()
-    const changes = Array.isArray(it.changes) ? it.changes.map(v => String(v || '').toLowerCase()) : []
-    if (t0.includes('KEY') || changes.includes('keys')) return 'key'
-    return 'update'
-  }
-
-  function inboxToNotice(it: InboxNotificationItem) {
-    const createdAt = resolveNoticeCreatedAt(it.created_at, it.event_id, it.id) || new Date().toISOString()
-    const body = String(it.body || '').trim()
-    const title = String(it.title || '').trim() || '通知'
-    const unread = !it.read_at
-    const data = it.data && typeof it.data === 'object' ? it.data : {}
-    const formatted = formatKeyPhotoNotice(title, body, data)
-    return {
-      id: String(it.event_id || it.id || '').trim(),
-      type: inboxNoticeType(it),
-      title: formatted.title,
-      summary: formatted.summary,
-      content: formatted.content,
-      data: { ...data, _server_id: String(it.id || '').trim(), event_id: String(it.event_id || '').trim() },
-      createdAt,
-      unread,
-    }
-  }
-
   async function syncInbox(reset: boolean) {
     if (!token) return
     if (!hasMoreRemote && !reset) return
     const cur = reset ? null : cursor
-    const { items: rows, next_cursor } = await listInboxNotifications(token, { limit: 50, cursor: cur })
-    const list = (rows || []).map(inboxToNotice).filter(n => !!n.id)
-    await upsertNotices(list, { replace: reset })
-    setCursor(next_cursor)
-    setHasMoreRemote(!!next_cursor)
+    const { nextCursor } = await syncInboxNotifications({ token, limit: 50, cursor: cur, replace: reset })
+    setCursor(nextCursor)
+    setHasMoreRemote(!!nextCursor)
   }
 
   async function onRefresh() {
@@ -488,6 +447,7 @@ export default function NoticesScreen(props: Props) {
     const taskResults: SearchResult[] = []
     const announcementResults: SearchResult[] = []
     const guideResults: SearchResult[] = []
+    const customerServiceManualResults: SearchResult[] = []
     const warehouseGuideResults: SearchResult[] = []
     const seen = new Set<string>()
 
@@ -570,11 +530,12 @@ export default function NoticesScreen(props: Props) {
       if (announcementResults.length >= 8) break
     }
 
-    for (const guide of workGuides) {
+    for (const guide of orderedWorkGuides) {
       const title = String(guide.title || '').trim()
       const body = companyContentBody(guide.content)
       const summary = companyContentSummary(guide.content, '工作指南')
-      const hay = `${title} ${summary} ${body}`.toLowerCase()
+      const roleLabel = companyGuideRoleLabel(guide.guide_role)
+      const hay = `${title} ${roleLabel} ${summary} ${body}`.toLowerCase()
       if (!hay.includes(q)) continue
       const key = String(guide.id || '').trim()
       if (!key || seen.has(`guide:${key}`)) continue
@@ -583,11 +544,34 @@ export default function NoticesScreen(props: Props) {
         id: `guide:${key}`,
         kind: 'guide',
         title: title || '工作指南',
-        subtitle: summary,
+        subtitle: roleLabel ? `${roleLabel} · ${summary}` : summary,
         body,
+        contentRaw: guide.content || null,
+        guideRole: guide.guide_role || null,
         icon: 'book-outline',
       })
       if (guideResults.length >= 8) break
+    }
+
+    for (const manual of customerServiceManuals) {
+      const title = String(manual.title || '').trim()
+      const body = companyContentBody(manual.content)
+      const summary = companyContentSummary(manual.content, '客服手册')
+      const hay = `${title} ${summary} ${body}`.toLowerCase()
+      if (!hay.includes(q)) continue
+      const key = String(manual.id || '').trim()
+      if (!key || seen.has(`customer-service-manual:${key}`)) continue
+      seen.add(`customer-service-manual:${key}`)
+      customerServiceManualResults.push({
+        id: `customer-service-manual:${key}`,
+        kind: 'guide',
+        title: title || '客服手册',
+        subtitle: summary,
+        body,
+        contentRaw: manual.content || null,
+        icon: 'document-text-outline',
+      })
+      if (customerServiceManualResults.length >= 10) break
     }
 
     for (const guide of warehouseGuides) {
@@ -605,6 +589,7 @@ export default function NoticesScreen(props: Props) {
         title: title || '仓库指南',
         subtitle: summary,
         body,
+        contentRaw: guide.content || null,
         icon: 'cube-outline',
       })
       if (warehouseGuideResults.length >= 8) break
@@ -615,16 +600,17 @@ export default function NoticesScreen(props: Props) {
       { key: 'task', title: '历史任务', emptyText: `最近 ${HISTORY_SEARCH_WINDOWS[historyWindowIndex]} 个月内没有匹配的历史任务。`, items: taskResults },
       { key: 'announcement', title: '公司公告', emptyText: '没有匹配的公司公告。', items: announcementResults },
       { key: 'guide', title: '工作指南', emptyText: '没有匹配的工作指南。', items: guideResults },
+      { key: 'customer_service_manual', title: '客服手册/规定', emptyText: '没有匹配的客服手册或规定。', items: customerServiceManualResults },
       { key: 'warehouse_guide', title: '仓库指南', emptyText: '没有匹配的仓库指南。', items: warehouseGuideResults },
     ] satisfies SearchSection[]
-  }, [query, announcements, historyTasks, historyWindowIndex, warehouseGuides, workGuides])
+  }, [announcements, customerServiceManuals, historyTasks, historyWindowIndex, orderedWorkGuides, query, warehouseGuides])
 
   function openSearchResult(item: SearchResult) {
     if (item.kind === 'task' && item.taskId) {
       const isCleaningTask = String(item.taskSourceType || '').trim() === 'cleaning_tasks'
       const isInspection = isCleaningTask && String(item.taskKind || '').trim() === 'inspection'
-      const isManager = role === 'admin' || role === 'offline_manager' || role === 'customer_service'
-      const isInspector = role === 'cleaning_inspector' || role === 'cleaner_inspector'
+      const isManager = isTaskManagerUser(user)
+      const isInspector = isTaskInspectorUser(user)
       if (isManager && isCleaningTask) {
         props.navigation.navigate('ManagerDailyTask', { taskId: item.taskId })
         return
@@ -641,6 +627,8 @@ export default function NoticesScreen(props: Props) {
       title: item.title,
       subtitle: item.subtitle,
       body: item.body,
+      contentRaw: item.contentRaw || null,
+      guideRole: item.guideRole || null,
       url: item.url || null,
       copyText: item.copyText || null,
       secretId: item.secretId,
@@ -729,6 +717,40 @@ export default function NoticesScreen(props: Props) {
           <Ionicons name="chevron-forward" size={moderateScale(16)} color="#9CA3AF" />
         </View>
       </Pressable>
+    )
+  }
+
+  function renderNoticeListHeader() {
+    return (
+      <>
+        {renderAnnouncementRail()}
+        {renderGuideRail()}
+
+        <View style={styles.noticeSectionHead}>
+          <Text style={styles.sectionTitle}>通知消息</Text>
+          <View style={styles.filterMiniWrap}>
+            <Pressable
+              onPress={() => setShowUnreadOnly(false)}
+              style={({ pressed }) => [styles.filterMiniChip, !showUnreadOnly ? styles.filterMiniChipActive : null, pressed ? styles.rowPressed : null]}
+            >
+              <Text style={[styles.filterMiniText, !showUnreadOnly ? styles.filterMiniTextActive : null]}>{t('notices_all')}</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setShowUnreadOnly(true)}
+              style={({ pressed }) => [styles.filterMiniChip, showUnreadOnly ? styles.filterMiniChipActive : null, pressed ? styles.rowPressed : null]}
+            >
+              <Text style={[styles.filterMiniText, showUnreadOnly ? styles.filterMiniTextActive : null]}>{t('notices_unread')}</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        {!hasInit && (
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator />
+            <Text style={styles.loadingText}>{t('common_loading')}</Text>
+          </View>
+        )}
+      </>
     )
   }
 
@@ -840,6 +862,8 @@ export default function NoticesScreen(props: Props) {
               const title = String(guide.title || '工作指南')
               const body = companyContentBody(guide.content)
               const summary = companyContentSummary(guide.content, '点击查看工作指南')
+              const roleLabel = companyGuideRoleLabel(guide.guide_role)
+              const isRecommended = !!currentGuideRole && guide.guide_role === currentGuideRole
               return (
                 <Pressable
                   key={String(guide.id || title)}
@@ -849,6 +873,8 @@ export default function NoticesScreen(props: Props) {
                       title,
                       subtitle: guide.updated_at ? `更新于 ${formatTime(String(guide.updated_at)).replace('/', '-').replace('/', '-')}` : '工作指南',
                       body,
+                      contentRaw: guide.content || null,
+                      guideRole: guide.guide_role || null,
                     })
                   }
                   style={({ pressed }) => [styles.guideCard, pressed ? styles.rowPressed : null]}
@@ -859,6 +885,20 @@ export default function NoticesScreen(props: Props) {
                     </View>
                     <Ionicons name="chevron-forward" size={moderateScale(14)} color="#9CA3AF" />
                   </View>
+                  {roleLabel || isRecommended ? (
+                    <View style={styles.guideBadgeRow}>
+                      {roleLabel ? (
+                        <View style={styles.guideBadge}>
+                          <Text style={styles.guideBadgeText}>{roleLabel}</Text>
+                        </View>
+                      ) : null}
+                      {isRecommended ? (
+                        <View style={[styles.guideBadge, styles.guideBadgePrimary]}>
+                          <Text style={[styles.guideBadgeText, styles.guideBadgePrimaryText]}>适合你</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  ) : null}
                   <Text style={styles.guideTitle} numberOfLines={2}>
                     {title}
                   </Text>
@@ -908,7 +948,7 @@ export default function NoticesScreen(props: Props) {
           value={query}
           onChangeText={setQuery}
           style={styles.searchInput}
-          placeholder="输入关键词搜索历史任务、仓库指南、工作指南、公告、房源信息..."
+          placeholder="输入关键词搜索历史任务、客服手册、仓库指南、工作指南、公告、房源信息..."
           placeholderTextColor="#9CA3AF"
           autoCapitalize="none"
           autoCorrect={false}
@@ -926,59 +966,31 @@ export default function NoticesScreen(props: Props) {
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           >
             {searchSections.map(renderSearchSection)}
-            {!hasAnySearchMatches ? <Text style={styles.emptyText}>暂无匹配内容，可试试房号、地址、Wi-Fi、公告标题或指南关键词。</Text> : null}
+            {!hasAnySearchMatches ? <Text style={styles.emptyText}>暂无匹配内容，可试试房号、地址、Wi-Fi、客服规定、公告标题或指南关键词。</Text> : null}
           </ScrollView>
         </View>
       ) : (
-        <>
-          {renderAnnouncementRail()}
-          {renderGuideRail()}
-
-          <View style={styles.noticeSectionHead}>
-            <Text style={styles.sectionTitle}>通知消息</Text>
-            <View style={styles.filterMiniWrap}>
-              <Pressable
-                onPress={() => setShowUnreadOnly(false)}
-                style={({ pressed }) => [styles.filterMiniChip, !showUnreadOnly ? styles.filterMiniChipActive : null, pressed ? styles.rowPressed : null]}
-              >
-                <Text style={[styles.filterMiniText, !showUnreadOnly ? styles.filterMiniTextActive : null]}>{t('notices_all')}</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setShowUnreadOnly(true)}
-                style={({ pressed }) => [styles.filterMiniChip, showUnreadOnly ? styles.filterMiniChipActive : null, pressed ? styles.rowPressed : null]}
-              >
-                <Text style={[styles.filterMiniText, showUnreadOnly ? styles.filterMiniTextActive : null]}>{t('notices_unread')}</Text>
-              </Pressable>
-            </View>
-          </View>
-
-          {!hasInit && (
-            <View style={styles.loadingWrap}>
-              <ActivityIndicator />
-              <Text style={styles.loadingText}>{t('common_loading')}</Text>
-            </View>
-          )}
-
-          <FlatList
-            data={items}
-            keyExtractor={it => it.id}
-            renderItem={renderNoticeItem}
-            contentContainerStyle={styles.listContent}
-            ItemSeparatorComponent={() => <View style={styles.sep} />}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-            onEndReachedThreshold={0.2}
-            onEndReached={onLoadMore}
-            ListEmptyComponent={!hasInit ? null : <Text style={styles.emptyText}>暂无通知消息。</Text>}
-            ListFooterComponent={
-              loadingMore ? (
-                <View style={styles.footer}>
-                  <ActivityIndicator />
-                  <Text style={styles.footerText}>{t('common_loading')}</Text>
-                </View>
-              ) : null
-            }
-          />
-        </>
+        <FlatList
+          style={styles.noticeList}
+          data={items}
+          keyExtractor={it => it.id}
+          renderItem={(info) => <View style={styles.noticeItemWrap}>{renderNoticeItem(info)}</View>}
+          contentContainerStyle={styles.listContent}
+          ListHeaderComponent={renderNoticeListHeader}
+          ItemSeparatorComponent={() => <View style={styles.sep} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          onEndReachedThreshold={0.2}
+          onEndReached={onLoadMore}
+          ListEmptyComponent={!hasInit ? null : <Text style={styles.emptyText}>暂无通知消息。</Text>}
+          ListFooterComponent={
+            loadingMore ? (
+              <View style={styles.footer}>
+                <ActivityIndicator />
+                <Text style={styles.footerText}>{t('common_loading')}</Text>
+              </View>
+            ) : null
+          }
+        />
       )}
     </SafeAreaView>
   )
@@ -1069,6 +1081,11 @@ const styles = StyleSheet.create({
     borderWidth: hairline(),
     borderColor: '#BFDBFE',
   },
+  guideBadgeRow: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  guideBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE' },
+  guideBadgePrimary: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
+  guideBadgeText: { color: '#1D4ED8', fontSize: 11, fontWeight: '900' },
+  guideBadgePrimaryText: { color: '#FFFFFF' },
   guideTitle: { marginTop: 12, color: '#111827', fontSize: 14, fontWeight: '900' },
   guideSummary: { marginTop: 8, color: '#6B7280', fontSize: 12, lineHeight: 18, fontWeight: '700' },
   guidePlaceholder: {
@@ -1183,7 +1200,9 @@ const styles = StyleSheet.create({
   loadingWrap: { paddingHorizontal: 16, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
   loadingText: { color: '#6B7280', fontWeight: '700' },
 
-  listContent: { paddingHorizontal: 16, paddingBottom: 16, paddingTop: 10, flexGrow: 1 },
+  noticeList: { flex: 1 },
+  listContent: { paddingBottom: 16, flexGrow: 1 },
+  noticeItemWrap: { paddingHorizontal: 16 },
   sep: { height: 10 },
   rowPressed: { opacity: 0.92 },
   noticeRow: {

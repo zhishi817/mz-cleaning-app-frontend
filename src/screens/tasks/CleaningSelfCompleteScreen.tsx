@@ -6,16 +6,17 @@ import * as ImagePicker from 'expo-image-picker'
 import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
+import { effectiveInspectionMode } from '../../lib/cleaningInspection'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
+import { getWorkTasksSnapshot, patchWorkTaskItem } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import { getCompletionPhotos, listChecklistItems, selfCompleteCleaningTask, submitCleaningConsumables, uploadCleaningMedia, uploadCleaningVideo, uploadSelfLockboxVideo, saveCompletionPhotos, type ChecklistItem } from '../../lib/api'
 import { API_BASE_URL } from '../../config/env'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'CleaningSelfComplete'>
 
-type PhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen'
+type PhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'vacuum_used'
 
 type CompletionPhotoItem = { area: PhotoArea; url: string }
 
@@ -26,7 +27,7 @@ type SupplyItemState = {
   status: 'ok' | 'low' | null
   qty: string
   note: string
-  photo_url: string | null
+  photo_urls: string[]
 }
 
 function normalizeBase(base: string) {
@@ -91,6 +92,11 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   const cleaningTaskId = String(task?.source_id || '').trim()
   const propertyCode = String(task?.property?.code || '').trim()
   const propertyAddr = String(task?.property?.address || '').trim()
+  const taskType = String((task as any)?.task_type || '').trim().toLowerCase()
+  const isStayoverTask = taskType === 'stayover_clean'
+  const inspectionMode = effectiveInspectionMode(task as any)
+  const requiresConsumables = !isStayoverTask
+  const requiresLockboxVideo = !isStayoverTask
 
   const [completion, setCompletion] = useState<Record<PhotoArea, string[]>>({
     toilet: [],
@@ -98,6 +104,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     sofa: [],
     bedroom: [],
     kitchen: [],
+    vacuum_used: [],
   })
   const [lockboxLocalUrl, setLockboxLocalUrl] = useState<string | null>(null)
   const lockboxFromTask = String((task as any)?.lockbox_video_url || '').trim()
@@ -111,7 +118,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   const [viewerUrls, setViewerUrls] = useState<string[]>([])
   const [viewerIndex, setViewerIndex] = useState(0)
 
-  const requiredAreas: PhotoArea[] = ['toilet', 'living', 'sofa', 'bedroom', 'kitchen']
+  const requiredAreas: PhotoArea[] = ['toilet', 'living', 'sofa', 'bedroom', 'kitchen', 'vacuum_used']
 
   const completionOk = useMemo(() => requiredAreas.every(a => (completion[a] || []).length > 0), [completion])
 
@@ -121,7 +128,18 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   const [remoteTvPhotoUrl, setRemoteTvPhotoUrl] = useState<string | null>(null)
   const [livingRoomPhotoUrl, setLivingRoomPhotoUrl] = useState<string | null>(String((task as any)?.living_room_photo_url || '').trim() || null)
 
-  const lockboxOk = !!String(lockboxUrl || '').trim()
+  const lockboxOk = !requiresLockboxVideo || !!String(lockboxUrl || '').trim()
+  const feedbackStepNo = isStayoverTask ? '1.' : '2.'
+  const photosStepNo = isStayoverTask ? '2.' : '3.'
+  const completeStepNo = isStayoverTask ? '3.' : '4.'
+
+  useEffect(() => {
+    if (!task || isStayoverTask) return
+    if (inspectionMode === 'self_complete') return
+    Alert.alert('待确认检查安排', '当前任务不是“自完成”流程，请等待经理确认检查安排。', [
+      { text: '知道了', onPress: () => props.navigation.goBack() },
+    ])
+  }, [inspectionMode, isStayoverTask, props.navigation, task])
 
   const canSubmitSupplies = useMemo(() => {
     if (!supplies.length) return false
@@ -132,13 +150,13 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       if (it.status === 'low') {
         const q = Number(String(it.qty || '').trim())
         if (!Number.isFinite(q) || q < 1) return false
-        if (!String(it.photo_url || '').trim()) return false
+        if (!(it.photo_urls || []).length) return false
       }
     }
     if (!String(livingRoomPhotoUrl || '').trim()) return false
     if (!String(remoteTvPhotoUrl || '').trim()) return false
     return true
-  }, [livingRoomPhotoUrl, supplies, remoteAcPhotoUrl, remoteTvPhotoUrl])
+  }, [livingRoomPhotoUrl, supplies, remoteTvPhotoUrl])
 
   const refresh = useCallback(async () => {
     if (!token) return
@@ -146,7 +164,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     try {
       setLoading(true)
       const r = await getCompletionPhotos(token, cleaningTaskId).catch(() => null)
-      const next: Record<PhotoArea, string[]> = { toilet: [], living: [], sofa: [], bedroom: [], kitchen: [] }
+      const next: Record<PhotoArea, string[]> = { toilet: [], living: [], sofa: [], bedroom: [], kitchen: [], vacuum_used: [] }
       for (const it of r?.items || []) {
         const a = String(it.area || '').trim() as PhotoArea
         const url = String(it.url || '').trim()
@@ -161,6 +179,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   }, [cleaningTaskId, token])
 
   const loadSuppliesChecklist = useCallback(async () => {
+    if (!requiresConsumables) return
     if (!token) return
     if (supplies.length) return
     try {
@@ -173,7 +192,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         status: it.id === 'other' ? ('ok' as const) : (null as any),
         qty: '1',
         note: '',
-        photo_url: null,
+        photo_urls: [],
       }))
       setSupplies(mapped)
     } catch (e: any) {
@@ -181,7 +200,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     } finally {
       setSuppliesLoading(false)
     }
-  }, [supplies.length, t, token])
+  }, [requiresConsumables, supplies.length, t, token])
 
   useEffect(() => {
     refresh()
@@ -195,6 +214,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   }, [props.navigation, refresh])
 
   useEffect(() => {
+    if (!requiresConsumables) return
     loadSuppliesChecklist()
   }, [loadSuppliesChecklist])
 
@@ -229,7 +249,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     if (!token) throw new Error('请先登录')
     const ok = await ensureCameraPerm()
     if (!ok) throw new Error('需要相机权限')
-    const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
+    const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
     if (res.canceled || !res.assets?.length) return null
     const a = res.assets[0] as any
     const uri = String(a.uri || '').trim()
@@ -255,7 +275,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         Alert.alert(t('common_error'), '需要相机权限')
         return
       }
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -263,7 +283,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       const name = String(a.fileName || uri.split('/').pop() || `stock-${Date.now()}.jpg`)
       const mimeType = String(a.mimeType || 'image/jpeg')
       const up = await uploadCleaningMedia(token, { uri, name, mimeType })
-      setSupplyItem(idx, { photo_url: up.url })
+      setSupplies((prev) => prev.map((x, i) => (i === idx ? { ...x, photo_urls: [...x.photo_urls, up.url] } : x)))
       Alert.alert(t('common_ok'), '库存照片已上传')
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '上传失败'))
@@ -278,7 +298,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         Alert.alert(t('common_error'), '需要相机权限')
         return
       }
-      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 })
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -304,8 +324,8 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       }
       const res =
         source === 'camera'
-          ? await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
-          : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1, allowsEditing: true, aspect: [4, 3] })
+          ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+          : await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
       if (res.canceled || !res.assets?.length) return
       const a = res.assets[0] as any
       const uri = String(a.uri || '').trim()
@@ -329,7 +349,8 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       status: x.status as any,
       qty: x.status === 'low' ? Number(String(x.qty || '').trim()) : undefined,
       note: x.note.trim() || undefined,
-      photo_url: x.photo_url || undefined,
+      photo_url: x.photo_urls[0] || undefined,
+      photo_urls: x.photo_urls.length ? x.photo_urls : undefined,
     }))
     if (String(remoteAcPhotoUrl || '').trim()) {
       out.push({
@@ -345,7 +366,11 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     } as any)
     try {
       setSuppliesSubmitting(true)
-      await submitCleaningConsumables(token, cleaningTaskId, { living_room_photo_url: String(livingRoomPhotoUrl || '').trim(), items: out })
+      const updated = await submitCleaningConsumables(token, cleaningTaskId, { living_room_photo_url: String(livingRoomPhotoUrl || '').trim(), items: out })
+      const nextStatus = String((updated as any)?.status || '').trim()
+      if (task?.id && nextStatus) {
+        await patchWorkTaskItem(String(task.id), { status: nextStatus } as any)
+      }
       setSuppliesSubmitted(true)
       Alert.alert(t('common_ok'), '提交成功')
     } catch (e: any) {
@@ -413,7 +438,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         return
       }
       const res = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+        mediaTypes: 'videos',
         videoMaxDuration: 30,
         quality: ImagePicker.UIImagePickerControllerQualityType.High,
       } as any)
@@ -437,7 +462,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   async function onSelfComplete() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!cleaningTaskId) return Alert.alert(t('common_error'), '缺少任务信息')
-    if (!lockboxOk) return Alert.alert(t('common_error'), '请先上传挂钥匙视频')
+    if (requiresLockboxVideo && !lockboxOk) return Alert.alert(t('common_error'), '请先上传挂钥匙视频')
     if (!completionOk) return Alert.alert(t('common_error'), '请先上传房间完成照片')
     try {
       setSubmitting(true)
@@ -473,188 +498,203 @@ export default function CleaningSelfCompleteScreen(props: Props) {
             {loading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
           </View>
           {propertyAddr ? <Text style={styles.sub}>{propertyAddr}</Text> : null}
+          {isStayoverTask ? <Text style={styles.mutedSmall}>入住中清洁无需上传钥匙、无需补品和检查，补齐完成照片后可直接标记完成。</Text> : null}
         </View>
 
-        <View style={styles.card}>
-          <Pressable onPress={() => toggle('supplies')} style={({ pressed }) => [styles.sectionHead, pressed ? styles.pressed : null]}>
-            {sectionTitle('1.', '消耗品补充', 'cube-outline')}
-            <Ionicons name={expanded.supplies ? 'chevron-up' : 'chevron-down'} size={moderateScale(18)} color="#6B7280" />
-          </Pressable>
-          {expanded.supplies ? (
-            <>
-              <Text style={styles.mutedSmall}>请完成消耗品补充（不足项需拍照）。</Text>
-              <Text style={styles.mutedSmall}>{`待住晚数：${remainingNights == null ? '-' : String(remainingNights)}`}</Text>
-              {suppliesSubmitted ? <Text style={styles.ok}>已提交</Text> : suppliesLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : <Text style={styles.warn}>未提交</Text>}
-              <View style={styles.supBlock}>
-                <Text style={styles.supLabel}>客厅照片</Text>
-                <Text style={styles.mutedSmall}>提交补品前需重新提供一张客厅照片。</Text>
-                <View style={styles.supRow}>
-                  <Pressable
-                    onPress={() => onUploadLivingRoomPhoto('camera')}
-                    disabled={suppliesSubmitting}
-                    style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
-                  >
-                    <Text style={styles.supPhotoText}>{livingRoomPhotoUrl ? '重新拍照' : '拍照'}</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => onUploadLivingRoomPhoto('library')}
-                    disabled={suppliesSubmitting}
-                    style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
-                  >
-                    <Text style={styles.supPhotoText}>相册上传</Text>
-                  </Pressable>
+        {requiresConsumables ? (
+          <View style={styles.card}>
+            <Pressable onPress={() => toggle('supplies')} style={({ pressed }) => [styles.sectionHead, pressed ? styles.pressed : null]}>
+              {sectionTitle('1.', '消耗品补充', 'cube-outline')}
+              <Ionicons name={expanded.supplies ? 'chevron-up' : 'chevron-down'} size={moderateScale(18)} color="#6B7280" />
+            </Pressable>
+            {expanded.supplies ? (
+              <>
+                <Text style={styles.mutedSmall}>请完成消耗品补充（不足项需拍照）。</Text>
+                <Text style={styles.mutedSmall}>{`待住晚数：${remainingNights == null ? '-' : String(remainingNights)}`}</Text>
+                {suppliesSubmitted ? <Text style={styles.ok}>已提交</Text> : suppliesLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : <Text style={styles.warn}>未提交</Text>}
+                <View style={styles.supBlock}>
+                  <Text style={styles.supLabel}>客厅照片</Text>
+                  <Text style={styles.mutedSmall}>提交补品前需重新提供一张客厅照片。</Text>
+                  <View style={styles.supRow}>
+                    <Pressable
+                      onPress={() => onUploadLivingRoomPhoto('camera')}
+                      disabled={suppliesSubmitting}
+                      style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                    >
+                      <Text style={styles.supPhotoText}>{livingRoomPhotoUrl ? '重新拍照' : '拍照'}</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => onUploadLivingRoomPhoto('library')}
+                      disabled={suppliesSubmitting}
+                      style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                    >
+                      <Text style={styles.supPhotoText}>相册上传</Text>
+                    </Pressable>
+                  </View>
+                  {livingRoomPhotoUrl ? (
+                    <Pressable
+                      onPress={() => {
+                        setViewerUrls([toAbsoluteUrl(livingRoomPhotoUrl)])
+                        setViewerIndex(0)
+                        setViewerOpen(true)
+                      }}
+                      style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
+                    >
+                      <Image source={{ uri: toAbsoluteUrl(livingRoomPhotoUrl) }} style={styles.supPreviewImg} />
+                    </Pressable>
+                  ) : null}
                 </View>
-                {livingRoomPhotoUrl ? (
-                  <Pressable
-                    onPress={() => {
-                      setViewerUrls([toAbsoluteUrl(livingRoomPhotoUrl)])
-                      setViewerIndex(0)
-                      setViewerOpen(true)
-                    }}
-                    style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
-                  >
-                    <Image source={{ uri: toAbsoluteUrl(livingRoomPhotoUrl) }} style={styles.supPreviewImg} />
-                  </Pressable>
-                ) : null}
-              </View>
-              {supplies.map((it, idx) => (
-                <View key={it.id} style={styles.supBlock}>
-                  <Text style={styles.supLabel}>{it.label}</Text>
-                  {it.id === 'other' ? (
-                    <TextInput
-                      value={it.note}
-                      onChangeText={(v) => setSupplyItem(idx, { note: v })}
-                      style={[styles.supInput, styles.supNote]}
-                      placeholder="其他需要补充/检查的内容（可选）"
-                      placeholderTextColor="#9CA3AF"
-                      multiline
-                    />
-                  ) : (
-                    <View style={styles.supRow}>
-                      <Pressable
-                        onPress={() => setSupplyItem(idx, { status: 'ok', photo_url: null })}
-                        style={({ pressed }) => [styles.supChip, it.status === 'ok' ? styles.supChipActive : null, pressed ? styles.pressed : null]}
-                      >
-                        <Text style={[styles.supChipText, it.status === 'ok' ? styles.supChipTextActive : null]}>足够</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => setSupplyItem(idx, { status: 'low' })}
-                        style={({ pressed }) => [styles.supChip, it.status === 'low' ? styles.supChipActive : null, pressed ? styles.pressed : null]}
-                      >
-                        <Text style={[styles.supChipText, it.status === 'low' ? styles.supChipTextActive : null]}>不足</Text>
-                      </Pressable>
-                    </View>
-                  )}
-                  {it.status === 'low' ? (
-                    <>
-                      <View style={styles.supRow}>
-                        <TextInput
-                          value={it.qty}
-                          onChangeText={(v) => setSupplyItem(idx, { qty: v.replace(/[^\d]/g, '').slice(0, 6) })}
-                          style={[styles.supInput, styles.supQty]}
-                          placeholder="缺多少（数量）"
-                          placeholderTextColor="#9CA3AF"
-                          keyboardType="number-pad"
-                        />
-                        <Pressable
-                          onPress={() => onTakeStockPhoto(idx)}
-                          disabled={suppliesSubmitting}
-                          style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
-                        >
-                          <Text style={styles.supPhotoText}>{it.photo_url ? '已拍照' : '拍照库存'}</Text>
-                        </Pressable>
-                      </View>
-                      {it.photo_url ? (
-                        <Pressable
-                          onPress={() => {
-                            setViewerUrls([toAbsoluteUrl(it.photo_url)])
-                            setViewerIndex(0)
-                            setViewerOpen(true)
-                          }}
-                          style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
-                        >
-                          <Image source={{ uri: toAbsoluteUrl(it.photo_url) }} style={styles.supPreviewImg} />
-                        </Pressable>
-                      ) : null}
+                {supplies.map((it, idx) => (
+                  <View key={it.id} style={styles.supBlock}>
+                    <Text style={styles.supLabel}>{it.label}</Text>
+                    {it.id === 'other' ? (
                       <TextInput
                         value={it.note}
                         onChangeText={(v) => setSupplyItem(idx, { note: v })}
                         style={[styles.supInput, styles.supNote]}
-                        placeholder="备注（可选）"
+                        placeholder="其他需要补充/检查的内容（可选）"
                         placeholderTextColor="#9CA3AF"
                         multiline
                       />
-                    </>
+                    ) : (
+                      <View style={styles.supRow}>
+                          <Pressable
+                            onPress={() => setSupplyItem(idx, { status: 'ok', photo_urls: [] })}
+                            style={({ pressed }) => [styles.supChip, it.status === 'ok' ? styles.supChipActive : null, pressed ? styles.pressed : null]}
+                          >
+                          <Text style={[styles.supChipText, it.status === 'ok' ? styles.supChipTextActive : null]}>足够</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => setSupplyItem(idx, { status: 'low' })}
+                          style={({ pressed }) => [styles.supChip, it.status === 'low' ? styles.supChipActive : null, pressed ? styles.pressed : null]}
+                        >
+                          <Text style={[styles.supChipText, it.status === 'low' ? styles.supChipTextActive : null]}>不足</Text>
+                        </Pressable>
+                      </View>
+                    )}
+                    {it.status === 'low' ? (
+                      <>
+                        <View style={styles.supRow}>
+                          <TextInput
+                            value={it.qty}
+                            onChangeText={(v) => setSupplyItem(idx, { qty: v.replace(/[^\d]/g, '').slice(0, 6) })}
+                            style={[styles.supInput, styles.supQty]}
+                            placeholder="缺多少（数量）"
+                            placeholderTextColor="#9CA3AF"
+                            keyboardType="number-pad"
+                          />
+                          <Pressable
+                            onPress={() => onTakeStockPhoto(idx)}
+                            disabled={suppliesSubmitting}
+                            style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                          >
+                            <Text style={styles.supPhotoText}>{it.photo_urls.length ? `继续拍照 (${it.photo_urls.length})` : '拍照库存'}</Text>
+                          </Pressable>
+                        </View>
+                        {it.photo_urls.length ? (
+                          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingVertical: 6 }}>
+                            {it.photo_urls.map((photoUrl, photoIdx) => (
+                              <View key={`${photoUrl}-${photoIdx}`} style={styles.thumbWrap}>
+                                <Pressable
+                                  onPress={() => {
+                                    setViewerUrls(it.photo_urls.map((url) => toAbsoluteUrl(url)))
+                                    setViewerIndex(photoIdx)
+                                    setViewerOpen(true)
+                                  }}
+                                  style={({ pressed }) => [styles.thumbPress, pressed ? styles.pressed : null]}
+                                >
+                                  <Image source={{ uri: toAbsoluteUrl(photoUrl) }} style={styles.thumb} />
+                                </Pressable>
+                                <Pressable
+                                  onPress={() => setSupplies((prev) => prev.map((x, i) => (i === idx ? { ...x, photo_urls: x.photo_urls.filter((_, j) => j !== photoIdx) } : x)))}
+                                  style={({ pressed }) => [styles.removeBtn, pressed ? styles.pressed : null]}
+                                >
+                                  <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
+                                </Pressable>
+                              </View>
+                            ))}
+                          </ScrollView>
+                        ) : null}
+                        <TextInput
+                          value={it.note}
+                          onChangeText={(v) => setSupplyItem(idx, { note: v })}
+                          style={[styles.supInput, styles.supNote]}
+                          placeholder="备注（可选）"
+                          placeholderTextColor="#9CA3AF"
+                          multiline
+                        />
+                      </>
+                    ) : null}
+                  </View>
+                ))}
+                <View style={styles.supBlock}>
+                  <Text style={styles.supLabel}>遥控器拍照</Text>
+                  <Text style={styles.mutedSmall}>请拍照：电视遥控器、空调遥控器。</Text>
+                  <Text style={styles.mutedSmall}>备注：空调遥控器嵌在墙上的不用拍照。</Text>
+
+                  <Text style={[styles.supLabel, { marginTop: 10 }]}>空调遥控器</Text>
+                  <View style={styles.supRow}>
+                    <Pressable
+                      onPress={() => onTakeRemotePhoto('ac')}
+                      disabled={suppliesSubmitting}
+                      style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                    >
+                      <Text style={styles.supPhotoText}>{remoteAcPhotoUrl ? '已拍照' : '拍照'}</Text>
+                    </Pressable>
+                  </View>
+                  {remoteAcPhotoUrl ? (
+                    <Pressable
+                      onPress={() => {
+                        setViewerUrls([toAbsoluteUrl(remoteAcPhotoUrl)])
+                        setViewerIndex(0)
+                        setViewerOpen(true)
+                      }}
+                      style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
+                    >
+                      <Image source={{ uri: toAbsoluteUrl(remoteAcPhotoUrl) }} style={styles.supPreviewImg} />
+                    </Pressable>
+                  ) : null}
+
+                  <Text style={[styles.supLabel, { marginTop: 12 }]}>电视遥控器</Text>
+                  <View style={styles.supRow}>
+                    <Pressable
+                      onPress={() => onTakeRemotePhoto('tv')}
+                      disabled={suppliesSubmitting}
+                      style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                    >
+                      <Text style={styles.supPhotoText}>{remoteTvPhotoUrl ? '已拍照' : '拍照'}</Text>
+                    </Pressable>
+                  </View>
+                  {remoteTvPhotoUrl ? (
+                    <Pressable
+                      onPress={() => {
+                        setViewerUrls([toAbsoluteUrl(remoteTvPhotoUrl)])
+                        setViewerIndex(0)
+                        setViewerOpen(true)
+                      }}
+                      style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
+                    >
+                      <Image source={{ uri: toAbsoluteUrl(remoteTvPhotoUrl) }} style={styles.supPreviewImg} />
+                    </Pressable>
                   ) : null}
                 </View>
-              ))}
-              <View style={styles.supBlock}>
-                <Text style={styles.supLabel}>遥控器拍照</Text>
-                <Text style={styles.mutedSmall}>请拍照：电视遥控器、空调遥控器。</Text>
-                <Text style={styles.mutedSmall}>备注：空调遥控器嵌在墙上的不用拍照。</Text>
-
-                <Text style={[styles.supLabel, { marginTop: 10 }]}>空调遥控器</Text>
-                <View style={styles.supRow}>
+                {supplies.length ? (
                   <Pressable
-                    onPress={() => onTakeRemotePhoto('ac')}
-                    disabled={suppliesSubmitting}
-                    style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
+                    onPress={onSubmitSupplies}
+                    disabled={suppliesSubmitting || !canSubmitSupplies}
+                    style={({ pressed }) => [styles.primaryBtn, pressed ? styles.pressed : null, suppliesSubmitting || !canSubmitSupplies ? styles.disabledPrimary : null]}
                   >
-                    <Text style={styles.supPhotoText}>{remoteAcPhotoUrl ? '已拍照' : '拍照'}</Text>
-                  </Pressable>
-                </View>
-                {remoteAcPhotoUrl ? (
-                  <Pressable
-                    onPress={() => {
-                      setViewerUrls([toAbsoluteUrl(remoteAcPhotoUrl)])
-                      setViewerIndex(0)
-                      setViewerOpen(true)
-                    }}
-                    style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
-                  >
-                    <Image source={{ uri: toAbsoluteUrl(remoteAcPhotoUrl) }} style={styles.supPreviewImg} />
+                    <Text style={styles.primaryText}>{suppliesSubmitting ? t('common_loading') : '提交消耗品补充'}</Text>
                   </Pressable>
                 ) : null}
-
-                <Text style={[styles.supLabel, { marginTop: 12 }]}>电视遥控器</Text>
-                <View style={styles.supRow}>
-                  <Pressable
-                    onPress={() => onTakeRemotePhoto('tv')}
-                    disabled={suppliesSubmitting}
-                    style={({ pressed }) => [styles.supPhotoBtn, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
-                  >
-                    <Text style={styles.supPhotoText}>{remoteTvPhotoUrl ? '已拍照' : '拍照'}</Text>
-                  </Pressable>
-                </View>
-                {remoteTvPhotoUrl ? (
-                  <Pressable
-                    onPress={() => {
-                      setViewerUrls([toAbsoluteUrl(remoteTvPhotoUrl)])
-                      setViewerIndex(0)
-                      setViewerOpen(true)
-                    }}
-                    style={({ pressed }) => [styles.supPhotoPreview, pressed ? styles.pressed : null]}
-                  >
-                    <Image source={{ uri: toAbsoluteUrl(remoteTvPhotoUrl) }} style={styles.supPreviewImg} />
-                  </Pressable>
-                ) : null}
-              </View>
-              {supplies.length ? (
-                <Pressable
-                  onPress={onSubmitSupplies}
-                  disabled={suppliesSubmitting || !canSubmitSupplies}
-                  style={({ pressed }) => [styles.primaryBtn, pressed ? styles.pressed : null, suppliesSubmitting || !canSubmitSupplies ? styles.disabledPrimary : null]}
-                >
-                  <Text style={styles.primaryText}>{suppliesSubmitting ? t('common_loading') : '提交消耗品补充'}</Text>
-                </Pressable>
-              ) : null}
-            </>
-          ) : null}
-        </View>
+              </>
+            ) : null}
+          </View>
+        ) : null}
 
         <View style={styles.card}>
           <Pressable onPress={() => toggle('feedback')} style={({ pressed }) => [styles.sectionHead, pressed ? styles.pressed : null]}>
-            {sectionTitle('2.', '房源问题反馈', 'chatbubble-ellipses-outline')}
+            {sectionTitle(feedbackStepNo, '房源问题反馈', 'chatbubble-ellipses-outline')}
             <Ionicons name={expanded.feedback ? 'chevron-up' : 'chevron-down'} size={moderateScale(18)} color="#6B7280" />
           </Pressable>
           {expanded.feedback ? (
@@ -674,21 +714,22 @@ export default function CleaningSelfCompleteScreen(props: Props) {
 
         <View style={styles.card}>
           <Pressable onPress={() => toggle('photos')} style={({ pressed }) => [styles.sectionHead, pressed ? styles.pressed : null]}>
-            {sectionTitle('3.', '房间完成照片', 'camera-outline')}
+            {sectionTitle(photosStepNo, '房间完成照片', 'camera-outline')}
             <Ionicons name={expanded.photos ? 'chevron-up' : 'chevron-down'} size={moderateScale(18)} color="#6B7280" />
           </Pressable>
           {expanded.photos ? (
             <>
-              <Text style={styles.mutedSmall}>每个区域至少 1 张照片。</Text>
+              <Text style={styles.mutedSmall}>每个区域至少 1 张照片，并补拍一张吸尘器使用后照片。</Text>
               {completionOk ? <Text style={styles.ok}>已满足</Text> : <Text style={styles.warn}>未满足</Text>}
               {requiredAreas.map((a) => {
                 const list = completion[a] || []
                 const title =
                   a === 'toilet' ? '浴室' :
-                    a === 'living' ? '客厅' :
-                      a === 'sofa' ? '沙发' :
-                        a === 'bedroom' ? '卧室' :
+                        a === 'living' ? '客厅' :
+                          a === 'sofa' ? '沙发' :
+                            a === 'bedroom' ? '卧室' :
                           a === 'kitchen' ? '厨房' :
+                            a === 'vacuum_used' ? '吸尘器使用后' :
                             a
                 return (
                   <View key={a} style={{ marginTop: 10 }}>
@@ -736,20 +777,20 @@ export default function CleaningSelfCompleteScreen(props: Props) {
 
         <View style={styles.card}>
           <Pressable onPress={() => toggle('complete')} style={({ pressed }) => [styles.sectionHead, pressed ? styles.pressed : null]}>
-            {sectionTitle('4.', '标记已完成', 'checkmark-circle-outline')}
+            {sectionTitle(completeStepNo, '标记已完成', 'checkmark-circle-outline')}
             <Ionicons name={expanded.complete ? 'chevron-up' : 'chevron-down'} size={moderateScale(18)} color="#6B7280" />
           </Pressable>
           {expanded.complete ? (
             <>
               <View style={{ marginTop: 8, gap: 6 }}>
-                <Text style={styles.mutedSmall}>{`消耗品补充：${suppliesSubmitted ? '已提交' : '未提交'}`}</Text>
+                {requiresConsumables ? <Text style={styles.mutedSmall}>{`消耗品补充：${suppliesSubmitted ? '已提交' : '未提交'}`}</Text> : null}
                 <Text style={styles.mutedSmall}>{`房间完成照片：${completionOk ? '已满足' : '未满足'}`}</Text>
-                <Text style={styles.mutedSmall}>{`挂钥匙视频：${lockboxOk ? '已上传' : '未上传'}`}</Text>
+                {requiresLockboxVideo ? <Text style={styles.mutedSmall}>{`挂钥匙视频：${lockboxOk ? '已上传' : '未上传'}`}</Text> : null}
               </View>
 
               <View style={{ marginTop: 10 }}>
-                <Text style={styles.mutedSmall}>挂钥匙视频（可重传）</Text>
-                {lockboxOk ? (
+                {requiresLockboxVideo ? <Text style={styles.mutedSmall}>挂钥匙视频（可重传）</Text> : <Text style={styles.mutedSmall}>入住中清洁补齐完成照片后可直接标记完成。</Text>}
+                {requiresLockboxVideo && lockboxOk ? (
                   <View style={styles.videoWrap}>
                     <Video
                       source={{ uri: toAbsoluteUrl(lockboxUrl) }}
@@ -761,13 +802,15 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                   </View>
                 ) : null}
                 <View style={styles.row}>
-                  <Pressable
-                    onPress={onUploadLockboxVideo}
-                    disabled={uploading || submitting}
-                    style={({ pressed }) => [styles.grayBtn, pressed ? styles.pressed : null, uploading || submitting ? styles.disabled : null]}
-                  >
-                    <Text style={styles.grayText}>{lockboxOk ? '重传视频' : '上传视频'}</Text>
-                  </Pressable>
+                  {requiresLockboxVideo ? (
+                    <Pressable
+                      onPress={onUploadLockboxVideo}
+                      disabled={uploading || submitting}
+                      style={({ pressed }) => [styles.grayBtn, pressed ? styles.pressed : null, uploading || submitting ? styles.disabled : null]}
+                    >
+                      <Text style={styles.grayText}>{lockboxOk ? '重传视频' : '上传视频'}</Text>
+                    </Pressable>
+                  ) : null}
                   <Pressable
                     onPress={onSelfComplete}
                     disabled={uploading || submitting}
@@ -816,8 +859,8 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#F6F7FB' },
   content: { padding: 16, gap: 12 },
   card: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 12, borderWidth: hairline(), borderColor: '#EEF0F6' },
-  headRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  badge: { height: 30, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '72%' },
+  headRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
+  badge: { minHeight: 30, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '100%', flexShrink: 1 },
   badgeText: { color: '#2563EB', fontWeight: '900', flexShrink: 1 },
   sub: { marginTop: 8, color: '#6B7280', fontWeight: '700' },
   muted: { marginTop: 10, color: '#6B7280', fontWeight: '700' },
@@ -825,19 +868,19 @@ const styles = StyleSheet.create({
   ok: { marginTop: 8, color: '#16A34A', fontWeight: '900' },
   warn: { marginTop: 8, color: '#DC2626', fontWeight: '900' },
   pressed: { opacity: 0.92 },
-  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sectionNo: { width: 22, fontWeight: '900', color: '#6B7280' },
-  sectionTitle: { fontSize: 15, fontWeight: '900', color: '#111827' },
-  row: { marginTop: 10, flexDirection: 'row', gap: 10 },
-  primaryBtn: { flex: 1, height: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
-  primaryText: { color: '#FFFFFF', fontWeight: '900' },
-  grayBtn: { flex: 1, height: 40, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', borderWidth: hairline(), borderColor: '#E5E7EB' },
-  grayText: { color: '#111827', fontWeight: '900' },
+  sectionTitle: { flexShrink: 1, minWidth: 0, fontSize: 15, fontWeight: '900', color: '#111827' },
+  row: { marginTop: 10, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  primaryBtn: { flex: 1, flexShrink: 1, minWidth: 140, minHeight: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  primaryText: { color: '#FFFFFF', fontWeight: '900', textAlign: 'center' },
+  grayBtn: { flex: 1, flexShrink: 1, minWidth: 140, minHeight: 40, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', borderWidth: hairline(), borderColor: '#E5E7EB', paddingHorizontal: 12, paddingVertical: 8 },
+  grayText: { color: '#111827', fontWeight: '900', textAlign: 'center' },
   disabled: { opacity: 0.6 },
   disabledPrimary: { backgroundColor: '#93C5FD' },
   areaHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  areaTitle: { flex: 1, color: '#111827', fontWeight: '900' },
+  areaTitle: { flex: 1, minWidth: 0, color: '#111827', fontWeight: '900' },
   areaCount: { width: 24, textAlign: 'center', color: '#6B7280', fontWeight: '900' },
   areaBtn: { height: 30, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
   areaBtnText: { color: '#FFFFFF', fontWeight: '900', fontSize: 12 },
@@ -847,16 +890,16 @@ const styles = StyleSheet.create({
   removeBtn: { position: 'absolute', top: 6, right: 6, width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
   supBlock: { marginTop: 12, paddingTop: 10, borderTopWidth: hairline(), borderTopColor: '#EEF0F6' },
   supLabel: { color: '#111827', fontWeight: '900' },
-  supRow: { marginTop: 8, flexDirection: 'row', gap: 10, alignItems: 'center' },
-  supChip: { flex: 1, height: 34, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', borderWidth: hairline(), borderColor: '#E5E7EB' },
+  supRow: { marginTop: 8, flexDirection: 'row', gap: 10, alignItems: 'center', flexWrap: 'wrap' },
+  supChip: { flex: 1, minWidth: 120, minHeight: 34, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', borderWidth: hairline(), borderColor: '#E5E7EB' },
   supChipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
   supChipText: { color: '#111827', fontWeight: '900' },
   supChipTextActive: { color: '#FFFFFF' },
   supInput: { height: 38, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E5E7EB', paddingHorizontal: 10, color: '#111827', fontWeight: '800' },
   supQty: { flex: 1 },
   supNote: { marginTop: 8, minHeight: 80, textAlignVertical: 'top', paddingTop: 10, paddingBottom: 10 },
-  supPhotoBtn: { width: 110, height: 38, borderRadius: 12, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
-  supPhotoText: { color: '#FFFFFF', fontWeight: '900', fontSize: 12 },
+  supPhotoBtn: { minWidth: 110, minHeight: 38, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 12, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
+  supPhotoText: { color: '#FFFFFF', fontWeight: '900', fontSize: 12, textAlign: 'center' },
   supPhotoPreview: { marginTop: 8, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6' },
   supPreviewImg: { width: '100%', height: 180, backgroundColor: '#F3F4F6' },
   videoWrap: { marginTop: 10, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },

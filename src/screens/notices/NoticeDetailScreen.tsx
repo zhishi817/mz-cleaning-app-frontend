@@ -1,9 +1,9 @@
 import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react'
-import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import { hairline, moderateScale } from '../../lib/scale'
-import { getNoticesSnapshot, initNoticesStore, markNoticeRead } from '../../lib/noticesStore'
+import { getNoticesSnapshot, initNoticesStore, markNoticeRead, subscribeNotices, type Notice } from '../../lib/noticesStore'
 import { getPresentedNotice } from '../../lib/noticePresentation'
 import type { NoticesStackParamList } from '../../navigation/RootNavigator'
 import { useI18n } from '../../lib/i18n'
@@ -76,6 +76,8 @@ export default function NoticeDetailScreen(props: Props) {
   const id = props.route.params.id
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
+  const [storeReady, setStoreReady] = useState(false)
+  const [rawNotice, setRawNotice] = useState<Notice | null>(null)
 
   useLayoutEffect(() => {
     props.navigation.setOptions({
@@ -103,22 +105,42 @@ export default function NoticeDetailScreen(props: Props) {
     })
   }, [props.navigation])
 
-  const notice = useMemo(() => {
-    const raw = getNoticesSnapshot().items.find(n => n.id === id) || null
-    return raw ? getPresentedNotice(raw) : null
-  }, [id])
+  const notice = useMemo(() => (rawNotice ? getPresentedNotice(rawNotice) : null), [rawNotice])
 
   useEffect(() => {
+    let alive = true
+    let unsub: (() => void) | null = null
+    const update = () => {
+      if (!alive) return
+      setRawNotice(getNoticesSnapshot().items.find((item) => item.id === id) || null)
+    }
     ;(async () => {
       await initNoticesStore()
+      if (!alive) return
+      update()
+      setStoreReady(true)
+      unsub = subscribeNotices(update)
       await markNoticeRead(id)
       try {
         const token = await getAuthToken()
-        const serverId = String((notice as any)?.data?._server_id || '').trim()
+        const current = getNoticesSnapshot().items.find((item) => item.id === id) || null
+        const serverId = String((current as any)?.data?._server_id || '').trim()
         if (token && serverId) await markInboxNotificationsRead(String(token), { ids: [serverId] })
       } catch {}
     })()
-  }, [id, notice])
+    return () => {
+      alive = false
+      if (unsub) unsub()
+    }
+  }, [id])
+
+  if (!storeReady) {
+    return (
+      <View style={styles.page}>
+        <ActivityIndicator style={styles.loading} color="#2563EB" />
+      </View>
+    )
+  }
 
   if (!notice) {
     return (
@@ -259,6 +281,7 @@ export default function NoticeDetailScreen(props: Props) {
 
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#F6F7FB' },
+  loading: { marginTop: 48 },
   content: { padding: 16 },
   card: {
     backgroundColor: '#FFFFFF',
@@ -267,8 +290,8 @@ const styles = StyleSheet.create({
     borderWidth: hairline(),
     borderColor: '#EEF0F6',
   },
-  metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  badge: { height: 26, borderRadius: 13, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center' },
+  metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
+  badge: { minHeight: 26, borderRadius: 13, paddingHorizontal: 12, paddingVertical: 3, alignItems: 'center', justifyContent: 'center' },
   badgeText: { fontSize: 12, fontWeight: '900' },
   timeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   time: { color: '#9CA3AF', fontSize: 12, fontWeight: '700' },
@@ -281,12 +304,12 @@ const styles = StyleSheet.create({
   infoLabel: { color: '#64748B', fontSize: 12, fontWeight: '800' },
   infoValue: { marginTop: 6, color: '#111827', fontSize: 15, fontWeight: '900' },
   noteCard: { marginTop: 14, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E5E7EB', padding: 12 },
-  actionBtn: { marginTop: 14, height: 42, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  actionText: { color: '#2563EB', fontWeight: '900' },
+  actionBtn: { marginTop: 14, minHeight: 42, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  actionText: { color: '#2563EB', fontWeight: '900', textAlign: 'center' },
   noteLabel: { color: '#6B7280', fontSize: 12, fontWeight: '900' },
   photoSection: { marginTop: 14 },
   imagesWrap: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  imagePress: { width: '48%', borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
+  imagePress: { flexBasis: '47%', flexGrow: 1, minWidth: 120, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   image: { width: '100%', height: 160, backgroundColor: '#F3F4F6' },
   viewerMask: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)' },
   viewerTopRow: { position: 'absolute', top: 0, left: 0, right: 0, height: 54, paddingHorizontal: 12, justifyContent: 'center', zIndex: 2 },

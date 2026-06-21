@@ -3,6 +3,9 @@ import React from 'react'
 import RootNavigator from './src/navigation/RootNavigator'
 import { AuthProvider } from './src/lib/auth'
 import { I18nProvider } from './src/lib/i18n'
+import { configureDefaultTextScaling } from './src/lib/scale'
+
+configureDefaultTextScaling()
 
 export default function App() {
   return (
