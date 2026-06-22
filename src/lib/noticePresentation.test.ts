@@ -124,9 +124,12 @@ test('key photo and issue notifications expose actor and issue details', () => {
       issue_title: '浴室漏水',
       issue_detail: '洗手盆下方持续滴水',
       severity: 'high',
+      photo_urls: ['https://example.com/issue-1.jpg', 'https://example.com/issue-2.jpg'],
     },
   }))
   expect(issue.title).toBe('Aura2707 · 发现房源问题')
   expect(issue.summary).toBe('浴室漏水')
+  expect(issue.content).toContain('房源：Aura2707')
   expect(issue.content).toContain('问题详情：洗手盆下方持续滴水')
+  expect(issue.images).toEqual(['https://example.com/issue-1.jpg', 'https://example.com/issue-2.jpg'])
 })

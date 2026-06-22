@@ -459,6 +459,11 @@ function hasMobileExecutor(task: WorkTaskItem) {
   return !!String((task as any).cleaner_id || (task as any).inspector_id || task.assignee_id || '').trim()
 }
 
+function isPropertyFollowupTask(task: WorkTaskItem) {
+  const source = String(task.source_type || '').trim()
+  return source === 'property_maintenance' || source === 'property_deep_cleaning' || source === 'property_daily_necessities'
+}
+
 export default function TasksScreen(props: Props) {
   const { status, user, token } = useAuth()
   const { locale, t } = useI18n()
@@ -1007,7 +1012,12 @@ export default function TasksScreen(props: Props) {
   }
 
   const selectedTasks = useMemo(() => {
-    const list = (tasksByDate.get(selectedDate) || []).filter(hasMobileExecutor).slice()
+    const list = (tasksByDate.get(selectedDate) || []).filter((task) => {
+      if (!(canManagerMode && mode === 'manager' && view === 'all')) return hasMobileExecutor(task)
+      if (task.source_type === 'cleaning_tasks') return true
+      if (isPropertyFollowupTask(task)) return hasMobileExecutor(task)
+      return true
+    }).slice()
     list.sort((a, b) => {
       if (period === 'today') {
         const aStatus = String(a.status || '').trim().toLowerCase()
@@ -1035,7 +1045,7 @@ export default function TasksScreen(props: Props) {
       return String(a.title || '').localeCompare(String(b.title || ''))
     })
     return list
-  }, [canManagerMode, mode, period, selectedDate, tasksByDate])
+  }, [canManagerMode, mode, period, selectedDate, tasksByDate, view])
 
   const canReorder = useMemo(() => {
     if (roleNames.includes('cleaner') || roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')) return true

@@ -235,6 +235,7 @@ export function getPresentedNotice(notice: Notice) {
   } else if (kind === 'issue_reported') {
     title = eventTitle(propertyCode, '发现房源问题')
     summary = cleanText((data as any).issue_title) || cleanText(notice.summary).replace(/^收到新的问题反馈[:：]\s*/, '') || '请查看问题详情'
+    addDetail(contentLines, '房源', propertyCode)
     addDetail(contentLines, '问题', summary)
     addDetail(contentLines, '严重程度', (data as any).severity)
     addDetail(contentLines, '问题详情', (data as any).issue_detail)
