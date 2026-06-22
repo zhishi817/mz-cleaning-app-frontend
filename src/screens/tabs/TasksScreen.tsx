@@ -442,6 +442,23 @@ function isSouthbankCleaningTask(task: WorkTaskItem) {
   return region.includes('southbank')
 }
 
+function isCleaningTaskAssignedToUser(task: WorkTaskItem, userId: string) {
+  const uid = String(userId || '').trim()
+  if (!uid || task.source_type !== 'cleaning_tasks') return false
+  const kind = String(task.task_kind || '').trim().toLowerCase()
+  if (kind === 'inspection') return String((task as any).inspector_id || task.assignee_id || '').trim() === uid
+  if (kind === 'cleaning') return String((task as any).cleaner_id || task.assignee_id || '').trim() === uid
+  return String((task as any).cleaner_id || (task as any).inspector_id || task.assignee_id || '').trim() === uid
+}
+
+function hasMobileExecutor(task: WorkTaskItem) {
+  if (task.source_type !== 'cleaning_tasks') return !!String(task.assignee_id || '').trim()
+  const kind = String(task.task_kind || '').trim().toLowerCase()
+  if (kind === 'inspection') return !!String((task as any).inspector_id || task.assignee_id || '').trim()
+  if (kind === 'cleaning') return !!String((task as any).cleaner_id || task.assignee_id || '').trim()
+  return !!String((task as any).cleaner_id || (task as any).inspector_id || task.assignee_id || '').trim()
+}
+
 export default function TasksScreen(props: Props) {
   const { status, user, token } = useAuth()
   const { locale, t } = useI18n()
@@ -475,6 +492,7 @@ export default function TasksScreen(props: Props) {
   const [warehouseKey, setWarehouseKey] = useState<WarehouseKeyStatus | null>(null)
   const [warehouseKeyLoading, setWarehouseKeyLoading] = useState(false)
   const [warehouseKeyBusy, setWarehouseKeyBusy] = useState(false)
+  const [warehouseKeyExpanded, setWarehouseKeyExpanded] = useState(false)
   const [warehouseTransferOpen, setWarehouseTransferOpen] = useState(false)
   const [warehouseNote, setWarehouseNote] = useState('')
   const [quickCreateOpen, setQuickCreateOpen] = useState(false)
@@ -549,8 +567,8 @@ export default function TasksScreen(props: Props) {
     return raw.includes('@') ? raw.split('@')[0] || raw : raw
   }, [user?.username])
   useEffect(() => {
-    if (!(canManagerMode && mode === 'manager' && period === 'today') && search) setSearch('')
-  }, [canManagerMode, mode, period, search])
+    if (!(canManagerMode && mode === 'manager') && search) setSearch('')
+  }, [canManagerMode, mode, search])
 
   useEffect(() => {
     let alive = true
@@ -989,7 +1007,7 @@ export default function TasksScreen(props: Props) {
   }
 
   const selectedTasks = useMemo(() => {
-    const list = (tasksByDate.get(selectedDate) || []).slice()
+    const list = (tasksByDate.get(selectedDate) || []).filter(hasMobileExecutor).slice()
     list.sort((a, b) => {
       if (period === 'today') {
         const aStatus = String(a.status || '').trim().toLowerCase()
@@ -1046,15 +1064,11 @@ export default function TasksScreen(props: Props) {
   const currentUserId = String((user as any)?.id || '').trim()
   const showWarehouseKeyCard = useMemo(() => {
     if (period !== 'today') return false
-    if (roleNames.includes('admin') || roleNames.includes('offline_manager')) return true
-    const southbankTasks = renderTasks.filter(isSouthbankCleaningTask)
-    if (!southbankTasks.length) return false
-    if (canManagerMode && mode === 'manager') return true
-    if (!(roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector') || roleNames.includes('cleaning_inspector'))) return false
-    return true
-  }, [canManagerMode, mode, period, renderTasks, roleNames.join('|')])
+    if (!currentUserId) return false
+    return renderTasks.some((task) => isSouthbankCleaningTask(task) && isCleaningTaskAssignedToUser(task, currentUserId))
+  }, [currentUserId, period, renderTasks])
   const loadWarehouseKey = useCallback(async () => {
-    if (!token || !showWarehouseKeyCard) return
+    if (!token || !showWarehouseKeyCard || !warehouseKeyExpanded) return
     setWarehouseKeyLoading(true)
     try {
       const data = await getWarehouseKeyStatus(token, { key_code: 'msq', date: dayEndDate })
@@ -1064,7 +1078,7 @@ export default function TasksScreen(props: Props) {
     } finally {
       setWarehouseKeyLoading(false)
     }
-  }, [dayEndDate, showWarehouseKeyCard, token])
+  }, [dayEndDate, showWarehouseKeyCard, token, warehouseKeyExpanded])
   const submitWarehouseKeyEvent = useCallback(async (action: 'borrow' | 'return' | 'handover', toUserId?: string) => {
     if (!token) return
     try {
@@ -1110,8 +1124,19 @@ export default function TasksScreen(props: Props) {
   }, [roleNames.join('|')])
   const isInspectorOnlySelf = useMemo(() => isInspectorOnlyRole(roleNames), [roleNames])
   useEffect(() => {
+    setWarehouseKeyExpanded(false)
+    setWarehouseTransferOpen(false)
+  }, [period, selectedDate])
+
+  useEffect(() => {
     if (!showWarehouseKeyCard) {
       setWarehouseKey(null)
+      setWarehouseKeyExpanded(false)
+      setWarehouseTransferOpen(false)
+      return
+    }
+    if (!warehouseKeyExpanded) {
+      setWarehouseTransferOpen(false)
       return
     }
     loadWarehouseKey()
@@ -1122,10 +1147,10 @@ export default function TasksScreen(props: Props) {
         if (typeof unsub === 'function') unsub()
       } catch {}
     }
-  }, [loadWarehouseKey, props.navigation, showWarehouseKeyCard])
+  }, [loadWarehouseKey, props.navigation, showWarehouseKeyCard, warehouseKeyExpanded])
 
   useEffect(() => {
-    if (!showWarehouseKeyCard) return
+    if (!showWarehouseKeyCard || !warehouseKeyExpanded) return
     let cancelled = false
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState !== 'active' || cancelled) return
@@ -1137,10 +1162,10 @@ export default function TasksScreen(props: Props) {
         sub.remove()
       } catch {}
     }
-  }, [loadWarehouseKey, showWarehouseKeyCard])
+  }, [loadWarehouseKey, showWarehouseKeyCard, warehouseKeyExpanded])
 
   useEffect(() => {
-    if (!showWarehouseKeyCard) return
+    if (!showWarehouseKeyCard || !warehouseKeyExpanded) return
     let cancelled = false
     const refreshForWarehouseNotice = () => {
       const notice = (getNoticesSnapshot().items || []).find((item) => {
@@ -1161,7 +1186,7 @@ export default function TasksScreen(props: Props) {
         unsub()
       } catch {}
     }
-  }, [loadWarehouseKey, showWarehouseKeyCard])
+  }, [loadWarehouseKey, showWarehouseKeyCard, warehouseKeyExpanded])
   const cleanerTodayTasks = useMemo(() => {
     if (period !== 'today') return []
     return renderTasks.filter((t) => {
@@ -1272,8 +1297,8 @@ export default function TasksScreen(props: Props) {
   }, [canManagerMode, dayEndDate, mode, period, token])
   const visibleTasks = useMemo(() => {
     const q = search.trim().toLowerCase()
-    // The manager search input is labeled as "today's tasks", so it must stay within
-    // the currently selected day instead of falling back to the whole hydrated week.
+    // Manager search must stay within the currently selected day, even when the
+    // user is browsing the week/month containers.
     const base = renderTasks
     const filtered = q
       ? base.filter((t) => taskManagerSearchText(t).includes(q))
@@ -1349,7 +1374,7 @@ export default function TasksScreen(props: Props) {
       return deduped
     }
     return list
-  }, [renderTasks, search, canManagerMode, mode, period])
+  }, [renderTasks, search, canManagerMode, mode])
   const showDayEndCard = period === 'today' && (isCleanerSelf || isInspectorSelf ? selfDayEndTasks.length > 0 : cleanerTodayTasks.length > 0) && !!dayEndViewerTarget.userId
   const dayEndInsertIndex = useMemo(() => {
     if (!showDayEndCard) return -1
@@ -1960,14 +1985,14 @@ function showBanner(title: string, message: string) {
           </Pressable>
         ) : null}
 
-        {canManagerMode && mode === 'manager' && period === 'today' ? (
+        {canManagerMode && mode === 'manager' ? (
           <View style={styles.searchWrap}>
             <Ionicons name="search-outline" size={moderateScale(16)} color="#9CA3AF" />
             <TextInput
               value={search}
               onChangeText={setSearch}
               style={styles.searchInput}
-              placeholder="搜索今日任务（房号/地址/清洁/检查）"
+              placeholder={period === 'today' ? '搜索今日任务（房号/地址/清洁/检查）' : period === 'week' ? '搜索本周当前日期任务（房号/地址/清洁/检查）' : '搜索本月当前日期任务（房号/地址/清洁/检查）'}
               placeholderTextColor="#9CA3AF"
             />
             {search.trim() ? (
@@ -2022,74 +2047,94 @@ function showBanner(title: string, message: string) {
 
         {showWarehouseKeyCard ? (
           <View style={styles.warehouseKeyCard}>
-            <View style={styles.taskTitleRow}>
-              <View style={styles.warehouseKeyIcon}>
-                <Ionicons name="key-outline" size={moderateScale(16)} color="#047857" />
-              </View>
-              <Text style={styles.taskTitle} numberOfLines={1}>MSQ 仓库钥匙</Text>
-              <View style={[styles.statusPill, warehouseIsHeldByMe ? styles.statusBlue : String(warehouseKeyRow?.status || '') === 'available' ? styles.statusGreen : styles.statusAmber]}>
-                <Text style={[styles.statusText, warehouseIsHeldByMe ? styles.statusTextBlue : String(warehouseKeyRow?.status || '') === 'available' ? styles.statusTextGreen : styles.statusTextAmber]}>
-                  {warehouseKeyLoading && !warehouseKeyRow ? '加载中' : warehouseStatus}
-                </Text>
-              </View>
-            </View>
-            <Text style={styles.summary} numberOfLines={2}>
-              {warehouseHolderName
-                ? `当前持有人：${warehouseHolderName}${warehouseIsHeldByMe ? '（我）' : ''}`
-                : '当前没有记录持有人。'}
-            </Text>
-            {warehouseHolderName ? (
-              <View style={styles.warehousePhoneRow}>
-                <Ionicons name="call-outline" size={moderateScale(14)} color="#047857" />
-                <Text style={styles.warehousePhoneText} numberOfLines={1}>
-                  {warehouseHolderPhone || '手机号未填写'}
-                </Text>
-                {warehouseHolderPhone ? (
-                  <Pressable
-                    onPress={callWarehouseKeyHolder}
-                    style={({ pressed }) => [styles.warehouseCallBtn, pressed ? styles.segmentPressed : null]}
-                  >
-                    <Text style={styles.warehouseCallText}>打电话</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-            ) : null}
-            {warehouseLatest ? (
-              <Text style={styles.warehouseKeyMeta} numberOfLines={2}>
-                最近：{warehouseKeyEventText(String(warehouseLatest.action || ''))}{warehouseLatestTime ? ` ${warehouseLatestTime}` : ''} · {String(warehouseLatest.actor_name || '').trim() || '未知'}{warehouseLatest.to_name ? ` → ${warehouseLatest.to_name}` : ''}
-              </Text>
-            ) : null}
-            <View style={styles.actionsRow}>
-              <Pressable
-                disabled={warehouseKeyBusy || warehouseIsHeldByMe}
-                onPress={() => submitWarehouseKeyEvent('borrow')}
-                style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, warehouseKeyBusy || warehouseIsHeldByMe ? styles.actionBtnDisabled : null]}
-              >
-                <Text style={[styles.actionText, warehouseKeyBusy || warehouseIsHeldByMe ? { color: '#6B7280' } : null]}>{warehouseIsHeldByMe ? '已由我持有' : '借钥匙'}</Text>
-              </Pressable>
-              <Pressable
-                disabled={warehouseKeyBusy || String(warehouseKeyRow?.status || '') === 'available'}
-                onPress={() => submitWarehouseKeyEvent('return')}
-                style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, warehouseKeyBusy || String(warehouseKeyRow?.status || '') === 'available' ? styles.actionBtnDisabled : null]}
-              >
-                <Text style={[styles.actionText, warehouseKeyBusy || String(warehouseKeyRow?.status || '') === 'available' ? { color: '#6B7280' } : null]}>还钥匙</Text>
-              </Pressable>
-              <Pressable
-                disabled={warehouseKeyBusy || !warehouseKeyCandidates.length}
-                onPress={() => setWarehouseTransferOpen(true)}
-                style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, warehouseKeyBusy || !warehouseKeyCandidates.length ? styles.actionBtnDisabled : null]}
-              >
-                <Text style={[styles.actionText, warehouseKeyBusy || !warehouseKeyCandidates.length ? { color: '#6B7280' } : null]}>转交同事</Text>
-              </Pressable>
-            </View>
             <Pressable
-              disabled={warehouseKeyLoading}
-              onPress={loadWarehouseKey}
-              style={({ pressed }) => [styles.warehouseRefresh, pressed ? styles.segmentPressed : null]}
+              onPress={() => setWarehouseKeyExpanded((prev) => !prev)}
+              style={({ pressed }) => [styles.warehouseKeyHeader, pressed ? styles.segmentPressed : null]}
             >
-              <Ionicons name="refresh-outline" size={moderateScale(14)} color="#047857" />
-              <Text style={styles.warehouseRefreshText}>{warehouseKeyLoading ? '刷新中' : '刷新状态'}</Text>
+              <View style={styles.warehouseKeyHeaderMain}>
+                <View style={styles.warehouseKeyIcon}>
+                  <Ionicons name="key-outline" size={moderateScale(16)} color="#047857" />
+                </View>
+                <Text style={styles.taskTitle} numberOfLines={1}>MSQ 仓库钥匙</Text>
+              </View>
+              {warehouseKeyExpanded ? (
+                <View style={[styles.statusPill, warehouseIsHeldByMe ? styles.statusBlue : String(warehouseKeyRow?.status || '') === 'available' ? styles.statusGreen : styles.statusAmber]}>
+                  <Text style={[styles.statusText, warehouseIsHeldByMe ? styles.statusTextBlue : String(warehouseKeyRow?.status || '') === 'available' ? styles.statusTextGreen : styles.statusTextAmber]}>
+                    {warehouseKeyLoading && !warehouseKeyRow ? '加载中' : warehouseStatus}
+                  </Text>
+                </View>
+              ) : (
+                <View style={[styles.statusPill, styles.statusGreen]}>
+                  <Text style={[styles.statusText, styles.statusTextGreen]}>已收起</Text>
+                </View>
+              )}
+              <Ionicons name={warehouseKeyExpanded ? 'chevron-up' : 'chevron-down'} size={moderateScale(16)} color="#047857" />
             </Pressable>
+            {warehouseKeyExpanded ? (
+              <>
+                <Text style={styles.summary} numberOfLines={2}>
+                  {warehouseHolderName
+                    ? `当前持有人：${warehouseHolderName}${warehouseIsHeldByMe ? '（我）' : ''}`
+                    : '当前没有记录持有人。'}
+                </Text>
+                {warehouseHolderName ? (
+                  <View style={styles.warehousePhoneRow}>
+                    <Ionicons name="call-outline" size={moderateScale(14)} color="#047857" />
+                    <Text style={styles.warehousePhoneText} numberOfLines={1}>
+                      {warehouseHolderPhone || '手机号未填写'}
+                    </Text>
+                    {warehouseHolderPhone ? (
+                      <Pressable
+                        onPress={callWarehouseKeyHolder}
+                        style={({ pressed }) => [styles.warehouseCallBtn, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={styles.warehouseCallText}>打电话</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ) : null}
+                {warehouseLatest ? (
+                  <Text style={styles.warehouseKeyMeta} numberOfLines={2}>
+                    最近：{warehouseKeyEventText(String(warehouseLatest.action || ''))}{warehouseLatestTime ? ` ${warehouseLatestTime}` : ''} · {String(warehouseLatest.actor_name || '').trim() || '未知'}{warehouseLatest.to_name ? ` → ${warehouseLatest.to_name}` : ''}
+                  </Text>
+                ) : null}
+                <View style={styles.actionsRow}>
+                  <Pressable
+                    disabled={warehouseKeyBusy || warehouseIsHeldByMe}
+                    onPress={() => submitWarehouseKeyEvent('borrow')}
+                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, warehouseKeyBusy || warehouseIsHeldByMe ? styles.actionBtnDisabled : null]}
+                  >
+                    <Text style={[styles.actionText, warehouseKeyBusy || warehouseIsHeldByMe ? { color: '#6B7280' } : null]}>{warehouseIsHeldByMe ? '已由我持有' : '借钥匙'}</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={warehouseKeyBusy || String(warehouseKeyRow?.status || '') === 'available'}
+                    onPress={() => submitWarehouseKeyEvent('return')}
+                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, warehouseKeyBusy || String(warehouseKeyRow?.status || '') === 'available' ? styles.actionBtnDisabled : null]}
+                  >
+                    <Text style={[styles.actionText, warehouseKeyBusy || String(warehouseKeyRow?.status || '') === 'available' ? { color: '#6B7280' } : null]}>还钥匙</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={warehouseKeyBusy || !warehouseKeyCandidates.length}
+                    onPress={() => setWarehouseTransferOpen(true)}
+                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, warehouseKeyBusy || !warehouseKeyCandidates.length ? styles.actionBtnDisabled : null]}
+                  >
+                    <Text style={[styles.actionText, warehouseKeyBusy || !warehouseKeyCandidates.length ? { color: '#6B7280' } : null]}>转交同事</Text>
+                  </Pressable>
+                </View>
+                <Pressable
+                  disabled={warehouseKeyLoading}
+                  onPress={loadWarehouseKey}
+                  style={({ pressed }) => [styles.warehouseRefresh, pressed ? styles.segmentPressed : null]}
+                >
+                  <Ionicons name="refresh-outline" size={moderateScale(14)} color="#047857" />
+                  <Text style={styles.warehouseRefreshText}>{warehouseKeyLoading ? '刷新中' : '刷新状态'}</Text>
+                </Pressable>
+              </>
+            ) : (
+              <Text style={styles.summary} numberOfLines={2}>
+                如需查看或操作 MSQ 仓库钥匙，请点击展开。
+              </Text>
+            )}
           </View>
         ) : null}
 
@@ -2348,7 +2393,13 @@ function showBanner(title: string, message: string) {
               const isLateCheckout = hasCheckout && isLateCheckoutTime(checkoutTime)
               const isEarlyCheckin = hasCheckin && isEarlyCheckinTime(checkinTime)
               const titleSuffix = hasCheckout || hasCheckin ? `${hasCheckout ? '退房' : ''}${hasCheckout && hasCheckin ? ' ' : ''}${hasCheckin ? '入住' : ''}` : ''
-              const title2 = `${code || task.title || '-'}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
+              const offlineTitleRaw = String(task.title || '').trim()
+              const offlineTitleSuffix = isOfflineTask && offlineTitleRaw && (!code || (!offlineTitleRaw.includes(code) && offlineTitleRaw !== code))
+                ? offlineTitleRaw
+                : ''
+              const title2 = isOfflineTask
+                ? [code || '', offlineTitleSuffix].filter(Boolean).join(' ').trim() || offlineTitleRaw || '-'
+                : `${code || task.title || '-'}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
               const keyRequirementTags = resolveKeyRequirementTags(task, { hasCheckout, hasCheckin, isCheckedOut })
               const checkoutSets = keyRequirementTags.checkoutSets
               const checkinSets = keyRequirementTags.checkinSets
@@ -2357,15 +2408,17 @@ function showBanner(title: string, message: string) {
               const selfInspectorOnlyUser = isInspectorOnlyRole(roleNames)
               const offlineDetail = (() => {
                 if (!isOfflineTask) return null
-                const t1 = String(task.title || '').trim()
-                if (t1 && (!code || t1 !== code) && t1 !== title2) return t1
                 const s1 = stripPhotoLines(task.summary)
                 if (s1) return s1
+                const t1 = String(task.title || '').trim()
+                if (t1 && (!code || t1 !== code) && t1 !== title2) return t1
                 if (!t1) return null
                 if (code && t1 === code) return null
                 if (t1 === title2) return null
                 return t1
               })()
+              const offlineAssigneeName = String((task as any).assignee_name || (task as any).cleaner_name || '').trim()
+                || (String(task.assignee_id || '').trim() ? String(task.assignee_id || '').trim() : '未分配')
               return (
                 <React.Fragment key={task.id}>
                   {shouldRenderDayEndBefore ? (
@@ -2653,6 +2706,30 @@ function showBanner(title: string, message: string) {
                         )
                       ) : null}
                     </>
+                  ) : isOfflineTask ? (
+                    <>
+                      <View style={styles.execCard}>
+                        <Text style={styles.execLabel}>执行人员</Text>
+                        <View style={styles.execPeople}>
+                          <View style={styles.execPerson}>
+                            <View style={styles.execBadgeClean}>
+                              <Text style={styles.execBadgeText}>执</Text>
+                            </View>
+                            <View style={styles.execPersonText}>
+                              <Text style={[styles.execPersonRole, styles.execPersonRoleClean]}>执行</Text>
+                              <Text style={styles.execPersonName} numberOfLines={1}>{offlineAssigneeName}</Text>
+                            </View>
+                          </View>
+                        </View>
+                        {sortIndex != null ? (
+                          <View style={styles.execOrderRow}>
+                            <Text style={styles.execOrder} numberOfLines={1}>
+                              {`执行顺序：${String(sortIndex)}`}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
+                    </>
                   ) : (
                     <>
                       {!isOfflineTask && addr ? (
@@ -2894,6 +2971,8 @@ const styles = StyleSheet.create({
   dayEndTaskCard: { backgroundColor: '#F8FBFF', borderColor: '#DCEAFE' },
   dayEndMsg: { marginTop: 4, color: '#4B5563', fontWeight: '700' },
   warehouseKeyCard: { marginTop: 10, backgroundColor: '#F0FDF4', borderRadius: 18, padding: 14, borderWidth: hairline(), borderColor: '#BBF7D0' },
+  warehouseKeyHeader: { minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  warehouseKeyHeaderMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 },
   warehouseKeyIcon: { width: 26, height: 26, borderRadius: 13, borderWidth: hairline(), borderColor: '#A7F3D0', backgroundColor: '#D1FAE5', alignItems: 'center', justifyContent: 'center' },
   warehousePhoneRow: { marginTop: 8, minHeight: 34, borderRadius: 12, backgroundColor: '#DCFCE7', paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
   warehousePhoneText: { flex: 1, minWidth: 0, color: '#065F46', fontSize: moderateScale(12), fontWeight: '900' },

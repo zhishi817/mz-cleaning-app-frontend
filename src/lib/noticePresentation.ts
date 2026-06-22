@@ -111,6 +111,10 @@ function resolveActorName(data: any) {
   return cleanText(data?.actor_name || data?.actor_user_name || data?.updated_by_name)
 }
 
+function resolveAssigneeName(data: any, relatedTask: any) {
+  return cleanText(data?.assignee_name || relatedTask?.assignee_name || relatedTask?.cleaner_name || data?.assignee_id || relatedTask?.assignee_id)
+}
+
 function resolveGuestSpecialRequest(data: any, relatedTask: any) {
   const hasDirectValue = Object.prototype.hasOwnProperty.call(data || {}, 'guest_special_request')
   return cleanText(hasDirectValue ? data?.guest_special_request : relatedTask?.guest_special_request)
@@ -276,11 +280,26 @@ export function getPresentedNotice(notice: Notice) {
     const targetName = cleanText((data as any).target_user_name)
     summary = [targetName, taskDate].filter(Boolean).join(' · ') || '请及时跟进'
   } else if (kind === 'work_task_updated') {
-    title = eventTitle(propertyCode, '任务已更新')
-    summary = cleanText((data as any).task_title) || cleanText(notice.summary) || '请查看最新任务内容'
+    const taskTitle = cleanText((data as any).task_title || relatedTask?.title)
+    const taskSummary = cleanText((data as any).task_summary || relatedTask?.summary)
+    const assigneeName = resolveAssigneeName(data, relatedTask)
+    title = eventTitle(propertyCode || taskTitle, '线下任务已更新')
+    summary = taskSummary || taskTitle || cleanText(notice.summary) || '请查看最新任务内容'
+    addDetail(contentLines, '任务日期', taskDate)
+    addDetail(contentLines, '执行人员', assigneeName || '未分配')
+    addDetail(contentLines, '任务标题', taskTitle)
+    addDetail(contentLines, '任务内容', taskSummary)
+    addDetail(contentLines, '状态', cleanText((data as any).status))
   } else if (kind === 'work_task_completed') {
-    title = eventTitle(propertyCode, '任务已完成')
-    summary = cleanText((data as any).task_title) || cleanText(notice.summary) || '任务已标记完成'
+    const taskTitle = cleanText((data as any).task_title || relatedTask?.title)
+    const taskSummary = cleanText((data as any).task_summary || relatedTask?.summary)
+    const assigneeName = resolveAssigneeName(data, relatedTask)
+    title = eventTitle(propertyCode || taskTitle, '线下任务已完成')
+    summary = taskSummary || taskTitle || cleanText(notice.summary) || '任务已标记完成'
+    addDetail(contentLines, '任务日期', taskDate)
+    addDetail(contentLines, '执行人员', assigneeName || '未分配')
+    addDetail(contentLines, '任务标题', taskTitle)
+    addDetail(contentLines, '任务内容', taskSummary)
   } else {
     if (propertyCode && !title.includes(propertyCode)) title = eventTitle(propertyCode, title.replace(/^[^：]+[:：]\s*/, ''))
     summary = summary || '请查看详情'

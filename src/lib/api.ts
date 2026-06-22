@@ -547,6 +547,7 @@ export type WorkTask = {
     show_checkin: boolean
   } | null
   checked_out_at?: string | null
+  assignee_name?: string | null
   cleaner_name?: string | null
   inspector_name?: string | null
   key_photo_url?: string | null

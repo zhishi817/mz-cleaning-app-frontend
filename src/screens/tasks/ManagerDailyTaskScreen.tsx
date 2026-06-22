@@ -609,14 +609,15 @@ export default function ManagerDailyTaskScreen(props: Props) {
 
   async function saveLuggage() {
     if (!token || !task || luggageSaving) return
-    if (!luggagePhotoUrls.length) return Alert.alert('请上传照片', '当天任务临时通知至少需要 1 张照片。')
+    const note = luggageNote.trim()
+    if (!note && !luggagePhotoUrls.length) return Alert.alert('请填写通知内容', '当天任务临时通知需要填写说明或上传照片。')
     const taskIds = cleaningTaskIdsFromTask(task)
     if (!taskIds.length) return Alert.alert('保存失败', '缺少清洁任务 ID')
     try {
       setLuggageSaving(true)
       const result = await saveGuestLuggageNotice(token, {
         task_ids: taskIds,
-        note: luggageNote.trim() || null,
+        note: note || null,
         photo_urls: luggagePhotoUrls.slice(0, 3),
       })
       await patchWorkTaskItem(task.id, { guest_luggage: result.guest_luggage } as any)
@@ -919,13 +920,13 @@ export default function ManagerDailyTaskScreen(props: Props) {
               </Pressable>
             </View>
           ) : null}
-          <Text style={styles.mutedSmall}>{`已选择 ${luggagePhotoUrls.length}/3 张，至少需要 1 张。`}</Text>
+          <Text style={styles.mutedSmall}>{`已选择 ${luggagePhotoUrls.length}/3 张，照片可选。`}</Text>
           {canEditLuggage ? (
             <View style={styles.luggageActions}>
               <Pressable
                 onPress={saveLuggage}
-                disabled={luggageSaving || luggageUploading || !luggagePhotoUrls.length}
-                style={({ pressed }) => [styles.primaryBtnFull, luggageSaving || luggageUploading || !luggagePhotoUrls.length ? styles.primaryBtnDisabled : null, pressed ? styles.pressed : null]}
+                disabled={luggageSaving || luggageUploading || (!luggageNote.trim() && !luggagePhotoUrls.length)}
+                style={({ pressed }) => [styles.primaryBtnFull, luggageSaving || luggageUploading || (!luggageNote.trim() && !luggagePhotoUrls.length) ? styles.primaryBtnDisabled : null, pressed ? styles.pressed : null]}
               >
                 <Text style={styles.primaryText}>{luggageSaving ? '保存中...' : '保存并通知'}</Text>
               </Pressable>

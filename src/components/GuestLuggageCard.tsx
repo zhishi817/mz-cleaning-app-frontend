@@ -48,6 +48,7 @@ export default function GuestLuggageCard(props: {
   const [acknowledging, setAcknowledging] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   if (!notice) return null
+  const photoUrls = (notice.photo_urls || []).slice(0, 3)
 
   const acknowledge = async () => {
     if (!props.token || acknowledging || notice.current_user_acknowledged) return
@@ -71,19 +72,21 @@ export default function GuestLuggageCard(props: {
           </View>
           <View style={styles.headerText}>
             <Text style={styles.title}>当天任务临时通知</Text>
-            <Text style={styles.subtitle}>请查看照片和说明，并按通知内容处理。</Text>
+            <Text style={styles.subtitle}>请查看说明或照片，并按通知内容处理。</Text>
           </View>
         </View>
 
         {notice.note ? <Text style={styles.note}>{notice.note}</Text> : null}
 
-        <View style={styles.photos}>
-          {(notice.photo_urls || []).slice(0, 3).map((url, index) => (
-            <Pressable key={`${url}-${index}`} onPress={() => setPreviewUrl(absoluteUrl(url))} style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}>
-              <Image source={{ uri: absoluteUrl(url) }} style={styles.photo} />
-            </Pressable>
-          ))}
-        </View>
+        {photoUrls.length ? (
+          <View style={styles.photos}>
+            {photoUrls.map((url, index) => (
+              <Pressable key={`${url}-${index}`} onPress={() => setPreviewUrl(absoluteUrl(url))} style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}>
+                <Image source={{ uri: absoluteUrl(url) }} style={styles.photo} />
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
 
         {props.showAcknowledge ? (
           notice.current_user_acknowledged ? (
