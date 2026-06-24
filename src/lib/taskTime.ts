@@ -26,6 +26,16 @@ export function isEarlyCheckinTime(value: any) {
   return mins != null && mins < 15 * 60
 }
 
+export function isLateCheckinTime(value: any) {
+  const mins = parseTaskTimeMinutes(value)
+  return mins != null && mins > 15 * 60
+}
+
+export function isLateCheckoutTime(value: any) {
+  const mins = parseTaskTimeMinutes(value)
+  return mins != null && mins > 10 * 60
+}
+
 export function canSkipInspectionPhotosForGuestArrival(value: any) {
   const mins = parseTaskTimeMinutes(value)
   return mins != null && mins >= 15 * 60

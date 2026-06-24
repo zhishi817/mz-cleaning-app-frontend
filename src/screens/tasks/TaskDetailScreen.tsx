@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
@@ -6,64 +6,29 @@ import * as Clipboard from 'expo-clipboard'
 import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
-import { effectiveInspectionMode, inspectionModeLabel, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
+import { cleaningTaskTitleSuffix, effectiveInspectionMode, inspectionModeLabel, inspectionScopeLabel, isPasswordOnlyInspectionTask, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
 import { useI18n } from '../../lib/i18n'
+import {
+  discardKeyUpload,
+  enqueueKeyUpload,
+  getKeyUploadQueueItem,
+  getKeyUploadVisibleError,
+  processKeyUploadQueue,
+  selectKeyPhotoEffectiveState,
+  subscribeKeyUploadQueue,
+  type KeyUploadQueueItem,
+} from '../../lib/keyUploadQueue'
 import { hairline, isCompactWidth, moderateScale } from '../../lib/scale'
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, refreshWorkTasksFromServer, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
-import { deleteKeyPhoto, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadMzappMedia } from '../../lib/api'
-import { enqueueKeyUpload } from '../../lib/keyUploadQueue'
+import { deleteKeyPhoto, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, uploadMzappMedia } from '../../lib/api'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { resolveKeyRequirementTags } from '../../lib/keyRequirementTags'
+import { isEarlyCheckinTime, isLateCheckinTime, isLateCheckoutTime } from '../../lib/taskTime'
+import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
-
-function statusLabel(status: string) {
-  const s = String(status || '').trim().toLowerCase()
-  if (s === 'done' || s === 'completed') return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-  if (s === 'to_inspect') return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-  if (s === 'to_hang_keys') return { text: '待挂钥匙', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-  if (s === 'to_complete') return { text: '待完成', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-  if (s === 'keys_hung') return { text: '已挂钥匙', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-  if (s === 'in_progress') return { text: '进行中', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
-  if (s === 'assigned') return { text: '已分配', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
-  if (s === 'cancelled' || s === 'canceled') return { text: '已取消', pill: styles.statusGray, textStyle: styles.statusTextGray }
-  return { text: '待处理', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-}
-
-function statusLabelForTask(task: WorkTaskItem, roleNames: string[]) {
-  const s = String(task.status || '').trim().toLowerCase()
-  const meta = statusLabel(s)
-  const source = String(task.source_type || '').trim().toLowerCase()
-  const kind = String(task.task_kind || '').trim().toLowerCase()
-  if (source === 'cleaning_tasks' && kind === 'inspection' && (s === 'cleaned' || s === 'restock_pending' || s === 'restocked')) {
-    return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-  }
-  if (source === 'cleaning_tasks' && kind === 'cleaning') {
-    const isCleanerView = isCleanerRole(roleNames)
-    const inspectionStatus = String((task as any).inspection_status || '').trim().toLowerCase()
-    const hasInspection = Array.isArray((task as any).inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
-    const inspectionMode = effectiveInspectionMode(task as any)
-    if (isCleaningWorkSubmitted(s)) {
-      if (isCleanerView) return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-      if (inspectionMode === 'same_day' || inspectionMode === 'deferred' || hasInspection || inspectionStatus) {
-        if (inspectionStatus === 'keys_hung' || inspectionStatus === 'done' || inspectionStatus === 'completed') {
-          return { text: '已挂钥匙', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-        }
-        return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-      }
-      return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-    }
-    const checkedOutAt = String((task as any).checked_out_at || '').trim()
-    if (s === 'in_progress' || s === 'cleaning') return { text: '进行中', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
-    if (s !== 'cancelled' && s !== 'canceled') {
-      if (checkedOutAt) return { text: '已退房', pill: styles.statusPurple, textStyle: styles.statusTextPurple }
-      return { text: '已分配', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
-    }
-  }
-  return meta
-}
 
 function taskKindLabel(kind: string) {
   const s = String(kind || '').trim().toLowerCase()
@@ -74,6 +39,23 @@ function taskKindLabel(kind: string) {
   if (s === 'offline') return '线下'
   if (s) return s
   return '任务'
+}
+
+function taskTagStylePair(tone: TaskTone) {
+  if (tone === 'special') return { container: styles.tagSpecial, text: styles.tagSpecialText }
+  if (tone === 'pending') return { container: styles.tagPending, text: styles.tagPendingText }
+  if (tone === 'danger') return { container: styles.tagDanger, text: styles.tagDangerText }
+  if (tone === 'success') return { container: styles.tagSuccess, text: styles.tagSuccessText }
+  if (tone === 'info') return { container: styles.tagInfo, text: styles.tagInfoText }
+  return { container: styles.tagNormal, text: styles.tagNormalText }
+}
+
+function statusPillStylePair(tone: TaskTone) {
+  if (tone === 'special') return { pill: styles.statusPurple, text: styles.statusTextPurple }
+  if (tone === 'pending') return { pill: styles.statusAmber, text: styles.statusTextAmber }
+  if (tone === 'success') return { pill: styles.statusGreen, text: styles.statusTextGreen }
+  if (tone === 'neutral') return { pill: styles.statusGray, text: styles.statusTextGray }
+  return { pill: styles.statusBlue, text: styles.statusTextBlue }
 }
 
 function extractFirstUrl(text: any) {
@@ -137,10 +119,6 @@ function roleNamesOf(user: any) {
   return Array.from(new Set(ids))
 }
 
-function isCleanerRole(roleNames: string[]) {
-  return roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector')
-}
-
 function ymd(d: Date) {
   const pad2 = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
@@ -178,39 +156,6 @@ function checkoutTaskIdsFromTask(task: WorkTaskItem | null) {
   )
 }
 
-function parseTimeMinutes(value: any) {
-  const raw = String(value || '').trim().toLowerCase()
-  if (!raw) return null
-  const s = raw.replace(/\s+/g, '')
-  const m12 = s.match(/^(\d{1,2})(?::(\d{1,2}))?(am|pm)$/)
-  if (m12) {
-    let hour = Number(m12[1] || 0)
-    const minute = Number(m12[2] || 0)
-    if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute < 0 || minute > 59) return null
-    hour = hour % 12
-    if (m12[3] === 'pm') hour += 12
-    return hour * 60 + minute
-  }
-  const m24 = s.match(/^(\d{1,2})(?::(\d{1,2}))?$/)
-  if (m24) {
-    const hour = Number(m24[1] || 0)
-    const minute = Number(m24[2] || 0)
-    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null
-    return hour * 60 + minute
-  }
-  return null
-}
-
-function isEarlyCheckinTime(value: any) {
-  const mins = parseTimeMinutes(value)
-  return mins != null && mins < 15 * 60
-}
-
-function isLateCheckoutTime(value: any) {
-  const mins = parseTimeMinutes(value)
-  return mins != null && mins > 10 * 60
-}
-
 export default function TaskDetailScreen(props: Props) {
   const { t } = useI18n()
   const { user, token } = useAuth()
@@ -228,7 +173,7 @@ export default function TaskDetailScreen(props: Props) {
   const [markNote, setMarkNote] = useState('')
   const [deferReason, setDeferReason] = useState('')
   const [showUnfinished, setShowUnfinished] = useState(false)
-  const [localKeyPhotoUrl, setLocalKeyPhotoUrl] = useState<string | null>(null)
+  const [keyQueueItem, setKeyQueueItem] = useState<KeyUploadQueueItem | null>(null)
   const [keyUploading, setKeyUploading] = useState(false)
   const [keyDeleting, setKeyDeleting] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
@@ -249,6 +194,15 @@ export default function TaskDetailScreen(props: Props) {
   const previewSize = useMemo(() => ({ width, height }), [height, width])
   const isCompactLayout = isCompactWidth(width)
   const guestLuggage = (task as any)?.guest_luggage || null
+  const cleaningTaskId = String((task as any)?.source_id || '').trim()
+
+  const reloadKeyQueueItem = useCallback(async () => {
+    if (!cleaningTaskId) {
+      setKeyQueueItem(null)
+      return
+    }
+    setKeyQueueItem(await getKeyUploadQueueItem(cleaningTaskId))
+  }, [cleaningTaskId])
 
   useEffect(() => {
     if (!task) return
@@ -278,6 +232,14 @@ export default function TaskDetailScreen(props: Props) {
     }
   }, [canManagerView, hasInit, id, task, token, user?.id])
 
+  useEffect(() => {
+    void reloadKeyQueueItem()
+    const unsubscribe = subscribeKeyUploadQueue(() => {
+      void reloadKeyQueueItem()
+    })
+    return unsubscribe
+  }, [reloadKeyQueueItem])
+
   async function onUploadKey() {
     if (!task) return
     if (!token) {
@@ -291,56 +253,37 @@ export default function TaskDetailScreen(props: Props) {
     if (keyUploading) return
     setKeyUploading(true)
     try {
-      const perm = await ImagePicker.requestCameraPermissionsAsync()
-      if (!perm.granted) {
-        Alert.alert('需要相机权限', '请在系统设置中允许相机权限后再拍照', [
-          { text: '取消', style: 'cancel' },
-          { text: '去设置', onPress: () => Linking.openSettings() },
-        ])
+      try {
+        const perm = await ImagePicker.requestCameraPermissionsAsync()
+        if (!perm.granted) {
+          Alert.alert('需要相机权限', '请在系统设置中允许相机权限后再拍照', [
+            { text: '取消', style: 'cancel' },
+            { text: '去设置', onPress: () => Linking.openSettings() },
+          ])
+          return
+        }
+      } catch {}
+
+      let res: ImagePicker.ImagePickerResult
+      try {
+        res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+      } catch {
+        Alert.alert(t('common_error'), '无法打开相机（模拟器不支持相机拍照，请用真机测试）')
         return
       }
-    } catch {}
+      if (res.canceled || !res.assets?.length) return
+      const a = res.assets[0] as any
+      const uri = String(a.uri || '').trim()
+      if (!uri) return
 
-    let res: ImagePicker.ImagePickerResult
-    try {
-      res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
-    } catch (e: any) {
-      Alert.alert(t('common_error'), '无法打开相机（模拟器不支持相机拍照，请用真机测试）')
-      return
-    }
-    if (res.canceled || !res.assets?.length) return
-    const a = res.assets[0] as any
-    const uri = String(a.uri || '').trim()
-    if (!uri) return
+      const propertyCode = String((task as any)?.property?.code || '').trim()
+      const now = new Date()
+      const pad2 = (n: number) => String(n).padStart(2, '0')
+      const watermarkTime = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`
+      const username = String((user as any)?.username || '').trim()
+      const watermarkText = `${propertyCode || '未知房号'}  ${username || '未知用户'}\n${watermarkTime}`
+      const capturedAt = now.toISOString()
 
-    const propertyCode = String((task as any)?.property?.code || '').trim()
-    const now = new Date()
-    const pad2 = (n: number) => String(n).padStart(2, '0')
-    const watermarkTime = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`
-    const username = String((user as any)?.username || '').trim()
-    const watermarkText = `${propertyCode || '未知房号'}  ${username || '未知用户'}\n${watermarkTime}`
-    const capturedAt = now.toISOString()
-
-    try {
-      const name = String(a.fileName || uri.split('/').pop() || `key-${Date.now()}.jpg`)
-      const mimeType = String(a.mimeType || 'image/jpeg')
-      const up = await uploadCleaningMedia(
-        token,
-        { uri, name, mimeType },
-        { purpose: 'key_photo', watermark: '1', watermark_text: watermarkText, property_code: propertyCode, captured_at: capturedAt },
-      )
-      await startCleaningTask(token, String(task.source_id), { media_url: up.url, captured_at: capturedAt })
-      await patchWorkTaskItem(String(task.id), { status: 'in_progress', key_photo_url: up.url } as any)
-      setLocalKeyPhotoUrl(up.url)
-      Alert.alert(t('common_ok'), '钥匙上传成功')
-    } catch (e: any) {
-      const msg = String(e?.message || '上传失败')
-      const m = msg.toLowerCase()
-      const canQueue = m.includes('network request failed') || m.includes('timeout') || m.includes('aborted')
-      if (!canQueue) {
-        Alert.alert(t('common_error'), msg)
-        return
-      }
       try {
         await enqueueKeyUpload({
           cleaning_task_id: String(task.source_id),
@@ -348,20 +291,24 @@ export default function TaskDetailScreen(props: Props) {
           property_code: propertyCode,
           captured_at: capturedAt,
           watermark_text: watermarkText,
+          file_name: String(a.fileName || uri.split('/').pop() || `key-${Date.now()}.jpg`),
+          mime_type: String(a.mimeType || 'image/jpeg'),
         })
-        Alert.alert(t('common_ok'), '已离线保存，网络恢复后自动上传')
-      } catch (e2: any) {
-        Alert.alert(t('common_error'), String(e2?.message || msg))
+        await reloadKeyQueueItem()
+        void processKeyUploadQueue(token)
+        Alert.alert(t('common_ok'), '钥匙照片已暂存，正在同步。')
+      } catch (e: any) {
+        Alert.alert(t('common_error'), String(e?.message || '保存失败'))
       }
-    }
-    finally {
+    } finally {
       setKeyUploading(false)
     }
   }
 
   async function onDeleteKey() {
     if (!task) return
-    if (!token) {
+    const remoteUrl = String((task as any).key_photo_url || '').trim()
+    if (!token && remoteUrl) {
       Alert.alert(t('common_error'), '请先登录')
       return
     }
@@ -369,9 +316,12 @@ export default function TaskDetailScreen(props: Props) {
     if (keyDeleting) return
     setKeyDeleting(true)
     try {
-      await deleteKeyPhoto(token, String(task.source_id))
-      setLocalKeyPhotoUrl(null)
-      Alert.alert(t('common_ok'), '已删除钥匙照片')
+      if (remoteUrl) {
+        await deleteKeyPhoto(token as string, String(task.source_id))
+      }
+      await discardKeyUpload(String(task.source_id), { deleteLocalFile: true })
+      await reloadKeyQueueItem()
+      Alert.alert(t('common_ok'), remoteUrl ? '已删除钥匙照片' : '已删除待同步钥匙照片')
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '删除失败'))
     } finally {
@@ -462,7 +412,7 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_error'), '请先登录')
       return
     }
-    if (!effectiveMarkPhotoUrls.length) {
+    if (requiresMarkPhotos && !effectiveMarkPhotoUrls.length) {
       Alert.alert(t('common_error'), '请先拍照上传')
       return
     }
@@ -491,7 +441,7 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_error'), '请先登录')
       return
     }
-    if (!effectiveMarkPhotoUrls.length) {
+    if (requiresMarkPhotos && !effectiveMarkPhotoUrls.length) {
       Alert.alert(t('common_error'), '请先拍照上传')
       return
     }
@@ -547,7 +497,8 @@ export default function TaskDetailScreen(props: Props) {
     )
   }
 
-  const meta = statusLabelForTask(task, roleNames)
+  const meta = getTaskStatusMeta(task, roleNames)
+  const metaStyles = statusPillStylePair(meta.tone)
   const kind = taskKindLabel(task.task_kind)
   const region = String(task.property?.region || '').trim()
   const code = String(task.property?.code || '').trim()
@@ -566,14 +517,26 @@ export default function TaskDetailScreen(props: Props) {
   const isCleaningOrInspection = isCleaningSource && (String(task.task_kind || '').toLowerCase() === 'cleaning' || String(task.task_kind || '').toLowerCase() === 'inspection')
   const wifiSsid = String((task as any)?.property?.wifi_ssid || '').trim()
   const wifiPassword = String((task as any)?.property?.wifi_password || '').trim()
-  const routerLocation = String((task as any)?.property?.router_location || '').trim()
   const hasCheckout = !!checkoutTime
   const hasCheckin = !!checkinTime
   const isLateCheckout = hasCheckout && isLateCheckoutTime(checkoutTime)
   const isEarlyCheckin = hasCheckin && isEarlyCheckinTime(checkinTime)
-  const titleSuffix = hasCheckout || hasCheckin ? `${hasCheckout ? '退房' : ''}${hasCheckout && hasCheckin ? ' ' : ''}${hasCheckin ? '入住' : ''}` : ''
+  const isLateCheckin = hasCheckin && isLateCheckinTime(checkinTime)
+  const titleSuffix = cleaningTaskTitleSuffix(task as any)
   const title2 = `${title}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
-  const keyPhotoUrl = String(localKeyPhotoUrl || (task as any).key_photo_url || '').trim() || null
+  const remoteKeyPhotoUrl = String((task as any).key_photo_url || '').trim() || null
+  const pendingKeyPhotoUrl = String(keyQueueItem?.local_uri || keyQueueItem?.uploaded_url || '').trim() || null
+  const keyPhotoEffectiveState = selectKeyPhotoEffectiveState({
+    key_photo_url: remoteKeyPhotoUrl,
+    has_local_pending: !!keyQueueItem,
+  })
+  const keyPhotoUrl = remoteKeyPhotoUrl || pendingKeyPhotoUrl
+  const keyPhotoStatusText = keyPhotoEffectiveState === 'recorded'
+    ? '钥匙已正式记录'
+    : keyPhotoEffectiveState === 'pending_sync'
+      ? '钥匙照片待同步'
+      : '未上传钥匙照片'
+  const keyPhotoVisibleError = getKeyUploadVisibleError(keyQueueItem?.last_error)
   const lockboxVideoUrl = String((task as any).lockbox_video_url || '').trim() || null
   const taskNote = String((task as any).note || '').trim()
   const checkedOutAt = String((task as any).checked_out_at || '').trim()
@@ -585,18 +548,41 @@ export default function TaskDetailScreen(props: Props) {
   const checkinSets = keyRequirementTags.checkinSets
   const showCheckout = isCleaningSource && keyRequirementTags.showCheckout
   const showCheckin = isCleaningSource && keyRequirementTags.showCheckin
-  const restockItems = Array.isArray((task as any).restock_items) ? ((task as any).restock_items as any[]) : []
   const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
   const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
   const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
   const inspectionMode = effectiveInspectionMode(task as any)
   const inspectionPlanLabel = inspectionModeLabel(inspectionMode, String((task as any).inspection_due_date || '').trim() || null)
+  const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
+  const showInspectionScope = isInspectionTask && taskType === 'checkin_clean'
+  const inspectionScopeText = showInspectionScope ? inspectionScopeLabel((task as any).inspection_scope) : ''
+  const stayoverTagStyles = taskTagStylePair('normal')
+  const kindTagStyles = taskTagStylePair(getTaskKindTone(task.task_kind))
+  const checkoutTagStyles = taskTagStylePair('danger')
+  const checkinTagStyles = taskTagStylePair('pending')
+  const lateCheckoutTagStyles = taskTagStylePair('danger')
+  const earlyCheckinTagStyles = taskTagStylePair('info')
+  const inspectionPlanTagStyles = taskTagStylePair(getInspectionModeTone(inspectionMode))
+  const inspectionScopeTagStyles = taskTagStylePair(getInspectionScopeTone(isPasswordOnlyInspection))
   const isSelfCompleteEligible = isCleaningTask && isSelfCompleteMode(task as any) && (isCheckoutTask || isStayoverTask)
   const isDirectCompleteEligible = isCleaningTask && (isSelfCompleteEligible || isStayoverTask)
   const isPendingInspectionDecision = isCleaningTask && !isStayoverTask && inspectionMode === 'pending_decision'
+  const showInspectionPlanTag = (isCleaningTask || isInspectionTask) && !isStayoverTask && !isPasswordOnlyInspection
   const isCustomerService = roleNames.includes('customer_service')
-  const canDeleteKeyPhoto = (roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector')) && isCleaningTask
+  const canDeleteKeyPhoto = (roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector')) && isCleaningTask && !!keyPhotoUrl
   const isCleaningSubmitted = isCleaningTask && isCleaningWorkSubmitted(task.status)
+  const restockItems = Array.isArray((task as any)?.restock_items) ? ((task as any).restock_items as any[]) : []
+  const restockSummary = restockItems
+    .map((item) => {
+      const label = String(item?.label || item?.item_id || '').trim()
+      if (!label) return null
+      const qty = item?.qty == null ? null : Number(item.qty)
+      const suffix = Number.isFinite(qty as any) && qty ? ` x${qty}` : ''
+      return String(item?.status || '').trim() === 'carry_forward'
+        ? `${label}${suffix}（上次检查要求下次退房补）`
+        : `${label}${suffix}`
+    })
+    .filter(Boolean) as string[]
   const detailText = (() => {
     if (isCleaningSource) return null
     if (isOfflineTask) return null
@@ -608,6 +594,7 @@ export default function TaskDetailScreen(props: Props) {
     return s === 'done' || s === 'completed'
   })()
   const effectiveMarkPhotoUrls = markPhotoUrls
+  const requiresMarkPhotos = !isOfflineTask
   const offlineDetail = (() => {
     if (!isOfflineTask) return null
     const code2 = String(task.property?.code || '').trim()
@@ -620,8 +607,6 @@ export default function TaskDetailScreen(props: Props) {
     if (t1 === title2) return null
     return t1
   })()
-  const effectiveLockboxUrl = lockboxVideoUrl
-
   return (
     <>
     <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, moderateScale(20)) + moderateScale(12) }]} showsVerticalScrollIndicator={false}>
@@ -636,44 +621,56 @@ export default function TaskDetailScreen(props: Props) {
       <View style={styles.card}>
         <View style={[styles.titleRow, isCompactLayout ? styles.titleRowCompact : null]}>
           <Text style={styles.title}>{title2}</Text>
-          <View style={[styles.statusPill, meta.pill]}>
-            <Text style={[styles.statusText, meta.textStyle]}>{meta.text}</Text>
+          <View style={[styles.statusPill, metaStyles.pill]}>
+            <Text style={[styles.statusText, metaStyles.text]}>{meta.text}</Text>
           </View>
         </View>
 
         <View style={styles.tagsRow}>
           {isStayoverTask ? (
-            <View style={styles.tag}>
-              <Text style={styles.tagText}>入住中清洁</Text>
+            <View style={stayoverTagStyles.container}>
+              <Text style={stayoverTagStyles.text}>入住中清洁</Text>
             </View>
           ) : (
             <>
-              <View style={styles.tag}>
-                <Text style={styles.tagText}>{kind}</Text>
+              <View style={kindTagStyles.container}>
+                <Text style={kindTagStyles.text}>{kind}</Text>
               </View>
               {showCheckout ? (
-                <View style={styles.tagKey}>
-                  <Text style={styles.tagKeyText}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
+                <View style={checkoutTagStyles.container}>
+                  <Text style={checkoutTagStyles.text}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
                 </View>
               ) : null}
               {showCheckin ? (
-                <View style={styles.tagWarn}>
-                  <Text style={styles.tagWarnText}>{`需挂${checkinSets}套钥匙`}</Text>
+                <View style={checkinTagStyles.container}>
+                  <Text style={checkinTagStyles.text}>{`需挂${checkinSets}套钥匙`}</Text>
                 </View>
               ) : null}
               {isLateCheckout ? (
-                <View style={styles.tagLate}>
-                  <Text style={styles.tagLateText}>晚退房</Text>
+                <View style={lateCheckoutTagStyles.container}>
+                  <Text style={lateCheckoutTagStyles.text}>晚退房</Text>
                 </View>
               ) : null}
               {isEarlyCheckin ? (
-                <View style={styles.tagEarly}>
-                  <Text style={styles.tagEarlyText}>早入住</Text>
+                <View style={earlyCheckinTagStyles.container}>
+                  <Text style={earlyCheckinTagStyles.text}>早入住</Text>
                 </View>
               ) : null}
-              <View style={inspectionMode === 'pending_decision' ? styles.tagWarn : styles.tag}>
-                <Text style={inspectionMode === 'pending_decision' ? styles.tagWarnText : styles.tagText}>{inspectionPlanLabel}</Text>
-              </View>
+              {isLateCheckin ? (
+                <View style={earlyCheckinTagStyles.container}>
+                  <Text style={earlyCheckinTagStyles.text}>晚入住</Text>
+                </View>
+              ) : null}
+              {showInspectionPlanTag ? (
+                <View style={inspectionPlanTagStyles.container}>
+                  <Text style={inspectionPlanTagStyles.text}>{inspectionPlanLabel}</Text>
+                </View>
+              ) : null}
+              {showInspectionScope ? (
+                <View style={inspectionScopeTagStyles.container}>
+                  <Text style={inspectionScopeTagStyles.text}>{inspectionScopeText}</Text>
+                </View>
+              ) : null}
               {urgency ? (
                 <View style={[styles.urgencyPill, urgency.pill]}>
                   <Text style={[styles.urgencyText, urgency.textStyle]}>{urgency.text}</Text>
@@ -760,10 +757,31 @@ export default function TaskDetailScreen(props: Props) {
           </View>
         ) : null}
 
+        {showInspectionScope ? (
+          <View style={styles.row}>
+            <Ionicons name={isPasswordOnlyInspection ? 'flash-outline' : 'checkmark-done-outline'} size={moderateScale(14)} color={TASK_TONE_COLORS[getInspectionScopeTone(isPasswordOnlyInspection)].text} />
+            <View style={[styles.inlineTonePill, inspectionScopeTagStyles.container]}>
+              <Text style={[styles.inlineTonePillText, inspectionScopeTagStyles.text]}>{`检查执行方式：${inspectionScopeText}`}</Text>
+            </View>
+          </View>
+        ) : null}
+
         {taskNote ? (
           <View style={styles.row}>
             <Ionicons name="document-text-outline" size={moderateScale(14)} color="#9CA3AF" />
             <Text style={styles.rowText}>{`备注：${taskNote}`}</Text>
+          </View>
+        ) : null}
+
+        {restockSummary.length ? (
+          <View style={styles.restockWrap}>
+            <Text style={styles.sectionTitle}>待补消耗品</Text>
+            {restockSummary.map((item, index) => (
+              <View key={`${item}-${index}`} style={styles.restockItem}>
+                <Text style={styles.restockTitle}>{item}</Text>
+                <Text style={styles.restockNote}>进入补品填报或检查与补充时，请优先处理这一项。</Text>
+              </View>
+            ))}
           </View>
         ) : null}
 
@@ -803,12 +821,14 @@ export default function TaskDetailScreen(props: Props) {
           <>
             <View style={styles.line} />
             <Text style={styles.sectionTitle}>钥匙照片</Text>
+            <Text style={styles.summary}>{keyPhotoStatusText}</Text>
             <Pressable
               onPress={() => setPreviewUrl(keyPhotoUrl)}
               style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
             >
               <Image source={{ uri: keyPhotoUrl }} style={styles.photo} resizeMode="contain" />
             </Pressable>
+            {keyPhotoVisibleError ? <Text style={styles.summary}>{keyPhotoVisibleError}</Text> : null}
             {canDeleteKeyPhoto ? (
               <Pressable
                 onPress={() =>
@@ -874,10 +894,18 @@ export default function TaskDetailScreen(props: Props) {
                 {!isStayoverTask ? (
                   <Pressable
                     onPress={onUploadKey}
-                    disabled={keyUploading || isCleaningSubmitted || !!keyPhotoUrl}
-                    style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, (keyUploading || !!keyPhotoUrl) ? styles.actionBtnDisabled : null]}
+                    disabled={keyUploading || isCleaningSubmitted || keyPhotoEffectiveState !== 'missing'}
+                    style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, (keyUploading || keyPhotoEffectiveState !== 'missing') ? styles.actionBtnDisabled : null]}
                   >
-                    <Text style={styles.actionText}>{keyUploading ? t('common_loading') : (isCleaningSubmitted || !!keyPhotoUrl ? '钥匙记录' : t('tasks_btn_upload_key'))}</Text>
+                    <Text style={styles.actionText}>
+                      {keyUploading
+                        ? t('common_loading')
+                        : keyPhotoEffectiveState === 'recorded'
+                          ? '钥匙已记录'
+                          : keyPhotoEffectiveState === 'pending_sync'
+                            ? '钥匙待同步'
+                            : (isCleaningSubmitted ? '钥匙记录' : t('tasks_btn_upload_key'))}
+                    </Text>
                   </Pressable>
                 ) : null}
                 <Pressable
@@ -914,7 +942,9 @@ export default function TaskDetailScreen(props: Props) {
             ) : null}
             <Text style={styles.sectionTitle}>任务处理</Text>
             <Text style={styles.mutedSmall} numberOfLines={2}>
-              {effectiveMarkPhotoUrls.length ? `已上传 ${effectiveMarkPhotoUrls.length} 张照片，可继续追加或删除` : '未上传照片（需要拍照/相册上传后才能提交）'}
+              {effectiveMarkPhotoUrls.length
+                ? `已上传 ${effectiveMarkPhotoUrls.length} 张照片，可继续追加或删除`
+                : (requiresMarkPhotos ? '未上传照片（需要拍照/相册上传后才能提交）' : '照片可选，可直接提交，也可补充拍照留档')}
             </Text>
             <View style={[styles.markUploadRow, isCompactLayout ? styles.actionsRowCompact : null]}>
               <Pressable onPress={() => onAppendPhotosForMarking('camera')} disabled={marking} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}>
@@ -1031,19 +1061,29 @@ const styles = StyleSheet.create({
   title: { flex: 1, minWidth: 0, flexShrink: 1, fontSize: moderateScale(18), lineHeight: moderateScale(23), fontWeight: '900', color: '#111827' },
   statusPill: { minHeight: 26, paddingHorizontal: 10, paddingVertical: 3, borderRadius: 13, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   statusText: { fontSize: 12, fontWeight: '900', textAlign: 'center' },
-  statusBlue: { backgroundColor: '#DBEAFE' },
-  statusAmber: { backgroundColor: '#FEF3C7' },
-  statusGreen: { backgroundColor: '#DCFCE7' },
-  statusPurple: { backgroundColor: '#EDE9FE' },
-  statusGray: { backgroundColor: '#F3F4F6' },
-  statusTextBlue: { color: '#2563EB' },
-  statusTextAmber: { color: '#B45309' },
-  statusTextGreen: { color: '#16A34A' },
-  statusTextPurple: { color: '#7C3AED' },
-  statusTextGray: { color: '#6B7280' },
+  statusBlue: { backgroundColor: TASK_TONE_COLORS.normal.bg },
+  statusAmber: { backgroundColor: TASK_TONE_COLORS.pending.bg },
+  statusGreen: { backgroundColor: TASK_TONE_COLORS.success.bg },
+  statusPurple: { backgroundColor: TASK_TONE_COLORS.special.bg },
+  statusGray: { backgroundColor: TASK_TONE_COLORS.neutral.bg },
+  statusTextBlue: { color: TASK_TONE_COLORS.normal.text },
+  statusTextAmber: { color: TASK_TONE_COLORS.pending.text },
+  statusTextGreen: { color: TASK_TONE_COLORS.success.text },
+  statusTextPurple: { color: TASK_TONE_COLORS.special.text },
+  statusTextGray: { color: TASK_TONE_COLORS.neutral.text },
   tagsRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  tag: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
-  tagText: { fontSize: 11, fontWeight: '900', color: '#2563EB' },
+  tagNormal: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.normal.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.normal.border, alignItems: 'center', justifyContent: 'center' },
+  tagNormalText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.normal.text },
+  tagSpecial: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.special.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.special.border, alignItems: 'center', justifyContent: 'center' },
+  tagSpecialText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.special.text },
+  tagPending: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.pending.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.pending.border, alignItems: 'center', justifyContent: 'center' },
+  tagPendingText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.pending.text },
+  tagDanger: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.danger.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.danger.border, alignItems: 'center', justifyContent: 'center' },
+  tagDangerText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.danger.text },
+  tagSuccess: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.success.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.success.border, alignItems: 'center', justifyContent: 'center' },
+  tagSuccessText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.success.text },
+  tagInfo: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.info.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.info.border, alignItems: 'center', justifyContent: 'center' },
+  tagInfoText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.info.text },
   urgencyPill: { paddingHorizontal: 10, height: 24, borderRadius: 12, borderWidth: hairline(), alignItems: 'center', justifyContent: 'center' },
   urgencyText: { fontSize: 11, fontWeight: '900' },
   urgencyUrgent: { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5' },
@@ -1056,15 +1096,9 @@ const styles = StyleSheet.create({
   urgencyLowText: { color: '#4B5563' },
   tagGray: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   tagGrayText: { fontSize: 11, fontWeight: '800', color: '#6B7280' },
-  tagKey: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
-  tagKeyText: { fontSize: 11, fontWeight: '900', color: '#B91C1C' },
-  tagWarn: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FFFBEB', borderWidth: hairline(), borderColor: '#FDE68A', alignItems: 'center', justifyContent: 'center' },
-  tagWarnText: { fontSize: 11, fontWeight: '900', color: '#B45309' },
-  tagLate: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FEE2E2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
-  tagLateText: { fontSize: 11, fontWeight: '900', color: '#B91C1C' },
-  tagEarly: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#DBEAFE', borderWidth: hairline(), borderColor: '#93C5FD', alignItems: 'center', justifyContent: 'center' },
-  tagEarlyText: { fontSize: 11, fontWeight: '900', color: '#1D4ED8' },
   row: { marginTop: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  inlineTonePill: { minHeight: 28, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 14, borderWidth: hairline(), alignItems: 'center', justifyContent: 'center' },
+  inlineTonePillText: { fontSize: moderateScale(13), fontWeight: '800' },
   rowText: { flex: 1, minWidth: 0, flexShrink: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600', lineHeight: moderateScale(19) },
   actionsRow: { marginTop: 14, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   actionsRowCompact: { flexDirection: 'column' },

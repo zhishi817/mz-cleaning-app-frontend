@@ -7,6 +7,13 @@ import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
+import {
+  getInspectionPanelFeedbackDraft,
+  setInspectionPanelFeedbackDraft,
+  type InspectionPanelFeedbackPhotoMetaMap,
+} from '../../lib/inspectionPanelFeedbackDraft'
+import { draftMimeTypeFrom, persistDraftMedia } from '../../lib/localMediaDrafts'
+import { compressImageForUpload } from '../../lib/imageCompression'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getJson, remove as removeStorage, setJson } from '../../lib/storage'
 import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
@@ -512,6 +519,7 @@ export default function FeedbackFormScreen(props: Props) {
   const propertyId = String(task?.property_id || task?.property?.id || '').trim()
   const propertyCode = String(task?.property?.code || '').trim()
   const taskId = String(task?.id || props.route.params.taskId || '').trim()
+  const isInspectionPanelBatchMode = props.route.params.source === 'inspection_panel_batch'
   const userKey = String((user as any)?.id || (user as any)?.username || (user as any)?.email || '').trim()
   const draftCacheKey = useMemo(() => feedbackDraftCacheKey(propertyId, propertyCode, taskId, userKey), [propertyId, propertyCode, taskId, userKey])
   const historyCacheRef = useRef<FeedbackHistoryCache | null>(null)
@@ -519,6 +527,7 @@ export default function FeedbackFormScreen(props: Props) {
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedDraftRef = useRef('')
   const [draftCacheHydrated, setDraftCacheHydrated] = useState(false)
+  const [panelPhotoMeta, setPanelPhotoMeta] = useState<InspectionPanelFeedbackPhotoMetaMap>({})
 
   const persistFeedbackDraftSnapshot = useCallback(async (snapshot?: {
     kind?: Kind
@@ -537,25 +546,49 @@ export default function FeedbackFormScreen(props: Props) {
 
     if (!hasContent) {
       lastSavedDraftRef.current = ''
-      await removeStorage(draftCacheKey).catch(() => null)
+      if (isInspectionPanelBatchMode) {
+        await setInspectionPanelFeedbackDraft(taskId, {
+          kind: nextKind,
+          maintenanceDrafts: [],
+          deepCleaningDrafts: [],
+          dailyDrafts: [],
+          photo_meta: {},
+        }).catch(() => null)
+      } else {
+        await removeStorage(draftCacheKey).catch(() => null)
+      }
       return
     }
 
-    const payload: FeedbackFormDraftCache = {
-      version: FEEDBACK_DRAFT_CACHE_VERSION,
-      kind: nextKind,
-      maintenanceDrafts: nextMaintenance,
-      deepCleaningDrafts: nextDeepCleaning,
-      dailyDrafts: nextDaily,
-      updated_at: Date.now(),
-    }
+    const payload = isInspectionPanelBatchMode
+      ? {
+          kind: nextKind,
+          maintenanceDrafts: nextMaintenance.map((draft) => ({ ...draft, client_item_id: draft.clientId })),
+          deepCleaningDrafts: nextDeepCleaning.map((draft) => ({ ...draft, client_item_id: draft.clientId })),
+          dailyDrafts: nextDaily.map((draft) => ({ ...draft, client_item_id: draft.clientId })),
+          photo_meta: panelPhotoMeta,
+        }
+      : {
+          version: FEEDBACK_DRAFT_CACHE_VERSION,
+          kind: nextKind,
+          maintenanceDrafts: nextMaintenance,
+          deepCleaningDrafts: nextDeepCleaning,
+          dailyDrafts: nextDaily,
+          updated_at: Date.now(),
+        }
     const serialized = JSON.stringify(payload)
     if (serialized === lastSavedDraftRef.current) return
     lastSavedDraftRef.current = serialized
+    if (isInspectionPanelBatchMode) {
+      await setInspectionPanelFeedbackDraft(taskId, payload as any).catch(() => {
+        lastSavedDraftRef.current = ''
+      })
+      return
+    }
     await setJson(draftCacheKey, payload).catch(() => {
       lastSavedDraftRef.current = ''
     })
-  }, [dailyDrafts, deepCleaningDrafts, draftCacheKey, kind, maintenanceDrafts])
+  }, [dailyDrafts, deepCleaningDrafts, draftCacheKey, isInspectionPanelBatchMode, kind, maintenanceDrafts, panelPhotoMeta, taskId])
 
   useEffect(() => {
     let cancelled = false
@@ -563,6 +596,31 @@ export default function FeedbackFormScreen(props: Props) {
     lastSavedDraftRef.current = ''
     ;(async () => {
       try {
+        if (isInspectionPanelBatchMode) {
+          const cached = await getInspectionPanelFeedbackDraft(taskId)
+          if (cancelled || !cached) return
+          if (cached.kind === 'maintenance' || cached.kind === 'deep_cleaning' || cached.kind === 'daily_necessities') {
+            setKind(cached.kind)
+          }
+          if (Array.isArray(cached.maintenanceDrafts) && cached.maintenanceDrafts.length) {
+            setMaintenanceDrafts(cached.maintenanceDrafts.map(normalizeMaintenanceDraft))
+          }
+          if (Array.isArray(cached.deepCleaningDrafts) && cached.deepCleaningDrafts.length) {
+            setDeepCleaningDrafts(cached.deepCleaningDrafts.map(normalizeDeepCleaningDraft))
+          }
+          if (Array.isArray(cached.dailyDrafts) && cached.dailyDrafts.length) {
+            setDailyDrafts(cached.dailyDrafts.map(normalizeDailyDraft))
+          }
+          setPanelPhotoMeta(cached.photo_meta || {})
+          lastSavedDraftRef.current = JSON.stringify({
+            kind: cached.kind,
+            maintenanceDrafts: cached.maintenanceDrafts,
+            deepCleaningDrafts: cached.deepCleaningDrafts,
+            dailyDrafts: cached.dailyDrafts,
+            photo_meta: cached.photo_meta || {},
+          })
+          return
+        }
         const cached = await getJson<FeedbackFormDraftCache>(draftCacheKey)
         if (cancelled || !cached || cached.version !== FEEDBACK_DRAFT_CACHE_VERSION) return
         if (cached.kind === 'maintenance' || cached.kind === 'deep_cleaning' || cached.kind === 'daily_necessities') {
@@ -586,7 +644,7 @@ export default function FeedbackFormScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [draftCacheKey])
+  }, [draftCacheKey, isInspectionPanelBatchMode, taskId])
 
   useEffect(() => {
     return () => {
@@ -609,6 +667,7 @@ export default function FeedbackFormScreen(props: Props) {
   }, [props.navigation, kind])
 
   useEffect(() => {
+    if (isInspectionPanelBatchMode) return
     let cancelled = false
     ;(async () => {
       try {
@@ -635,9 +694,10 @@ export default function FeedbackFormScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [propertyId, propertyCode])
+  }, [isInspectionPanelBatchMode, propertyId, propertyCode])
 
   async function refreshLists(options?: { force?: boolean; silent?: boolean }) {
+    if (isInspectionPanelBatchMode) return
     if (!token || (!propertyId && !propertyCode)) return
     const force = !!options?.force
     const cache = historyCacheRef.current
@@ -688,11 +748,12 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   useEffect(() => {
+    if (isInspectionPanelBatchMode) return
     if (!isFocused) return
     const cache = historyCacheRef.current
     const hasCache = !!(cache && (cache.pending.length || cache.resolved.length))
     void refreshLists({ silent: hasCache })
-  }, [token, propertyId, propertyCode, isFocused])
+  }, [isInspectionPanelBatchMode, token, propertyId, propertyCode, isFocused])
 
   useEffect(() => {
     let cancelled = false
@@ -728,6 +789,7 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   useEffect(() => {
+    if (isInspectionPanelBatchMode) return
     if (!token) return
     let cancelled = false
     ;(async () => {
@@ -742,7 +804,7 @@ export default function FeedbackFormScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [token])
+  }, [isInspectionPanelBatchMode, token])
 
   function dailySuggestKey(mode: 'draft' | 'edit', clientId?: string) {
     return mode === 'draft' ? `draft:${String(clientId || '').trim()}` : 'edit'
@@ -836,7 +898,6 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   async function uploadPhotoUrls(source: 'camera' | 'library', options: PhotoUploadOptions = {}): Promise<string[]> {
-    if (!token) return []
     const ok = source === 'camera' ? await ensureCameraPerm() : await ensureLibraryPerm()
     if (!ok) {
       Alert.alert(t('common_error'), source === 'camera' ? '请先开启相机权限' : '请先开启相册权限')
@@ -856,6 +917,31 @@ export default function FeedbackFormScreen(props: Props) {
           const uri = String(asset?.uri || '').trim()
           if (!uri) continue
           const capturedAt = new Date().toISOString()
+          if (isInspectionPanelBatchMode) {
+            const preparedUri = await compressImageForUpload(uri)
+            const convertedToJpeg = !!preparedUri && preparedUri !== uri
+            const fallbackName = convertedToJpeg ? `feedback-${Date.now()}.jpg` : String(asset?.fileName || uri.split('/').pop() || `feedback-${Date.now()}`)
+            const resolvedMimeType = convertedToJpeg ? 'image/jpeg' : draftMimeTypeFrom(fallbackName, String(asset?.mimeType || ''), uri)
+            const localUri = persistDraftMedia({
+              dirName: 'mzstay-inspection-feedback-drafts',
+              prefix: 'feedback',
+              sourceUri: preparedUri || uri,
+              name: fallbackName,
+              mimeType: resolvedMimeType,
+            })
+            uploaded.push(localUri)
+            setPanelPhotoMeta((prev) => ({
+              ...prev,
+              [localUri]: {
+                name: fallbackName,
+                mime_type: resolvedMimeType,
+                captured_at: capturedAt,
+                watermark_text: buildWatermarkText(capturedAt),
+              },
+            }))
+            continue
+          }
+          if (!token) return uploaded
           const up = await uploadCleaningMedia(
             token,
             { uri, name: String(asset?.fileName || uri.split('/').pop() || `feedback-${Date.now()}.jpg`), mimeType: String(asset?.mimeType || 'image/jpeg') },
@@ -867,7 +953,7 @@ export default function FeedbackFormScreen(props: Props) {
       }
       return uploaded
     } catch (e: any) {
-      Alert.alert(t('common_error'), String(e?.message || '上传失败'))
+      Alert.alert(t('common_error'), String(e?.message || (isInspectionPanelBatchMode ? '保存失败' : '上传失败')))
       return uploaded
     }
   }
@@ -947,6 +1033,58 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   async function submitFeedback() {
+    if (isInspectionPanelBatchMode) {
+      try {
+        setSubmitting(true)
+        if (kind === 'maintenance') {
+          const invalidIndex = maintenanceDrafts.findIndex((draft) => {
+            if (!draft.area || !draft.detail.trim()) return true
+            if (draft.submitAsCompleted && !draft.completionAfterPhotos.length) return true
+            return false
+          })
+          if (invalidIndex >= 0) {
+            Alert.alert(t('common_error'), `请完整填写第 ${invalidIndex + 1} 条维修记录`)
+            return
+          }
+        } else if (kind === 'deep_cleaning') {
+          const invalidIndex = deepCleaningDrafts.findIndex((draft) => {
+            if (!draft.area || !draft.detail.trim() || !draft.media.length) return true
+            if (draft.submitAsCompleted) {
+              if (!draft.completionAfterPhotos.length) return true
+              if (!String(draft.completionStartedAt || '').trim() || !String(draft.completionEndedAt || '').trim()) return true
+            }
+            return false
+          })
+          if (invalidIndex >= 0) {
+            Alert.alert(t('common_error'), `请完整填写第 ${invalidIndex + 1} 条深度清洁记录`)
+            return
+          }
+        } else {
+          const invalidIndex = dailyDrafts.findIndex((draft) => {
+            const qty = Number(draft.qty)
+            return !draft.itemName.trim() || !Number.isFinite(qty) || qty < 1 || (!draft.note.trim() && !draft.media.length)
+          })
+          if (invalidIndex >= 0) {
+            Alert.alert(t('common_error'), `请完整填写第 ${invalidIndex + 1} 条日用品记录`)
+            return
+          }
+        }
+        await persistFeedbackDraftSnapshot({
+          kind,
+          maintenanceDrafts,
+          deepCleaningDrafts,
+          dailyDrafts,
+        })
+        Alert.alert(t('common_ok'), '已暂存到检查提交批次，正式提交本页时再同步到后台。')
+        props.navigation.goBack()
+        return
+      } catch (e: any) {
+        Alert.alert(t('common_error'), String(e?.message || '保存失败'))
+        return
+      } finally {
+        setSubmitting(false)
+      }
+    }
     if (!token || !propertyId) return
     try {
       setSubmitting(true)
@@ -985,7 +1123,13 @@ export default function FeedbackFormScreen(props: Props) {
           }
           if (draft.submitAsCompleted) {
             try {
-              await completePropertyFeedbackProject(token, 'maintenance', feedbackId, `legacy-${feedbackId}`, {
+              const project = await createPropertyFeedbackProject(token, 'maintenance', feedbackId, {
+                name: draft.detail.trim() || draft.area || '维修项目',
+                area: draft.area || undefined,
+                detail: draft.detail.trim(),
+                note: draft.completionNote.trim() || undefined,
+              })
+              await completePropertyFeedbackProject(token, 'maintenance', feedbackId, String(project.item.id), {
                 note: draft.completionNote.trim() || undefined,
                 detail: draft.detail.trim(),
                 source_task_id: task?.id ? String(task.id) : undefined,
@@ -1041,7 +1185,12 @@ export default function FeedbackFormScreen(props: Props) {
           }
           if (draft.submitAsCompleted) {
             try {
-              await completePropertyFeedbackProject(token, 'deep_cleaning', feedbackId, `legacy-${feedbackId}`, {
+              const project = await createPropertyFeedbackProject(token, 'deep_cleaning', feedbackId, {
+                name: draft.area || '深度清洁',
+                area: draft.area || undefined,
+                note: draft.completionNote.trim() || undefined,
+              })
+              await completePropertyFeedbackProject(token, 'deep_cleaning', feedbackId, String(project.item.id), {
                 note: draft.completionNote.trim() || undefined,
                 detail: draft.detail.trim(),
                 source_task_id: task?.id ? String(task.id) : undefined,
@@ -1428,7 +1577,11 @@ export default function FeedbackFormScreen(props: Props) {
   }, [detailItem])
   const pendingHistoryCount = pendingGroups.maintenance.length + pendingGroups.deep.length + pendingGroups.daily.length
   const currentDraftCount = kind === 'maintenance' ? maintenanceDrafts.length : kind === 'deep_cleaning' ? deepCleaningDrafts.length : dailyDrafts.length
-  const submitButtonLabel = submitting ? t('common_loading') : currentDraftCount > 1 ? `提交全部 ${currentDraftCount} 条记录` : '提交记录'
+  const submitButtonLabel = submitting
+    ? t('common_loading')
+    : isInspectionPanelBatchMode
+      ? (currentDraftCount > 1 ? `暂存全部 ${currentDraftCount} 条记录` : '暂存并返回')
+      : (currentDraftCount > 1 ? `提交全部 ${currentDraftCount} 条记录` : '提交记录')
 
   useEffect(() => {
     if (detailItem || !queuedEditItem || actionOpen || dailyEditOpen || recordEditOpen) return
@@ -1471,7 +1624,15 @@ export default function FeedbackFormScreen(props: Props) {
             <StepCard
               step="2"
               title="填写记录信息"
-              subtitle={kind === 'daily_necessities' ? '可连续添加多条日用品记录，一次性提交。' : kind === 'deep_cleaning' ? '可连续添加多条深清记录，每条独立填写前后照片和完成状态。' : '可连续添加多条维修记录，每条独立填写前后照片和完成状态。'}
+              subtitle={
+                isInspectionPanelBatchMode
+                  ? '这里只做本地暂存，正式提交“检查与补充”时才会统一上传并写库。'
+                  : kind === 'daily_necessities'
+                    ? '可连续添加多条日用品记录，一次性提交。'
+                    : kind === 'deep_cleaning'
+                      ? '可连续添加多条深清记录，每条独立填写前后照片和完成状态。'
+                      : '可连续添加多条维修记录，每条独立填写前后照片和完成状态。'
+              }
             >
               {kind === 'maintenance'
                   ? maintenanceDrafts.map((draft, index) => (
@@ -1669,6 +1830,7 @@ export default function FeedbackFormScreen(props: Props) {
               </View>
             </StepCard>
 
+            {!isInspectionPanelBatchMode ? (
             <View style={styles.historyCard}>
               <View style={styles.historyHeader}>
                 <View style={styles.historyTitleWrap}>
@@ -1727,6 +1889,7 @@ export default function FeedbackFormScreen(props: Props) {
                 </View>
               ) : null}
             </View>
+            ) : null}
           </View>
         )}
       </ScrollView>

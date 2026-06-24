@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { AppState } from 'react-native'
+import NetInfo from '@react-native-community/netinfo'
 import { forgotPasswordApi, loginApi, meApi, unregisterExpoPushToken } from './api'
 import { API_BASE_URL, LOCAL_LOGIN_ENABLED, LOCAL_LOGIN_PASSWORD, LOCAL_LOGIN_ROLE, LOCAL_LOGIN_USERNAME } from '../config/env'
 import {
@@ -17,6 +18,10 @@ import {
   type StoredUser,
 } from './authStorage'
 import { subscribeAuthInvalidated } from './authEvents'
+import { processCleaningConsumablesSubmitQueue } from './cleaningConsumablesSubmitQueue'
+import { processInspectionMediaQueue, pruneExpiredInspectionMediaItems } from './inspectionMediaQueue'
+import { processInspectionPanelSubmitQueue } from './inspectionPanelSubmitQueue'
+import { processKeyUploadQueue } from './keyUploadQueue'
 import { clearRegisteredExpoPushToken, getRegisteredExpoPushToken } from './pushTokenStorage'
 import { deactivateWorkTasksRealtime } from './workTasksStore'
 
@@ -179,6 +184,38 @@ export function AuthProvider(props: { children: React.ReactNode }) {
     })
     return () => subscription.remove()
   }, [applySignedInState, status, token])
+
+  useEffect(() => {
+    if (status !== 'signedIn' || !token) return
+    let cancelled = false
+    const runQueueMaintenance = async () => {
+      if (cancelled) return
+      try {
+        await pruneExpiredInspectionMediaItems()
+        await processInspectionMediaQueue(token)
+        await processInspectionPanelSubmitQueue(token)
+        await processCleaningConsumablesSubmitQueue(token, String(user?.username || '').trim())
+        await processKeyUploadQueue(token)
+      } catch {}
+    }
+    void runQueueMaintenance()
+    const netInfoUnsub = NetInfo.addEventListener((state) => {
+      if (cancelled) return
+      if (state.isConnected && state.isInternetReachable !== false) void runQueueMaintenance()
+    })
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') void runQueueMaintenance()
+    })
+    return () => {
+      cancelled = true
+      try {
+        netInfoUnsub()
+      } catch {}
+      try {
+        appStateSub.remove()
+      } catch {}
+    }
+  }, [status, token, user?.username])
 
   useEffect(() => {
     return subscribeAuthInvalidated(() => {

@@ -58,6 +58,28 @@ export type AppTabParamList = {
   Me: undefined
 }
 
+export type DayEndTargetRole = 'cleaning' | 'inspection'
+
+export type DayEndRoleStats = {
+  assigned: number
+  done: number
+  pending: number
+  activeRooms: string[]
+  doneRooms: string[]
+}
+
+export type DayEndOverviewUser = {
+  userId: string
+  userName: string
+  roles: DayEndTargetRole[]
+  roomCodes: string[]
+  complete: boolean | null
+  stats?: {
+    cleaning: DayEndRoleStats
+    inspection: DayEndRoleStats
+  }
+}
+
 const AuthStack = createNativeStackNavigator<AuthStackParamList>()
 const Tabs = createBottomTabNavigator<AppTabParamList>()
 const TasksStack = createNativeStackNavigator<TasksStackParamList>()
@@ -72,8 +94,8 @@ export type TasksStackParamList = {
   InspectionComplete: { taskId: string; skipInspectionPhotos?: boolean }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
-  DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; overviewMode?: boolean; overviewUsers?: Array<{ userId: string; userName: string; roles: string[]; roomCodes: string[]; complete: boolean | null }> }
-  FeedbackForm: { taskId: string }
+  DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; targetRoles?: DayEndTargetRole[]; overviewMode?: boolean; overviewUsers?: DayEndOverviewUser[] }
+  FeedbackForm: { taskId: string; source?: 'inspection_panel_batch' }
   SuppliesForm: { taskId: string }
 }
 
@@ -86,8 +108,8 @@ export type NoticesStackParamList = {
   InspectionComplete: { taskId: string; skipInspectionPhotos?: boolean }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
-  DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; overviewMode?: boolean; overviewUsers?: Array<{ userId: string; userName: string; roles: string[]; roomCodes: string[]; complete: boolean | null }> }
-  FeedbackForm: { taskId: string }
+  DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; targetRoles?: DayEndTargetRole[]; overviewMode?: boolean; overviewUsers?: DayEndOverviewUser[] }
+  FeedbackForm: { taskId: string; source?: 'inspection_panel_batch' }
   SuppliesForm: { taskId: string }
 }
 

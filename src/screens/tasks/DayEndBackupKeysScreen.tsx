@@ -8,9 +8,9 @@ import { API_BASE_URL } from '../../config/env'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { listCleaningAppLinenTypes, listCleaningAppPropertyCodes, listCleaningAppTasks, listDayEndBackupKeys, listDayEndHandover, uploadCleaningMedia, uploadDayEndHandover } from '../../lib/api'
+import { listCleaningAppLinenTypes, listCleaningAppPropertyCodes, listCleaningAppTasks, listDayEndBackupKeys, listDayEndHandover, listWorkTasks, uploadCleaningMedia, uploadDayEndHandover } from '../../lib/api'
 import { clearDayEndHandoverDraft, getDayEndHandoverDraft, persistDayEndDraftPhoto, saveDayEndHandoverDraft, type DayEndHandoverDraft, type DayEndRejectDraftItem } from '../../lib/dayEndHandoverQueue'
-import type { TasksStackParamList } from '../../navigation/RootNavigator'
+import type { DayEndOverviewUser, DayEndRoleStats, DayEndTargetRole, TasksStackParamList } from '../../navigation/RootNavigator'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'DayEndBackupKeys'>
 
@@ -181,15 +181,46 @@ async function loadLinenTypeOptionsCached(token: string) {
   return next
 }
 
-function addDays(base: string, delta: number) {
-  const raw = String(base || '').slice(0, 10)
-  const dt = new Date(`${raw}T00:00:00`)
-  if (Number.isNaN(dt.getTime())) return raw
-  dt.setDate(dt.getDate() + delta)
-  const y = dt.getFullYear()
-  const m = String(dt.getMonth() + 1).padStart(2, '0')
-  const d = String(dt.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
+function normalizeDayEndRoles(items: any[]): DayEndTargetRole[] {
+  const roles = new Set<DayEndTargetRole>()
+  for (const item of Array.isArray(items) ? items : []) {
+    if (item === 'cleaning' || item === 'inspection') roles.add(item)
+  }
+  return Array.from(roles.values()).sort()
+}
+
+function roleStatsLine(label: string, stats?: DayEndRoleStats | null) {
+  if (!stats || stats.assigned <= 0) return ''
+  const parts = [`${label} ${stats.done}/${stats.assigned}`]
+  if (stats.activeRooms.length) parts.push(`进行中 ${stats.activeRooms.join('、')}`)
+  else if (stats.pending > 0) parts.push(`待处理 ${stats.pending}`)
+  if (stats.doneRooms.length) parts.push(`已完成 ${stats.doneRooms.join('、')}`)
+  return parts.join(' · ')
+}
+
+function buildResolvedDayEndMeta(tasks: Array<any>, userId0: string) {
+  const userId = String(userId0 || '').trim()
+  const roles = new Set<DayEndTargetRole>()
+  const roomCodes = new Set<string>()
+  if (!userId) return { roles: [] as DayEndTargetRole[], roomCodes: [] as string[] }
+  for (const task of tasks || []) {
+    if (String(task?.source_type || '').trim() !== 'cleaning_tasks') continue
+    const status = String(task?.status || '').trim().toLowerCase()
+    if (status === 'cancelled' || status === 'canceled') continue
+    const kind = String(task?.task_kind || '').trim().toLowerCase()
+    const assignedUserId = kind === 'inspection'
+      ? String(task?.inspector_id || task?.assignee_id || '').trim()
+      : String(task?.cleaner_id || task?.assignee_id || '').trim()
+    if (assignedUserId !== userId) continue
+    if (kind === 'inspection') roles.add('inspection')
+    else if (kind === 'cleaning') roles.add('cleaning')
+    const code = String(task?.property?.code || '').trim()
+    if (code) roomCodes.add(code)
+  }
+  return {
+    roles: Array.from(roles.values()).sort(),
+    roomCodes: Array.from(roomCodes.values()).sort((a, b) => a.localeCompare(b, 'en')),
+  }
 }
 
 export default function DayEndBackupKeysScreen(props: Props) {
@@ -222,9 +253,15 @@ export default function DayEndBackupKeysScreen(props: Props) {
   const targetUserId = String(props.route.params.userId || '').trim()
   const targetUserName = String(props.route.params.userName || '').trim()
   const focus = props.route.params.focus
-  const taskRoomCodes = Array.isArray(props.route.params.taskRoomCodes) ? props.route.params.taskRoomCodes : []
+  const routeTaskRoomCodes = useMemo(() => (Array.isArray(props.route.params.taskRoomCodes) ? props.route.params.taskRoomCodes : []), [props.route.params.taskRoomCodes])
+  const routeTargetRoles = useMemo(() => normalizeDayEndRoles(props.route.params.targetRoles || []), [props.route.params.targetRoles])
+  const routeTaskRoomCodesKey = routeTaskRoomCodes.join('|')
+  const routeTargetRolesKey = routeTargetRoles.join('|')
   const overviewMode = props.route.params.overviewMode === true
-  const overviewUsers = Array.isArray(props.route.params.overviewUsers) ? props.route.params.overviewUsers : []
+  const overviewUsers = useMemo(
+    () => (Array.isArray(props.route.params.overviewUsers) ? props.route.params.overviewUsers : []) as DayEndOverviewUser[],
+    [props.route.params.overviewUsers],
+  )
   const overviewUsersPending = useMemo(
     () => overviewUsers.map((entry) => ({ ...entry, complete: null as boolean | null })),
     [overviewUsers],
@@ -233,14 +270,63 @@ export default function DayEndBackupKeysScreen(props: Props) {
   const roleNames = useMemo(() => roleNamesOf(user), [user])
   const isCleanerSelf = useMemo(() => roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector'), [roleNames])
   const isInspectorSelf = useMemo(() => roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector'), [roleNames])
-  const isInspectorOnlySelf = useMemo(() => roleNames.includes('cleaning_inspector') && !roleNames.includes('cleaner') && !roleNames.includes('cleaner_inspector'), [roleNames])
   const isManagerViewer = useMemo(() => canManageDayEnd(roleNames), [roleNames])
   const viewingOtherUser = !!targetUserId && targetUserId !== currentUserId
   const isOverviewMode = isManagerViewer && overviewMode && !targetUserId
+  const fallbackSelfRoles = useMemo(
+    () => normalizeDayEndRoles([isCleanerSelf ? 'cleaning' : '', isInspectorSelf ? 'inspection' : '']),
+    [isCleanerSelf, isInspectorSelf],
+  )
+  const [resolvedTargetRoles, setResolvedTargetRoles] = useState<DayEndTargetRole[]>(() => routeTargetRoles.length ? routeTargetRoles : fallbackSelfRoles)
+  const [resolvedTaskRoomCodes, setResolvedTaskRoomCodes] = useState<string[]>(() => dedupePropertyCodeOptions(routeTaskRoomCodes.map((code, idx) => ({ id: `task_${idx}_${code}`, code }))).map((item) => item.code))
+  const effectiveRoles = useMemo(
+    () => (resolvedTargetRoles.length ? resolvedTargetRoles : fallbackSelfRoles),
+    [fallbackSelfRoles, resolvedTargetRoles],
+  )
+  const effectiveHasCleaning = effectiveRoles.includes('cleaning')
+  const effectiveHasInspection = effectiveRoles.includes('inspection')
+  const effectiveInspectorOnly = effectiveHasInspection && !effectiveHasCleaning
+  const consumableSectionIndex = effectiveHasCleaning ? 4 : 1
+  const rejectSectionIndex = effectiveHasCleaning ? (effectiveHasInspection ? 5 : 4) : 2
   const canEdit = (isCleanerSelf || isInspectorSelf) && !viewingOtherUser
   const canView = canEdit || isManagerViewer
-  const canSubmit = canEdit && (isInspectorOnlySelf ? photoPayload(consumableItems).length > 0 : (photoPayload(keyItems).length > 0 && photoPayload(returnWashItems).length > 0)) && rejectItems.every(rejectItemComplete)
+  const canSubmit = canEdit
+    && (!effectiveHasCleaning || (photoPayload(keyItems).length > 0 && photoPayload(returnWashItems).length > 0))
+    && (!effectiveHasInspection || photoPayload(consumableItems).length > 0)
+    && rejectItems.every(rejectItemComplete)
   const [overviewRows, setOverviewRows] = useState(() => overviewUsersPending)
+
+  useEffect(() => {
+    if (routeTargetRoles.length) {
+      setResolvedTargetRoles(routeTargetRoles)
+      return
+    }
+    if (!token || isOverviewMode) return
+    const lookupUserId = String(targetUserId || currentUserId || '').trim()
+    if (!lookupUserId || !date) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const tasks = await listWorkTasks(token, { date_from: date, date_to: date, view: 'all' })
+        if (cancelled) return
+        const next = buildResolvedDayEndMeta(tasks, lookupUserId)
+        if (next.roles.length) setResolvedTargetRoles(next.roles)
+        else if (!targetUserId) setResolvedTargetRoles(fallbackSelfRoles)
+        if (next.roomCodes.length && !routeTaskRoomCodes.length) setResolvedTaskRoomCodes(next.roomCodes)
+      } catch {
+        if (!cancelled && !targetUserId) setResolvedTargetRoles(fallbackSelfRoles)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [currentUserId, date, fallbackSelfRoles, isOverviewMode, routeTargetRoles, routeTargetRolesKey, routeTaskRoomCodes.length, targetUserId, token])
+
+  useEffect(() => {
+    if (routeTaskRoomCodes.length) {
+      setResolvedTaskRoomCodes(dedupePropertyCodeOptions(routeTaskRoomCodes.map((code, idx) => ({ id: `task_${idx}_${code}`, code }))).map((item) => item.code))
+    }
+  }, [routeTaskRoomCodes, routeTaskRoomCodesKey])
 
   const buildDraft = useCallback(
     (params?: { pendingSubmit?: boolean; nextKeyItems?: PhotoItem[]; nextReturnWashItems?: PhotoItem[]; nextWarehouseKeyItems?: PhotoItem[]; nextWarehouseKeyNotUsed?: boolean; nextConsumableItems?: PhotoItem[]; nextRejectItems?: RejectItemState[] }): DayEndHandoverDraft => ({
@@ -334,7 +420,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
         setLoading(false)
       }
 
-      const taskRoomOptions = dedupePropertyCodeOptions(taskRoomCodes.map((code, idx) => ({ id: `task_${idx}_${code}`, code })))
+      const taskRoomOptions = dedupePropertyCodeOptions(resolvedTaskRoomCodes.map((code, idx) => ({ id: `task_${idx}_${code}`, code })))
       const linenPromise = loadLinenTypeOptionsCached(token).catch(() => [] as LinenTypeOption[])
       const propertyCodePromise = (async () => {
         if (taskRoomOptions.length) return taskRoomOptions
@@ -407,7 +493,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
       setDraftReady(true)
       setLoading(false)
     }
-  }, [applyLoadedData, canEdit, canView, currentUserId, date, isOverviewMode, t, targetUserId, taskRoomCodes, token])
+  }, [applyLoadedData, canEdit, canView, currentUserId, date, isOverviewMode, resolvedTaskRoomCodes, t, targetUserId, token])
 
   useEffect(() => {
     load()
@@ -434,7 +520,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [date, isOverviewMode, overviewUsers, token])
+  }, [date, isOverviewMode, overviewUsers, overviewUsersPending, token])
 
   useEffect(() => {
     if (!focus) return
@@ -565,11 +651,11 @@ export default function DayEndBackupKeysScreen(props: Props) {
     if (section === 'warehouse_key' && !warehouseKeyNotUsed && !photoPayload(warehouseKeyItems).length) return '请上传仓库钥匙照片，或选择今天未使用仓库钥匙'
     if (section === 'consumable' && !photoPayload(consumableItems).length) return '请先上传剩余消耗品照片'
     if ((section === 'reject' || section === 'all') && !rejectItems.every(rejectItemComplete)) return '请补全 Reject 床品登记'
-    if (section === 'all' && !isInspectorOnlySelf) {
+    if (section === 'all' && effectiveHasCleaning) {
       if (!photoPayload(keyItems).length) return '请先上传备用钥匙照片'
       if (!photoPayload(returnWashItems).length) return '请先上传脏床品照片'
     }
-    if (section === 'all' && isInspectorOnlySelf && !photoPayload(consumableItems).length) return '请先上传剩余消耗品照片'
+    if (section === 'all' && effectiveHasInspection && !photoPayload(consumableItems).length) return '请先上传剩余消耗品照片'
     return ''
   }
 
@@ -713,7 +799,15 @@ export default function DayEndBackupKeysScreen(props: Props) {
 
   async function onSubmit() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
-    if (!canSubmit) return Alert.alert(t('common_error'), isInspectorOnlySelf ? '请先上传剩余消耗品照片，并补全 Reject 床品登记' : '请先上传备用钥匙照片、脏床品照片，并补全 Reject 床品登记')
+    if (!canSubmit) {
+      const missing = [
+        effectiveHasCleaning ? '备用钥匙照片' : '',
+        effectiveHasCleaning ? '脏床品照片' : '',
+        effectiveHasInspection ? '剩余消耗品照片' : '',
+        'Reject 床品登记',
+      ].filter(Boolean).join('、')
+      return Alert.alert(t('common_error'), `请先补全${missing}`)
+    }
     if (uploading || submitting) return
     setSubmitting(true)
     try {
@@ -744,7 +838,13 @@ export default function DayEndBackupKeysScreen(props: Props) {
       } catch (e: any) {
         const msg = String(e?.message || '')
         if (msg.includes('后端未部署该接口')) {
-          throw new Error(isInspectorOnlySelf ? '后端还没部署新版检查员日终交接接口，当前页面只能先查看/拍照暂存，暂时无法正式提交剩余消耗品和 Reject 床品登记。' : '后端还没部署新版日终交接接口，当前页面只能先查看/拍照暂存，暂时无法正式提交脏床品和 Reject 床品登记。')
+          throw new Error(
+            effectiveInspectorOnly
+              ? '后端还没部署新版检查员日终交接接口，当前页面只能先查看/拍照暂存，暂时无法正式提交剩余消耗品和 Reject 床品登记。'
+              : (effectiveHasCleaning && effectiveHasInspection
+                ? '后端还没部署新版清洁/检查日终交接接口，当前页面只能先查看/拍照暂存，暂时无法正式提交完整的日终交接记录。'
+                : '后端还没部署新版日终交接接口，当前页面只能先查看/拍照暂存，暂时无法正式提交脏床品和 Reject 床品登记。'),
+          )
         }
         throw e
       }
@@ -812,6 +912,37 @@ export default function DayEndBackupKeysScreen(props: Props) {
     })
   }
 
+  function renderConsumableCard() {
+    return (
+      <View
+        style={styles.card}
+        onLayout={(e) => {
+          const y = e?.nativeEvent?.layout?.y
+          setAnchorY((prev) => ({ ...prev, consumable: typeof y === 'number' ? y : prev.consumable }))
+        }}
+      >
+        <Text style={styles.sectionTitle}>{`${consumableSectionIndex}. 剩余消耗品照片`}</Text>
+        <Text style={styles.mutedSmall}>至少上传 1 张，拍当天检查结束后自己剩余的消耗品。</Text>
+        {canEdit ? (
+          <Pressable onPress={() => captureAndUpload('consumable')} style={({ pressed }) => [styles.sectionBtn, pressed ? styles.pressed : null]} disabled={uploading || submitting}>
+            <Ionicons name="camera-outline" size={moderateScale(16)} color="#2563EB" />
+            <Text style={styles.sectionBtnText}>{consumableItems.length ? '继续拍剩余消耗品' : '拍剩余消耗品'}</Text>
+          </Pressable>
+        ) : null}
+        {renderPhotoGrid(consumableItems, (id) => setConsumableItems((prev) => prev.filter((x) => x.id !== id)))}
+        {canEdit ? (
+          <Pressable
+            onPress={() => onSubmitSection('consumable')}
+            disabled={!photoPayload(consumableItems).length || uploading || submitting || !!submittingSection}
+            style={({ pressed }) => [styles.sectionSubmitBtn, pressed ? styles.pressed : null, !photoPayload(consumableItems).length || uploading || submitting || !!submittingSection ? styles.sectionSubmitDisabled : null]}
+          >
+            <Text style={styles.sectionSubmitText}>{submittingSection === 'consumable' ? t('common_loading') : '保存剩余消耗品照片'}</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    )
+  }
+
   if (!canView) {
     return (
       <View style={[styles.page, styles.center]}>
@@ -837,13 +968,15 @@ export default function DayEndBackupKeysScreen(props: Props) {
               {overviewRows.map((item) => (
                 <Pressable
                   key={item.userId}
-                  onPress={() => props.navigation.push('DayEndBackupKeys', { date, userId: item.userId, userName: item.userName, taskRoomCodes: item.roomCodes })}
+                  onPress={() => props.navigation.push('DayEndBackupKeys', { date, userId: item.userId, userName: item.userName, taskRoomCodes: item.roomCodes, targetRoles: item.roles })}
                   style={({ pressed }) => [styles.overviewItem, pressed ? styles.pressed : null]}
                 >
                   <View style={styles.overviewMain}>
                     <Text style={styles.overviewName}>{item.userName || item.userId}</Text>
                     <Text style={styles.overviewMeta}>{item.roles.includes('cleaning') && item.roles.includes('inspection') ? '清洁 + 检查' : item.roles.includes('inspection') ? '检查' : '清洁'}</Text>
                     {item.roomCodes.length ? <Text style={styles.overviewRooms} numberOfLines={2}>{`房号：${item.roomCodes.join('、')}`}</Text> : null}
+                    {roleStatsLine('清洁', item.stats?.cleaning) ? <Text style={styles.overviewProgress}>{roleStatsLine('清洁', item.stats?.cleaning)}</Text> : null}
+                    {roleStatsLine('检查', item.stats?.inspection) ? <Text style={styles.overviewProgress}>{roleStatsLine('检查', item.stats?.inspection)}</Text> : null}
                   </View>
                   <View style={[styles.overviewStatusPill, item.complete == null ? styles.overviewStatusGray : (item.complete ? styles.overviewStatusGreen : styles.overviewStatusAmber)]}>
                     <Text style={[styles.overviewStatusText, item.complete == null ? styles.overviewStatusTextGray : (item.complete ? styles.overviewStatusTextGreen : styles.overviewStatusTextAmber)]}>{item.complete == null ? '加载中' : (item.complete ? '已提交' : '未提交')}</Text>
@@ -859,41 +992,22 @@ export default function DayEndBackupKeysScreen(props: Props) {
         <Text style={styles.title}>日终交接</Text>
         <Text style={styles.mutedSmall}>{`日期：${date || '-'}`}</Text>
         {targetUserName ? <Text style={styles.mutedSmall}>{`人员：${targetUserName}`}</Text> : null}
-        <Text style={styles.mutedSmall}>{isInspectorOnlySelf ? '完成当天检查任务后，请提交自己剩余消耗品照片，并完成 Reject 床品登记。' : '完成当天清洁任务后，请提交备用钥匙照片、脏床品照片，以及 Reject 床品登记。'}</Text>
-        {taskRoomCodes.length ? <Text style={styles.mutedSmall}>{`今日任务房号：${taskRoomCodes.join('、')}`}</Text> : null}
+        <Text style={styles.mutedSmall}>
+          {effectiveHasCleaning && effectiveHasInspection
+            ? '完成当天清洁和检查任务后，请提交备用钥匙、脏床品、仓库钥匙记录、剩余消耗品，以及 Reject 床品登记。'
+            : (effectiveInspectorOnly
+              ? '完成当天检查任务后，请提交剩余消耗品照片，并完成 Reject 床品登记。'
+              : '完成当天清洁任务后，请提交备用钥匙、脏床品、仓库钥匙记录，以及 Reject 床品登记。')}
+        </Text>
+        {resolvedTaskRoomCodes.length ? <Text style={styles.mutedSmall}>{`今日任务房号：${resolvedTaskRoomCodes.join('、')}`}</Text> : null}
         {!canEdit ? <Text style={styles.mutedSmall}>当前为查看模式。</Text> : null}
         {loading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
         {loadError ? <Text style={styles.errorText}>{loadError}</Text> : null}
       </View>
 
-      {isInspectorOnlySelf ? (
-        <View
-          style={styles.card}
-          onLayout={(e) => {
-            const y = e?.nativeEvent?.layout?.y
-            setAnchorY((prev) => ({ ...prev, consumable: typeof y === 'number' ? y : prev.consumable }))
-          }}
-        >
-          <Text style={styles.sectionTitle}>1. 剩余消耗品照片</Text>
-          <Text style={styles.mutedSmall}>至少上传 1 张，拍当天检查结束后自己剩余的消耗品。</Text>
-          {canEdit ? (
-            <Pressable onPress={() => captureAndUpload('consumable')} style={({ pressed }) => [styles.sectionBtn, pressed ? styles.pressed : null]} disabled={uploading || submitting}>
-              <Ionicons name="camera-outline" size={moderateScale(16)} color="#2563EB" />
-              <Text style={styles.sectionBtnText}>{consumableItems.length ? '继续拍剩余消耗品' : '拍剩余消耗品'}</Text>
-            </Pressable>
-          ) : null}
-          {renderPhotoGrid(consumableItems, (id) => setConsumableItems((prev) => prev.filter((x) => x.id !== id)))}
-          {canEdit ? (
-            <Pressable
-              onPress={() => onSubmitSection('consumable')}
-              disabled={!photoPayload(consumableItems).length || uploading || submitting || !!submittingSection}
-              style={({ pressed }) => [styles.sectionSubmitBtn, pressed ? styles.pressed : null, !photoPayload(consumableItems).length || uploading || submitting || !!submittingSection ? styles.sectionSubmitDisabled : null]}
-            >
-              <Text style={styles.sectionSubmitText}>{submittingSection === 'consumable' ? t('common_loading') : '保存剩余消耗品照片'}</Text>
-            </Pressable>
-          ) : null}
-        </View>
-      ) : (
+      {!effectiveHasCleaning && effectiveHasInspection ? renderConsumableCard() : null}
+
+      {effectiveHasCleaning ? (
         <>
           <View
             style={styles.card}
@@ -991,7 +1105,9 @@ export default function DayEndBackupKeysScreen(props: Props) {
             ) : null}
           </View>
         </>
-      )}
+      ) : null}
+
+      {effectiveHasCleaning && effectiveHasInspection ? renderConsumableCard() : null}
 
       <View
         style={styles.card}
@@ -1000,7 +1116,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
           setAnchorY((prev) => ({ ...prev, reject: typeof y === 'number' ? y : prev.reject }))
         }}
       >
-        <Text style={styles.sectionTitle}>{isInspectorOnlySelf ? '2. Reject 床品登记' : '4. Reject 床品登记'}</Text>
+        <Text style={styles.sectionTitle}>{`${rejectSectionIndex}. Reject 床品登记`}</Text>
         <Text style={styles.mutedSmall}>不合格床品要退给工厂退款时，在仓库登记床品类型、数量、使用房号，并上传不合格床品退回照片。</Text>
         {canEdit ? (
           <Pressable
@@ -1174,6 +1290,7 @@ const styles = StyleSheet.create({
   overviewName: { color: '#111827', fontWeight: '900', fontSize: 14 },
   overviewMeta: { marginTop: 4, color: '#2563EB', fontWeight: '800', fontSize: 12 },
   overviewRooms: { marginTop: 6, color: '#6B7280', fontWeight: '700', fontSize: 12, lineHeight: 18 },
+  overviewProgress: { marginTop: 4, color: '#4B5563', fontWeight: '700', fontSize: 12, lineHeight: 18 },
   overviewStatusPill: { minWidth: 64, minHeight: 28, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 4, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   overviewStatusGray: { backgroundColor: '#E5E7EB' },
   overviewStatusGreen: { backgroundColor: '#DCFCE7' },

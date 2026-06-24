@@ -83,6 +83,7 @@ const SAFE_PATCH_FIELDS = new Set([
   'cleaner_name',
   'inspector_name',
   'inspection_mode',
+  'inspection_scope',
   'inspection_due_date',
   'keys_required',
   'keys_required_checkout',

@@ -152,6 +152,11 @@ function getRestockEntriesFromNoticeData(data: any) {
     .filter((item: any) => !!item && item.needRestock)
 }
 
+function summarizeRestockLabels(items: Array<{ label: string; qty: number | null }>) {
+  const labels = items.map((item) => (item.qty != null ? `${item.label} x${item.qty}` : item.label))
+  return labels.length ? labels.join('、') : ''
+}
+
 export function getPresentedNotice(notice: Notice) {
   const propertyCode = resolvePropertyCode(notice)
   const relatedTask = resolveRelatedTask(notice)
@@ -189,6 +194,7 @@ export function getPresentedNotice(notice: Notice) {
     'keys_hung',
     'self_completed',
     'restock_proof_saved',
+    'restock_sufficient_confirmed',
     'ready',
     'key_upload_reminder',
     'key_upload_sla',
@@ -226,10 +232,15 @@ export function getPresentedNotice(notice: Notice) {
     for (const change of changes) addDetail(contentLines, '变更', change)
   } else if (kind === 'consumables_submitted' || kind === 'consumables_updated') {
     title = eventTitle(propertyCode, kind === 'consumables_updated' ? '补品记录已更新' : '清洁已完成')
-    const restockLabels = restockEntries.map((item: { label: string; qty: number | null }) => (item.qty != null ? `${item.label} x${item.qty}` : item.label))
-    summary = restockLabels.length ? `${restockLabels.length} 项需要补货` : (kind === 'consumables_updated' ? '补品记录已更新' : '待检查')
-    if (restockLabels.length) addDetail(contentLines, '待补货', restockLabels.join('、'))
-  } else if (kind === 'inspection_complete' || kind === 'keys_hung') {
+    const restockSummary = summarizeRestockLabels(restockEntries)
+    summary = restockSummary ? `待补货：${restockSummary}` : (kind === 'consumables_updated' ? '补品记录已更新' : '现场消耗品已提交，待检查')
+    if (restockSummary) addDetail(contentLines, '待补货', restockSummary)
+  } else if (kind === 'inspection_complete') {
+    title = eventTitle(propertyCode, '检查已完成')
+    const restockSummary = summarizeRestockLabels(restockEntries)
+    summary = restockSummary ? `待补货：${restockSummary}` : '现场消耗品已确认充足'
+    if (restockSummary) addDetail(contentLines, '待补货', restockSummary)
+  } else if (kind === 'keys_hung') {
     title = eventTitle(propertyCode, '房间已挂钥匙')
     summary = '挂钥匙视频已上传，房间钥匙已挂好'
   } else if (kind === 'issue_reported') {
@@ -241,7 +252,8 @@ export function getPresentedNotice(notice: Notice) {
     addDetail(contentLines, '问题详情', (data as any).issue_detail)
   } else if (kind === 'restock_done') {
     title = eventTitle(propertyCode, '补货已完成')
-    summary = '等待检查'
+    const restockSummary = summarizeRestockLabels(restockEntries)
+    summary = restockSummary ? `已补货：${restockSummary}` : '补货完成，等待检查'
   } else if (kind === 'completion_photos_saved') {
     title = eventTitle(propertyCode, '房间照片已提交')
     summary = '清洁完成照片已上传'
@@ -253,7 +265,11 @@ export function getPresentedNotice(notice: Notice) {
     summary = '等待检查或确认'
   } else if (kind === 'restock_proof_saved') {
     title = eventTitle(propertyCode, '补货凭证已提交')
-    summary = '补货证明已上传'
+    const restockSummary = summarizeRestockLabels(restockEntries)
+    summary = restockSummary ? `补货凭证：${restockSummary}` : '补货证明已上传'
+  } else if (kind === 'restock_sufficient_confirmed') {
+    title = eventTitle(propertyCode, '消耗品已确认充足')
+    summary = '检查员已确认现场消耗品充足'
   } else if (kind === 'ready') {
     title = eventTitle(propertyCode, '房源可入住')
     summary = '房源已完成准备'
@@ -322,6 +338,7 @@ export function getPresentedNotice(notice: Notice) {
     'keys_hung',
     'self_completed',
     'restock_proof_saved',
+    'restock_sufficient_confirmed',
     'ready',
     'guest_luggage_updated',
     'guest_luggage_deleted',
