@@ -50,6 +50,7 @@ type Period = 'today' | 'week' | 'month'
 type QuickCreateMode = 'checkout' | 'checkin' | 'offline'
 type QuickCreateOfflineTaskType = 'property' | 'company' | 'other'
 type QuickCreatePropertyOption = { id: string; code: string; region?: string | null }
+type DayEndOverviewDisplayUser = DayEndOverviewUser & { displayRole: DayEndTargetRole }
 type Props = NativeStackScreenProps<TasksStackParamList, 'TasksList'>
 type TaskCacheHint = { message: string; lastSyncedAt: string | null } | null
 
@@ -166,7 +167,7 @@ function pushUniqueRoom(list: string[], roomCode: string) {
 
 function isInspectionWorkSubmitted(status0: any) {
   const s = String(status0 || '').trim().toLowerCase()
-  return isDoneLikeStatus(s) || s === 'to_hang_keys'
+  return isDoneLikeStatus(s)
 }
 
 function applyDayEndRoleProgress(stats: DayEndRoleStats, status0: any, roomCode: string, isSubmitted: boolean) {
@@ -193,6 +194,63 @@ function formatDayEndRoleStats(label: string, stats?: DayEndRoleStats | null) {
   return parts.join(' · ')
 }
 
+function dayEndRoleRank(roles: DayEndTargetRole[]) {
+  const normalized = normalizeDayEndRoles(roles)
+  if (normalized.includes('cleaning')) return 0
+  if (normalized.includes('inspection')) return 1
+  return 2
+}
+
+function compareDayEndOverviewUsers(a: DayEndOverviewUser, b: DayEndOverviewUser) {
+  const roleDelta = dayEndRoleRank(a.roles) - dayEndRoleRank(b.roles)
+  if (roleDelta) return roleDelta
+  const completionDelta = Number(a.complete === true) - Number(b.complete === true)
+  if (completionDelta) return completionDelta
+  return String(a.userName || a.userId || '').localeCompare(String(b.userName || b.userId || ''), 'en')
+}
+
+function compareDayEndOverviewDisplayUsers(a: DayEndOverviewDisplayUser, b: DayEndOverviewDisplayUser) {
+  const completionDelta = Number(a.complete === true) - Number(b.complete === true)
+  if (completionDelta) return completionDelta
+  return String(a.userName || a.userId || '').localeCompare(String(b.userName || b.userId || ''), 'en')
+}
+
+function buildDayEndOverviewDisplayUsers(users: DayEndOverviewUser[]): DayEndOverviewDisplayUser[] {
+  const cleaners: DayEndOverviewDisplayUser[] = []
+  const inspectors: DayEndOverviewDisplayUser[] = []
+  for (const entry of users || []) {
+    const cleaningAssigned = Number(entry.stats?.cleaning?.assigned || 0)
+    const inspectionAssigned = Number(entry.stats?.inspection?.assigned || 0)
+    if (cleaningAssigned > 0 || (cleaningAssigned <= 0 && entry.roles.includes('cleaning'))) {
+      cleaners.push({ ...entry, displayRole: 'cleaning' })
+    }
+    if (inspectionAssigned > 0 || (inspectionAssigned <= 0 && entry.roles.includes('inspection'))) {
+      inspectors.push({ ...entry, displayRole: 'inspection' })
+    }
+  }
+  return [
+    ...cleaners.sort(compareDayEndOverviewDisplayUsers),
+    ...inspectors.sort(compareDayEndOverviewDisplayUsers),
+  ]
+}
+
+function dayEndProgressIdentity(task: { id?: any; source_id?: any; title?: any; property?: { code?: any } | null }, code: string) {
+  return code || String(task.property?.code || task.title || '').trim() || String(task.source_id || task.id || '').trim()
+}
+
+function resolveCleaningProgressUserId(task: { task_kind?: any; assignee_id?: any; cleaner_id?: any; cleaner_name?: any; inspector_id?: any }) {
+  const cleanerId = String(task.cleaner_id || '').trim()
+  if (cleanerId) return cleanerId
+  const kind = String(task.task_kind || '').trim().toLowerCase()
+  const assigneeId = String(task.assignee_id || '').trim()
+  if (!assigneeId) return ''
+  if (kind === 'cleaning') return assigneeId
+  const cleanerName = String(task.cleaner_name || '').trim()
+  const inspectorId = String(task.inspector_id || '').trim()
+  if (cleanerName && assigneeId !== inspectorId) return assigneeId
+  return ''
+}
+
 function dayEndTargetContentLabel(roles: DayEndTargetRole[]) {
   const hasCleaning = roles.includes('cleaning')
   const hasInspection = roles.includes('inspection')
@@ -214,9 +272,13 @@ function buildDayEndOverviewBaseUsers(tasks: Array<{
   assignee_name?: any
   cleaner_name?: any
   inspector_name?: any
+  id?: any
+  source_id?: any
+  title?: any
   property?: { code?: any } | null
 }>): DayEndOverviewUser[] {
   const map = new Map<string, { userId: string; userName: string; roles: Set<DayEndTargetRole>; roomCodes: Set<string>; stats: { cleaning: DayEndRoleStats; inspection: DayEndRoleStats } }>()
+  const seenRoleRooms = new Set<string>()
   for (const task of tasks || []) {
     const st = String(task.status || '').trim().toLowerCase()
     if (st === 'cancelled' || st === 'canceled') continue
@@ -231,27 +293,34 @@ function buildDayEndOverviewBaseUsers(tasks: Array<{
       || (Array.isArray(task.inspection_task_ids) && task.inspection_task_ids.length > 0)
       || !!String(task.inspection_status || '').trim()
     if (hasCleaningWork) {
-      const cleanerId = String(task.cleaner_id || (kind === 'cleaning' ? task.assignee_id : '') || '').trim()
+      const cleanerId = resolveCleaningProgressUserId(task)
       if (cleanerId) {
         const cleaningStatus = String(task.cleaning_status || (kind === 'cleaning' ? task.status : '') || '').trim().toLowerCase()
-        const entry = map.get(cleanerId) || {
-          userId: cleanerId,
-          userName: String(task.cleaner_name || task.assignee_name || '').trim(),
-          roles: new Set<DayEndTargetRole>(),
-          roomCodes: new Set<string>(),
-          stats: { cleaning: createDayEndRoleStats(), inspection: createDayEndRoleStats() },
+        const progressKey = ['cleaning', cleanerId, dayEndProgressIdentity(task, code)].join('|')
+        if (!seenRoleRooms.has(progressKey)) {
+          seenRoleRooms.add(progressKey)
+          const entry = map.get(cleanerId) || {
+            userId: cleanerId,
+            userName: String(task.cleaner_name || task.assignee_name || '').trim(),
+            roles: new Set<DayEndTargetRole>(),
+            roomCodes: new Set<string>(),
+            stats: { cleaning: createDayEndRoleStats(), inspection: createDayEndRoleStats() },
+          }
+          entry.roles.add('cleaning')
+          if (!entry.userName) entry.userName = String(task.cleaner_name || task.assignee_name || '').trim()
+          if (code) entry.roomCodes.add(code)
+          applyDayEndRoleProgress(entry.stats.cleaning, cleaningStatus, code, isCleaningWorkSubmitted(cleaningStatus))
+          map.set(cleanerId, entry)
         }
-        entry.roles.add('cleaning')
-        if (!entry.userName) entry.userName = String(task.cleaner_name || task.assignee_name || '').trim()
-        if (code) entry.roomCodes.add(code)
-        applyDayEndRoleProgress(entry.stats.cleaning, cleaningStatus, code, isCleaningWorkSubmitted(cleaningStatus))
-        map.set(cleanerId, entry)
       }
     }
     if (hasInspectionWork) {
       const inspectorId = String(task.inspector_id || (kind === 'inspection' ? task.assignee_id : '') || '').trim()
       if (!inspectorId) continue
       const inspectionStatus = String(task.inspection_status || (kind === 'inspection' ? task.status : '') || '').trim().toLowerCase()
+      const progressKey = ['inspection', inspectorId, dayEndProgressIdentity(task, code)].join('|')
+      if (seenRoleRooms.has(progressKey)) continue
+      seenRoleRooms.add(progressKey)
       const entry = map.get(inspectorId) || {
         userId: inspectorId,
         userName: String(task.inspector_name || task.assignee_name || '').trim(),
@@ -278,7 +347,7 @@ function buildDayEndOverviewBaseUsers(tasks: Array<{
         inspection: { ...entry.stats.inspection, activeRooms: entry.stats.inspection.activeRooms.slice().sort((a, b) => a.localeCompare(b, 'en')), doneRooms: entry.stats.inspection.doneRooms.slice().sort((a, b) => a.localeCompare(b, 'en')) },
       },
     }))
-    .sort((a, b) => a.userName.localeCompare(b.userName, 'en'))
+    .sort(compareDayEndOverviewUsers)
 }
 
 function isCleaningWorkSubmitted(status0: any) {
@@ -1168,8 +1237,9 @@ export default function TasksScreen(props: Props) {
   const showWarehouseKeyCard = useMemo(() => {
     if (period !== 'today') return false
     if (!currentUserId) return false
-    return renderTasks.some((task) => isSouthbankCleaningTask(task) && isCleaningTaskAssignedToUser(task, currentUserId))
-  }, [currentUserId, period, renderTasks])
+    const managerCanViewSouthbankKeys = canSeeDayEndOverview && canManagerMode && mode === 'manager' && view === 'all'
+    return renderTasks.some((task) => isSouthbankCleaningTask(task) && (managerCanViewSouthbankKeys || isCleaningTaskAssignedToUser(task, currentUserId)))
+  }, [canManagerMode, canSeeDayEndOverview, currentUserId, mode, period, renderTasks, view])
   const loadWarehouseKey = useCallback(async () => {
     if (!token || !showWarehouseKeyCard || !warehouseKeyExpanded) return
     setWarehouseKeyLoading(true)
@@ -1311,6 +1381,10 @@ export default function TasksScreen(props: Props) {
       }),
     )
   }, [selfDayEndTasks])
+  const dayEndOverviewDisplayUsers = useMemo(
+    () => buildDayEndOverviewDisplayUsers(dayEndOverviewUsers),
+    [dayEndOverviewUsers],
+  )
   const dayEndViewerTarget = useMemo(() => {
     const currentUserId = String((user as any)?.id || '').trim()
     if ((isCleanerSelf || isInspectorSelf) && currentUserId) return { userId: currentUserId, userName: String((user as any)?.username || '').trim(), roles: selfDayEndRoles, roomCodes: [] as string[] }
@@ -1393,7 +1467,7 @@ export default function TasksScreen(props: Props) {
           return { ...entry, complete }
         }))
         if (!cancelled) {
-          setDayEndOverviewUsers(rows.sort((a, b) => Number(a.complete) - Number(b.complete) || a.userName.localeCompare(b.userName, 'en')))
+          setDayEndOverviewUsers(rows.sort(compareDayEndOverviewUsers))
           setDayEndOverviewLoading(false)
         }
       } catch {
@@ -2115,23 +2189,23 @@ function showBanner(title: string, message: string) {
                   {dayEndOverviewLoading && !dayEndOverviewUsers.length ? (
                     <Text style={styles.staffProgressEmpty}>正在加载今天的人员工作情况...</Text>
                   ) : null}
-                  {!dayEndOverviewLoading && !dayEndOverviewUsers.length ? (
+                  {!dayEndOverviewLoading && !dayEndOverviewDisplayUsers.length ? (
                     <Text style={styles.staffProgressEmpty}>今天暂无清洁或检查任务。</Text>
                   ) : null}
-                  {dayEndOverviewUsers.map((entry) => {
-                    const cleaningLine = formatDayEndRoleStats('清洁', entry.stats?.cleaning)
-                    const inspectionLine = formatDayEndRoleStats('检查', entry.stats?.inspection)
+                  {dayEndOverviewDisplayUsers.map((entry) => {
+                    const cleaningLine = entry.displayRole === 'cleaning' ? formatDayEndRoleStats('清洁', entry.stats?.cleaning) : ''
+                    const inspectionLine = entry.displayRole === 'inspection' ? formatDayEndRoleStats('检查', entry.stats?.inspection) : ''
                     return (
                       <Pressable
-                        key={entry.userId}
-                        onPress={() => openDayEndScreen({ userId: entry.userId, userName: entry.userName, taskRoomCodes: entry.roomCodes, targetRoles: entry.roles })}
+                        key={`${entry.displayRole}:${entry.userId}`}
+                        onPress={() => openDayEndScreen({ userId: entry.userId, userName: entry.userName, taskRoomCodes: entry.roomCodes, targetRoles: [entry.displayRole] })}
                         style={({ pressed }) => [styles.staffProgressItem, pressed ? styles.segmentPressed : null]}
                       >
                         <View style={styles.staffProgressMain}>
                           <View style={styles.staffProgressNameRow}>
                             <Text style={styles.staffProgressName}>{entry.userName || entry.userId}</Text>
                             <Text style={styles.staffProgressMeta}>
-                              {entry.roles.includes('cleaning') && entry.roles.includes('inspection') ? '清洁 + 检查' : entry.roles.includes('inspection') ? '检查人员' : '清洁人员'}
+                              {entry.displayRole === 'inspection' ? '检查人员' : '清洁人员'}
                             </Text>
                           </View>
                           {cleaningLine ? <Text style={styles.staffProgressLine}>{cleaningLine}</Text> : null}

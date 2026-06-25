@@ -62,7 +62,13 @@ export function getTaskStatusMeta(task: WorkTaskItem, roleNames: string[]) {
   const kind = String(task.task_kind || '').trim().toLowerCase()
 
   if (source === 'cleaning_tasks' && kind === 'inspection') {
+    const hasInspector = !!(
+      String((task as any).inspector_id || '').trim()
+      || String((task as any).inspector_name || '').trim()
+      || String((task as any).assignee_id || '').trim()
+    )
     if (s === 'cleaned' || s === 'restock_pending' || s === 'restocked') return { text: '待检查', tone: 'pending' as const }
+    if ((s === 'todo' || s === 'pending' || s === 'unassigned') && hasInspector) return { text: '已分配', tone: 'normal' as const }
     return meta
   }
 
@@ -70,7 +76,7 @@ export function getTaskStatusMeta(task: WorkTaskItem, roleNames: string[]) {
     const isCleanerView = isCleanerRole(roleNames)
     const cleanerName = String((task as any).cleaner_name || '').trim()
     const inspectorName = String((task as any).inspector_name || '').trim()
-    const hasExecutor = !!(cleanerName || inspectorName || String((task as any).assignee_id || '').trim() || String((task as any).inspector_id || '').trim())
+    const hasExecutor = !!(cleanerName || inspectorName || String((task as any).cleaner_id || '').trim() || String((task as any).assignee_id || '').trim() || String((task as any).inspector_id || '').trim())
     const inspectionStatus = String((task as any).inspection_status || '').trim().toLowerCase()
     const hasInspection = Array.isArray((task as any).inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
     const inspectionMode = effectiveInspectionMode(task as any)

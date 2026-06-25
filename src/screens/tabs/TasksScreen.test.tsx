@@ -16,6 +16,13 @@ const mockRoleState = {
   isTaskManagerUser: false,
 }
 
+function flattenRenderedText(node: any): string[] {
+  if (node == null || typeof node === 'boolean') return []
+  if (typeof node === 'string' || typeof node === 'number') return [String(node)]
+  if (Array.isArray(node)) return node.flatMap(flattenRenderedText)
+  return flattenRenderedText(node.children || [])
+}
+
 jest.mock('../../components/GuestLuggageCard', () => () => null)
 
 jest.mock('../../lib/auth', () => ({
@@ -244,7 +251,7 @@ test('customer service hides day-end overview while admin sees staff progress su
       start_time: '10am',
       end_time: '3pm',
       assignee_id: 'cleaner-1',
-      cleaner_id: 'cleaner-1',
+      cleaner_id: null,
       cleaner_name: '清洁A',
       inspector_id: 'inspector-1',
       inspector_name: '检查B',
@@ -273,11 +280,61 @@ test('customer service hides day-end overview while admin sees staff progress su
       cleaner_name: null,
       inspector_id: 'inspector-2',
       inspector_name: 'zhi-f',
-      status: 'assigned',
+      status: 'to_hang_keys',
       cleaning_status: 'assigned',
-      inspection_status: 'assigned',
+      inspection_status: 'to_hang_keys',
       urgency: 'medium',
       property: { id: 'p2', code: 'MQ102', address: 'B', unit_type: '2b1b' },
+    },
+    {
+      id: 'merged-3',
+      task_kind: 'cleaning',
+      source_type: 'cleaning_tasks',
+      source_id: 'ct-5',
+      source_ids: ['ct-5'],
+      cleaning_task_ids: ['ct-5'],
+      inspection_task_ids: [],
+      property_id: 'p3',
+      title: 'MQ103',
+      summary: null,
+      scheduled_date: mockTodayKey,
+      start_time: '10am',
+      end_time: '3pm',
+      assignee_id: 'cleaner-3',
+      cleaner_id: 'cleaner-3',
+      cleaner_name: 'Simon',
+      inspector_id: null,
+      inspector_name: null,
+      status: 'assigned',
+      cleaning_status: 'assigned',
+      inspection_status: null,
+      urgency: 'medium',
+      property: { id: 'p3', code: 'MQ103', address: 'C', unit_type: '2b1b' },
+    },
+    {
+      id: 'merged-4',
+      task_kind: 'inspection',
+      source_type: 'cleaning_tasks',
+      source_id: 'ct-6',
+      source_ids: ['ct-6'],
+      cleaning_task_ids: [],
+      inspection_task_ids: ['ct-6'],
+      property_id: 'p4',
+      title: 'MQ104',
+      summary: null,
+      scheduled_date: mockTodayKey,
+      start_time: '10am',
+      end_time: '3pm',
+      assignee_id: 'inspector-4',
+      cleaner_id: null,
+      cleaner_name: null,
+      inspector_id: 'inspector-4',
+      inspector_name: 'AaronInspector',
+      status: 'assigned',
+      cleaning_status: null,
+      inspection_status: 'assigned',
+      urgency: 'medium',
+      property: { id: 'p4', code: 'MQ104', address: 'D', unit_type: '2b1b' },
     },
   ])
   listDayEndHandoverMock.mockImplementation(async (_token: string, params: { user_id?: string }) => (
@@ -319,12 +376,24 @@ test('customer service hides day-end overview while admin sees staff progress su
     expect(adminUi.getByText('今日工作情况')).toBeTruthy()
     expect(adminUi.getByText('清洁A')).toBeTruthy()
     expect(adminUi.getByText('检查B')).toBeTruthy()
+    expect(adminUi.getByText('Simon')).toBeTruthy()
+    expect(adminUi.getByText('AaronInspector')).toBeTruthy()
     expect(adminUi.getByText('清洁 0/1 · 进行中 MQ101')).toBeTruthy()
     expect(adminUi.getByText('检查 1/1 · 已完成 MQ101')).toBeTruthy()
     expect(adminUi.getByText('zhi-f')).toBeTruthy()
-    expect(adminUi.getByText('检查 0/1 · 待处理 1')).toBeTruthy()
+    expect(adminUi.getAllByText('检查 0/1 · 待处理 1').length).toBeGreaterThan(0)
     expect(adminUi.queryByText('检查 1/1 · 进行中 MQ101')).toBeNull()
     expect(adminUi.queryByText('清洁 + 检查')).toBeNull()
+    const rendered = flattenRenderedText(adminUi.toJSON()).join('\n')
+    expect(rendered.indexOf('清洁A')).toBeGreaterThanOrEqual(0)
+    expect(rendered.indexOf('检查B')).toBeGreaterThanOrEqual(0)
+    expect(rendered.indexOf('zhi-f')).toBeGreaterThanOrEqual(0)
+    expect(rendered.indexOf('Simon')).toBeGreaterThanOrEqual(0)
+    expect(rendered.indexOf('AaronInspector')).toBeGreaterThanOrEqual(0)
+    expect(rendered.indexOf('清洁A')).toBeLessThan(rendered.indexOf('zhi-f'))
+    expect(rendered.indexOf('清洁A')).toBeLessThan(rendered.indexOf('检查B'))
+    expect(rendered.indexOf('Simon')).toBeLessThan(rendered.indexOf('AaronInspector'))
+    expect(rendered.indexOf('Simon')).toBeLessThan(rendered.indexOf('检查B'))
   })
 
   fireEvent.press(adminUi.getByLabelText('staff-progress-toggle'))
@@ -333,6 +402,55 @@ test('customer service hides day-end overview while admin sees staff progress su
     expect(adminUi.queryByText('清洁A')).toBeNull()
   })
 
+  mockAuthState.user = { id: 'u1', username: 'tester', role: 'cleaner', roles: ['cleaner'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = false
+})
+
+test('admin manager view shows MSQ warehouse key card for Southbank work even when not assigned to admin', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  snapshot.items = [
+    {
+      ...previousItems[0],
+      id: 'southbank-task',
+      source_id: 'ct-southbank',
+      task_kind: 'cleaning',
+      status: 'assigned',
+      assignee_id: 'cleaner-2',
+      cleaner_id: 'cleaner-2',
+      cleaner_name: '清洁B',
+      inspector_id: 'inspector-2',
+      inspector_name: '检查B',
+      property: {
+        ...previousItems[0].property,
+        id: 'p-southbank',
+        code: 'MSQ4504E',
+        region: 'Southbank',
+        address: '18 Hoff Boulevard, Southbank',
+      },
+    },
+  ]
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin', 'offline_manager'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-admin-msq-key', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText('MSQ 仓库钥匙')).toBeTruthy()
+  })
+
+  snapshot.items = previousItems
   mockAuthState.user = { id: 'u1', username: 'tester', role: 'cleaner', roles: ['cleaner'] }
   mockRoleState.canSwitchTaskMode = false
   mockRoleState.isTaskManagerUser = false

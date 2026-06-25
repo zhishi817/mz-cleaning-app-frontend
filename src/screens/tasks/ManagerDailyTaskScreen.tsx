@@ -7,6 +7,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { API_BASE_URL } from '../../config/env'
 import { effectiveInspectionMode, inspectionModeLabel, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
+import { buildCleaningMediaImageSource } from '../../lib/cleaningMedia'
 import {
   deleteGuestLuggageNotice,
   getCleaningConsumables,
@@ -25,6 +26,7 @@ import { prependNotice } from '../../lib/noticesStore'
 import { hasAnyRole } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
 import { findWorkTaskItemByAnyId, patchWorkTaskItem, refreshWorkTasksFromServer, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
+import { inspectionPhotoTaskIdsFromTask } from '../../lib/managerDailyTaskPhotos'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 
@@ -190,16 +192,6 @@ function cleaningTaskIdsFromTask(task: WorkTaskItem | null) {
   return uniqueTextList(ids)
 }
 
-function inspectionTaskIdsFromTask(task: WorkTaskItem | null) {
-  if (!task || task.source_type !== 'cleaning_tasks') return []
-  const ids = [
-    ...(Array.isArray((task as any)?.inspection_task_ids) ? (task as any).inspection_task_ids : []),
-    ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
-    (task as any)?.source_id,
-  ]
-  return uniqueTextList(ids)
-}
-
 function mergeConsumableRows(rows: any[]) {
   const byItem = new Map<string, { item_id: string; photo_url?: string | null; photo_urls?: string[]; item_label?: string | null; status?: string | null; note?: string | null; need_restock?: boolean }>()
   for (const x of rows || []) {
@@ -354,7 +346,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     }
   }, [task, token, user?.id, props.route.params.taskId])
 
-  const inspectionTaskIds = useMemo(() => inspectionTaskIdsFromTask(task), [task])
+  const inspectionTaskIds = useMemo(() => inspectionPhotoTaskIdsFromTask(task), [task])
   const cleaningTaskIds = useMemo(() => cleaningTaskIdsFromTask(task), [task])
   const inspectionTaskIdsKey = inspectionTaskIds.join('|')
   const cleaningTaskIdsKey = cleaningTaskIds.join('|')
@@ -890,7 +882,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
           <View style={styles.luggagePhotos}>
             {luggagePhotoUrls.map((url, index) => (
               <View key={`${url}-${index}`} style={styles.luggagePhotoItem}>
-                <Image source={{ uri: toAbsoluteUrl(url) }} style={styles.luggagePhoto} />
+                <Image source={buildCleaningMediaImageSource(token, url)} style={styles.luggagePhoto} />
                 {canEditLuggage ? (
                   <Pressable
                     onPress={() => setLuggagePhotoUrls((prev) => prev.filter((_, itemIndex) => itemIndex !== index))}
@@ -963,7 +955,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
               }}
               style={({ pressed }) => [styles.mediaThumbWrap, pressed ? styles.pressed : null]}
             >
-              <Image source={{ uri: toAbsoluteUrl((task as any)?.key_photo_url) }} style={styles.mediaThumb} />
+              <Image source={buildCleaningMediaImageSource(token, (task as any)?.key_photo_url)} style={styles.mediaThumb} />
               <Text style={styles.mediaLabel}>钥匙照片</Text>
             </Pressable>
           ) : null}
@@ -992,7 +984,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                     }}
                     style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                   >
-                    <Image source={{ uri: toAbsoluteUrl(x.url) }} style={styles.gridImg} />
+                    <Image source={buildCleaningMediaImageSource(token, x.url)} style={styles.gridImg} />
                   </Pressable>
                 ))}
               </View>
@@ -1016,7 +1008,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                   }}
                   style={({ pressed }) => [styles.fullWidthMediaCard, pressed ? styles.pressed : null]}
                 >
-                  <Image source={{ uri: toAbsoluteUrl(livingRoomPhotoUrl) }} style={styles.fullWidthImg} />
+                  <Image source={buildCleaningMediaImageSource(token, livingRoomPhotoUrl)} style={styles.fullWidthImg} />
                 </Pressable>
               ) : (
                 <Text style={styles.mutedSmall}>暂无</Text>
@@ -1034,7 +1026,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <Image source={{ uri: toAbsoluteUrl(remoteTvPhotoUrl) }} style={styles.gridImg} />
+                      <Image source={buildCleaningMediaImageSource(token, remoteTvPhotoUrl)} style={styles.gridImg} />
                       <Text style={styles.mediaLabel}>电视遥控器</Text>
                     </Pressable>
                   ) : null}
@@ -1046,7 +1038,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <Image source={{ uri: toAbsoluteUrl(remoteAcPhotoUrl) }} style={styles.gridImg} />
+                      <Image source={buildCleaningMediaImageSource(token, remoteAcPhotoUrl)} style={styles.gridImg} />
                       <Text style={styles.mediaLabel}>空调遥控器</Text>
                     </Pressable>
                   ) : null}
@@ -1075,7 +1067,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <Image source={{ uri: toAbsoluteUrl(url) }} style={styles.gridImg} />
+                      <Image source={buildCleaningMediaImageSource(token, url)} style={styles.gridImg} />
                     </Pressable>
                   ))}
                 </View>
@@ -1103,7 +1095,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <Image source={{ uri: toAbsoluteUrl(x.url) }} style={styles.gridImg} />
+                      <Image source={buildCleaningMediaImageSource(token, x.url)} style={styles.gridImg} />
                     </Pressable>
                   ))}
                 </View>
@@ -1137,7 +1129,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                               }}
                               style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                             >
-                              <Image source={{ uri: toAbsoluteUrl(photoUrl) }} style={styles.gridImg} />
+                              <Image source={buildCleaningMediaImageSource(token, photoUrl)} style={styles.gridImg} />
                             </Pressable>
                           ))}
                         </View>
@@ -1158,7 +1150,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                               }}
                               style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                             >
-                              <Image source={{ uri: toAbsoluteUrl(photoUrl) }} style={styles.gridImg} />
+                              <Image source={buildCleaningMediaImageSource(token, photoUrl)} style={styles.gridImg} />
                             </Pressable>
                           ))}
                         </View>
@@ -1198,7 +1190,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
           </View>
           {viewerUrl ? (
             <View style={{ flex: 1 }} pointerEvents="none">
-              <Image source={{ uri: toAbsoluteUrl(viewerUrl) }} style={styles.viewerImg} resizeMode="contain" />
+              <Image source={buildCleaningMediaImageSource(token, viewerUrl)} style={styles.viewerImg} resizeMode="contain" />
             </View>
           ) : null}
         </Pressable>
