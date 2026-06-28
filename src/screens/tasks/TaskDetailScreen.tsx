@@ -21,12 +21,13 @@ import {
 import { hairline, isCompactWidth, moderateScale } from '../../lib/scale'
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, refreshWorkTasksFromServer, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
-import { deleteKeyPhoto, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, uploadMzappMedia } from '../../lib/api'
+import { deleteKeyPhoto, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, updateWorkTaskPhotos, uploadMzappMedia } from '../../lib/api'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { resolveKeyRequirementTags } from '../../lib/keyRequirementTags'
 import { isEarlyCheckinTime, isLateCheckinTime, isLateCheckoutTime } from '../../lib/taskTime'
 import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
+import { buildCleaningMediaImageSource } from '../../lib/cleaningMedia'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
 
@@ -130,6 +131,13 @@ function addDays(d: Date, days: number) {
   return nd
 }
 
+function buildDetailFallbackRange(base = new Date()) {
+  return {
+    date_from: ymd(addDays(base, -7)),
+    date_to: ymd(addDays(base, 7)),
+  }
+}
+
 function isBeforeToday(taskDate0: any) {
   const taskDate = String(taskDate0 || '').slice(0, 10)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(taskDate)) return false
@@ -170,6 +178,8 @@ export default function TaskDetailScreen(props: Props) {
   const action = props.route.params.action
   const [marking, setMarking] = useState(false)
   const [markPhotoUrls, setMarkPhotoUrls] = useState<string[]>([])
+  const [taskPhotoUrls, setTaskPhotoUrls] = useState<string[]>([])
+  const [taskPhotoSaving, setTaskPhotoSaving] = useState(false)
   const [markNote, setMarkNote] = useState('')
   const [deferReason, setDeferReason] = useState('')
   const [showUnfinished, setShowUnfinished] = useState(false)
@@ -192,6 +202,8 @@ export default function TaskDetailScreen(props: Props) {
   const items = getWorkTasksSnapshot().items
   const task = useMemo<WorkTaskItem | null>(() => findWorkTaskItemByAnyId(id), [id, items])
   const previewSize = useMemo(() => ({ width, height }), [height, width])
+  const previewSource = useMemo(() => (previewUrl ? buildCleaningMediaImageSource(token, previewUrl) : null), [previewUrl, token])
+  const taskPhotoUrlsKey = useMemo(() => JSON.stringify(normalizePhotoUrls((task as any)?.photo_urls)), [task])
   const isCompactLayout = isCompactWidth(width)
   const guestLuggage = (task as any)?.guest_luggage || null
   const cleaningTaskId = String((task as any)?.source_id || '').trim()
@@ -207,10 +219,11 @@ export default function TaskDetailScreen(props: Props) {
   useEffect(() => {
     if (!task) return
     setMarkPhotoUrls(normalizePhotoUrls((task as any).completion_photo_urls).length ? normalizePhotoUrls((task as any).completion_photo_urls) : photoUrlsFromText(task.summary))
+    setTaskPhotoUrls(normalizePhotoUrls((task as any).photo_urls))
     setMarkNote(String((task as any).completion_note || '').trim())
     setDeferReason(String((task as any).completion_reason || '').trim())
     setShowUnfinished(false)
-  }, [task?.id])
+  }, [task?.id, taskPhotoUrlsKey])
 
   useEffect(() => {
     if (!hasInit) return
@@ -218,9 +231,7 @@ export default function TaskDetailScreen(props: Props) {
     if (!token || !user?.id) return
     let cancelled = false
     const view: WorkTasksView = canManagerView ? 'all' : 'mine'
-    const now = new Date()
-    const date_from = ymd(addDays(now, -45))
-    const date_to = ymd(addDays(now, 45))
+    const { date_from, date_to } = buildDetailFallbackRange()
     setResolvingRemote(true)
     refreshWorkTasksFromServer({ token, userId: String(user.id), date_from, date_to, view })
       .catch(() => null)
@@ -404,6 +415,71 @@ export default function TaskDetailScreen(props: Props) {
 
   function removeMarkPhoto(index: number) {
     setMarkPhotoUrls((prev) => prev.filter((_, idx) => idx !== index))
+  }
+
+  async function saveTaskPhotos(nextUrls: string[]) {
+    if (!task) return
+    if (!token) throw new Error('请先登录')
+    const normalized = normalizePhotoUrls(nextUrls)
+    const result = await updateWorkTaskPhotos(token, String(task.id), { photo_urls: normalized })
+    const saved = normalizePhotoUrls(result.photo_urls)
+    setTaskPhotoUrls(saved)
+    await patchWorkTaskItem(String(task.id), { photo_urls: saved } as any)
+  }
+
+  async function onAppendTaskPhotos(source: 'camera' | 'library') {
+    if (!task) return
+    if (!token) {
+      Alert.alert(t('common_error'), '请先登录')
+      return
+    }
+    const permitted = source === 'camera' ? await ensureCameraPerm() : await ensureLibraryPerm()
+    if (!permitted) {
+      Alert.alert(t('common_error'), source === 'camera' ? '请先开启相机权限' : '请先开启相册权限')
+      return
+    }
+    const uploaded: string[] = []
+    try {
+      setTaskPhotoSaving(true)
+      const res =
+        source === 'camera'
+          ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+          : await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: 'images',
+              quality: 0.75,
+              allowsEditing: false,
+              allowsMultipleSelection: true,
+              selectionLimit: 0,
+            })
+      if (res.canceled || !res.assets?.length) return
+      for (const asset of res.assets as any[]) {
+        const uri = String(asset?.uri || '').trim()
+        if (!uri) continue
+        const name = String(asset?.fileName || uri.split('/').pop() || `offline-task-${Date.now()}.jpg`)
+        const mimeType = String(asset?.mimeType || 'image/jpeg')
+        const up = await uploadMzappMedia(token, { uri, name, mimeType })
+        uploaded.push(up.url)
+      }
+      if (!uploaded.length) return
+      await saveTaskPhotos([...taskPhotoUrls, ...uploaded])
+      Alert.alert(t('common_ok'), uploaded.length > 1 ? `已上传 ${uploaded.length} 张照片` : '照片已上传')
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '上传失败'))
+    } finally {
+      setTaskPhotoSaving(false)
+    }
+  }
+
+  async function removeTaskPhoto(index: number) {
+    if (taskPhotoSaving) return
+    try {
+      setTaskPhotoSaving(true)
+      await saveTaskPhotos(taskPhotoUrls.filter((_, idx) => idx !== index))
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '删除失败'))
+    } finally {
+      setTaskPhotoSaving(false)
+    }
   }
 
   async function onMarkDone() {
@@ -940,6 +1016,39 @@ export default function TaskDetailScreen(props: Props) {
                 <Text style={styles.summary}>{offlineDetail || detailText}</Text>
               </View>
             ) : null}
+            {isOfflineTask ? (
+              <View style={styles.taskPhotosPanel}>
+                <Text style={styles.sectionTitle}>任务照片</Text>
+                <Text style={styles.mutedSmall}>
+                  {taskPhotoUrls.length ? `已添加 ${taskPhotoUrls.length} 张照片，线下执行人可查看` : '可添加现场说明照片给线下执行人查看'}
+                </Text>
+                <View style={[styles.markUploadRow, isCompactLayout ? styles.actionsRowCompact : null]}>
+                  <Pressable onPress={() => onAppendTaskPhotos('camera')} disabled={taskPhotoSaving} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, taskPhotoSaving ? styles.markBtnDisabled : null]}>
+                    <Text style={styles.markBtnText}>{taskPhotoSaving ? '保存中...' : '拍照添加'}</Text>
+                  </Pressable>
+                  <Pressable onPress={() => onAppendTaskPhotos('library')} disabled={taskPhotoSaving} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, taskPhotoSaving ? styles.markBtnDisabled : null]}>
+                    <Text style={styles.markBtnText}>相册添加</Text>
+                  </Pressable>
+                </View>
+                {taskPhotoUrls.length ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.markPhotoList}>
+                    {taskPhotoUrls.map((url, index) => (
+                      <View key={`${url}:${index}`} style={styles.markPhotoCard}>
+                        <Pressable
+                          onPress={() => setPreviewUrl(String(url))}
+                          style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
+                        >
+                          <Image source={buildCleaningMediaImageSource(token, url)} style={styles.markPhotoThumb} resizeMode="cover" />
+                        </Pressable>
+                        <Pressable onPress={() => removeTaskPhoto(index)} disabled={taskPhotoSaving} style={({ pressed }) => [styles.markPhotoRemoveBtn, pressed ? styles.pressed : null]}>
+                          <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
+                        </Pressable>
+                      </View>
+                    ))}
+                  </ScrollView>
+                ) : null}
+              </View>
+            ) : null}
             <Text style={styles.sectionTitle}>任务处理</Text>
             <Text style={styles.mutedSmall} numberOfLines={2}>
               {effectiveMarkPhotoUrls.length
@@ -1039,9 +1148,9 @@ export default function TaskDetailScreen(props: Props) {
             bounces={false}
             centerContent
           >
-            {previewUrl ? (
+            {previewSource ? (
               <View style={{ width: previewSize.width, height: Math.max(240, previewSize.height - insets.top - insets.bottom - 80) }}>
-                <Image source={{ uri: previewUrl }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+                <Image source={previewSource} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
               </View>
             ) : null}
           </ScrollView>
@@ -1121,6 +1230,7 @@ const styles = StyleSheet.create({
   mutedSmall: { marginTop: 8, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   markWrap: { marginTop: 14 },
   detailPanel: { marginBottom: 4 },
+  taskPhotosPanel: { marginTop: 4, marginBottom: 4 },
   label: { marginTop: 14, marginBottom: 8, color: '#111827', fontWeight: '900' },
   input: { height: 44, borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, fontWeight: '700', color: '#111827' },
   markRow: { marginTop: 14, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },

@@ -19,6 +19,7 @@ import {
 } from './authStorage'
 import { subscribeAuthInvalidated } from './authEvents'
 import { processCleaningConsumablesSubmitQueue } from './cleaningConsumablesSubmitQueue'
+import { processDayEndHandoverQueue } from './dayEndHandoverQueue'
 import { processInspectionMediaQueue, pruneExpiredInspectionMediaItems } from './inspectionMediaQueue'
 import { processInspectionPanelSubmitQueue } from './inspectionPanelSubmitQueue'
 import { processKeyUploadQueue } from './keyUploadQueue'
@@ -196,6 +197,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         await processInspectionPanelSubmitQueue(token)
         await processCleaningConsumablesSubmitQueue(token, String(user?.username || '').trim())
         await processKeyUploadQueue(token)
+        await processDayEndHandoverQueue(token)
       } catch {}
     }
     void runQueueMaintenance()

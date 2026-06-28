@@ -187,6 +187,62 @@ test('tasks screen shows 晚入住 tag when checkin time is later than 3pm', asy
   snapshot.items[0].end_time = '3pm'
 })
 
+test('property follow-up task prioritizes content before assignee and address', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  snapshot.items = [
+    {
+      id: 'maintenance-1',
+      task_kind: 'maintenance',
+      source_type: 'property_maintenance',
+      source_id: 'pm-1',
+      title: '888312',
+      summary: '洗碗机排水不正常',
+      scheduled_date: mockTodayKey,
+      start_time: '',
+      end_time: '',
+      assignee_id: 'u1',
+      assignee_name: 'Miranda',
+      status: 'assigned',
+      urgency: 'medium',
+      property: {
+        id: 'p-maintenance',
+        code: '888312',
+        region: 'Melbourne',
+        address: '888 Collins Street, Melbourne',
+        unit_type: '',
+        access_guide_link: '',
+      },
+      date: mockTodayKey,
+    },
+  ]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-follow-up-layout', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText('任务内容')).toBeTruthy()
+    expect(ui.getByText('洗碗机排水不正常')).toBeTruthy()
+    expect(ui.getByText('执行人员')).toBeTruthy()
+    expect(ui.getByText('Miranda')).toBeTruthy()
+    expect(ui.getByText('房源地址')).toBeTruthy()
+  })
+
+  const rendered = flattenRenderedText(ui.toJSON()).join('\n')
+  expect(rendered.indexOf('洗碗机排水不正常')).toBeLessThan(rendered.indexOf('执行人员'))
+  expect(rendered.indexOf('执行人员')).toBeLessThan(rendered.indexOf('888 Collins Street, Melbourne'))
+
+  snapshot.items = previousItems
+})
+
 test('manager-only user can switch between 全部 and 我的 without being forced back to 全部', async () => {
   mockAuthState.user = { id: 'u1', username: 'tester', role: 'admin', roles: ['admin', 'offline_manager'] }
   mockRoleState.canSwitchTaskMode = false

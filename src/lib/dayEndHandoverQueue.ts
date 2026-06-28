@@ -1,6 +1,6 @@
 import { Directory, File, Paths } from 'expo-file-system'
 import { getJson, setJson } from './storage'
-import { uploadCleaningMedia, uploadDayEndHandover } from './api'
+import { isRetryableApiError, uploadCleaningMedia, uploadDayEndHandover } from './api'
 
 export type DayEndDraftPhoto = {
   id: string
@@ -39,13 +39,9 @@ function keyOf(userId: string, date: string) {
 }
 
 function isNetworkishError(e: any) {
-  const m = String(e?.message || e || '').toLowerCase()
-  if (!m) return false
-  if (m.includes('network request failed')) return true
-  if (m.includes('timeout')) return true
-  if (m.includes('timed out')) return true
-  if (m.includes('aborted')) return true
-  return false
+  if (isRetryableApiError(e)) return true
+  const code = String(e?.code || '').trim().toUpperCase()
+  return code === 'TIMEOUT' || code === 'NETWORK_ERROR'
 }
 
 async function loadAllDrafts(): Promise<Record<string, DayEndHandoverDraft>> {

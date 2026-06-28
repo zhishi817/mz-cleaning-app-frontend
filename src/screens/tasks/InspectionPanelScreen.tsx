@@ -40,6 +40,7 @@ import { canSkipInspectionPhotosForGuestArrival, isEarlyCheckinTime } from '../.
 import { getInspectionScopeTone, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
 import { ensureSuppliesCatalogLoaded, retrySuppliesCatalog, useSuppliesCatalogStore } from '../../lib/useSuppliesCatalogStore'
 import { getWorkTasksSnapshot, patchWorkTaskItem, subscribeWorkTasks } from '../../lib/workTasksStore'
+import { getCleaningConsumables } from '../../lib/api'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import CleaningMediaImage from '../../components/CleaningMediaImage'
@@ -173,6 +174,64 @@ function buildInitialRestock(task: any) {
     .filter(Boolean) as RestockState[]
 }
 
+function sourceIdsForConsumables(task: any, fallbackId: string) {
+  return Array.from(new Set([
+    fallbackId,
+    ...(Array.isArray(task?.source_ids) ? task.source_ids : []),
+    ...(Array.isArray(task?.cleaning_task_ids) ? task.cleaning_task_ids : []),
+  ].map((value) => cleanText(value)).filter(Boolean)))
+}
+
+function buildRestockFromConsumables(responses: any[]) {
+  const out: RestockState[] = []
+  const seen = new Set<string>()
+  for (const response of responses) {
+    const items = Array.isArray(response?.items) ? response.items : []
+    for (const item of items) {
+      const itemId = cleanText(item?.item_id)
+      if (!itemId || seen.has(itemId)) continue
+      const status = cleanText(item?.status).toLowerCase()
+      if (!item?.need_restock && status !== 'low') continue
+      seen.add(itemId)
+      const photoUrls = Array.isArray(item?.photo_urls) ? item.photo_urls.map(cleanText).filter(Boolean) : []
+      const qty0 = item?.qty == null ? null : Number(item.qty)
+      out.push({
+        item_id: itemId,
+        label: cleanText(item?.item_label) || itemId,
+        qty: Number.isFinite(qty0) ? qty0 : null,
+        status: null,
+        source_photo_url: cleanText(item?.photo_url) || photoUrls[0] || null,
+        proof_media: [],
+        note: cleanText(item?.note),
+        origin: 'task',
+      })
+    }
+  }
+  return out
+}
+
+function mergeRestockItems(base: RestockState[], incoming: RestockState[]) {
+  const out = base.map(cloneRestockItem)
+  const byId = new Map(out.map((item, index) => [item.item_id, index]))
+  for (const item of incoming) {
+    const idx = byId.get(item.item_id)
+    if (idx == null) {
+      byId.set(item.item_id, out.length)
+      out.push(cloneRestockItem(item))
+      continue
+    }
+    const current = out[idx]
+    out[idx] = {
+      ...current,
+      label: current.label || item.label,
+      qty: current.qty == null ? item.qty : current.qty,
+      source_photo_url: current.source_photo_url || item.source_photo_url,
+      note: current.note || item.note,
+    }
+  }
+  return out
+}
+
 function buildSnapshot(params: {
   taskId: string
   cleaningTaskId: string
@@ -271,6 +330,7 @@ export default function InspectionPanelScreen(props: Props) {
   const propertyAddr = cleanText(task?.property?.address)
   const checkinTime = cleanText((task as any)?.end_time || (task as any)?.checkin_time)
   const guestSpecialRequest = cleanText((task as any)?.guest_special_request)
+  const consumableSourceIdsKey = useMemo(() => sourceIdsForConsumables(task, cleaningTaskId).join('|'), [cleaningTaskId, task])
   const guestArrivalPhotoSkipEligible = canSkipInspectionPhotosForGuestArrival(checkinTime)
   const isEarlyCheckinGuest = isEarlyCheckinTime(checkinTime)
   const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
@@ -322,11 +382,16 @@ export default function InspectionPanelScreen(props: Props) {
     const forceDraftReload = options?.forceDraftReload === true
     if (showSpinner) setLoading(true)
     try {
-      const [batch, draft, feedback] = await Promise.all([
+      const consumableSourceIds = consumableSourceIdsKey ? consumableSourceIdsKey.split('|').filter(Boolean) : []
+      const [batch, draft, feedback, consumablesResponses] = await Promise.all([
         getInspectionPanelBatch(task.id),
         getInspectionPanelDraft(task.id),
         getInspectionPanelFeedbackDraft(task.id),
+        token && consumableSourceIds.length
+          ? Promise.all(consumableSourceIds.map((id) => getCleaningConsumables(token, id).catch(() => null)))
+          : Promise.resolve([]),
       ])
+      const remoteRestockItems = buildRestockFromConsumables(consumablesResponses)
       const sourceSnapshot = batch && batch.status !== 'draft' ? batch.snapshot : null
       setBatchItem(batch)
       setFeedbackDraft(sourceSnapshot?.feedback || feedback || null)
@@ -341,14 +406,22 @@ export default function InspectionPanelScreen(props: Props) {
       }
       if (draftHydratedRef.current && !forceDraftReload) {
         if (feedback) setFeedbackDraft(feedback)
+        const incoming = mergeRestockItems(initialRestockItems.map(cloneRestockItem), remoteRestockItems)
+        if (incoming.length) {
+          setRestock((prev) => mergeRestockItems(prev, incoming))
+          if (remoteRestockItems.length) setRestockConfirmedSufficient(false)
+        }
         return
       }
       setRestock(
-        draft?.restock?.length
-          ? draft.restock.map(cloneRestockItem)
-          : initialRestockItems.map(cloneRestockItem),
+        mergeRestockItems(
+          draft?.restock?.length
+            ? draft.restock.map(cloneRestockItem)
+            : initialRestockItems.map(cloneRestockItem),
+          remoteRestockItems,
+        ),
       )
-      setRestockConfirmedSufficient(!!draft?.restock_confirmed_sufficient)
+      setRestockConfirmedSufficient(!!draft?.restock_confirmed_sufficient && !remoteRestockItems.length)
       setGuestArrivalPhotoSkipConfirmed(draft?.room_photo_requirement === 'guest_arrival_confirmed')
       setRoomPhotos(cloneRoomPhotos(draft?.room_photos || baseRoomPhotos()))
       setCleaningIssue([...(draft?.cleaning_issue || [])])
@@ -356,7 +429,7 @@ export default function InspectionPanelScreen(props: Props) {
     } finally {
       if (showSpinner) setLoading(false)
     }
-  }, [cleaningTaskId, initialRestockItems, task])
+  }, [cleaningTaskId, consumableSourceIdsKey, initialRestockItems, task, token])
 
   useEffect(() => {
     void loadLocalState({ showSpinner: true })

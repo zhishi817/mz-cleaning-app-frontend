@@ -32,6 +32,8 @@ import GuestLuggageCard from '../../components/GuestLuggageCard'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'ManagerDailyTask'>
 
+const PHOTO_LOAD_FOCUS_REUSE_MS = 30_000
+
 function normalizeBase(base: string) {
   return String(base || '').trim().replace(/\/+$/g, '')
 }
@@ -98,6 +100,13 @@ function addDays(d: Date, days: number) {
   const nd = new Date(d)
   nd.setDate(nd.getDate() + days)
   return nd
+}
+
+function buildDetailFallbackRange(base = new Date()) {
+  return {
+    date_from: ymd(addDays(base, -7)),
+    date_to: ymd(addDays(base, 7)),
+  }
 }
 
 function buildCleaningSummary(checkoutTime: string | null, checkinTime: string | null) {
@@ -298,6 +307,9 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const syncedTaskIdRef = useRef<string>('')
   const syncedLuggageVersionRef = useRef<string>('')
+  const photoLoadInFlightKeyRef = useRef<string>('')
+  const photoLoadInFlightPromiseRef = useRef<Promise<void> | null>(null)
+  const lastPhotoLoadRef = useRef<{ key: string; at: number } | null>(null)
 
   useEffect(() => {
     const currentTaskId = String(task?.id || '').trim()
@@ -332,9 +344,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     if (!token || !user?.id) return
     let cancelled = false
     const view: WorkTasksView = 'all'
-    const now = new Date()
-    const date_from = ymd(addDays(now, -45))
-    const date_to = ymd(addDays(now, 45))
+    const { date_from, date_to } = buildDetailFallbackRange()
     setResolvingRemote(true)
     refreshWorkTasksFromServer({ token, userId: String(user.id), date_from, date_to, view })
       .catch(() => null)
@@ -351,9 +361,15 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const inspectionTaskIdsKey = inspectionTaskIds.join('|')
   const cleaningTaskIdsKey = cleaningTaskIds.join('|')
 
-  const loadTaskPhotos = useCallback(async () => {
+  const loadTaskPhotos = useCallback(async (opts?: { reuseRecent?: boolean }) => {
     if (!token) return
-    if (!inspectionTaskIds.length && !cleaningTaskIds.length) {
+    const loadKey = `${String(user?.id || '')}|${cleaningTaskIdsKey}|${inspectionTaskIdsKey}`
+    const lastLoad = lastPhotoLoadRef.current
+    if (opts?.reuseRecent && lastLoad?.key === loadKey && Date.now() - lastLoad.at < PHOTO_LOAD_FOCUS_REUSE_MS) return
+    if (photoLoadInFlightPromiseRef.current && photoLoadInFlightKeyRef.current === loadKey) return photoLoadInFlightPromiseRef.current
+    const cleaningIds = cleaningTaskIdsKey ? cleaningTaskIdsKey.split('|').filter(Boolean) : []
+    const inspectionIds = inspectionTaskIdsKey ? inspectionTaskIdsKey.split('|').filter(Boolean) : []
+    if (!inspectionIds.length && !cleaningIds.length) {
       setConsumableItems([])
       setLivingRoomPhotoUrls([])
       setCompletionItems([])
@@ -361,57 +377,70 @@ export default function ManagerDailyTaskScreen(props: Props) {
       setRestockProofs([])
       return
     }
-    setPhotosLoading(true)
-    try {
-      const [consumablesResps, completionResps, inspectionResps, restockResps] = await Promise.all([
-        Promise.all(cleaningTaskIds.map((id) => getCleaningConsumables(token, id).catch(() => null))),
-        Promise.all(cleaningTaskIds.map((id) => getCompletionPhotos(token, id).catch(() => null))),
-        Promise.all(inspectionTaskIds.map((id) => getInspectionPhotos(token, id).catch(() => null))),
-        Promise.all(cleaningTaskIds.map((id) => getRestockProof(token, id).catch(() => null))),
-      ])
 
-      setLivingRoomPhotoUrls(uniqueTextList(consumablesResps.flatMap((resp) => normalizeUrlList((resp as any)?.living_room_photo_url))))
-      setConsumableItems(mergeConsumableRows(consumablesResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))))
+    let run: Promise<void> | undefined = undefined
+    run = (async () => {
+      setPhotosLoading(true)
+      try {
+        const [consumablesResps, completionResps, inspectionResps, restockResps] = await Promise.all([
+          Promise.all(cleaningIds.map((id) => getCleaningConsumables(token, id).catch(() => null))),
+          Promise.all(cleaningIds.map((id) => getCompletionPhotos(token, id).catch(() => null))),
+          Promise.all(inspectionIds.map((id) => getInspectionPhotos(token, id).catch(() => null))),
+          Promise.all(cleaningIds.map((id) => getRestockProof(token, id).catch(() => null))),
+        ])
 
-      const completion = completionResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))
-      const seenCompletion = new Set<string>()
-      setCompletionItems(
-        completion
-          .map((x) => ({ area: String(x.area || '').trim(), url: String(x.url || '').trim(), note: x.note ?? null }))
-          .filter((x) => {
-            if (!x.url) return false
-            const key = `${x.area}|${x.url}`
-            if (seenCompletion.has(key)) return false
-            seenCompletion.add(key)
-            return true
-          }),
-      )
+        setLivingRoomPhotoUrls(uniqueTextList(consumablesResps.flatMap((resp) => normalizeUrlList((resp as any)?.living_room_photo_url))))
+        setConsumableItems(mergeConsumableRows(consumablesResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))))
 
-      const items = inspectionResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))
-      const seenInspection = new Set<string>()
-      setInspectionItems(
-        items
-          .map((x) => ({ area: String(x.area || '').trim(), url: String(x.url || '').trim(), note: x.note ?? null }))
-          .filter((x) => {
-            if (!x.url) return false
-            const key = `${x.area}|${x.url}`
-            if (seenInspection.has(key)) return false
-            seenInspection.add(key)
-            return true
-          }),
-      )
+        const completion = completionResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))
+        const seenCompletion = new Set<string>()
+        setCompletionItems(
+          completion
+            .map((x) => ({ area: String(x.area || '').trim(), url: String(x.url || '').trim(), note: x.note ?? null }))
+            .filter((x) => {
+              if (!x.url) return false
+              const key = `${x.area}|${x.url}`
+              if (seenCompletion.has(key)) return false
+              seenCompletion.add(key)
+              return true
+            }),
+        )
 
-      setRestockProofs(mergeRestockProofRows(restockResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))))
-    } catch {
-      setConsumableItems([])
-      setLivingRoomPhotoUrls([])
-      setCompletionItems([])
-      setInspectionItems([])
-      setRestockProofs([])
-    } finally {
-      setPhotosLoading(false)
-    }
-  }, [cleaningTaskIdsKey, inspectionTaskIdsKey, token])
+        const items = inspectionResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))
+        const seenInspection = new Set<string>()
+        setInspectionItems(
+          items
+            .map((x) => ({ area: String(x.area || '').trim(), url: String(x.url || '').trim(), note: x.note ?? null }))
+            .filter((x) => {
+              if (!x.url) return false
+              const key = `${x.area}|${x.url}`
+              if (seenInspection.has(key)) return false
+              seenInspection.add(key)
+              return true
+            }),
+        )
+
+        setRestockProofs(mergeRestockProofRows(restockResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))))
+        lastPhotoLoadRef.current = { key: loadKey, at: Date.now() }
+      } catch {
+        setConsumableItems([])
+        setLivingRoomPhotoUrls([])
+        setCompletionItems([])
+        setInspectionItems([])
+        setRestockProofs([])
+      } finally {
+        if (run && photoLoadInFlightPromiseRef.current === run) {
+          photoLoadInFlightPromiseRef.current = null
+          photoLoadInFlightKeyRef.current = ''
+          setPhotosLoading(false)
+        }
+      }
+    })()
+
+    photoLoadInFlightKeyRef.current = loadKey
+    photoLoadInFlightPromiseRef.current = run
+    return run
+  }, [cleaningTaskIdsKey, inspectionTaskIdsKey, token, user?.id])
 
   useEffect(() => {
     void loadTaskPhotos()
@@ -420,7 +449,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
   useEffect(() => {
     const nav: any = props.navigation as any
     if (!nav || typeof nav.addListener !== 'function') return
-    const unsub = nav.addListener('focus', () => void loadTaskPhotos())
+    const unsub = nav.addListener('focus', () => void loadTaskPhotos({ reuseRecent: true }))
     return unsub
   }, [loadTaskPhotos, props.navigation])
 
@@ -546,9 +575,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
         }).catch(() => null)
       }
       if (token && user?.id) {
-        const now = new Date()
-        const date_from = ymd(addDays(now, -45))
-        const date_to = ymd(addDays(now, 45))
+        const { date_from, date_to } = buildDetailFallbackRange()
         refreshWorkTasksFromServer({ token, userId: String(user.id), date_from, date_to, view: 'all' }).catch(() => null)
       }
       setKeysDirty(false)

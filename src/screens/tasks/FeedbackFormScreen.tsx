@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import {
+  clearInspectionPanelFeedbackDraft,
   getInspectionPanelFeedbackDraft,
   setInspectionPanelFeedbackDraft,
   type InspectionPanelFeedbackPhotoMetaMap,
@@ -22,8 +23,10 @@ import {
   createPropertyFeedback,
   createPropertyFeedbackBatch,
   createPropertyFeedbackProject,
+  deletePropertyFeedback,
   listDailyNecessityOptions,
   listPropertyFeedbacks,
+  movePropertyFeedback,
   updatePropertyFeedback,
   updatePropertyFeedbackProject,
   uploadCleaningMedia,
@@ -105,7 +108,7 @@ type FeedbackHistoryCache = {
 
 type FeedbackFormDraftCache = {
   version: number
-  kind: Kind
+  kind: Kind | null
   maintenanceDrafts?: MaintenanceDraft[]
   deepCleaningDrafts?: DeepCleaningDraft[]
   dailyDrafts?: DailyDraft[]
@@ -231,6 +234,12 @@ function statusLabel(item?: PropertyFeedback | null) {
   if (s === 'resolved') return '已完成'
   if (s === 'in_progress') return '处理中'
   return '待处理'
+}
+
+function feedbackKindLabel(kind: PropertyFeedback['kind']) {
+  if (kind === 'deep_cleaning') return '深度清洁'
+  if (kind === 'daily_necessities') return '日用品反馈'
+  return '房源维修'
 }
 
 function projectStatusLabel(item?: PropertyFeedbackProject | null, feedback?: PropertyFeedback | null) {
@@ -469,11 +478,12 @@ export default function FeedbackFormScreen(props: Props) {
   const insets = useSafeAreaInsets()
   const isFocused = useIsFocused()
 
-  const [kind, setKind] = useState<Kind>('maintenance')
+  const [kind, setKind] = useState<Kind | null>(null)
   const [maintenanceDrafts, setMaintenanceDrafts] = useState<MaintenanceDraft[]>([buildMaintenanceDraft()])
   const [deepCleaningDrafts, setDeepCleaningDrafts] = useState<DeepCleaningDraft[]>([buildDeepCleaningDraft()])
   const [dailyDrafts, setDailyDrafts] = useState<DailyDraft[]>([buildDailyDraft()])
   const [submitting, setSubmitting] = useState(false)
+  const [kindError, setKindError] = useState(false)
 
   const [pending, setPending] = useState<PropertyFeedback[]>([])
   const [resolved, setResolved] = useState<PropertyFeedback[]>([])
@@ -514,6 +524,11 @@ export default function FeedbackFormScreen(props: Props) {
   const [recordEditOpen, setRecordEditOpen] = useState(false)
   const [recordEditFeedback, setRecordEditFeedback] = useState<PropertyFeedback | null>(null)
   const [recordEditSaving, setRecordEditSaving] = useState(false)
+  const [moveOpen, setMoveOpen] = useState(false)
+  const [moveItem, setMoveItem] = useState<PropertyFeedback | null>(null)
+  const [moveTargetKind, setMoveTargetKind] = useState<Kind>('maintenance')
+  const [moveSaving, setMoveSaving] = useState(false)
+  const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null)
 
   const task = useMemo(() => getWorkTasksSnapshot().items.find((x) => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
   const propertyId = String(task?.property_id || task?.property?.id || '').trim()
@@ -521,16 +536,25 @@ export default function FeedbackFormScreen(props: Props) {
   const taskId = String(task?.id || props.route.params.taskId || '').trim()
   const isInspectionPanelBatchMode = props.route.params.source === 'inspection_panel_batch'
   const userKey = String((user as any)?.id || (user as any)?.username || (user as any)?.email || '').trim()
+  const isAdminUser = useMemo(() => {
+    const roles = Array.isArray((user as any)?.roles) ? ((user as any).roles as any[]) : []
+    const normalized = new Set([
+      String((user as any)?.role || '').trim(),
+      ...roles.map((role) => String(role || '').trim()),
+    ].filter(Boolean))
+    return normalized.has('admin')
+  }, [user])
   const draftCacheKey = useMemo(() => feedbackDraftCacheKey(propertyId, propertyCode, taskId, userKey), [propertyId, propertyCode, taskId, userKey])
   const historyCacheRef = useRef<FeedbackHistoryCache | null>(null)
   const historyRefreshRef = useRef<Promise<void> | null>(null)
+  const scrollRef = useRef<ScrollView>(null)
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedDraftRef = useRef('')
   const [draftCacheHydrated, setDraftCacheHydrated] = useState(false)
   const [panelPhotoMeta, setPanelPhotoMeta] = useState<InspectionPanelFeedbackPhotoMetaMap>({})
 
   const persistFeedbackDraftSnapshot = useCallback(async (snapshot?: {
-    kind?: Kind
+    kind?: Kind | null
     maintenanceDrafts?: MaintenanceDraft[]
     deepCleaningDrafts?: DeepCleaningDraft[]
     dailyDrafts?: DailyDraft[]
@@ -547,18 +571,14 @@ export default function FeedbackFormScreen(props: Props) {
     if (!hasContent) {
       lastSavedDraftRef.current = ''
       if (isInspectionPanelBatchMode) {
-        await setInspectionPanelFeedbackDraft(taskId, {
-          kind: nextKind,
-          maintenanceDrafts: [],
-          deepCleaningDrafts: [],
-          dailyDrafts: [],
-          photo_meta: {},
-        }).catch(() => null)
+        await clearInspectionPanelFeedbackDraft(taskId).catch(() => null)
       } else {
         await removeStorage(draftCacheKey).catch(() => null)
       }
       return
     }
+
+    if (!nextKind) return
 
     const payload = isInspectionPanelBatchMode
       ? {
@@ -662,7 +682,7 @@ export default function FeedbackFormScreen(props: Props) {
   }, [draftCacheHydrated, persistFeedbackDraftSnapshot])
 
   useEffect(() => {
-    const title = kind === 'maintenance' ? '房源维修' : kind === 'deep_cleaning' ? '深度清洁' : '日用品反馈'
+    const title = kind === 'maintenance' ? '房源维修' : kind === 'deep_cleaning' ? '深度清洁' : kind === 'daily_necessities' ? '日用品反馈' : '问题反馈'
     props.navigation.setOptions({ title })
   }, [props.navigation, kind])
 
@@ -771,9 +791,18 @@ export default function FeedbackFormScreen(props: Props) {
 
   function resetCreateForm(nextKind: Kind) {
     setKind(nextKind)
+    setKindError(false)
     if (nextKind === 'maintenance' && !maintenanceDrafts.length) setMaintenanceDrafts([buildMaintenanceDraft()])
     if (nextKind === 'deep_cleaning' && !deepCleaningDrafts.length) setDeepCleaningDrafts([buildDeepCleaningDraft()])
     if (nextKind === 'daily_necessities' && !dailyDrafts.length) setDailyDrafts([buildDailyDraft()])
+  }
+
+  function requireFeedbackKind() {
+    if (kind) return true
+    setKindError(true)
+    scrollRef.current?.scrollTo({ y: 0, animated: true })
+    Alert.alert(t('common_error'), '请先选择反馈类型')
+    return false
   }
 
   function updateMaintenanceDraft(clientId: string, updater: (draft: MaintenanceDraft) => MaintenanceDraft) {
@@ -1033,6 +1062,7 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   async function submitFeedback() {
+    if (!requireFeedbackKind()) return
     if (isInspectionPanelBatchMode) {
       try {
         setSubmitting(true)
@@ -1385,6 +1415,67 @@ export default function FeedbackFormScreen(props: Props) {
     if (detailItem?.id === row.id && detailItem?.kind === row.kind) setDetailItem(row)
   }
 
+  function removeFeedbackRow(item: PropertyFeedback) {
+    setPending((prev) => prev.filter((row) => `${row.kind}:${row.id}` !== `${item.kind}:${item.id}`))
+    setResolved((prev) => prev.filter((row) => `${row.kind}:${row.id}` !== `${item.kind}:${item.id}`))
+    if (detailItem?.id === item.id && detailItem?.kind === item.kind) setDetailItem(null)
+  }
+
+  function requestMoveFeedback(item: PropertyFeedback) {
+    if (!isAdminUser || actionOpen || dailyEditOpen || recordEditOpen || moveOpen) return
+    setMoveItem(item)
+    setMoveTargetKind(item.kind === 'maintenance' ? 'deep_cleaning' : 'maintenance')
+    setMoveOpen(true)
+  }
+
+  async function confirmMoveFeedback() {
+    if (!token || !moveItem) return
+    if (moveTargetKind === moveItem.kind) {
+      setMoveOpen(false)
+      setMoveItem(null)
+      return
+    }
+    try {
+      setMoveSaving(true)
+      const original = moveItem
+      const resp = await movePropertyFeedback(token, original.kind, original.id, moveTargetKind)
+      removeFeedbackRow(original)
+      if (resp.row) applyUpdatedFeedbackRow(resp.row as any)
+      setMoveOpen(false)
+      setMoveItem(null)
+      await refreshLists({ force: true })
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '调整失败'))
+    } finally {
+      setMoveSaving(false)
+    }
+  }
+
+  function requestDeleteFeedback(item: PropertyFeedback) {
+    if (!isAdminUser || !token) return
+    Alert.alert('删除反馈记录', '确认删除这条反馈记录？删除后不会继续显示在移动端历史反馈中。', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              setDeleteBusyId(`${item.kind}:${item.id}`)
+              await deletePropertyFeedback(token, item.kind, item.id)
+              removeFeedbackRow(item)
+              await refreshLists({ force: true })
+            } catch (e: any) {
+              Alert.alert(t('common_error'), String(e?.message || '删除失败'))
+            } finally {
+              setDeleteBusyId(null)
+            }
+          })()
+        },
+      },
+    ])
+  }
+
   function buildEditedFeedbackFallback(item: PropertyFeedback): PropertyFeedback {
     const afterPhotos = Array.isArray(projectForm.after_photos) ? projectForm.after_photos : []
     const isResolvedPending = afterPhotos.length > 0
@@ -1576,7 +1667,7 @@ export default function FeedbackFormScreen(props: Props) {
     return buildHistoryProject(detailItem)
   }, [detailItem])
   const pendingHistoryCount = pendingGroups.maintenance.length + pendingGroups.deep.length + pendingGroups.daily.length
-  const currentDraftCount = kind === 'maintenance' ? maintenanceDrafts.length : kind === 'deep_cleaning' ? deepCleaningDrafts.length : dailyDrafts.length
+  const currentDraftCount = kind === 'maintenance' ? maintenanceDrafts.length : kind === 'deep_cleaning' ? deepCleaningDrafts.length : kind === 'daily_necessities' ? dailyDrafts.length : 1
   const submitButtonLabel = submitting
     ? t('common_loading')
     : isInspectionPanelBatchMode
@@ -1592,7 +1683,7 @@ export default function FeedbackFormScreen(props: Props) {
 
   return (
     <>
-      <ScrollView style={styles.page} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+      <ScrollView ref={scrollRef} style={styles.page} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
         {!task ? (
           <Text style={styles.muted}>{t('common_loading')}</Text>
         ) : (
@@ -1601,6 +1692,7 @@ export default function FeedbackFormScreen(props: Props) {
               step="1"
               title="选择反馈类型"
               subtitle="先选择本次反馈属于维修、深清还是日用品。"
+              highlight={kindError}
             >
               <View style={styles.headerRow}>
                 <View style={styles.headerTextWrap}>
@@ -1619,6 +1711,7 @@ export default function FeedbackFormScreen(props: Props) {
                   </Pressable>
                 ))}
               </View>
+              {kindError ? <Text style={styles.errorText}>请选择反馈类型后再提交。</Text> : null}
             </StepCard>
 
             <StepCard
@@ -1627,14 +1720,22 @@ export default function FeedbackFormScreen(props: Props) {
               subtitle={
                 isInspectionPanelBatchMode
                   ? '这里只做本地暂存，正式提交“检查与补充”时才会统一上传并写库。'
-                  : kind === 'daily_necessities'
+                  : !kind
+                    ? '先选择反馈类型，再填写对应记录。'
+                    : kind === 'daily_necessities'
                     ? '可连续添加多条日用品记录，一次性提交。'
                     : kind === 'deep_cleaning'
                       ? '可连续添加多条深清记录，每条独立填写前后照片和完成状态。'
                       : '可连续添加多条维修记录，每条独立填写前后照片和完成状态。'
               }
             >
-              {kind === 'maintenance'
+              {!kind ? (
+                <View style={styles.emptyKindCard}>
+                  <Ionicons name="arrow-up-circle-outline" size={22} color="#2563EB" />
+                  <Text style={styles.emptyKindTitle}>请先选择反馈类型</Text>
+                  <Text style={styles.emptyKindText}>选择房源维修、深度清洁或日用品反馈后，再填写对应记录。</Text>
+                </View>
+              ) : kind === 'maintenance'
                   ? maintenanceDrafts.map((draft, index) => (
                       <View key={draft.clientId} style={styles.createCard}>
                         <View style={styles.createCardHeader}>
@@ -1816,6 +1917,11 @@ export default function FeedbackFormScreen(props: Props) {
               <View style={styles.batchActions}>
                 <Pressable
                   onPress={() => {
+                    if (!kind) {
+                      setKindError(true)
+                      scrollRef.current?.scrollTo({ y: 0, animated: true })
+                      return
+                    }
                     if (kind === 'maintenance') setMaintenanceDrafts((prev) => [...prev, buildMaintenanceDraft()])
                     else if (kind === 'deep_cleaning') setDeepCleaningDrafts((prev) => [...prev, buildDeepCleaningDraft()])
                     else setDailyDrafts((prev) => [...prev, buildDailyDraft()])
@@ -1864,9 +1970,9 @@ export default function FeedbackFormScreen(props: Props) {
                         <Text style={styles.historySectionCountText}>{pendingHistoryCount}</Text>
                       </View>
                     </View>
-                    <FeedbackGroup title="房源维修" items={pendingGroups.maintenance} emptyText="暂无处理中维修反馈" onView={setDetailItem} onEdit={requestRecordEdit} onPreview={openViewer} />
-                    <FeedbackGroup title="深度清洁" items={pendingGroups.deep} emptyText="暂无处理中深清反馈" onView={setDetailItem} onEdit={requestRecordEdit} onPreview={openViewer} />
-                    <FeedbackGroup title="日用品反馈" items={pendingGroups.daily} emptyText="暂无处理中日用品反馈" onView={setDetailItem} onEdit={requestRecordEdit} onPreview={openViewer} />
+                    <FeedbackGroup title="房源维修" items={pendingGroups.maintenance} emptyText="暂无处理中维修反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
+                    <FeedbackGroup title="深度清洁" items={pendingGroups.deep} emptyText="暂无处理中深清反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
+                    <FeedbackGroup title="日用品反馈" items={pendingGroups.daily} emptyText="暂无处理中日用品反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
                   </View>
 
                   <View style={styles.historySection}>
@@ -1884,7 +1990,7 @@ export default function FeedbackFormScreen(props: Props) {
                         </Pressable>
                       </View>
                     </View>
-                    {resolvedExpanded ? <FeedbackGroup title="完工记录" items={resolved} emptyText="暂无待复核记录" onView={setDetailItem} onEdit={requestRecordEdit} onPreview={openViewer} /> : null}
+                    {resolvedExpanded ? <FeedbackGroup title="完工记录" items={resolved} emptyText="暂无待复核记录" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} /> : null}
                   </View>
                 </View>
               ) : null}
@@ -1905,6 +2011,18 @@ export default function FeedbackFormScreen(props: Props) {
                   <Pressable onPress={() => requestRecordEdit(detailItem)} style={({ pressed }) => [styles.headerActionBtn, pressed ? styles.pressed : null]}>
                     <Ionicons name="create-outline" size={16} color="#2563EB" />
                     <Text style={styles.headerActionText}>编辑记录</Text>
+                  </Pressable>
+                ) : null}
+                {detailItem && isAdminUser ? (
+                  <Pressable onPress={() => requestMoveFeedback(detailItem)} style={({ pressed }) => [styles.headerActionBtn, pressed ? styles.pressed : null]}>
+                    <Ionicons name="swap-horizontal-outline" size={16} color="#2563EB" />
+                    <Text style={styles.headerActionText}>调整类型</Text>
+                  </Pressable>
+                ) : null}
+                {detailItem && isAdminUser ? (
+                  <Pressable onPress={() => requestDeleteFeedback(detailItem)} style={({ pressed }) => [styles.headerDangerBtn, pressed ? styles.pressed : null]}>
+                    <Ionicons name="trash-outline" size={16} color="#DC2626" />
+                    <Text style={styles.headerDangerText}>删除</Text>
                   </Pressable>
                 ) : null}
                 <Pressable onPress={closeDetailModal}><Text style={styles.closeText}>关闭</Text></Pressable>
@@ -1962,6 +2080,51 @@ export default function FeedbackFormScreen(props: Props) {
                   </>
                 ) : null}
               </ScrollView>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={moveOpen} transparent presentationStyle="overFullScreen" animationType="fade" onRequestClose={() => { if (!moveSaving) { setMoveOpen(false); setMoveItem(null) } }}>
+        <View style={styles.modalRoot}>
+          <Pressable style={styles.modalBackdrop} onPress={() => { if (!moveSaving) { setMoveOpen(false); setMoveItem(null) } }} />
+          <View style={styles.modalSheet}>
+            <View style={styles.modalTop}>
+              <Text style={styles.modalTitle}>调整反馈类型</Text>
+              <Pressable disabled={moveSaving} onPress={() => { setMoveOpen(false); setMoveItem(null) }}><Text style={styles.closeText}>关闭</Text></Pressable>
+            </View>
+            <View style={styles.modalBody}>
+              <View style={styles.modalScrollBody}>
+                <Text style={styles.helperText}>
+                  {moveItem ? `当前类型：${feedbackKindLabel(moveItem.kind)}。调整后会移动到对应分组。` : '请选择目标类型。'}
+                </Text>
+                <View style={styles.chipsRow}>
+                  {(['maintenance', 'deep_cleaning', 'daily_necessities'] as Kind[]).map((value) => (
+                    <Pressable
+                      key={`move-${value}`}
+                      disabled={moveSaving || value === moveItem?.kind}
+                      onPress={() => setMoveTargetKind(value)}
+                      style={({ pressed }) => [
+                        styles.chip,
+                        moveTargetKind === value ? styles.chipActive : null,
+                        value === moveItem?.kind ? styles.chipDisabled : null,
+                        pressed ? styles.pressed : null,
+                      ]}
+                    >
+                      <Text style={[styles.chipText, moveTargetKind === value ? styles.chipTextActive : null, value === moveItem?.kind ? styles.chipTextDisabled : null]}>
+                        {feedbackKindLabel(value)}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Pressable
+                  onPress={confirmMoveFeedback}
+                  disabled={moveSaving || !moveItem || moveTargetKind === moveItem.kind}
+                  style={({ pressed }) => [styles.submitBtn, moveSaving || !moveItem || moveTargetKind === moveItem.kind ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
+                >
+                  <Text style={styles.submitText}>{moveSaving ? t('common_loading') : '确认调整'}</Text>
+                </Pressable>
+              </View>
             </View>
           </View>
         </View>
@@ -2253,12 +2416,12 @@ function UploadButtons(props: { onCamera: () => void; onLibrary: () => void }) {
   )
 }
 
-function StepCard(props: { step: string; title: string; subtitle?: string; children: React.ReactNode }) {
+function StepCard(props: { step: string; title: string; subtitle?: string; highlight?: boolean; children: React.ReactNode }) {
   return (
-    <View style={styles.stepCard}>
+    <View style={[styles.stepCard, props.highlight ? styles.stepCardError : null]}>
       <View style={styles.stepHeader}>
-        <View style={styles.stepBadge}>
-          <Text style={styles.stepBadgeText}>{props.step}</Text>
+        <View style={[styles.stepBadge, props.highlight ? styles.stepBadgeError : null]}>
+          <Text style={[styles.stepBadgeText, props.highlight ? styles.stepBadgeTextError : null]}>{props.step}</Text>
         </View>
         <View style={styles.stepHeaderText}>
           <Text style={styles.stepTitle}>{props.title}</Text>
@@ -2290,7 +2453,18 @@ function PhotoStrip(props: { urls: string[]; onPress: (urls: string[], index: nu
   )
 }
 
-function FeedbackGroup(props: { title: string; items: PropertyFeedback[]; emptyText?: string; onView: (item: PropertyFeedback) => void; onEdit: (item: PropertyFeedback) => void; onPreview: (urls: string[], index: number) => void }) {
+function FeedbackGroup(props: {
+  title: string
+  items: PropertyFeedback[]
+  emptyText?: string
+  canManage?: boolean
+  deleteBusyId?: string | null
+  onView: (item: PropertyFeedback) => void
+  onEdit: (item: PropertyFeedback) => void
+  onMove: (item: PropertyFeedback) => void
+  onDelete: (item: PropertyFeedback) => void
+  onPreview: (urls: string[], index: number) => void
+}) {
   return (
     <View style={styles.groupBlock}>
       <View style={styles.groupHead}>
@@ -2327,6 +2501,20 @@ function FeedbackGroup(props: { title: string; items: PropertyFeedback[]; emptyT
                   <Pressable onPress={() => props.onEdit(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
                     <Ionicons name="create-outline" size={18} color="#2563EB" />
                   </Pressable>
+                  {props.canManage ? (
+                    <Pressable onPress={() => props.onMove(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
+                      <Ionicons name="swap-horizontal-outline" size={18} color="#2563EB" />
+                    </Pressable>
+                  ) : null}
+                  {props.canManage ? (
+                    <Pressable
+                      disabled={props.deleteBusyId === `${item.kind}:${item.id}`}
+                      onPress={() => props.onDelete(item)}
+                      style={({ pressed }) => [styles.iconBtnDanger, props.deleteBusyId === `${item.kind}:${item.id}` ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
+                    >
+                      <Ionicons name="trash-outline" size={18} color="#DC2626" />
+                    </Pressable>
+                  ) : null}
                 </View>
               </View>
             </View>
@@ -2344,9 +2532,12 @@ const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 40 },
   pageStack: { gap: 14 },
   stepCard: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 16, borderWidth: hairline(), borderColor: '#E5E7EB', shadowColor: '#0F172A', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 1, overflow: 'hidden' },
+  stepCardError: { borderColor: '#FCA5A5', backgroundColor: '#FFF7F7' },
   stepHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   stepBadge: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
+  stepBadgeError: { backgroundColor: '#FEE2E2' },
   stepBadgeText: { color: '#1D4ED8', fontWeight: '900', fontSize: 13 },
+  stepBadgeTextError: { color: '#DC2626' },
   stepHeaderText: { flex: 1 },
   stepTitle: { fontSize: 18, fontWeight: '900', color: '#111827' },
   stepSubtitle: { marginTop: 4, color: '#6B7280', fontWeight: '600', lineHeight: 18 },
@@ -2367,6 +2558,9 @@ const styles = StyleSheet.create({
   textarea: { height: 112, minHeight: 112, paddingTop: 12, paddingBottom: 12, textAlignVertical: 'top' },
   helperText: { marginTop: 6, color: '#64748B', fontSize: 12, lineHeight: 17, fontWeight: '600' },
   errorText: { marginTop: 6, color: '#DC2626', fontSize: 12, fontWeight: '700' },
+  emptyKindCard: { marginTop: 12, borderRadius: 16, borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', padding: 16, alignItems: 'flex-start', gap: 6 },
+  emptyKindTitle: { color: '#1D4ED8', fontSize: 15, fontWeight: '900' },
+  emptyKindText: { color: '#475569', fontSize: 13, fontWeight: '700', lineHeight: 19 },
   suggestList: { marginTop: 8, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E2E8F0', overflow: 'hidden' },
   suggestItem: { paddingHorizontal: 12, paddingVertical: 11, borderBottomWidth: hairline(), borderBottomColor: '#E5E7EB' },
   suggestItemTitle: { color: '#111827', fontWeight: '800' },
@@ -2374,8 +2568,10 @@ const styles = StyleSheet.create({
   chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 999, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB' },
   chipActive: { backgroundColor: '#DBEAFE', borderColor: '#93C5FD' },
+  chipDisabled: { opacity: 0.45 },
   chipText: { color: '#111827', fontWeight: '700', fontSize: 12 },
   chipTextActive: { color: '#1D4ED8' },
+  chipTextDisabled: { color: '#64748B' },
   photoRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   photoBtn: { backgroundColor: '#EFF6FF', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, borderWidth: hairline(), borderColor: '#BFDBFE' },
   photoBtnText: { color: '#1D4ED8', fontWeight: '800' },
@@ -2492,7 +2688,10 @@ const styles = StyleSheet.create({
   closeText: { color: '#2563EB', fontWeight: '800' },
   headerActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE' },
   headerActionText: { color: '#2563EB', fontWeight: '800', fontSize: 12, textAlign: 'center' },
+  headerDangerBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FECACA' },
+  headerDangerText: { color: '#DC2626', fontWeight: '800', fontSize: 12, textAlign: 'center' },
   iconBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', alignItems: 'center', justifyContent: 'center' },
+  iconBtnDanger: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FECACA', alignItems: 'center', justifyContent: 'center' },
   detailHeadline: { color: '#111827', fontWeight: '900', fontSize: 16 },
   detailText: { marginTop: 10, color: '#374151', lineHeight: 20 },
   detailMeta: { marginTop: 8, color: '#6B7280', fontSize: 12, fontWeight: '700' },

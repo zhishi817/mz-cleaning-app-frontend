@@ -579,6 +579,7 @@ export type WorkTask = {
   inspection_status?: string | null
   urgency: string
   sort_index?: number | null
+  photo_urls?: string[] | null
   old_code?: string | null
   new_code?: string | null
   guest_special_request?: string | null
@@ -1183,6 +1184,48 @@ export async function updatePropertyFeedback(
   throw new Error(msg || '更新反馈失败')
 }
 
+export async function deletePropertyFeedback(
+  token: string,
+  kind: 'maintenance' | 'deep_cleaning' | 'daily_necessities',
+  feedbackId: string,
+) {
+  const urls = buildUrlCandidates(`mzapp/property-feedbacks/${encodeURIComponent(kind)}/${encodeURIComponent(feedbackId)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    lastRes = res
+    if (res.ok) return (await res.json()) as { ok: boolean; deleted?: boolean }
+  }
+  const msg = lastRes ? await parseErrorMessage(lastRes) : ''
+  throw new Error(msg || '删除反馈失败')
+}
+
+export async function movePropertyFeedback(
+  token: string,
+  kind: 'maintenance' | 'deep_cleaning' | 'daily_necessities',
+  feedbackId: string,
+  targetKind: 'maintenance' | 'deep_cleaning' | 'daily_necessities',
+) {
+  const urls = buildUrlCandidates(`mzapp/property-feedbacks/${encodeURIComponent(kind)}/${encodeURIComponent(feedbackId)}/move`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_kind: targetKind }),
+    })
+    lastRes = res
+    if (res.ok) return (await res.json()) as { ok: boolean; row?: PropertyFeedback | null }
+  }
+  const msg = lastRes ? await parseErrorMessage(lastRes) : ''
+  throw new Error(msg || '调整反馈类型失败')
+}
+
 export async function createPropertyFeedbackProject(
   token: string,
   kind: 'maintenance' | 'deep_cleaning',
@@ -1609,6 +1652,30 @@ export async function uploadLockboxVideo(token: string, cleaningTaskId: string, 
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as any
+}
+
+export async function deleteLockboxVideo(token: string, cleaningTaskId: string) {
+  const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/lockbox-video`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404 && lastRes.status !== 405) break
+  }
+  const res = lastRes as Response
+  if (res.ok) return (await parseJsonOrThrow(res)) as any
+  if (res.status === 404 || res.status === 405) {
+    const urls2 = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/lockbox-video/delete`)
+    let lastRes2: Response | null = null
+    for (const url of urls2) {
+      lastRes2 = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }, 15000)
+      if (lastRes2.status !== 404 && lastRes2.status !== 405) break
+    }
+    const res2 = lastRes2 as Response
+    if (!res2.ok) throw new Error(await parseErrorMessage(res2))
+    return (await parseJsonOrThrow(res2)) as any
+  }
+  throw new Error(await parseErrorMessage(res))
 }
 
 export async function uploadSelfLockboxVideo(token: string, cleaningTaskId: string, params: { media_url: string; captured_at?: string }) {
@@ -2652,4 +2719,25 @@ export async function markWorkTask(
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as any
+}
+
+export async function updateWorkTaskPhotos(
+  token: string,
+  taskId: string,
+  params: { photo_urls: string[] },
+) {
+  const urls = buildUrlCandidates(`mzapp/work-tasks/${encodeURIComponent(taskId)}/photos`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: boolean; photo_urls: string[] }
 }

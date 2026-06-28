@@ -6,7 +6,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { API_BASE_URL } from '../../config/env'
-import { uploadLockboxVideo } from '../../lib/api'
+import { deleteLockboxVideo, uploadLockboxVideo } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import {
   getInspectionPanelBatch,
@@ -27,7 +27,7 @@ import { inspectionScopeLabel, isPasswordOnlyInspectionTask } from '../../lib/cl
 import { hairline, moderateScale } from '../../lib/scale'
 import { isEarlyCheckinTime } from '../../lib/taskTime'
 import { getInspectionScopeTone, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
-import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
+import { getWorkTasksSnapshot, patchWorkTaskItem } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import AppButton from '../../components/ui/AppButton'
 import AppText from '../../components/ui/AppText'
@@ -78,6 +78,7 @@ export default function InspectionCompleteScreen(props: Props) {
   const insets = useSafeAreaInsets()
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [lockboxItem, setLockboxItem] = useState<InspectionMediaQueueItem | null>(null)
   const [missing, setMissing] = useState<string[]>([])
@@ -86,7 +87,8 @@ export default function InspectionCompleteScreen(props: Props) {
 
   const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
   const cleaningTaskId = String(task?.source_id || '').trim()
-  const lockboxFromTask = String((task as any)?.lockbox_video_url || '').trim()
+  const [lockboxDeleted, setLockboxDeleted] = useState(false)
+  const lockboxFromTask = lockboxDeleted ? '' : String((task as any)?.lockbox_video_url || '').trim()
   const effectiveLockboxUrl = String(lockboxItem?.uploaded_url || lockboxItem?.local_uri || lockboxFromTask || '').trim() || null
   const lockboxSaved = !!lockboxItem?.business_saved || !!lockboxFromTask
   const checkinTime = String((task as any)?.end_time || (task as any)?.checkin_time || '').trim()
@@ -177,6 +179,7 @@ export default function InspectionCompleteScreen(props: Props) {
       if (lockboxItem && !lockboxItem.business_saved) {
         await removeInspectionMediaItem(lockboxItem.id)
       }
+      setLockboxDeleted(false)
       const queued = await enqueueInspectionMediaItem({
         task_id: cleaningTaskId,
         kind: 'lockbox_video',
@@ -224,7 +227,43 @@ export default function InspectionCompleteScreen(props: Props) {
     }
   }
 
-  const canComplete = !!lockboxItem?.uploaded_url && !submitting && !lockboxSaved
+  async function deleteCurrentLockboxVideo() {
+    if (deleting) return
+    if (!lockboxItem && !lockboxSaved && !lockboxFromTask) return
+    if (!task) return Alert.alert(t('common_error'), '缺少任务信息')
+    if (lockboxSaved && !token) return Alert.alert(t('common_error'), '请先登录')
+    if (!cleaningTaskId) return Alert.alert(t('common_error'), '缺少任务信息')
+    try {
+      setDeleting(true)
+      if (lockboxSaved) {
+        await deleteLockboxVideo(token as string, cleaningTaskId)
+      }
+      if (lockboxItem) await removeInspectionMediaItem(lockboxItem.id)
+      setLockboxItem(null)
+      setLockboxDeleted(true)
+      await patchWorkTaskItem(String(task.id), { status: 'to_inspect', lockbox_video_url: null } as any)
+      Alert.alert(t('common_ok'), lockboxSaved ? '已删除视频，任务已恢复为待检查。' : '已删除本机待上传视频。')
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '删除失败'))
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  function onDeleteLockboxVideo() {
+    Alert.alert(
+      '删除视频',
+      lockboxSaved
+        ? '删除后任务会恢复为待检查，需要重新拍摄并提交。确定删除吗？'
+        : '确定删除本机待上传视频吗？',
+      [
+        { text: t('common_cancel'), style: 'cancel' },
+        { text: '删除', style: 'destructive', onPress: () => { void deleteCurrentLockboxVideo() } },
+      ],
+    )
+  }
+
+  const canComplete = !!lockboxItem?.uploaded_url && !submitting && !deleting && !lockboxSaved
   const uploadHint = (() => {
     if (!lockboxItem && lockboxSaved) return '挂钥匙视频已同步完成。'
     if (!lockboxItem) return ''
@@ -321,6 +360,16 @@ export default function InspectionCompleteScreen(props: Props) {
         {uploadHint ? (
           <Text style={lockboxItem?.uploaded_url ? styles.ok : styles.pending}>{uploadHint}</Text>
         ) : null}
+        {effectiveLockboxUrl || lockboxItem ? (
+          <Pressable
+            onPress={onDeleteLockboxVideo}
+            disabled={deleting || uploading || submitting}
+            style={({ pressed }) => [styles.deleteBtn, pressed ? styles.pressed : null, deleting || uploading || submitting ? styles.disabled : null]}
+          >
+            <Ionicons name="trash-outline" size={moderateScale(15)} color="#B91C1C" />
+            <Text style={styles.deleteText}>{deleting ? t('common_loading') : '删除已上传视频'}</Text>
+          </Pressable>
+        ) : null}
       </View>
     </ScrollView>
     <SafeAreaBottomBar>
@@ -328,9 +377,9 @@ export default function InspectionCompleteScreen(props: Props) {
         <AppButton
           label={uploading ? t('common_loading') : lockboxItem?.uploaded_url ? '重拍视频' : '拍视频并上传'}
           onPress={onUploadVideo}
-          disabled={uploading || submitting}
+          disabled={uploading || deleting || submitting}
           tone="secondary"
-          style={[styles.grayBtn, uploading || submitting ? styles.disabled : null]}
+          style={[styles.grayBtn, uploading || deleting || submitting ? styles.disabled : null]}
         />
         <AppButton
           label={
@@ -383,6 +432,8 @@ const styles = StyleSheet.create({
   previewText: { fontWeight: '900', color: '#111827', textAlign: 'center' },
   videoWrap: { marginTop: 12, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#0B0F17' },
   video: { width: '100%', height: 220, backgroundColor: '#0B0F17' },
+  deleteBtn: { marginTop: 10, minHeight: 38, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FECACA', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, alignSelf: 'flex-start' },
+  deleteText: { fontWeight: '900', color: '#B91C1C', textAlign: 'center' },
 
   row: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
   grayBtn: { flex: 1, flexShrink: 1, minWidth: 140, minHeight: 44, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },

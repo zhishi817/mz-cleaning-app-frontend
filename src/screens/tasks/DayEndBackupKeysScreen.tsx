@@ -8,7 +8,7 @@ import { API_BASE_URL } from '../../config/env'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { listCleaningAppLinenTypes, listCleaningAppPropertyCodes, listCleaningAppTasks, listDayEndBackupKeys, listDayEndHandover, listWorkTasks, uploadCleaningMedia, uploadDayEndHandover } from '../../lib/api'
+import { isRetryableApiError, listCleaningAppLinenTypes, listCleaningAppPropertyCodes, listCleaningAppTasks, listDayEndBackupKeys, listDayEndHandover, listWorkTasks, uploadCleaningMedia, uploadDayEndHandover } from '../../lib/api'
 import { clearDayEndHandoverDraft, getDayEndHandoverDraft, persistDayEndDraftPhoto, saveDayEndHandoverDraft, type DayEndHandoverDraft, type DayEndRejectDraftItem } from '../../lib/dayEndHandoverQueue'
 import type { DayEndOverviewUser, DayEndRoleStats, DayEndTargetRole, TasksStackParamList } from '../../navigation/RootNavigator'
 
@@ -113,13 +113,9 @@ function mergeRejectItems(remoteItems: RejectItemState[], draftItems: RejectItem
 }
 
 function isNetworkishError(e: any) {
-  const m = String(e?.message || e || '').toLowerCase()
-  if (!m) return false
-  if (m.includes('network request failed')) return true
-  if (m.includes('timeout')) return true
-  if (m.includes('timed out')) return true
-  if (m.includes('aborted')) return true
-  return false
+  if (isRetryableApiError(e)) return true
+  const code = String(e?.code || '').trim().toUpperCase()
+  return code === 'TIMEOUT' || code === 'NETWORK_ERROR'
 }
 
 function roleNamesOf(user: any): string[] {

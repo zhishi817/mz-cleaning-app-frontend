@@ -66,6 +66,7 @@ const SAFE_PATCH_FIELDS = new Set([
   'urgency',
   'title',
   'summary',
+  'photo_urls',
   'completion_photo_urls',
   'completion_note',
   'completion_reason',
@@ -77,6 +78,7 @@ const SAFE_PATCH_FIELDS = new Set([
   'checked_out_at',
   'key_photo_url',
   'lockbox_video_url',
+  'lockbox_video_uploaded_at',
   'sort_index',
   'sort_index_cleaner',
   'sort_index_inspector',
@@ -118,6 +120,7 @@ let healthTimer: ReturnType<typeof setInterval> | null = null
 let lastStreamActivityAt = 0
 let fullSyncPromise: Promise<void> | null = null
 let fullSyncQueued = false
+const refreshWorkTasksInFlight = new Map<string, Promise<void>>()
 
 function emit() {
   for (const cb of listeners) cb()
@@ -706,19 +709,31 @@ export async function refreshWorkTasksFromServer(params: {
   view: WorkTasksView
 }) {
   const bucketKey = makeWorkTasksBucketKey({ userId: params.userId, date_from: params.date_from, date_to: params.date_to, view: params.view })
-  await initWorkTasksStore({ bucketKey })
-  const remote = await listWorkTasks(params.token, { date_from: params.date_from, date_to: params.date_to, view: params.view })
-  const items = remote.map(mapRemoteTask).filter((t) => t.date !== 'unknown')
+  const inFlight = refreshWorkTasksInFlight.get(bucketKey)
+  if (inFlight) return inFlight
 
-  const now = new Date().toISOString()
-  clearBucketDirty(bucketKey)
-  state = {
-    ...state,
-    items,
-    bucketKey,
-    updatedAt: now,
-    lastFullSyncTimestamp: now,
+  const run = (async () => {
+    await initWorkTasksStore({ bucketKey })
+    const remote = await listWorkTasks(params.token, { date_from: params.date_from, date_to: params.date_to, view: params.view })
+    const items = remote.map(mapRemoteTask).filter((t) => t.date !== 'unknown')
+
+    const now = new Date().toISOString()
+    clearBucketDirty(bucketKey)
+    state = {
+      ...state,
+      items,
+      bucketKey,
+      updatedAt: now,
+      lastFullSyncTimestamp: now,
+    }
+    await persist()
+    emit()
+  })()
+
+  refreshWorkTasksInFlight.set(bucketKey, run)
+  try {
+    await run
+  } finally {
+    if (refreshWorkTasksInFlight.get(bucketKey) === run) refreshWorkTasksInFlight.delete(bucketKey)
   }
-  await persist()
-  emit()
 }

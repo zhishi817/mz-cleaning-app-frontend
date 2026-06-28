@@ -2711,7 +2711,9 @@ function showBanner(title: string, message: string) {
                 if (t1 === title2) return null
                 return t1
               })()
-              const offlineAssigneeName = String((task as any).assignee_name || (task as any).cleaner_name || '').trim()
+              const standaloneTaskDetail = isOfflineTask ? offlineDetail : (!isCleaningSource ? detailPreview : '')
+              const showStandaloneTaskLayout = !isCleaningSource && (isOfflineTask || isPropertyFollowupTask(task) || !!standaloneTaskDetail)
+              const standaloneAssigneeName = String((task as any).assignee_name || (task as any).cleaner_name || (task as any).inspector_name || '').trim()
                 || (String(task.assignee_id || '').trim() ? String(task.assignee_id || '').trim() : '未分配')
               return (
                 <React.Fragment key={task.id}>
@@ -3154,29 +3156,71 @@ function showBanner(title: string, message: string) {
                         )
                       ) : null}
                     </>
-                  ) : !taskCollapsed && isOfflineTask ? (
+                  ) : !taskCollapsed && showStandaloneTaskLayout ? (
                     <>
-                      <View style={styles.execCard}>
-                        <Text style={styles.execLabel}>执行人员</Text>
-                        <View style={styles.execPeople}>
-                          <View style={styles.execPerson}>
-                            <View style={styles.execBadgeClean}>
-                              <Text style={styles.execBadgeText}>执</Text>
-                            </View>
-                            <View style={styles.execPersonText}>
-                              <Text style={[styles.execPersonRole, styles.execPersonRoleClean]}>执行</Text>
-                              <Text style={styles.execPersonName} numberOfLines={1}>{offlineAssigneeName}</Text>
-                            </View>
+                      {standaloneTaskDetail ? (
+                        <View style={[styles.detailRowCard, styles.detailRowCardPrimary]}>
+                          <View style={[styles.detailIconWrap, styles.detailIconIndigo]}>
+                            <Ionicons name="document-text-outline" size={moderateScale(18)} color="#4F46E5" />
+                          </View>
+                          <View style={styles.detailRowContent}>
+                            <Text style={styles.detailRowLabel}>任务内容</Text>
+                            <Text style={styles.primaryDetailText} numberOfLines={4}>
+                              {standaloneTaskDetail}
+                            </Text>
                           </View>
                         </View>
+                      ) : null}
+
+                      <View style={styles.detailRowCard}>
+                        <View style={[styles.detailIconWrap, styles.detailIconBlue]}>
+                          <Ionicons name="person-outline" size={moderateScale(18)} color="#2563EB" />
+                        </View>
+                        <View style={styles.detailRowContent}>
+                          <Text style={styles.detailRowLabel}>执行人员</Text>
+                          <Text style={styles.addrText} numberOfLines={1}>
+                            {standaloneAssigneeName}
+                          </Text>
+                        </View>
                         {sortIndex != null ? (
-                          <View style={styles.execOrderRow}>
-                            <Text style={styles.execOrder} numberOfLines={1}>
+                          <View style={styles.copyAffordance}>
+                            <Text style={styles.copyAffordanceText} numberOfLines={1}>
                               {`执行顺序：${String(sortIndex)}`}
                             </Text>
                           </View>
                         ) : null}
                       </View>
+
+                      {addr ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={addressCopied ? `address-copied-${task.id}` : `address-copy-${task.id}`}
+                          onPress={async () => {
+                            try {
+                              await Clipboard.setStringAsync(addr)
+                              flashCopiedFeedback(`address:${task.id}`)
+                              showBanner('已复制', '地址已复制')
+                            } catch {
+                              showBanner('复制失败', '复制失败')
+                            }
+                          }}
+                          style={({ pressed }) => [styles.detailRowCard, pressed ? styles.segmentPressed : null]}
+                        >
+                          <View style={[styles.detailIconWrap, styles.detailIconMuted]}>
+                            <Ionicons name="location-outline" size={moderateScale(18)} color="#6B7280" />
+                          </View>
+                          <View style={styles.detailRowContent}>
+                            <Text style={styles.detailRowLabel}>房源地址</Text>
+                            <Text style={styles.addrText} numberOfLines={2}>
+                              {addr}
+                            </Text>
+                          </View>
+                          <View style={[styles.copyAffordance, addressCopied ? styles.copyAffordanceDone : null]}>
+                            <Ionicons name={addressCopied ? 'checkmark-circle' : 'copy-outline'} size={moderateScale(18)} color={addressCopied ? '#047857' : '#9CA3AF'} />
+                            {addressCopied ? <Text style={styles.copyAffordanceText}>已复制</Text> : null}
+                          </View>
+                        </Pressable>
+                      ) : null}
                     </>
                   ) : (
                     <>
@@ -3208,15 +3252,6 @@ function showBanner(title: string, message: string) {
                     </>
                   )}
 
-                  {!taskCollapsed && isOfflineTask && offlineDetail ? (
-                    <View style={styles.row}>
-                      <Ionicons name="list-outline" size={moderateScale(14)} color="#9CA3AF" />
-                      <Text style={styles.addr} numberOfLines={3}>
-                        {offlineDetail}
-                      </Text>
-                    </View>
-                  ) : null}
-
                   {!taskCollapsed && restockSummary ? (
                     <View style={styles.row}>
                       <Ionicons name="cube-outline" size={moderateScale(14)} color="#9CA3AF" />
@@ -3224,7 +3259,7 @@ function showBanner(title: string, message: string) {
                     </View>
                   ) : null}
 
-                  {!taskCollapsed && showSummary ? (
+                  {!taskCollapsed && showSummary && !showStandaloneTaskLayout ? (
                     <Text style={styles.summary} numberOfLines={3}>
                       {detailPreview}
                     </Text>
@@ -3679,6 +3714,7 @@ const styles = StyleSheet.create({
   execOrderRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, columnGap: 16, paddingHorizontal: 4 },
   execOrder: { flexGrow: 1, flexBasis: 120, color: '#6B7280', fontWeight: '600', fontSize: moderateScale(11), lineHeight: moderateScale(16) },
   detailRowCard: { marginTop: 14, borderRadius: 16, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#E5E7EB', paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 12, minWidth: 0 },
+  detailRowCardPrimary: { backgroundColor: '#EEF2FF', borderColor: '#C7D2FE' },
   detailRowCardAccent: { backgroundColor: '#F0FDFA', borderColor: '#99F6E4' },
   detailIconWrap: { width: moderateScale(34), height: moderateScale(34), borderRadius: moderateScale(17), alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   detailIconBlue: { backgroundColor: '#DBEAFE' },
@@ -3705,6 +3741,7 @@ const styles = StyleSheet.create({
   timeValue: { marginTop: 2, color: '#111827', fontWeight: '600', fontSize: moderateScale(13) },
   pwLabel: { color: '#9CA3AF', fontWeight: '600', fontSize: moderateScale(12) },
   pwValue: { marginTop: 2, color: '#111827', fontWeight: '600', fontSize: moderateScale(13) },
+  primaryDetailText: { marginTop: 4, color: '#111827', fontWeight: '800', fontSize: moderateScale(14), lineHeight: moderateScale(20) },
   guestValue: { marginTop: 4, color: '#111827', fontWeight: '600', fontSize: moderateScale(13), lineHeight: moderateScale(19) },
   guideText: { flex: 1, minWidth: 0, color: '#2563EB', fontWeight: '600', fontSize: moderateScale(13) },
   pwRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6 },
