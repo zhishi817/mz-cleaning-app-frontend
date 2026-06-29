@@ -27,6 +27,7 @@ import { hasAnyRole } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
 import { findWorkTaskItemByAnyId, patchWorkTaskItem, refreshWorkTasksFromServer, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
 import { inspectionPhotoTaskIdsFromTask } from '../../lib/managerDailyTaskPhotos'
+import { cleaningExecutionTaskIdsFromTask, executionTaskIdsForRole } from '../../lib/turnoverDisplay'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 
@@ -178,27 +179,12 @@ function isBeforeToday(taskDate0: any) {
 
 function checkoutTaskIdsFromTask(task: WorkTaskItem | null) {
   if (!task || task.source_type !== 'cleaning_tasks') return []
-  return Array.from(
-    new Set(
-      [
-        ...(Array.isArray((task as any)?.cleaning_task_ids) ? (task as any).cleaning_task_ids : []),
-        ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
-        (task as any)?.source_id,
-      ]
-        .map((x) => String(x || '').trim())
-        .filter(Boolean),
-    ),
-  )
+  return executionTaskIdsForRole(task, 'cleaning')
 }
 
 function cleaningTaskIdsFromTask(task: WorkTaskItem | null) {
   if (!task || task.source_type !== 'cleaning_tasks') return []
-  const ids = [
-    ...(Array.isArray((task as any)?.cleaning_task_ids) ? (task as any).cleaning_task_ids : []),
-    ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
-    (task as any)?.source_id,
-  ]
-  return uniqueTextList(ids)
+  return cleaningExecutionTaskIdsFromTask(task)
 }
 
 function mergeConsumableRows(rows: any[]) {
@@ -457,8 +443,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!task) return
     if (!canEditManagerFields) return
-    const ids = Array.isArray((task as any)?.source_ids) && (task as any).source_ids.length ? (task as any).source_ids : [String((task as any)?.source_id || '')]
-    const taskIds = ids.map((x: any) => String(x || '').trim()).filter(Boolean)
+    const taskIds = executionTaskIdsForRole(task, task.task_kind)
     try {
       setSaving(true)
       const norm = (v: any) => String(v ?? '').replace(/\s+/g, ' ').trim()

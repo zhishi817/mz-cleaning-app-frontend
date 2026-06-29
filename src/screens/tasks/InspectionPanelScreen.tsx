@@ -38,6 +38,7 @@ import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { canSkipInspectionPhotosForGuestArrival, isEarlyCheckinTime } from '../../lib/taskTime'
 import { getInspectionScopeTone, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
+import { checkinTimeForDisplay, cleaningExecutionTaskIdsFromTask, isEarlyCheckinDisplay } from '../../lib/turnoverDisplay'
 import { ensureSuppliesCatalogLoaded, retrySuppliesCatalog, useSuppliesCatalogStore } from '../../lib/useSuppliesCatalogStore'
 import { getWorkTasksSnapshot, patchWorkTaskItem, subscribeWorkTasks } from '../../lib/workTasksStore'
 import { getCleaningConsumables } from '../../lib/api'
@@ -176,9 +177,8 @@ function buildInitialRestock(task: any) {
 
 function sourceIdsForConsumables(task: any, fallbackId: string) {
   return Array.from(new Set([
+    ...cleaningExecutionTaskIdsFromTask(task),
     fallbackId,
-    ...(Array.isArray(task?.source_ids) ? task.source_ids : []),
-    ...(Array.isArray(task?.cleaning_task_ids) ? task.cleaning_task_ids : []),
   ].map((value) => cleanText(value)).filter(Boolean)))
 }
 
@@ -328,11 +328,11 @@ export default function InspectionPanelScreen(props: Props) {
   const propertyId = cleanText(task?.property_id || task?.property?.id)
   const propertyCode = cleanText(task?.property?.code)
   const propertyAddr = cleanText(task?.property?.address)
-  const checkinTime = cleanText((task as any)?.end_time || (task as any)?.checkin_time)
+  const checkinTime = cleanText(checkinTimeForDisplay(task))
   const guestSpecialRequest = cleanText((task as any)?.guest_special_request)
   const consumableSourceIdsKey = useMemo(() => sourceIdsForConsumables(task, cleaningTaskId).join('|'), [cleaningTaskId, task])
   const guestArrivalPhotoSkipEligible = canSkipInspectionPhotosForGuestArrival(checkinTime)
-  const isEarlyCheckinGuest = isEarlyCheckinTime(checkinTime)
+  const isEarlyCheckinGuest = isEarlyCheckinDisplay(task) || isEarlyCheckinTime(checkinTime)
   const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
   const roomPhotoRequirement: InspectionPanelRoomPhotoRequirement = isPasswordOnlyInspection
     ? 'password_only'

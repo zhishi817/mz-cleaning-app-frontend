@@ -165,10 +165,10 @@ test('tasks screen shows wifi info and copies wifi password', async () => {
   })
 })
 
-test('tasks screen shows 晚入住 tag when checkin time is later than 3pm', async () => {
+test('tasks screen shows 晚入住 tag when checkin time is later than 6pm', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
-  snapshot.items[0].end_time = '4pm'
+  snapshot.items[0].end_time = '7pm'
 
   const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
   const ui = render(

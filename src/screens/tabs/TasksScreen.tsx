@@ -29,7 +29,17 @@ import { canSwitchTaskMode, isTaskManagerUser } from '../../lib/roles'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { resolveKeyRequirementTags } from '../../lib/keyRequirementTags'
 import { normalizeAuMobile } from '../../lib/phone'
-import { isEarlyCheckinTime, isLateCheckinTime, isLateCheckoutTime } from '../../lib/taskTime'
+import {
+  allRelatedSourceIdsFromTask,
+  checkinTimeForDisplay,
+  checkoutTimeForDisplay,
+  executionTaskIdsForRole,
+  guestRequestForDisplay,
+  isEarlyCheckinDisplay,
+  isLateCheckinDisplay,
+  isLateCheckoutDisplay,
+  turnoverDisplayOf,
+} from '../../lib/turnoverDisplay'
 import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
 import {
   activateWorkTasksRealtime,
@@ -135,17 +145,7 @@ function isInspectorOnlyRole(roleNames: string[]) {
 
 function checkoutTaskIdsFromTask(task: WorkTaskItem | null) {
   if (!task || task.source_type !== 'cleaning_tasks') return []
-  return Array.from(
-    new Set(
-      [
-        ...(Array.isArray((task as any)?.cleaning_task_ids) ? (task as any).cleaning_task_ids : []),
-        ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
-        (task as any)?.source_id,
-      ]
-        .map((x) => String(x || '').trim())
-        .filter(Boolean),
-    ),
-  )
+  return executionTaskIdsForRole(task, 'cleaning')
 }
 
 function normalizeDayEndRoles(items: Array<string | DayEndTargetRole>) {
@@ -959,7 +959,7 @@ export default function TasksScreen(props: Props) {
     const all = getWorkTasksSnapshot().items || []
     for (const task of all) {
       if (task.source_type !== 'cleaning_tasks') continue
-      const srcIds = Array.isArray((task as any).source_ids) ? ((task as any).source_ids as any[]).map(x => String(x)) : []
+      const srcIds = allRelatedSourceIdsFromTask(task)
       const srcId = String(task.source_id || '')
       for (const id of ids) {
         if (srcId === id || srcIds.includes(id)) return task
@@ -1922,7 +1922,7 @@ function showBanner(title: string, message: string) {
           localPatches.push({ id: String(task.id), patch: { sort_index: mark } as Partial<WorkTaskItem> })
           continue
         }
-        const ids = Array.isArray((task as any).source_ids) && (task as any).source_ids.length ? (task as any).source_ids.map((x: any) => String(x)) : [String(task.source_id)]
+        const ids = executionTaskIdsForRole(task, task.task_kind)
         if (task.task_kind === 'cleaning') {
           cleanerGroups.push(ids)
           localPatches.push({ id: String(task.id), patch: { sort_index: mark, sort_index_cleaner: mark } as Partial<WorkTaskItem> })
@@ -2595,15 +2595,16 @@ function showBanner(title: string, message: string) {
               const code = task.property?.code || ''
               const unitType = task.property?.unit_type || ''
               const region = task.property?.region || ''
-              const checkoutTime = String(task.start_time || '').trim()
-              const checkinTime = String(task.end_time || '').trim()
+              const checkoutTime = checkoutTimeForDisplay(task)
+              const checkinTime = checkinTimeForDisplay(task)
               const guideUrl = normalizeHttpUrl(task.property?.access_guide_link)
               const wifiSsid = String(task.property?.wifi_ssid || '').trim()
               const wifiPassword = String(task.property?.wifi_password || '').trim()
               const hasWifiInfo = !!(wifiSsid || wifiPassword)
-              const oldCode = String((task as any).old_code || '').trim()
-              const newCode = String((task as any).new_code || '').trim()
-              const guestSpecialRequest = String((task as any).guest_special_request || (task as any).note || '').trim()
+              const turnoverDisplay = turnoverDisplayOf(task)
+              const oldCode = String(turnoverDisplay?.old_code || (task as any).old_code || '').trim()
+              const newCode = String(turnoverDisplay?.new_code || (task as any).new_code || '').trim()
+              const guestSpecialRequest = guestRequestForDisplay(task)
               const guestLuggage = (task as any).guest_luggage || null
               const urgency = urgencyMeta(task.urgency)
               const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
@@ -2681,9 +2682,9 @@ function showBanner(title: string, message: string) {
               })()
               const hasCheckout = !!checkoutTime
               const hasCheckin = !!checkinTime
-              const isLateCheckout = hasCheckout && isLateCheckoutTime(checkoutTime)
-              const isEarlyCheckin = hasCheckin && isEarlyCheckinTime(checkinTime)
-              const isLateCheckin = hasCheckin && isLateCheckinTime(checkinTime)
+              const isLateCheckout = hasCheckout && isLateCheckoutDisplay(task, checkoutTime)
+              const isEarlyCheckin = hasCheckin && isEarlyCheckinDisplay(task, checkinTime)
+              const isLateCheckin = hasCheckin && isLateCheckinDisplay(task, checkinTime)
               const titleSuffix = cleaningTaskTitleSuffix(task as any)
               const taskCollapsed = !!collapsedTaskIds[String(task.id)]
               const addressCopied = copiedFeedbackKey === `address:${task.id}`

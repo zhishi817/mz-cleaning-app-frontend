@@ -25,7 +25,16 @@ import { deleteKeyPhoto, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks,
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { resolveKeyRequirementTags } from '../../lib/keyRequirementTags'
-import { isEarlyCheckinTime, isLateCheckinTime, isLateCheckoutTime } from '../../lib/taskTime'
+import {
+  checkinTimeForDisplay,
+  checkoutTimeForDisplay,
+  executionTaskIdsForRole,
+  guestRequestForDisplay,
+  isEarlyCheckinDisplay,
+  isLateCheckinDisplay,
+  isLateCheckoutDisplay,
+  turnoverDisplayOf,
+} from '../../lib/turnoverDisplay'
 import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
 import { buildCleaningMediaImageSource } from '../../lib/cleaningMedia'
 
@@ -151,17 +160,7 @@ function isCleaningWorkSubmitted(status0: any) {
 
 function checkoutTaskIdsFromTask(task: WorkTaskItem | null) {
   if (!task || task.source_type !== 'cleaning_tasks') return []
-  return Array.from(
-    new Set(
-      [
-        ...(Array.isArray((task as any)?.cleaning_task_ids) ? (task as any).cleaning_task_ids : []),
-        ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
-        (task as any)?.source_id,
-      ]
-        .map((x) => String(x || '').trim())
-        .filter(Boolean),
-    ),
-  )
+  return executionTaskIdsForRole(task, 'cleaning')
 }
 
 export default function TaskDetailScreen(props: Props) {
@@ -580,13 +579,15 @@ export default function TaskDetailScreen(props: Props) {
   const code = String(task.property?.code || '').trim()
   const unitType = String(task.property?.unit_type || '').trim()
   const title = `${region ? `${region} ` : ''}${code || task.title || '-'}`.trim()
-  const checkoutTime = String(task.start_time || '').trim()
-  const checkinTime = String(task.end_time || '').trim()
+  const checkoutTime = checkoutTimeForDisplay(task)
+  const checkinTime = checkinTimeForDisplay(task)
   const guideUrl = normalizeHttpUrl(task.property?.access_guide_link)
   const taskType = String((task as any).task_type || '').trim().toLowerCase()
   const isCheckoutTask = taskType === 'checkout_clean' || !!checkoutTime
-  const oldCode = String((task as any).old_code || '').trim()
-  const newCode = String((task as any).new_code || '').trim()
+  const turnoverDisplay = turnoverDisplayOf(task)
+  const oldCode = String(turnoverDisplay?.old_code || (task as any).old_code || '').trim()
+  const newCode = String(turnoverDisplay?.new_code || (task as any).new_code || '').trim()
+  const guestSpecialRequest = guestRequestForDisplay(task)
   const urgency = urgencyMeta(task.urgency)
   const isCleaningSource = task.source_type === 'cleaning_tasks'
   const isStayoverTask = isCleaningSource && isStayoverTaskType(taskType)
@@ -595,9 +596,9 @@ export default function TaskDetailScreen(props: Props) {
   const wifiPassword = String((task as any)?.property?.wifi_password || '').trim()
   const hasCheckout = !!checkoutTime
   const hasCheckin = !!checkinTime
-  const isLateCheckout = hasCheckout && isLateCheckoutTime(checkoutTime)
-  const isEarlyCheckin = hasCheckin && isEarlyCheckinTime(checkinTime)
-  const isLateCheckin = hasCheckin && isLateCheckinTime(checkinTime)
+  const isLateCheckout = hasCheckout && isLateCheckoutDisplay(task, checkoutTime)
+  const isEarlyCheckin = hasCheckin && isEarlyCheckinDisplay(task, checkinTime)
+  const isLateCheckin = hasCheckin && isLateCheckinDisplay(task, checkinTime)
   const titleSuffix = cleaningTaskTitleSuffix(task as any)
   const title2 = `${title}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
   const remoteKeyPhotoUrl = String((task as any).key_photo_url || '').trim() || null
@@ -846,6 +847,13 @@ export default function TaskDetailScreen(props: Props) {
           <View style={styles.row}>
             <Ionicons name="document-text-outline" size={moderateScale(14)} color="#9CA3AF" />
             <Text style={styles.rowText}>{`备注：${taskNote}`}</Text>
+          </View>
+        ) : null}
+
+        {guestSpecialRequest ? (
+          <View style={styles.row}>
+            <Ionicons name="chatbubble-ellipses-outline" size={moderateScale(14)} color="#9CA3AF" />
+            <Text style={styles.rowText}>{`客人需求：${guestSpecialRequest}`}</Text>
           </View>
         ) : null}
 

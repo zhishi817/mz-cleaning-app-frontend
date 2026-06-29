@@ -556,6 +556,9 @@ export type WorkTask = {
   source_type: string
   source_id: string
   source_ids?: string[]
+  active_source_ids?: string[]
+  superseded_source_ids?: string[]
+  all_related_source_ids?: string[]
   cleaning_task_ids?: string[]
   inspection_task_ids?: string[]
   order_id?: string | null
@@ -583,6 +586,9 @@ export type WorkTask = {
   old_code?: string | null
   new_code?: string | null
   guest_special_request?: string | null
+  guest_request_checkout?: string | null
+  guest_request_checkin?: string | null
+  guest_request_summary?: string | null
   guest_luggage?: GuestLuggageNotice | null
   note?: string | null
   completion_photo_urls?: string[] | null
@@ -607,6 +613,32 @@ export type WorkTask = {
   completion_photos_ok?: boolean
   stayed_nights?: number | null
   remaining_nights?: number | null
+  is_late_checkout?: boolean
+  is_early_checkin?: boolean
+  is_late_checkin?: boolean
+  display_conflicts?: Record<string, any>[]
+  turnover_display?: {
+    checkout_order_id?: string | null
+    checkin_order_id?: string | null
+    checkout_time?: string | null
+    checkin_time?: string | null
+    is_late_checkout?: boolean
+    is_early_checkin?: boolean
+    is_late_checkin?: boolean
+    guest_request_checkout?: string | null
+    guest_request_checkin?: string | null
+    guest_request_summary?: string | null
+    old_code?: string | null
+    new_code?: string | null
+    keys_required_checkout?: number | null
+    keys_required_checkin?: number | null
+    stayed_nights?: number | null
+    remaining_nights?: number | null
+    active_source_ids?: string[]
+    superseded_source_ids?: string[]
+    all_related_source_ids?: string[]
+    conflicts?: Record<string, any>[]
+  } | null
   restock_items?: Array<{
     item_id: string
     label: string

@@ -260,7 +260,7 @@ test('password-only inspection task shows explicit execution scope', async () =>
   snapshot.items[0].end_time = '3pm'
 })
 
-test('task detail shows 晚入住 tag when checkin time is later than 3pm', async () => {
+test('task detail shows 晚入住 tag when checkin time is later than 6pm', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
   snapshot.items[0].task_kind = 'cleaning'
@@ -268,7 +268,7 @@ test('task detail shows 晚入住 tag when checkin time is later than 3pm', asyn
   snapshot.items[0].inspection_scope = undefined
   snapshot.items[0].inspection_mode = undefined
   snapshot.items[0].start_time = '10am'
-  snapshot.items[0].end_time = '4pm'
+  snapshot.items[0].end_time = '7pm'
 
   const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
   const ui = render(

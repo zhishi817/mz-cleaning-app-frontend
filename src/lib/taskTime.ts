@@ -28,7 +28,7 @@ export function isEarlyCheckinTime(value: any) {
 
 export function isLateCheckinTime(value: any) {
   const mins = parseTaskTimeMinutes(value)
-  return mins != null && mins > 15 * 60
+  return mins != null && mins > 18 * 60
 }
 
 export function isLateCheckoutTime(value: any) {
