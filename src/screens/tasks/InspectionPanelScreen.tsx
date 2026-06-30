@@ -38,7 +38,7 @@ import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { canSkipInspectionPhotosForGuestArrival, isEarlyCheckinTime } from '../../lib/taskTime'
 import { getInspectionScopeTone, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
-import { checkinTimeForDisplay, cleaningExecutionTaskIdsFromTask, isEarlyCheckinDisplay } from '../../lib/turnoverDisplay'
+import { checkinTimeForDisplay, cleaningExecutionTaskIdsFromTask, guestRequestForDisplay, isEarlyCheckinDisplay } from '../../lib/turnoverDisplay'
 import { ensureSuppliesCatalogLoaded, retrySuppliesCatalog, useSuppliesCatalogStore } from '../../lib/useSuppliesCatalogStore'
 import { getWorkTasksSnapshot, patchWorkTaskItem, subscribeWorkTasks } from '../../lib/workTasksStore'
 import { getCleaningConsumables } from '../../lib/api'
@@ -329,7 +329,7 @@ export default function InspectionPanelScreen(props: Props) {
   const propertyCode = cleanText(task?.property?.code)
   const propertyAddr = cleanText(task?.property?.address)
   const checkinTime = cleanText(checkinTimeForDisplay(task))
-  const guestSpecialRequest = cleanText((task as any)?.guest_special_request)
+  const guestSpecialRequest = guestRequestForDisplay(task)
   const consumableSourceIdsKey = useMemo(() => sourceIdsForConsumables(task, cleaningTaskId).join('|'), [cleaningTaskId, task])
   const guestArrivalPhotoSkipEligible = canSkipInspectionPhotosForGuestArrival(checkinTime)
   const isEarlyCheckinGuest = isEarlyCheckinDisplay(task) || isEarlyCheckinTime(checkinTime)

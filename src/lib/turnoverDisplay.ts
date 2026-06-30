@@ -21,6 +21,14 @@ function cleanText(value: any) {
   return String(value ?? '').trim()
 }
 
+export function cleanGuestRequestText(value: any) {
+  const text = cleanText(value)
+  const normalized = text.toLowerCase()
+  if (!text || normalized === 'null' || normalized === 'undefined' || normalized === 'none' || normalized === 'n/a') return ''
+  if (text === '无' || text === '没有') return ''
+  return text
+}
+
 export function uniqueTextList(values: any[]) {
   return Array.from(new Set((values || []).map((value) => cleanText(value)).filter(Boolean)))
 }
@@ -85,7 +93,7 @@ export function checkinTimeForDisplay(task: any) {
 
 export function guestRequestForDisplay(task: any) {
   const display = turnoverDisplayOf(task)
-  return cleanText(display?.guest_request_summary) || cleanText(task?.guest_special_request || task?.note)
+  return cleanGuestRequestText(display?.guest_request_summary) || cleanGuestRequestText(task?.guest_special_request || task?.note)
 }
 
 export function isLateCheckoutDisplay(task: any, checkoutTime?: string) {

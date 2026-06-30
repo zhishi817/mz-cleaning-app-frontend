@@ -124,7 +124,7 @@ function shouldExpire(item: InspectionMediaQueueItem, now: number) {
 }
 
 function isRetryableStatus(item: InspectionMediaQueueItem) {
-  return item.upload_status === 'pending' || item.upload_status === 'failed_retryable' || (item.kind === 'lockbox_video' && !!item.uploaded_url && !item.business_saved)
+  return item.upload_status === 'pending' || item.upload_status === 'uploading' || item.upload_status === 'failed_retryable' || (item.kind === 'lockbox_video' && !!item.uploaded_url && !item.business_saved)
 }
 
 async function updateQueueItem(id: string, updater: (item: InspectionMediaQueueItem) => InspectionMediaQueueItem | null) {

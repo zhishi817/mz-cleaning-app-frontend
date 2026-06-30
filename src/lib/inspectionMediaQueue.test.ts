@@ -121,3 +121,39 @@ test('retries lockbox business save without re-uploading the local video', async
     business_saved: true,
   })
 })
+
+test('retries an interrupted uploading lockbox video after recovery', async () => {
+  const api = require('./api') as {
+    uploadCleaningVideo: jest.Mock
+    uploadLockboxVideo: jest.Mock
+  }
+  api.uploadCleaningVideo.mockResolvedValue({ url: 'https://cdn.example.com/lock-recovered.mov' })
+  api.uploadLockboxVideo.mockResolvedValue({ ok: true })
+
+  const queueMod = require('./inspectionMediaQueue') as typeof import('./inspectionMediaQueue')
+
+  const item = await queueMod.enqueueInspectionMediaItem({
+    task_id: 'cleaning-task-2',
+    kind: 'lockbox_video',
+    source_uri: 'file:///camera/lock-1.mov',
+    name: 'lock-1.mov',
+    mime_type: 'video/quicktime',
+  })
+  await queueMod.updateInspectionMediaItem(item.id, {
+    upload_status: 'uploading',
+    last_error: null,
+  })
+
+  const result = await queueMod.processInspectionMediaQueue('token-1')
+
+  expect(result).toEqual({ processed: 1, remaining: 0 })
+  expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
+  expect(api.uploadLockboxVideo).toHaveBeenCalledTimes(1)
+
+  const queuedAfterRecovery = await queueMod.listInspectionMediaQueueItemsForTask('cleaning-task-2', ['lockbox_video'])
+  expect(queuedAfterRecovery[0]).toMatchObject({
+    uploaded_url: 'https://cdn.example.com/lock-recovered.mov',
+    upload_status: 'uploaded',
+    business_saved: true,
+  })
+})
