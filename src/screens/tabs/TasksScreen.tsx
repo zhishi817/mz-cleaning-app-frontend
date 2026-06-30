@@ -24,7 +24,18 @@ import {
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import { getNoticesSnapshot, initNoticesStore, prependNotice, subscribeNotices } from '../../lib/noticesStore'
 import { getProfile, setProfile, type Profile } from '../../lib/profileStore'
-import { cleaningTaskTitleSuffix, effectiveInspectionMode, inspectionModeLabel, inspectionScopeLabel, isPasswordOnlyInspectionTask, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
+import {
+  cleaningTaskTitleSuffix,
+  effectiveInspectionMode,
+  inspectionModeLabel,
+  inspectionScopeLabel,
+  isCleaningExecutionTask,
+  isInspectionExecutionTask,
+  isKeyHandoverExecutionTask,
+  isPasswordOnlyInspectionTask,
+  isSelfCompleteMode,
+  isStayoverTaskType,
+} from '../../lib/cleaningInspection'
 import { canSwitchTaskMode, isTaskManagerUser } from '../../lib/roles'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { resolveKeyRequirementTags } from '../../lib/keyRequirementTags'
@@ -144,7 +155,7 @@ function isInspectorOnlyRole(roleNames: string[]) {
 }
 
 function checkoutTaskIdsFromTask(task: WorkTaskItem | null) {
-  if (!task || task.source_type !== 'cleaning_tasks') return []
+  if (!task || !isCleaningExecutionTask(task)) return []
   return executionTaskIdsForRole(task, 'cleaning')
 }
 
@@ -261,6 +272,9 @@ function dayEndTargetContentLabel(roles: DayEndTargetRole[]) {
 
 function buildDayEndOverviewBaseUsers(tasks: Array<{
   task_kind?: any
+  execution_role?: any
+  execution_semantics?: any
+  source_type?: any
   status?: any
   cleaning_status?: any
   inspection_status?: any
@@ -285,11 +299,11 @@ function buildDayEndOverviewBaseUsers(tasks: Array<{
     const kind = String(task.task_kind || '').trim().toLowerCase()
     const code = String(task.property?.code || '').trim()
     const hasCleaningWork =
-      kind === 'cleaning'
+      isCleaningExecutionTask(task)
       || (Array.isArray(task.cleaning_task_ids) && task.cleaning_task_ids.length > 0)
       || !!String(task.cleaning_status || '').trim()
     const hasInspectionWork =
-      kind === 'inspection'
+      isInspectionExecutionTask(task)
       || (Array.isArray(task.inspection_task_ids) && task.inspection_task_ids.length > 0)
       || !!String(task.inspection_status || '').trim()
     if (hasCleaningWork) {
@@ -523,9 +537,7 @@ function warehouseKeyEventTimeText(value: any, currentDate: string) {
 }
 
 function isSouthbankCleaningTask(task: WorkTaskItem) {
-  if (task.source_type !== 'cleaning_tasks') return false
-  const kind = String(task.task_kind || '').trim().toLowerCase()
-  if (kind !== 'cleaning' && kind !== 'inspection') return false
+  if (!isCleaningExecutionTask(task) && !isInspectionExecutionTask(task) && !isKeyHandoverExecutionTask(task)) return false
   const status = String(task.status || '').trim().toLowerCase()
   if (status === 'cancelled' || status === 'canceled') return false
   const region = String(task.property?.region || '').trim().toLowerCase().replace(/\s+/g, '')
@@ -534,18 +546,25 @@ function isSouthbankCleaningTask(task: WorkTaskItem) {
 
 function isCleaningTaskAssignedToUser(task: WorkTaskItem, userId: string) {
   const uid = String(userId || '').trim()
-  if (!uid || task.source_type !== 'cleaning_tasks') return false
-  const kind = String(task.task_kind || '').trim().toLowerCase()
-  if (kind === 'inspection') return String((task as any).inspector_id || task.assignee_id || '').trim() === uid
-  if (kind === 'cleaning') return String((task as any).cleaner_id || task.assignee_id || '').trim() === uid
+  if (!uid) return false
+  const cleaning = isCleaningExecutionTask(task)
+  const inspection = isInspectionExecutionTask(task)
+  const handover = isKeyHandoverExecutionTask(task)
+  if (!cleaning && !inspection && !handover) return false
+  if (handover) return String(task.assignee_id || '').trim() === uid
+  if (inspection && !cleaning) return String((task as any).inspector_id || task.assignee_id || '').trim() === uid
+  if (cleaning && !inspection) return String((task as any).cleaner_id || task.assignee_id || '').trim() === uid
   return String((task as any).cleaner_id || (task as any).inspector_id || task.assignee_id || '').trim() === uid
 }
 
 function hasMobileExecutor(task: WorkTaskItem) {
-  if (task.source_type !== 'cleaning_tasks') return !!String(task.assignee_id || '').trim()
-  const kind = String(task.task_kind || '').trim().toLowerCase()
-  if (kind === 'inspection') return !!String((task as any).inspector_id || task.assignee_id || '').trim()
-  if (kind === 'cleaning') return !!String((task as any).cleaner_id || task.assignee_id || '').trim()
+  const cleaning = isCleaningExecutionTask(task)
+  const inspection = isInspectionExecutionTask(task)
+  const handover = isKeyHandoverExecutionTask(task)
+  if (!cleaning && !inspection && !handover) return !!String(task.assignee_id || '').trim()
+  if (handover) return !!String(task.assignee_id || '').trim()
+  if (inspection && !cleaning) return !!String((task as any).inspector_id || task.assignee_id || '').trim()
+  if (cleaning && !inspection) return !!String((task as any).cleaner_id || task.assignee_id || '').trim()
   return !!String((task as any).cleaner_id || (task as any).inspector_id || task.assignee_id || '').trim()
 }
 
@@ -687,15 +706,14 @@ export default function TasksScreen(props: Props) {
     const isInspector = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
     if (isInspector && period === 'today') {
       for (const t of list) {
-        if (t.source_type === 'cleaning_tasks' && t.task_kind === 'inspection' && String(t.status || '').toLowerCase() === 'to_inspect') next[t.id] = true
+        if (isInspectionExecutionTask(t) && String(t.status || '').toLowerCase() === 'to_inspect') next[t.id] = true
       }
     }
     const role = String(user?.role || '')
     if (role === 'cleaning_inspector' || role === 'cleaner_inspector') {
       for (const t of list) {
         if (
-          t.source_type === 'cleaning_tasks' &&
-          t.task_kind === 'inspection' &&
+          isInspectionExecutionTask(t) &&
           String(t.status || '').toLowerCase() === 'in_progress' &&
           !!String((t as any).key_photo_url || '').trim()
         ) {
@@ -705,7 +723,7 @@ export default function TasksScreen(props: Props) {
     }
     if ((role === 'cleaner' || role === 'cleaner_inspector') && period === 'today') {
       for (const t of list) {
-        if (!(t.source_type === 'cleaning_tasks' && t.task_kind === 'cleaning')) continue
+        if (!isCleaningExecutionTask(t)) continue
         const raw = String((t as any).checked_out_at || '').trim()
         const ms = Date.parse(raw)
         if (raw && Number.isFinite(ms) && Date.now() - ms < 6 * 60 * 60 * 1000) next[`co:${t.id}`] = true
@@ -713,7 +731,7 @@ export default function TasksScreen(props: Props) {
     }
     if (canManagerMode && mode === 'manager' && period === 'today') {
       for (const t of list) {
-        if (t.source_type === 'cleaning_tasks' && t.task_kind === 'inspection' && String(t.status || '').toLowerCase() === 'keys_hung') {
+        if (isInspectionExecutionTask(t) && String(t.status || '').toLowerCase() === 'keys_hung') {
           next[`hung:${t.id}`] = true
         }
       }
@@ -1176,7 +1194,7 @@ export default function TasksScreen(props: Props) {
   const selectedTasks = useMemo(() => {
     const list = (tasksByDate.get(selectedDate) || []).filter((task) => {
       if (!(canManagerMode && mode === 'manager' && view === 'all')) return hasMobileExecutor(task)
-      if (task.source_type === 'cleaning_tasks') return true
+      if (isCleaningExecutionTask(task) || isInspectionExecutionTask(task) || isKeyHandoverExecutionTask(task)) return true
       if (isPropertyFollowupTask(task)) return hasMobileExecutor(task)
       return true
     }).slice()
@@ -1197,9 +1215,9 @@ export default function TasksScreen(props: Props) {
       const sortDelta = taskSortIndexValue(a) - taskSortIndexValue(b)
       if (sortDelta) return sortDelta
 
-      const aIsCleaning = a.source_type === 'cleaning_tasks'
-      const bIsCleaning = b.source_type === 'cleaning_tasks'
-      if (!(aIsCleaning && bIsCleaning)) {
+      const aIsExecutionTask = isCleaningExecutionTask(a) || isInspectionExecutionTask(a) || isKeyHandoverExecutionTask(a)
+      const bIsExecutionTask = isCleaningExecutionTask(b) || isInspectionExecutionTask(b) || isKeyHandoverExecutionTask(b)
+      if (!(aIsExecutionTask && bIsExecutionTask)) {
         const ur = urgencyRank(b.urgency) - urgencyRank(a.urgency)
         if (ur) return ur
       }
@@ -1212,15 +1230,19 @@ export default function TasksScreen(props: Props) {
   const canReorder = useMemo(() => {
     if (roleNames.includes('cleaner') || roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')) return true
     if (canManagerMode && mode === 'manager') return false
-    return selectedTasks.some((task) => task.source_type !== 'cleaning_tasks')
+    return selectedTasks.some((task) => !isCleaningExecutionTask(task) && !isInspectionExecutionTask(task) && !isKeyHandoverExecutionTask(task))
   }, [canManagerMode, mode, selectedTasks, roleNames.join('|')])
 
   const isReorderableTask = useMemo(() => {
     return (task: WorkTaskItem) => {
-      if (task.source_type !== 'cleaning_tasks') return !(canManagerMode && mode === 'manager')
-      if (roleNames.includes('cleaner_inspector')) return task.task_kind === 'cleaning' || task.task_kind === 'inspection'
-      if (roleNames.includes('cleaning_inspector')) return task.task_kind === 'inspection'
-      if (roleNames.includes('cleaner')) return task.task_kind === 'cleaning'
+      const cleaning = isCleaningExecutionTask(task)
+      const inspection = isInspectionExecutionTask(task)
+      const handover = isKeyHandoverExecutionTask(task)
+      if (handover) return false
+      if (!cleaning && !inspection) return !(canManagerMode && mode === 'manager')
+      if (roleNames.includes('cleaner_inspector')) return cleaning || inspection
+      if (roleNames.includes('cleaning_inspector')) return inspection
+      if (roleNames.includes('cleaner')) return cleaning
       return false
     }
   }, [canManagerMode, mode, roleNames.join('|')])
@@ -1363,21 +1385,18 @@ export default function TasksScreen(props: Props) {
   const selfDayEndTasks = useMemo(() => {
     if (period !== 'today') return []
     return renderTasks.filter((t) => {
-      if (t.source_type !== 'cleaning_tasks') return false
-      const kind = String(t.task_kind || '').trim().toLowerCase()
       const st = String(t.status || '').trim().toLowerCase()
       if (st === 'cancelled' || st === 'canceled') return false
-      if (roleNames.includes('cleaner_inspector')) return kind === 'cleaning' || kind === 'inspection'
-      if (roleNames.includes('cleaning_inspector')) return kind === 'inspection'
-      if (roleNames.includes('cleaner')) return kind === 'cleaning'
+      if (roleNames.includes('cleaner_inspector')) return isCleaningExecutionTask(t) || isInspectionExecutionTask(t)
+      if (roleNames.includes('cleaning_inspector')) return isInspectionExecutionTask(t)
+      if (roleNames.includes('cleaner')) return isCleaningExecutionTask(t)
       return false
     })
   }, [period, renderTasks, roleNames.join('|')])
   const selfDayEndRoles = useMemo(() => {
     return normalizeDayEndRoles(
       selfDayEndTasks.map((task) => {
-        const kind = String(task.task_kind || '').trim().toLowerCase()
-        return kind === 'inspection' ? 'inspection' : 'cleaning'
+        return isInspectionExecutionTask(task) && !isCleaningExecutionTask(task) ? 'inspection' : 'cleaning'
       }),
     )
   }, [selfDayEndTasks])
@@ -1453,7 +1472,7 @@ export default function TasksScreen(props: Props) {
       setDayEndOverviewLoading(true)
       try {
         const tasks = await listWorkTasks(token, { date_from: dayEndDate, date_to: dayEndDate, view: 'all' })
-        const baseUsers = buildDayEndOverviewBaseUsers(tasks.filter((task) => String(task.source_type || '').trim() === 'cleaning_tasks'))
+        const baseUsers = buildDayEndOverviewBaseUsers(tasks.filter((task) => isCleaningExecutionTask(task) || isInspectionExecutionTask(task)))
         if (cancelled) return
         if (!baseUsers.length) {
           setDayEndOverviewUsers([])
@@ -1505,9 +1524,9 @@ export default function TasksScreen(props: Props) {
       }
       const sortDelta = taskSortIndexValue(a) - taskSortIndexValue(b)
       if (sortDelta) return sortDelta
-      const aIsCleaning = a.source_type === 'cleaning_tasks'
-      const bIsCleaning = b.source_type === 'cleaning_tasks'
-      if (!(aIsCleaning && bIsCleaning)) {
+      const aIsExecutionTask = isCleaningExecutionTask(a) || isInspectionExecutionTask(a) || isKeyHandoverExecutionTask(a)
+      const bIsExecutionTask = isCleaningExecutionTask(b) || isInspectionExecutionTask(b) || isKeyHandoverExecutionTask(b)
+      if (!(aIsExecutionTask && bIsExecutionTask)) {
         const ur = urgencyRank(b.urgency) - urgencyRank(a.urgency)
         if (ur) return ur
       }
@@ -1515,7 +1534,7 @@ export default function TasksScreen(props: Props) {
     })
     if (canManagerMode && mode === 'manager') {
       const keyOf = (t: WorkTaskItem) => {
-        if (t.source_type !== 'cleaning_tasks') return ''
+        if (!isCleaningExecutionTask(t) && !isInspectionExecutionTask(t) && !isKeyHandoverExecutionTask(t)) return ''
         const d = String(t.scheduled_date || (t as any).date || '').slice(0, 10)
         const code = String(t.property?.code || '').trim()
         const pid = String(t.property_id || '').trim()
@@ -1528,7 +1547,7 @@ export default function TasksScreen(props: Props) {
         const s = String(t.status || '').trim().toLowerCase()
         return s === 'done' || s === 'completed' || s === 'keys_hung'
       }
-      const isCleaningKind = (t: WorkTaskItem) => String(t.task_kind || '').trim().toLowerCase() === 'cleaning'
+      const isCleaningKind = (t: WorkTaskItem) => isCleaningExecutionTask(t)
       const pick = (a: WorkTaskItem, b: WorkTaskItem) => {
         const aDone = isDone(a)
         const bDone = isDone(b)
@@ -1569,12 +1588,13 @@ export default function TasksScreen(props: Props) {
     const eligibleIndexes = visibleTasks
       .map((task, index) => ({ task, index }))
       .filter(({ task }) => {
-        if (task.source_type !== 'cleaning_tasks') return false
-        const kind = String(task.task_kind || '').trim().toLowerCase()
-        if (canManagerMode && !isCleanerSelf && !isInspectorSelf) return kind === 'cleaning'
-        if (roleNames.includes('cleaner_inspector')) return kind === 'cleaning' || kind === 'inspection'
-        if (roleNames.includes('cleaning_inspector')) return kind === 'inspection'
-        if (roleNames.includes('cleaner')) return kind === 'cleaning'
+        const cleaning = isCleaningExecutionTask(task)
+        const inspection = isInspectionExecutionTask(task)
+        if (!cleaning && !inspection) return false
+        if (canManagerMode && !isCleanerSelf && !isInspectorSelf) return cleaning
+        if (roleNames.includes('cleaner_inspector')) return cleaning || inspection
+        if (roleNames.includes('cleaning_inspector')) return inspection
+        if (roleNames.includes('cleaner')) return cleaning
         return false
       })
     if (!eligibleIndexes.length) return -1
@@ -1721,6 +1741,7 @@ function showBanner(title: string, message: string) {
     const assigneeId = String(task.assignee_id || '').trim()
     const cleanerId = String((task as any)?.cleaner_id || '').trim()
     const inspectorId = String((task as any)?.inspector_id || '').trim()
+    if (isKeyHandoverExecutionTask(task)) return assigneeId === uid
     if (kind === 'inspection') return assigneeId === uid || inspectorId === uid
     if (kind === 'cleaning') return assigneeId === uid || cleanerId === uid
     return assigneeId === uid
@@ -1736,7 +1757,7 @@ function showBanner(title: string, message: string) {
     ;(async () => {
       await initNoticesStore().catch(() => null)
       const existing = new Set(getNoticesSnapshot().items.map(n => n.id))
-      const toInspect = renderTasks.filter(t => t.source_type === 'cleaning_tasks' && t.task_kind === 'inspection' && isTaskOwnedByCurrentUser(t) && String(t.status || '').toLowerCase() === 'to_inspect')
+      const toInspect = renderTasks.filter(t => isInspectionExecutionTask(t) && isTaskOwnedByCurrentUser(t) && String(t.status || '').toLowerCase() === 'to_inspect')
       const fresh = toInspect.filter(t => !notifiedInspectionsRef.current[t.id] && !existing.has(`insp:to_inspect:${t.id}`))
       if (!fresh.length || cancelled) return
       for (const t of fresh) notifiedInspectionsRef.current[t.id] = true
@@ -1771,8 +1792,7 @@ function showBanner(title: string, message: string) {
     if (period !== 'today') return
     const keysUploaded = renderTasks.filter(
       t =>
-        t.source_type === 'cleaning_tasks' &&
-        t.task_kind === 'inspection' &&
+        isInspectionExecutionTask(t) &&
         isTaskOwnedByCurrentUser(t) &&
         String(t.status || '').toLowerCase() === 'in_progress' &&
         !!String((t as any).key_photo_url || '').trim(),
@@ -1815,7 +1835,7 @@ function showBanner(title: string, message: string) {
     if (period !== 'today') return
     const checkedOut = renderTasks.filter(
       t => {
-        if (!(t.source_type === 'cleaning_tasks' && t.task_kind === 'cleaning')) return false
+        if (!isCleaningExecutionTask(t)) return false
         if (!isTaskOwnedByCurrentUser(t)) return false
         const raw = String((t as any).checked_out_at || '').trim()
         if (!raw) return false
@@ -1859,7 +1879,7 @@ function showBanner(title: string, message: string) {
     if (!taskNoticeArmed) return
     if (!(canManagerMode && mode === 'manager')) return
     if (period !== 'today') return
-    const hung = renderTasks.filter(t => t.source_type === 'cleaning_tasks' && t.task_kind === 'inspection' && String(t.status || '').toLowerCase() === 'keys_hung')
+    const hung = renderTasks.filter(t => isInspectionExecutionTask(t) && String(t.status || '').toLowerCase() === 'keys_hung')
     let cancelled = false
     ;(async () => {
       await initNoticesStore().catch(() => null)
@@ -1917,16 +1937,20 @@ function showBanner(title: string, message: string) {
       const localPatches: Array<{ id: string; patch: Partial<WorkTaskItem> }> = []
       for (const { task, mark } of marks) {
         if (!isReorderableTask(task)) continue
-        if (task.source_type !== 'cleaning_tasks') {
+        const cleaning = isCleaningExecutionTask(task)
+        const inspection = isInspectionExecutionTask(task)
+        if (!cleaning && !inspection) {
           workTaskIds.push(String(task.id))
           localPatches.push({ id: String(task.id), patch: { sort_index: mark } as Partial<WorkTaskItem> })
           continue
         }
-        const ids = executionTaskIdsForRole(task, task.task_kind)
-        if (task.task_kind === 'cleaning') {
+        if (cleaning) {
+          const ids = executionTaskIdsForRole(task, 'cleaning')
           cleanerGroups.push(ids)
           localPatches.push({ id: String(task.id), patch: { sort_index: mark, sort_index_cleaner: mark } as Partial<WorkTaskItem> })
-        } else if (task.task_kind === 'inspection') {
+        }
+        if (inspection) {
+          const ids = executionTaskIdsForRole(task, 'inspection')
           inspectorGroups.push(ids)
           localPatches.push({ id: String(task.id), patch: { sort_index: mark, sort_index_inspector: mark } as Partial<WorkTaskItem> })
         }
@@ -2613,6 +2637,7 @@ function showBanner(title: string, message: string) {
               const isCleaningSource = task.source_type === 'cleaning_tasks'
               const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
               const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
+              const isKeyHandoverTask = isKeyHandoverExecutionTask(task)
               const isCleaningSubmitted = isCleaningTask && isCleaningWorkSubmitted(task.status)
               const keyPhotoState = selectKeyPhotoEffectiveState({
                 key_photo_url: String((task as any)?.key_photo_url || '').trim(),
@@ -2622,7 +2647,11 @@ function showBanner(title: string, message: string) {
               const isStayoverTask = isCleaningTask && isStayoverTaskType(taskType)
               const isCheckoutTask = taskType === 'checkout_clean' || !!checkoutTime
               const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
-              const inspectionScopeTag = isInspectionTask && taskType === 'checkin_clean' ? inspectionScopeLabel((task as any).inspection_scope) : null
+              const inspectionScopeTag = isPasswordOnlyInspection
+                ? '仅改密码'
+                : isInspectionTask && taskType === 'checkin_clean'
+                  ? inspectionScopeLabel((task as any).inspection_scope)
+                  : null
               const inspectionMode = effectiveInspectionMode(task as any)
               const inspectionPlanLabel = inspectionModeLabel(inspectionMode, String((task as any).inspection_due_date || '').trim() || null)
               const stayoverTagStyles = taskTagStylePair('normal')
@@ -2790,8 +2819,8 @@ function showBanner(title: string, message: string) {
                     }
                     const isManager0 = canTaskManagerView
                     const isInspector0 = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
-                    const isInspection0 = task.source_type === 'cleaning_tasks' && task.task_kind === 'inspection'
-                    const isCleaningTask0 = task.source_type === 'cleaning_tasks'
+                    const isInspection0 = isInspectionExecutionTask(task)
+                    const isCleaningTask0 = isCleaningExecutionTask(task) || isInspectionExecutionTask(task) || isKeyHandoverExecutionTask(task)
                     if (isManager0 && isCleaningTask0) {
                       props.navigation.navigate('ManagerDailyTask', { taskId: task.id })
                       return
@@ -2847,7 +2876,7 @@ function showBanner(title: string, message: string) {
                     ) : (
                       <>
                         <View style={kindTagStyles.container}>
-                          <Text style={kindTagStyles.text}>{kind}</Text>
+                          <Text style={kindTagStyles.text}>{isKeyHandoverTask ? '执行' : kind}</Text>
                         </View>
                         {showCheckout ? (
                           <View style={checkoutTagStyles.container}>
@@ -3308,6 +3337,21 @@ function showBanner(title: string, message: string) {
                         style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
                       >
                         <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
+                      </Pressable>
+                    </View>
+                  ) : !taskCollapsed && isKeyHandoverTask ? (
+                    <View style={styles.actionsRow}>
+                      <Pressable
+                        onPress={() => props.navigation.navigate('InspectionComplete', { taskId: task.id, skipInspectionPhotos: true })}
+                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={styles.actionText}>上传视频并完成</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
+                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={styles.actionText}>房源问题反馈</Text>
                       </Pressable>
                     </View>
                   ) : !taskCollapsed && isInspectionTask && isInspectorUser ? (

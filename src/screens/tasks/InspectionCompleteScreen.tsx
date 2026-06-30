@@ -113,17 +113,17 @@ export default function InspectionCompleteScreen(props: Props) {
     try {
       setLoading(true)
       setValidationReady(false)
-      const batch = await getInspectionPanelBatch(props.route.params.taskId)
       const needs: string[] = []
+      const batch = isPasswordOnlyInspection ? null : await getInspectionPanelBatch(props.route.params.taskId)
       const status = batch?.status || null
       setPanelBatchStatus(status)
-      if (!batch || status === 'draft') needs.push('请先在“检查与补充”页点击正式提交')
+      if (!isPasswordOnlyInspection && (!batch || status === 'draft')) needs.push('请先在“检查与补充”页点击正式提交')
       setMissing(needs)
       setValidationReady(true)
     } finally {
       setLoading(false)
     }
-  }, [cleaningTaskId, props.route.params.taskId])
+  }, [cleaningTaskId, isPasswordOnlyInspection, props.route.params.taskId])
 
   useEffect(() => {
     refresh()

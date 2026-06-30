@@ -553,6 +553,8 @@ export type GuestLuggageNotice = {
 export type WorkTask = {
   id: string
   task_kind: string
+  execution_role?: 'cleaning' | 'inspection' | 'execution' | 'mixed' | 'work' | string | null
+  execution_semantics?: 'cleaning_execution' | 'checkin_inspection' | 'inspection_execution' | 'key_handover_execution' | 'mixed_cleaning_inspection' | 'work_task' | string | null
   source_type: string
   source_id: string
   source_ids?: string[]

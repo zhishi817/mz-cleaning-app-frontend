@@ -63,7 +63,58 @@ export function inspectionScopeLabel(scope: any) {
   return normalizeInspectionScope(scope) === 'password_only' ? '仅改密码' : '检查后挂钥匙'
 }
 
+export function taskExecutionRole(task: {
+  execution_role?: any
+  execution_semantics?: any
+  source_type?: any
+  task_kind?: any
+}) {
+  const explicit = String(task?.execution_role || '').trim().toLowerCase()
+  if (explicit === 'cleaning' || explicit === 'inspection' || explicit === 'execution' || explicit === 'mixed' || explicit === 'work') return explicit
+  const semantics = String(task?.execution_semantics || '').trim().toLowerCase()
+  if (semantics === 'cleaning_execution') return 'cleaning'
+  if (semantics === 'key_handover_execution') return 'execution'
+  if (semantics === 'checkin_inspection' || semantics === 'inspection_execution') return 'inspection'
+  if (semantics === 'mixed_cleaning_inspection') return 'mixed'
+  const sourceType = String(task?.source_type || '').trim().toLowerCase()
+  const taskKind = String(task?.task_kind || '').trim().toLowerCase()
+  if (sourceType !== 'cleaning_tasks') return 'work'
+  if (taskKind === 'cleaning' || taskKind === 'inspection') return taskKind
+  return 'mixed'
+}
+
+export function isCleaningExecutionTask(task: {
+  execution_role?: any
+  execution_semantics?: any
+  source_type?: any
+  task_kind?: any
+}) {
+  const role = taskExecutionRole(task)
+  return role === 'cleaning' || role === 'mixed'
+}
+
+export function isInspectionExecutionTask(task: {
+  execution_role?: any
+  execution_semantics?: any
+  source_type?: any
+  task_kind?: any
+}) {
+  const role = taskExecutionRole(task)
+  return role === 'inspection' || role === 'mixed'
+}
+
+export function isKeyHandoverExecutionTask(task: {
+  execution_role?: any
+  execution_semantics?: any
+  source_type?: any
+  task_kind?: any
+}) {
+  return taskExecutionRole(task) === 'execution'
+}
+
 export function isPasswordOnlyInspectionTask(task: {
+  execution_role?: any
+  execution_semantics?: any
   source_type?: any
   task_kind?: any
   task_type?: any
@@ -73,6 +124,7 @@ export function isPasswordOnlyInspectionTask(task: {
   const taskKind = String(task?.task_kind || '').trim().toLowerCase()
   const taskType = String(task?.task_type || '').trim().toLowerCase()
   if (sourceType !== 'cleaning_tasks') return false
+  if (isKeyHandoverExecutionTask(task)) return true
   if (taskKind !== 'inspection') return false
   return taskType === 'checkin_clean' && normalizeInspectionScope(task?.inspection_scope) === 'password_only'
 }

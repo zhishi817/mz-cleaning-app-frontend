@@ -6,7 +6,7 @@ import * as Clipboard from 'expo-clipboard'
 import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
-import { cleaningTaskTitleSuffix, effectiveInspectionMode, inspectionModeLabel, inspectionScopeLabel, isPasswordOnlyInspectionTask, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
+import { cleaningTaskTitleSuffix, effectiveInspectionMode, inspectionModeLabel, inspectionScopeLabel, isKeyHandoverExecutionTask, isPasswordOnlyInspectionTask, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
 import { useI18n } from '../../lib/i18n'
 import {
   discardKeyUpload,
@@ -590,8 +590,9 @@ export default function TaskDetailScreen(props: Props) {
   const guestSpecialRequest = guestRequestForDisplay(task)
   const urgency = urgencyMeta(task.urgency)
   const isCleaningSource = task.source_type === 'cleaning_tasks'
+  const isKeyHandoverTask = isKeyHandoverExecutionTask(task as any)
   const isStayoverTask = isCleaningSource && isStayoverTaskType(taskType)
-  const isCleaningOrInspection = isCleaningSource && (String(task.task_kind || '').toLowerCase() === 'cleaning' || String(task.task_kind || '').toLowerCase() === 'inspection')
+  const isCleaningOrInspection = isCleaningSource && (String(task.task_kind || '').toLowerCase() === 'cleaning' || String(task.task_kind || '').toLowerCase() === 'inspection' || isKeyHandoverTask)
   const wifiSsid = String((task as any)?.property?.wifi_ssid || '').trim()
   const wifiPassword = String((task as any)?.property?.wifi_password || '').trim()
   const hasCheckout = !!checkoutTime
@@ -631,8 +632,8 @@ export default function TaskDetailScreen(props: Props) {
   const inspectionMode = effectiveInspectionMode(task as any)
   const inspectionPlanLabel = inspectionModeLabel(inspectionMode, String((task as any).inspection_due_date || '').trim() || null)
   const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
-  const showInspectionScope = isInspectionTask && taskType === 'checkin_clean'
-  const inspectionScopeText = showInspectionScope ? inspectionScopeLabel((task as any).inspection_scope) : ''
+  const showInspectionScope = isPasswordOnlyInspection || (isInspectionTask && taskType === 'checkin_clean')
+  const inspectionScopeText = isPasswordOnlyInspection ? '仅改密码' : (showInspectionScope ? inspectionScopeLabel((task as any).inspection_scope) : '')
   const stayoverTagStyles = taskTagStylePair('normal')
   const kindTagStyles = taskTagStylePair(getTaskKindTone(task.task_kind))
   const checkoutTagStyles = taskTagStylePair('danger')
@@ -711,7 +712,7 @@ export default function TaskDetailScreen(props: Props) {
           ) : (
             <>
               <View style={kindTagStyles.container}>
-                <Text style={kindTagStyles.text}>{kind}</Text>
+                <Text style={kindTagStyles.text}>{isKeyHandoverTask ? '执行' : kind}</Text>
               </View>
               {showCheckout ? (
                 <View style={checkoutTagStyles.container}>
@@ -930,7 +931,22 @@ export default function TaskDetailScreen(props: Props) {
           </>
         ) : null}
 
-        {isCleaningTask ? (
+        {isKeyHandoverTask ? (
+          <View style={[styles.actionsRow, isCompactLayout ? styles.actionsRowCompact : null]}>
+            <Pressable
+              onPress={() => props.navigation.navigate('InspectionComplete', { taskId: task.id, skipInspectionPhotos: true })}
+              style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null]}
+            >
+              <Text style={styles.actionText}>上传视频并完成</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
+              style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null]}
+            >
+              <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
+            </Pressable>
+          </View>
+        ) : isCleaningTask ? (
           <View style={[styles.actionsRow, isCompactLayout ? styles.actionsRowCompact : null]}>
             {isCustomerService ? (
               <>

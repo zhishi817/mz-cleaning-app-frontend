@@ -260,6 +260,43 @@ test('password-only inspection task shows explicit execution scope', async () =>
   snapshot.items[0].end_time = '3pm'
 })
 
+test('key handover execution task shows user-facing password-only label and video action', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  snapshot.items[0].task_kind = 'execution'
+  snapshot.items[0].execution_role = 'execution'
+  snapshot.items[0].execution_semantics = 'key_handover_execution'
+  snapshot.items[0].task_type = 'checkin_clean'
+  snapshot.items[0].inspection_scope = 'password_only'
+  snapshot.items[0].inspection_mode = 'same_day'
+  snapshot.items[0].status = 'assigned'
+  snapshot.items[0].start_time = null
+  snapshot.items[0].end_time = '3pm'
+
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TaskDetailScreen navigation={{ goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-exec', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText('执行')).toBeTruthy()
+    expect(ui.getByText('检查执行方式：仅改密码')).toBeTruthy()
+    expect(ui.getByText('上传视频并完成')).toBeTruthy()
+    expect(ui.queryByText('execution')).toBeNull()
+  })
+
+  snapshot.items[0].task_kind = 'cleaning'
+  snapshot.items[0].execution_role = undefined
+  snapshot.items[0].execution_semantics = undefined
+  snapshot.items[0].task_type = undefined
+  snapshot.items[0].inspection_scope = undefined
+  snapshot.items[0].inspection_mode = undefined
+  snapshot.items[0].start_time = '10am'
+  snapshot.items[0].end_time = '3pm'
+})
+
 test('task detail shows 晚入住 tag when checkin time is later than 6pm', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
