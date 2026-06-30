@@ -44,6 +44,7 @@ function taskKindLabel(kind: string) {
   const s = String(kind || '').trim().toLowerCase()
   if (s === 'cleaning') return '清洁'
   if (s === 'inspection') return '检查'
+  if (s === 'execution') return '执行'
   if (s === 'maintenance') return '维修'
   if (s === 'deep_cleaning') return '深清'
   if (s === 'offline') return '线下'

@@ -264,8 +264,8 @@ test('key handover execution task shows user-facing password-only label and vide
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
   snapshot.items[0].task_kind = 'execution'
-  snapshot.items[0].execution_role = 'execution'
-  snapshot.items[0].execution_semantics = 'key_handover_execution'
+  snapshot.items[0].execution_role = undefined
+  snapshot.items[0].execution_semantics = undefined
   snapshot.items[0].task_type = 'checkin_clean'
   snapshot.items[0].inspection_scope = 'password_only'
   snapshot.items[0].inspection_mode = 'same_day'

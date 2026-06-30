@@ -165,6 +165,63 @@ test('tasks screen shows wifi info and copies wifi password', async () => {
   })
 })
 
+test('key handover execution task shows password-only tag and executor role in list', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  snapshot.items = [
+    {
+      ...previousItems[0],
+      id: 'exec-1',
+      task_kind: 'execution',
+      execution_role: undefined,
+      execution_semantics: undefined,
+      task_type: 'checkin_clean',
+      inspection_scope: 'password_only',
+      inspection_mode: 'same_day',
+      source_type: 'cleaning_tasks',
+      source_id: 'ct-exec-1',
+      assignee_id: 'angela-id',
+      assignee_name: 'Angela',
+      executor_name: 'Angela',
+      cleaner_id: null,
+      cleaner_name: null,
+      inspector_id: null,
+      inspector_name: null,
+      start_time: null,
+      end_time: '3pm',
+      property: {
+        ...previousItems[0].property,
+        code: 'AU2117',
+        region: 'Southbank',
+      },
+    },
+  ]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-key-handover-exec', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getAllByText('执行').length).toBeGreaterThan(0)
+    expect(ui.getByText('仅改密码')).toBeTruthy()
+    expect(ui.getByText('Angela')).toBeTruthy()
+    expect(ui.queryByText('execution')).toBeNull()
+  })
+
+  const rendered = flattenRenderedText(ui.toJSON()).join('\n')
+  expect(rendered).toContain('执行\nAngela')
+  expect(rendered).not.toContain('清洁\nAngela')
+
+  snapshot.items = previousItems
+})
+
 test('tasks screen shows 晚入住 tag when checkin time is later than 6pm', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()

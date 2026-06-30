@@ -407,7 +407,7 @@ function managerRegionRank(region0: string) {
 }
 
 function taskCleanerSortValue(task: WorkTaskItem) {
-  const cleanerName = String((task as any).cleaner_name || '').trim()
+  const cleanerName = String((task as any).executor_name || (task as any).cleaner_name || '').trim()
   const cleanerId = String((task as any).cleaner_id || task.assignee_id || '').trim()
   const inspectorName = String((task as any).inspector_name || '').trim()
   const inspectorId = String((task as any).inspector_id || '').trim()
@@ -421,6 +421,7 @@ function taskManagerSearchText(task: WorkTaskItem) {
     task.title,
     (task as any).region,
     task.property?.region,
+    (task as any).executor_name,
     (task as any).cleaner_name,
     (task as any).cleaner_id,
     task.assignee_id,
@@ -458,6 +459,7 @@ function taskKindLabel(kind: string) {
   const s = String(kind || '').trim().toLowerCase()
   if (s === 'cleaning') return '清洁'
   if (s === 'inspection') return '检查'
+  if (s === 'execution') return '执行'
   if (s === 'maintenance') return '维修'
   if (s === 'deep_cleaning') return '深清'
   if (s === 'offline') return '线下'
@@ -2674,6 +2676,7 @@ function showBanner(title: string, message: string) {
               const isInspectorUser = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
               const cleanerName = String((task as any).cleaner_name || '').trim()
               const inspectorName = String((task as any).inspector_name || '').trim()
+              const executorName = String((task as any).executor_name || (task as any).assignee_name || (isKeyHandoverTask ? (cleanerName || inspectorName) : '') || task.assignee_id || '').trim()
               const cleanerExecName = cleanerName || '-'
               const inspectorExecName = isDirectCompleteEligible || isPendingInspectionDecision ? '无' : (inspectorName || '-')
               const cleanerOrderRaw = (task as any).sort_index_cleaner
@@ -2926,27 +2929,41 @@ function showBanner(title: string, message: string) {
                     <>
                       <View style={styles.execCard}>
                         <Text style={styles.execLabel}>执行人员</Text>
-                        <View style={styles.execPeople}>
-                          <View style={styles.execPerson}>
-                            <View style={styles.execBadgeClean}>
-                              <Text style={styles.execBadgeText}>清</Text>
-                            </View>
-                            <View style={styles.execPersonText}>
-                              <Text style={[styles.execPersonRole, styles.execPersonRoleClean]}>清洁</Text>
-                              <Text style={styles.execPersonName} numberOfLines={1}>{cleanerExecName}</Text>
-                            </View>
-                          </View>
-                          <View style={styles.execPerson}>
-                            <View style={styles.execBadgeInspect}>
-                              <Text style={styles.execBadgeText}>检</Text>
-                            </View>
-                            <View style={styles.execPersonText}>
-                              <Text style={[styles.execPersonRole, styles.execPersonRoleInspect]}>检查</Text>
-                              <Text style={styles.execPersonName} numberOfLines={1}>{inspectorExecName}</Text>
+                        {isKeyHandoverTask ? (
+                          <View style={styles.execPeople}>
+                            <View style={styles.execPerson}>
+                              <View style={styles.execBadgeExecute}>
+                                <Text style={styles.execBadgeText}>执</Text>
+                              </View>
+                              <View style={styles.execPersonText}>
+                                <Text style={[styles.execPersonRole, styles.execPersonRoleExecute]}>执行</Text>
+                                <Text style={styles.execPersonName} numberOfLines={1}>{executorName || '-'}</Text>
+                              </View>
                             </View>
                           </View>
-                        </View>
-                        {isManager || isInspectorUser ? (
+                        ) : (
+                          <View style={styles.execPeople}>
+                            <View style={styles.execPerson}>
+                              <View style={styles.execBadgeClean}>
+                                <Text style={styles.execBadgeText}>清</Text>
+                              </View>
+                              <View style={styles.execPersonText}>
+                                <Text style={[styles.execPersonRole, styles.execPersonRoleClean]}>清洁</Text>
+                                <Text style={styles.execPersonName} numberOfLines={1}>{cleanerExecName}</Text>
+                              </View>
+                            </View>
+                            <View style={styles.execPerson}>
+                              <View style={styles.execBadgeInspect}>
+                                <Text style={styles.execBadgeText}>检</Text>
+                              </View>
+                              <View style={styles.execPersonText}>
+                                <Text style={[styles.execPersonRole, styles.execPersonRoleInspect]}>检查</Text>
+                                <Text style={styles.execPersonName} numberOfLines={1}>{inspectorExecName}</Text>
+                              </View>
+                            </View>
+                          </View>
+                        )}
+                        {!isKeyHandoverTask && (isManager || isInspectorUser) ? (
                           <View style={styles.execOrderRow}>
                             <Text style={styles.execOrder} numberOfLines={1}>
                               {`清洁顺序：${cleanerOrderN == null ? '-' : String(cleanerOrderN)}`}
@@ -3750,11 +3767,13 @@ const styles = StyleSheet.create({
   execPerson: { flexGrow: 1, flexShrink: 1, flexBasis: 140, minWidth: 128, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 16, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E5E7EB' },
   execBadgeClean: { width: 36, height: 36, borderRadius: 18, flexShrink: 0, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   execBadgeInspect: { width: 36, height: 36, borderRadius: 18, flexShrink: 0, backgroundColor: '#7C3AED', alignItems: 'center', justifyContent: 'center' },
+  execBadgeExecute: { width: 36, height: 36, borderRadius: 18, flexShrink: 0, backgroundColor: '#0F766E', alignItems: 'center', justifyContent: 'center' },
   execBadgeText: { color: '#FFFFFF', fontWeight: '800', fontSize: 13 },
   execPersonText: { flex: 1, minWidth: 0 },
   execPersonRole: { fontWeight: '800', fontSize: moderateScale(11), lineHeight: moderateScale(15) },
   execPersonRoleClean: { color: '#2563EB' },
   execPersonRoleInspect: { color: '#7C3AED' },
+  execPersonRoleExecute: { color: '#0F766E' },
   execPersonName: { minWidth: 0, flexShrink: 1, color: '#111827', fontWeight: '800', fontSize: moderateScale(13), lineHeight: moderateScale(18) },
   execOrderRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, columnGap: 16, paddingHorizontal: 4 },
   execOrder: { flexGrow: 1, flexBasis: 120, color: '#6B7280', fontWeight: '600', fontSize: moderateScale(11), lineHeight: moderateScale(16) },
