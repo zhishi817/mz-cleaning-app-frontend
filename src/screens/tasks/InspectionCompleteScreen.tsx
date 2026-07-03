@@ -33,6 +33,7 @@ import AppButton from '../../components/ui/AppButton'
 import AppText from '../../components/ui/AppText'
 import SafeAreaBottomBar from '../../components/ui/SafeAreaBottomBar'
 import { layoutTokens } from '../../lib/theme'
+import { actionDisabledReasonText } from '../../lib/workTaskActions'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'InspectionComplete'>
 
@@ -72,6 +73,12 @@ function toAbsoluteUrl(rawUrl: any) {
   return s0
 }
 
+function staleQueueUpload(item: InspectionMediaQueueItem | null, now = Date.now()) {
+  if (!item || item.upload_status !== 'uploading') return false
+  const startedAt = new Date(String(item.last_attempt_at || item.uploaded_at || item.created_at || '')).getTime()
+  return Number.isFinite(startedAt) && now - startedAt > 2 * 60 * 1000
+}
+
 export default function InspectionCompleteScreen(props: Props) {
   const { t } = useI18n()
   const { token } = useAuth()
@@ -86,7 +93,7 @@ export default function InspectionCompleteScreen(props: Props) {
   const [panelBatchStatus, setPanelBatchStatus] = useState<InspectionPanelBatchStatus | null>(null)
 
   const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
-  const cleaningTaskId = String(task?.source_id || '').trim()
+  const cleaningTaskId = String(props.route.params.sourceId || task?.source_id || '').trim()
   const [lockboxDeleted, setLockboxDeleted] = useState(false)
   const lockboxFromTask = lockboxDeleted ? '' : String((task as any)?.lockbox_video_url || '').trim()
   const effectiveLockboxUrl = String(lockboxItem?.uploaded_url || lockboxItem?.local_uri || lockboxFromTask || '').trim() || null
@@ -98,6 +105,15 @@ export default function InspectionCompleteScreen(props: Props) {
   const inspectionScopeNoticeStyles = noticeToneStylePair(getInspectionScopeTone(isPasswordOnlyInspection))
   const oldCode = String((task as any)?.old_code || '').trim()
   const newCode = String((task as any)?.new_code || '').trim()
+  const serverActions = Array.isArray((task as any)?.available_actions) ? (((task as any).available_actions || []) as any[]) : null
+  const accessVideoAction = serverActions?.find((action) => String(action?.id || '') === 'upload_access_video') || null
+  const accessVideoDeniedReason = serverActions
+    ? accessVideoAction?.enabled
+      ? ''
+      : actionDisabledReasonText(accessVideoAction?.disabled_reason || '当前任务没有可提交的访问凭证操作')
+    : ''
+  const submitInspectionAction = serverActions?.find((action) => String(action?.id || '') === 'submit_inspection') || null
+  const canOpenInspectionPanel = !isPasswordOnlyInspection && (!serverActions || submitInspectionAction?.enabled === true)
 
   const reloadLockboxItem = useCallback(async () => {
     if (!cleaningTaskId) {
@@ -156,6 +172,7 @@ export default function InspectionCompleteScreen(props: Props) {
   async function onUploadVideo() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!cleaningTaskId) return Alert.alert(t('common_error'), '缺少任务信息')
+    if (accessVideoDeniedReason) return Alert.alert('暂不可操作', accessVideoDeniedReason)
     if (!validationReady || loading) return Alert.alert(t('common_error'), '正在校验检查与补充状态，请稍候')
     if (missing.length) return Alert.alert(t('common_error'), missing.join('、'))
     try {
@@ -201,6 +218,7 @@ export default function InspectionCompleteScreen(props: Props) {
   async function onSubmitComplete() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!cleaningTaskId) return Alert.alert(t('common_error'), '缺少任务信息')
+    if (accessVideoDeniedReason) return Alert.alert('暂不可操作', accessVideoDeniedReason)
     if (lockboxSaved) {
       Alert.alert(t('common_ok'), '挂钥匙视频已同步完成')
       props.navigation.goBack()
@@ -250,6 +268,16 @@ export default function InspectionCompleteScreen(props: Props) {
     }
   }
 
+  async function retryLockboxUpload() {
+    if (!token) return Alert.alert(t('common_error'), '请先登录')
+    if (!lockboxItem || lockboxSaved) return
+    await updateInspectionMediaItem(lockboxItem.id, {
+      upload_status: lockboxItem.uploaded_url ? 'uploaded' : 'pending',
+      last_error: null,
+    })
+    void processInspectionMediaQueue(token)
+  }
+
   function onDeleteLockboxVideo() {
     Alert.alert(
       '删除视频',
@@ -263,11 +291,14 @@ export default function InspectionCompleteScreen(props: Props) {
     )
   }
 
-  const canComplete = !!lockboxItem?.uploaded_url && !submitting && !deleting && !lockboxSaved
+  const canComplete = !accessVideoDeniedReason && !!lockboxItem?.uploaded_url && !submitting && !deleting && !lockboxSaved
+  const lockboxUploadStale = staleQueueUpload(lockboxItem)
+  const canRetryLockboxUpload = !!lockboxItem && !lockboxSaved && !submitting && !deleting && (lockboxUploadStale || lockboxItem.upload_status === 'failed_retryable')
   const uploadHint = (() => {
     if (!lockboxItem && lockboxSaved) return '挂钥匙视频已同步完成。'
     if (!lockboxItem) return ''
     if (lockboxSaved) return '挂钥匙视频已同步完成。'
+    if (lockboxUploadStale) return '视频上传可能已卡住，视频仍保存在本机，可点击重试上传。'
     if (lockboxItem.upload_status === 'pending' || lockboxItem.upload_status === 'uploading') return '视频已保存到本机，正在自动上传。'
     if (lockboxItem.uploaded_url && !lockboxItem.business_saved) return '视频已上传，联网恢复后会自动保存；如需立刻完成，也可以手动点击提交。'
     if (lockboxItem.local_file_deleted_at && !lockboxItem.uploaded_url) return '本地视频已过期清理，请重新拍摄。'
@@ -316,12 +347,15 @@ export default function InspectionCompleteScreen(props: Props) {
           </Text>
         ) : null}
         {isEarlyCheckinSkipAttempt ? <Text style={styles.warnSmall}>早入住不可跳过检查照片，请返回检查与补充正常拍照。</Text> : null}
-        <Pressable
-          onPress={() => props.navigation.navigate('InspectionPanel', { taskId: task.id })}
-          style={({ pressed }) => [styles.linkBtn, pressed ? styles.pressed : null]}
-        >
-          <Text style={styles.linkText}>进入检查与补充</Text>
-        </Pressable>
+        {accessVideoDeniedReason ? <Text style={styles.warnSmall}>{`暂不可操作：${accessVideoDeniedReason}`}</Text> : null}
+        {canOpenInspectionPanel ? (
+          <Pressable
+            onPress={() => props.navigation.navigate('InspectionPanel', { taskId: task.id })}
+            style={({ pressed }) => [styles.linkBtn, pressed ? styles.pressed : null]}
+          >
+            <Text style={styles.linkText}>进入检查与补充</Text>
+          </Pressable>
+        ) : null}
         {loading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
       </View>
 
@@ -360,6 +394,16 @@ export default function InspectionCompleteScreen(props: Props) {
         {uploadHint ? (
           <Text style={lockboxItem?.uploaded_url ? styles.ok : styles.pending}>{uploadHint}</Text>
         ) : null}
+        {canRetryLockboxUpload ? (
+          <Pressable
+            onPress={retryLockboxUpload}
+            disabled={uploading || submitting || deleting}
+            style={({ pressed }) => [styles.retryBtn, pressed ? styles.pressed : null, uploading || submitting || deleting ? styles.disabled : null]}
+          >
+            <Ionicons name="refresh-outline" size={moderateScale(15)} color="#2563EB" />
+            <Text style={styles.retryText}>重试上传</Text>
+          </Pressable>
+        ) : null}
         {effectiveLockboxUrl || lockboxItem ? (
           <Pressable
             onPress={onDeleteLockboxVideo}
@@ -377,9 +421,9 @@ export default function InspectionCompleteScreen(props: Props) {
         <AppButton
           label={uploading ? t('common_loading') : lockboxItem?.uploaded_url ? '重拍视频' : '拍视频并上传'}
           onPress={onUploadVideo}
-          disabled={uploading || deleting || submitting}
+          disabled={uploading || deleting || submitting || !!accessVideoDeniedReason}
           tone="secondary"
-          style={[styles.grayBtn, uploading || deleting || submitting ? styles.disabled : null]}
+          style={[styles.grayBtn, uploading || deleting || submitting || !!accessVideoDeniedReason ? styles.disabled : null]}
         />
         <AppButton
           label={
@@ -434,6 +478,8 @@ const styles = StyleSheet.create({
   video: { width: '100%', height: 220, backgroundColor: '#0B0F17' },
   deleteBtn: { marginTop: 10, minHeight: 38, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FECACA', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, alignSelf: 'flex-start' },
   deleteText: { fontWeight: '900', color: '#B91C1C', textAlign: 'center' },
+  retryBtn: { marginTop: 10, minHeight: 38, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, alignSelf: 'flex-start' },
+  retryText: { fontWeight: '900', color: '#2563EB', textAlign: 'center' },
 
   row: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
   grayBtn: { flex: 1, flexShrink: 1, minWidth: 140, minHeight: 44, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },

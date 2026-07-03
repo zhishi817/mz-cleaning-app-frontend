@@ -6,7 +6,7 @@ import * as Clipboard from 'expo-clipboard'
 import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
-import { cleaningTaskTitleSuffix, effectiveInspectionMode, inspectionModeLabel, inspectionScopeLabel, isKeyHandoverExecutionTask, isPasswordOnlyInspectionTask, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
+import { cleaningTaskTitleSuffix, effectiveInspectionMode, inspectionModeLabel, inspectionScopeLabel, isCheckinSiteExecutionTask, isKeyHandoverExecutionTask, isPasswordOnlyInspectionTask, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
 import { useI18n } from '../../lib/i18n'
 import {
   discardKeyUpload,
@@ -37,6 +37,8 @@ import {
 } from '../../lib/turnoverDisplay'
 import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
 import { buildCleaningMediaImageSource } from '../../lib/cleaningMedia'
+import { actionDisabledReasonText, availableActionsForTask, navigationForWorkTaskAction } from '../../lib/workTaskActions'
+import type { WorkTaskAvailableAction } from '../../lib/api'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
 
@@ -546,6 +548,34 @@ export default function TaskDetailScreen(props: Props) {
     }
   }
 
+  async function onToggleGuestCheckedOut() {
+    if (!task) return
+    if (!token) return
+    const currentCheckedOutAt = String((task as any).checked_out_at || '').trim()
+    const taskDate = String(task.scheduled_date || task.date || '').trim()
+    if (isBeforeToday(taskDate)) return
+    const nextCheckedOutAt = currentCheckedOutAt ? null : new Date().toISOString()
+    try {
+      setCheckedOutPending(true)
+      const taskIds = checkoutTaskIdsFromTask(task)
+      await patchWorkTaskItem(String(task.id), { checked_out_at: nextCheckedOutAt } as any)
+      if (taskIds.length) {
+        await markGuestCheckedOutByTasks(token, { task_ids: taskIds, action: currentCheckedOutAt ? 'unset' : 'set' })
+      } else {
+        const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
+        if (!orderId) throw new Error('缺少订单ID')
+        await markGuestCheckedOutByOrder(token, { order_id: orderId, action: currentCheckedOutAt ? 'unset' : 'set' })
+      }
+      Alert.alert(t('common_ok'), currentCheckedOutAt ? '已取消退房' : '已标记已退房')
+      props.navigation.goBack()
+    } catch (e: any) {
+      await patchWorkTaskItem(String(task.id), { checked_out_at: currentCheckedOutAt || null } as any)
+      Alert.alert(t('common_error'), String(e?.message || '提交失败'))
+    } finally {
+      setCheckedOutPending(false)
+    }
+  }
+
   useEffect(() => {
     if (!task) return
     if (action !== 'upload_key') return
@@ -593,7 +623,8 @@ export default function TaskDetailScreen(props: Props) {
   const isCleaningSource = task.source_type === 'cleaning_tasks'
   const isKeyHandoverTask = isKeyHandoverExecutionTask(task as any)
   const isStayoverTask = isCleaningSource && isStayoverTaskType(taskType)
-  const isCleaningOrInspection = isCleaningSource && (String(task.task_kind || '').toLowerCase() === 'cleaning' || String(task.task_kind || '').toLowerCase() === 'inspection' || isKeyHandoverTask)
+  const isCheckinSiteExecution = isCheckinSiteExecutionTask(task as any)
+  const isCleaningOrInspection = isCleaningSource && (String(task.task_kind || '').toLowerCase() === 'cleaning' || String(task.task_kind || '').toLowerCase() === 'inspection' || isKeyHandoverTask || isCheckinSiteExecution)
   const wifiSsid = String((task as any)?.property?.wifi_ssid || '').trim()
   const wifiPassword = String((task as any)?.property?.wifi_password || '').trim()
   const hasCheckout = !!checkoutTime
@@ -633,7 +664,7 @@ export default function TaskDetailScreen(props: Props) {
   const inspectionMode = effectiveInspectionMode(task as any)
   const inspectionPlanLabel = inspectionModeLabel(inspectionMode, String((task as any).inspection_due_date || '').trim() || null)
   const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
-  const showInspectionScope = isPasswordOnlyInspection || (isInspectionTask && taskType === 'checkin_clean')
+  const showInspectionScope = isPasswordOnlyInspection || isCheckinSiteExecution
   const inspectionScopeText = isPasswordOnlyInspection ? '仅改密码' : (showInspectionScope ? inspectionScopeLabel((task as any).inspection_scope) : '')
   const stayoverTagStyles = taskTagStylePair('normal')
   const kindTagStyles = taskTagStylePair(getTaskKindTone(task.task_kind))
@@ -647,7 +678,6 @@ export default function TaskDetailScreen(props: Props) {
   const isDirectCompleteEligible = isCleaningTask && (isSelfCompleteEligible || isStayoverTask)
   const isPendingInspectionDecision = isCleaningTask && !isStayoverTask && inspectionMode === 'pending_decision'
   const showInspectionPlanTag = (isCleaningTask || isInspectionTask) && !isStayoverTask && !isPasswordOnlyInspection
-  const isCustomerService = roleNames.includes('customer_service')
   const canDeleteKeyPhoto = (roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector')) && isCleaningTask && !!keyPhotoUrl
   const isCleaningSubmitted = isCleaningTask && isCleaningWorkSubmitted(task.status)
   const restockItems = Array.isArray((task as any)?.restock_items) ? ((task as any).restock_items as any[]) : []
@@ -662,6 +692,47 @@ export default function TaskDetailScreen(props: Props) {
         : `${label}${suffix}`
     })
     .filter(Boolean) as string[]
+  const taskActions = availableActionsForTask(task, { roleNames })
+  const hasServerTaskActions = Array.isArray((task as any)?.available_actions)
+  const renderTaskActionButton = (action: WorkTaskAvailableAction) => {
+    const disabledReason = action.disabled_reason ? actionDisabledReasonText(action.disabled_reason) : ''
+    const localDisabled =
+      (action.id === 'upload_key_photo' && (keyUploading || keyPhotoEffectiveState !== 'missing' || isCleaningSubmitted))
+      || (action.id === 'mark_guest_checkout' && (!token || isHistoricalTask || checkedOutPending))
+    const disabled = !action.enabled || localDisabled
+    const label = action.id === 'upload_key_photo'
+      ? (keyUploading
+        ? t('common_loading')
+        : keyPhotoEffectiveState === 'recorded'
+          ? '钥匙已记录'
+          : keyPhotoEffectiveState === 'pending_sync'
+            ? '钥匙待同步'
+            : (isCleaningSubmitted ? '钥匙记录' : action.label))
+      : action.id === 'mark_guest_checkout' && checkedOutPending
+        ? '提交中...'
+        : action.label
+    const onPress = () => {
+      if (disabled) {
+        if (disabledReason && hasServerTaskActions) Alert.alert('暂不可操作', disabledReason)
+        return
+      }
+      if (action.id === 'upload_key_photo') return void onUploadKey()
+      if (action.id === 'mark_guest_checkout') return void onToggleGuestCheckedOut()
+      const route = navigationForWorkTaskAction(task, action)
+      if (route) props.navigation.navigate(route.screen as any, route.params as any)
+    }
+    return (
+      <Pressable
+        key={`${action.id}:${action.target || ''}:${action.label}`}
+        onPress={onPress}
+        disabled={disabled && !disabledReason}
+        style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, disabled ? styles.actionBtnDisabled : null]}
+      >
+        <Text style={[styles.actionText, disabled ? { color: '#6B7280' } : null]}>{label}</Text>
+        {disabled && disabledReason && hasServerTaskActions ? <Text style={styles.actionReasonText}>{disabledReason}</Text> : null}
+      </Pressable>
+    )
+  }
   const detailText = (() => {
     if (isCleaningSource) return null
     if (isOfflineTask) return null
@@ -713,7 +784,7 @@ export default function TaskDetailScreen(props: Props) {
           ) : (
             <>
               <View style={kindTagStyles.container}>
-                <Text style={kindTagStyles.text}>{isKeyHandoverTask ? '执行' : kind}</Text>
+                <Text style={kindTagStyles.text}>{isKeyHandoverTask || isCheckinSiteExecution ? '执行' : kind}</Text>
               </View>
               {showCheckout ? (
                 <View style={checkoutTagStyles.container}>
@@ -764,7 +835,12 @@ export default function TaskDetailScreen(props: Props) {
           )}
         </View>
 
-        {isDirectCompleteEligible || isPendingInspectionDecision ? (
+        {isCheckinSiteExecution ? (
+          <View style={styles.row}>
+            <Ionicons name="person-outline" size={moderateScale(14)} color="#9CA3AF" />
+            <Text style={styles.rowText}>执行人员：{String((task as any).executor_name || (task as any).assignee_name || (task as any).cleaner_name || (task as any).inspector_name || task.assignee_id || '').trim() || '-'}</Text>
+          </View>
+        ) : isDirectCompleteEligible || isPendingInspectionDecision ? (
           <View style={styles.row}>
             <Ionicons name="person-outline" size={moderateScale(14)} color="#9CA3AF" />
             <Text style={styles.rowText}>检查人员：无</Text>
@@ -932,106 +1008,9 @@ export default function TaskDetailScreen(props: Props) {
           </>
         ) : null}
 
-        {isKeyHandoverTask ? (
+        {isCleaningSource && taskActions.length ? (
           <View style={[styles.actionsRow, isCompactLayout ? styles.actionsRowCompact : null]}>
-            <Pressable
-              onPress={() => props.navigation.navigate('InspectionComplete', { taskId: task.id, skipInspectionPhotos: true })}
-              style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null]}
-            >
-              <Text style={styles.actionText}>上传视频并完成</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-              style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null]}
-            >
-              <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-            </Pressable>
-          </View>
-        ) : isCleaningTask ? (
-          <View style={[styles.actionsRow, isCompactLayout ? styles.actionsRowCompact : null]}>
-            {isCustomerService ? (
-              <>
-                {isCheckoutTask ? (
-                  <Pressable
-                    onPress={async () => {
-                      if (isHistoricalTask) return
-                      if (!token) return
-                      const nextCheckedOutAt = isCheckedOut ? null : new Date().toISOString()
-                      try {
-                        setCheckedOutPending(true)
-                        const taskIds = checkoutTaskIdsFromTask(task)
-                        await patchWorkTaskItem(String(task.id), { checked_out_at: nextCheckedOutAt } as any)
-                        if (taskIds.length) {
-                          await markGuestCheckedOutByTasks(token, { task_ids: taskIds, action: isCheckedOut ? 'unset' : 'set' })
-                        } else {
-                          const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
-                          if (!orderId) throw new Error('缺少订单ID')
-                          await markGuestCheckedOutByOrder(token, { order_id: orderId, action: isCheckedOut ? 'unset' : 'set' })
-                        }
-                        Alert.alert(t('common_ok'), isCheckedOut ? '已取消退房' : '已标记已退房')
-                        props.navigation.goBack()
-                      } catch (e: any) {
-                        await patchWorkTaskItem(String(task.id), { checked_out_at: checkedOutAt || null } as any)
-                        Alert.alert(t('common_error'), String(e?.message || '提交失败'))
-                      } finally {
-                        setCheckedOutPending(false)
-                      }
-                    }}
-                    disabled={!token || isHistoricalTask || checkedOutPending}
-                    style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, isCheckedOut || isHistoricalTask || checkedOutPending ? styles.actionBtnDisabled : null]}
-                  >
-                    <Text style={[styles.actionText, isCheckedOut || isHistoricalTask || checkedOutPending ? { color: '#6B7280' } : null]}>{checkedOutPending ? '提交中...' : isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
-                  </Pressable>
-                ) : null}
-                <Pressable
-                  onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                  style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null]}
-                >
-                  <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-                </Pressable>
-              </>
-            ) : (
-              <>
-                {!isStayoverTask ? (
-                  <Pressable
-                    onPress={onUploadKey}
-                    disabled={keyUploading || isCleaningSubmitted || keyPhotoEffectiveState !== 'missing'}
-                    style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, (keyUploading || keyPhotoEffectiveState !== 'missing') ? styles.actionBtnDisabled : null]}
-                  >
-                    <Text style={styles.actionText}>
-                      {keyUploading
-                        ? t('common_loading')
-                        : keyPhotoEffectiveState === 'recorded'
-                          ? '钥匙已记录'
-                          : keyPhotoEffectiveState === 'pending_sync'
-                            ? '钥匙待同步'
-                            : (isCleaningSubmitted ? '钥匙记录' : t('tasks_btn_upload_key'))}
-                    </Text>
-                  </Pressable>
-                ) : null}
-                <Pressable
-                  onPress={() => {
-                    if (isPendingInspectionDecision) return
-                    props.navigation.navigate(isDirectCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)
-                  }}
-                  style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, isPendingInspectionDecision ? styles.actionBtnDisabled : null]}
-                >
-                  <Text style={styles.actionText}>
-                    {isPendingInspectionDecision
-                      ? '待确认检查安排'
-                      : isCleaningSubmitted
-                        ? (isDirectCompleteEligible ? '完成记录' : '补品记录')
-                        : (isStayoverTask ? '标记已完成' : (isSelfCompleteEligible ? '补充与完成' : '补品填报'))}
-                  </Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                  style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null]}
-                >
-                  <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-                </Pressable>
-              </>
-            )}
+            {taskActions.map(renderTaskActionButton)}
           </View>
         ) : (
           <View style={styles.markWrap}>
@@ -1240,6 +1219,7 @@ const styles = StyleSheet.create({
   actionBtnCompact: { width: '100%', flexBasis: '100%', flexGrow: 0 },
   actionBtnDisabled: { backgroundColor: '#E5E7EB' },
   actionText: { flexShrink: 1, fontWeight: '900', color: '#FFFFFF', fontSize: 13, lineHeight: 17, textAlign: 'center' },
+  actionReasonText: { marginTop: 2, color: '#6B7280', fontSize: 11, lineHeight: 14, textAlign: 'center' },
   dangerBtn: { marginTop: 10, minHeight: 40, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
   dangerText: { fontWeight: '900', color: '#B91C1C', fontSize: 13 },
   line: { marginTop: 14, height: hairline(), backgroundColor: '#EEF0F6' },

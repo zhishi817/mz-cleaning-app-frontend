@@ -14,6 +14,7 @@ import { syncInboxNotifications } from '../../lib/notificationInbox'
 import { isTaskInspectorUser, isTaskManagerUser, roleNamesOf } from '../../lib/roles'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { getWorkTasksSnapshot, subscribeWorkTasks } from '../../lib/workTasksStore'
+import { navigationForWorkTaskAction, preferredNoticeActionForTask } from '../../lib/workTaskActions'
 import {
   listCompanyAnnouncementsForApp,
   listCompanyDocsForApp,
@@ -617,6 +618,17 @@ export default function NoticesScreen(props: Props) {
     if (item.kind === 'task' && item.taskId) {
       const isCleaningTask = String(item.taskSourceType || '').trim() === 'cleaning_tasks'
       const isInspection = isCleaningTask && String(item.taskKind || '').trim() === 'inspection'
+      const task = historyTasks.find((it) => String(it.id || '').trim() === item.taskId) || null
+      if (task && Array.isArray((task as any).available_actions)) {
+        const action = preferredNoticeActionForTask(task as any, {}, { roleNames: roleNamesOf(user) })
+        const route = action?.enabled ? navigationForWorkTaskAction(task as any, action) : null
+        if (route) {
+          props.navigation.navigate(route.screen as any, route.params as any)
+          return
+        }
+        props.navigation.navigate('TaskDetail', { id: item.taskId })
+        return
+      }
       const isManager = isTaskManagerUser(user)
       const isInspector = isTaskInspectorUser(user)
       if (isManager && isCleaningTask) {

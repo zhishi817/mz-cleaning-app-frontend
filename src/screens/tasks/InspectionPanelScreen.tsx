@@ -324,7 +324,7 @@ export default function InspectionPanelScreen(props: Props) {
   }, [])
 
   const task = getWorkTasksSnapshot().items.find((x) => x.id === props.route.params.taskId) || null
-  const cleaningTaskId = cleanText(task?.source_id)
+  const cleaningTaskId = cleanText(props.route.params.sourceId) || cleanText(task?.source_id)
   const propertyId = cleanText(task?.property_id || task?.property?.id)
   const propertyCode = cleanText(task?.property?.code)
   const propertyAddr = cleanText(task?.property?.address)
@@ -1126,6 +1126,7 @@ export default function InspectionPanelScreen(props: Props) {
                     if (batchValidationError) return
                     props.navigation.navigate('InspectionComplete', {
                       taskId: task.id,
+                      ...(cleaningTaskId ? { sourceId: cleaningTaskId } : {}),
                       skipInspectionPhotos: batchItem?.snapshot.room_photo_requirement === 'guest_arrival_confirmed',
                     })
                     return

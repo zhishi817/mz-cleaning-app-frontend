@@ -13,7 +13,7 @@ import { listMzappAlerts, markMzappAlertRead } from '../../lib/api'
 import { getMyProfile } from '../../lib/api'
 import { listDayEndHandover } from '../../lib/api'
 import { listWorkTasks } from '../../lib/api'
-import { createWarehouseKeyEvent, getWarehouseKeyStatus, type WarehouseKeyStatus } from '../../lib/api'
+import { createWarehouseKeyEvent, getWarehouseKeyStatus, type WarehouseKeyStatus, type WorkTaskAvailableAction } from '../../lib/api'
 import { processDayEndHandoverQueue } from '../../lib/dayEndHandoverQueue'
 import {
   listKeyUploadQueueItems,
@@ -29,6 +29,7 @@ import {
   effectiveInspectionMode,
   inspectionModeLabel,
   inspectionScopeLabel,
+  isCheckinSiteExecutionTask,
   isCleaningExecutionTask,
   isInspectionExecutionTask,
   isKeyHandoverExecutionTask,
@@ -52,6 +53,7 @@ import {
   turnoverDisplayOf,
 } from '../../lib/turnoverDisplay'
 import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
+import { navigationForWorkTaskAction, primaryActionsForTask } from '../../lib/workTaskActions'
 import {
   activateWorkTasksRealtime,
   deactivateWorkTasksRealtime,
@@ -1611,6 +1613,43 @@ function showBanner(title: string, message: string) {
     bannerTimerRef.current = setTimeout(() => setBanner(null), 4000)
   }
 
+  async function toggleGuestCheckedOut(task: WorkTaskItem) {
+    if (!token || !user?.id) return
+    const taskDate = String(task.scheduled_date || (task as any).date || '')
+    if (isBeforeToday(taskDate)) return
+    const checkedOutAt = String((task as any).checked_out_at || '').trim()
+    const nextCheckedOutAt = checkedOutAt ? null : new Date().toISOString()
+    try {
+      const taskIds = checkoutTaskIdsFromTask(task)
+      setCheckedOutPendingMap((prev) => ({ ...prev, [task.id]: true }))
+      await patchWorkTaskItem(String(task.id), { checked_out_at: nextCheckedOutAt } as any)
+      if (taskIds.length) {
+        await markGuestCheckedOutByTasks(token, { task_ids: taskIds, action: checkedOutAt ? 'unset' : 'set' })
+      } else {
+        const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
+        if (!orderId) throw new Error('缺少订单ID')
+        await markGuestCheckedOutByOrder(token, { order_id: orderId, action: checkedOutAt ? 'unset' : 'set' })
+      }
+      showBanner('已标记', checkedOutAt ? '已取消退房' : '已标记已退房')
+    } catch (e: any) {
+      await patchWorkTaskItem(String(task.id), { checked_out_at: checkedOutAt || null } as any)
+      showBanner('失败', String(e?.message || '提交失败'))
+    } finally {
+      setCheckedOutPendingMap((prev) => {
+        const next = { ...prev }
+        delete next[task.id]
+        return next
+      })
+    }
+  }
+
+  function handleTaskActionPress(task: WorkTaskItem, action: WorkTaskAvailableAction) {
+    if (!action.enabled) return
+    if (action.id === 'mark_guest_checkout') return void toggleGuestCheckedOut(task)
+    const route = navigationForWorkTaskAction(task, action)
+    if (route) props.navigation.navigate(route.screen as any, route.params as any)
+  }
+
   function openDayEndScreen(params?: { userId?: string; userName?: string; taskRoomCodes?: string[]; targetRoles?: DayEndTargetRole[]; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; overviewMode?: boolean; overviewUsers?: DayEndOverviewUser[] }) {
     props.navigation.navigate('DayEndBackupKeys', {
       date: dayEndDate,
@@ -2640,18 +2679,18 @@ function showBanner(title: string, message: string) {
               const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
               const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
               const isKeyHandoverTask = isKeyHandoverExecutionTask(task)
-              const isCleaningSubmitted = isCleaningTask && isCleaningWorkSubmitted(task.status)
               const keyPhotoState = selectKeyPhotoEffectiveState({
                 key_photo_url: String((task as any)?.key_photo_url || '').trim(),
                 has_local_pending: !!keyQueueByTaskId[String((task as any)?.source_id || '').trim()],
               })
               const taskType = String((task as any).task_type || '').trim().toLowerCase()
+              const isCheckinSiteExecution = isCheckinSiteExecutionTask(task as any)
               const isStayoverTask = isCleaningTask && isStayoverTaskType(taskType)
               const isCheckoutTask = taskType === 'checkout_clean' || !!checkoutTime
               const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
               const inspectionScopeTag = isPasswordOnlyInspection
                 ? '仅改密码'
-                : isInspectionTask && taskType === 'checkin_clean'
+                : isCheckinSiteExecution
                   ? inspectionScopeLabel((task as any).inspection_scope)
                   : null
               const inspectionMode = effectiveInspectionMode(task as any)
@@ -2671,12 +2710,36 @@ function showBanner(title: string, message: string) {
               const checkedOutAt = String((task as any).checked_out_at || '').trim()
               const isCheckedOut = !!checkedOutAt
               const isHistoricalTask = isBeforeToday(String(task.scheduled_date || (task as any).date || ''))
-              const canEditManagerFields = roleNames.includes('customer_service') || roleNames.includes('admin') || roleNames.includes('offline_manager')
               const isManager = canManagerMode && mode === 'manager'
               const isInspectorUser = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
+              const taskPrimaryActions = primaryActionsForTask(task, { roleNames, limit: 2 })
+              const renderPrimaryAction = (action: WorkTaskAvailableAction) => {
+                const localDisabled =
+                  (action.id === 'upload_key_photo' && keyPhotoState !== 'missing')
+                  || (action.id === 'mark_guest_checkout' && (!token || isHistoricalTask || !!checkedOutPendingMap[task.id]))
+                const disabled = !action.enabled || localDisabled
+                const label = action.id === 'upload_key_photo'
+                  ? (keyPhotoState === 'recorded' ? '钥匙已记录' : keyPhotoState === 'pending_sync' ? '钥匙待同步' : action.label)
+                  : action.id === 'mark_guest_checkout' && checkedOutPendingMap[task.id]
+                    ? '提交中...'
+                    : action.label
+                return (
+                  <Pressable
+                    key={`${action.id}:${action.target || ''}:${action.label}`}
+                    onPress={() => {
+                      if (disabled) return
+                      handleTaskActionPress(task, action)
+                    }}
+                    disabled={disabled}
+                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, disabled ? styles.actionBtnDisabled : null]}
+                  >
+                    <Text style={[styles.actionText, disabled ? { color: '#6B7280' } : null]}>{label}</Text>
+                  </Pressable>
+                )
+              }
               const cleanerName = String((task as any).cleaner_name || '').trim()
               const inspectorName = String((task as any).inspector_name || '').trim()
-              const executorName = String((task as any).executor_name || (task as any).assignee_name || (isKeyHandoverTask ? (cleanerName || inspectorName) : '') || task.assignee_id || '').trim()
+              const executorName = String((task as any).executor_name || (task as any).assignee_name || ((isKeyHandoverTask || isCheckinSiteExecution) ? (cleanerName || inspectorName) : '') || task.assignee_id || '').trim()
               const cleanerExecName = cleanerName || '-'
               const inspectorExecName = isDirectCompleteEligible || isPendingInspectionDecision ? '无' : (inspectorName || '-')
               const cleanerOrderRaw = (task as any).sort_index_cleaner
@@ -2810,6 +2873,8 @@ function showBanner(title: string, message: string) {
                     </Pressable>
                   ) : null}
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`task-card-${task.id}`}
                     onPress={() => {
                     if (reorderMode && isReorderableTask(task)) {
                       setOrderList((prev) => {
@@ -2818,6 +2883,10 @@ function showBanner(title: string, message: string) {
                         setOrderMarks(Object.fromEntries(next.map((id, idx) => [id, String(idx + 1)])))
                         return next
                       })
+                      return
+                    }
+                    if (Array.isArray((task as any).available_actions)) {
+                      props.navigation.navigate('TaskDetail', { id: task.id })
                       return
                     }
                     const isManager0 = canTaskManagerView
@@ -2879,7 +2948,7 @@ function showBanner(title: string, message: string) {
                     ) : (
                       <>
                         <View style={kindTagStyles.container}>
-                          <Text style={kindTagStyles.text}>{isKeyHandoverTask ? '执行' : kind}</Text>
+                          <Text style={kindTagStyles.text}>{isKeyHandoverTask || isCheckinSiteExecution ? '执行' : kind}</Text>
                         </View>
                         {showCheckout ? (
                           <View style={checkoutTagStyles.container}>
@@ -2929,7 +2998,7 @@ function showBanner(title: string, message: string) {
                     <>
                       <View style={styles.execCard}>
                         <Text style={styles.execLabel}>执行人员</Text>
-                        {isKeyHandoverTask ? (
+                        {isKeyHandoverTask || isCheckinSiteExecution ? (
                           <View style={styles.execPeople}>
                             <View style={styles.execPerson}>
                               <View style={styles.execBadgeExecute}>
@@ -2963,7 +3032,7 @@ function showBanner(title: string, message: string) {
                             </View>
                           </View>
                         )}
-                        {!isKeyHandoverTask && (isManager || isInspectorUser) ? (
+                        {!isKeyHandoverTask && !isCheckinSiteExecution && (isManager || isInspectorUser) ? (
                           <View style={styles.execOrderRow}>
                             <Text style={styles.execOrder} numberOfLines={1}>
                               {`清洁顺序：${cleanerOrderN == null ? '-' : String(cleanerOrderN)}`}
@@ -3312,120 +3381,9 @@ function showBanner(title: string, message: string) {
                     </Text>
                   ) : null}
 
-                  {!taskCollapsed && isCleaningSource && isManager ? (
+                  {!taskCollapsed && taskPrimaryActions.length ? (
                     <View style={styles.actionsRow}>
-                      {canEditManagerFields && isCheckoutTask ? (
-                        <Pressable
-                          onPress={async () => {
-                            if (isHistoricalTask) return
-                            if (!token || !user?.id) return
-                            try {
-                                  const nextCheckedOutAt = isCheckedOut ? null : new Date().toISOString()
-                                  const taskIds = checkoutTaskIdsFromTask(task)
-                                  setCheckedOutPendingMap((prev) => ({ ...prev, [task.id]: true }))
-                                  await patchWorkTaskItem(String(task.id), { checked_out_at: nextCheckedOutAt } as any)
-                                  if (taskIds.length) {
-                                    await markGuestCheckedOutByTasks(token, { task_ids: taskIds, action: isCheckedOut ? 'unset' : 'set' })
-                                  } else {
-                                    const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
-                                    if (!orderId) throw new Error('缺少订单ID')
-                                    await markGuestCheckedOutByOrder(token, { order_id: orderId, action: isCheckedOut ? 'unset' : 'set' })
-                                  }
-                                  showBanner('已标记', isCheckedOut ? '已取消退房' : '已标记已退房')
-                            } catch (e: any) {
-                              await patchWorkTaskItem(String(task.id), { checked_out_at: checkedOutAt || null } as any)
-                              showBanner('失败', String(e?.message || '提交失败'))
-                            } finally {
-                              setCheckedOutPendingMap((prev) => {
-                                const next = { ...prev }
-                                delete next[task.id]
-                                return next
-                              })
-                            }
-                          }}
-                          disabled={!token || isHistoricalTask || !!checkedOutPendingMap[task.id]}
-                          style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, isCheckedOut || isHistoricalTask || !!checkedOutPendingMap[task.id] ? styles.actionBtnDisabled : null]}
-                        >
-                          <Text style={[styles.actionText, isCheckedOut || isHistoricalTask || !!checkedOutPendingMap[task.id] ? { color: '#6B7280' } : null]}>{checkedOutPendingMap[task.id] ? '提交中...' : isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
-                        </Pressable>
-                      ) : null}
-                      <Pressable
-                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                      >
-                        <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-                      </Pressable>
-                    </View>
-                  ) : !taskCollapsed && isKeyHandoverTask ? (
-                    <View style={styles.actionsRow}>
-                      <Pressable
-                        onPress={() => props.navigation.navigate('InspectionComplete', { taskId: task.id, skipInspectionPhotos: true })}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                      >
-                        <Text style={styles.actionText}>上传视频并完成</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                      >
-                        <Text style={styles.actionText}>房源问题反馈</Text>
-                      </Pressable>
-                    </View>
-                  ) : !taskCollapsed && isInspectionTask && isInspectorUser ? (
-                    <View style={styles.actionsRow}>
-                      <Pressable
-                        onPress={() => props.navigation.navigate('InspectionPanel', { taskId: task.id })}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                      >
-                        <Text style={styles.actionText}>{isPasswordOnlyInspection ? '查看说明' : '检查与补充'}</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => props.navigation.navigate('InspectionComplete', { taskId: task.id })}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                      >
-                        <Text style={styles.actionText}>{isPasswordOnlyInspection ? '改密码并完成' : '标记已完成'}</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                      >
-                        <Text style={styles.actionText}>房源问题反馈</Text>
-                      </Pressable>
-                    </View>
-                  ) : !taskCollapsed && isCleaningTask ? (
-                    <View style={styles.actionsRow}>
-                      {!isCleaningSubmitted && !isStayoverTask ? (
-                        <Pressable
-                          onPress={() => props.navigation.navigate('TaskDetail', { id: task.id, action: 'upload_key' })}
-                          disabled={keyPhotoState !== 'missing'}
-                          style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, keyPhotoState !== 'missing' ? styles.actionBtnDisabled : null]}
-                        >
-                          <Text style={[styles.actionText, keyPhotoState !== 'missing' ? { color: '#6B7280' } : null]}>
-                            {keyPhotoState === 'recorded' ? '钥匙已记录' : keyPhotoState === 'pending_sync' ? '钥匙待同步' : t('tasks_btn_upload_key')}
-                          </Text>
-                        </Pressable>
-                      ) : null}
-                      <Pressable
-                        onPress={() => {
-                          if (isPendingInspectionDecision) return
-                          props.navigation.navigate(isDirectCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)
-                        }}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, isPendingInspectionDecision ? styles.actionBtnDisabled : null]}
-                      >
-                        <Text style={styles.actionText}>
-                          {isPendingInspectionDecision
-                            ? '待确认检查安排'
-                            : isCleaningSubmitted
-                              ? (isDirectCompleteEligible ? '完成记录' : '补品记录')
-                              : (isStayoverTask ? '标记已完成' : (isSelfCompleteEligible ? '补充与完成' : '补品填报'))}
-                        </Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                      >
-                        <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-                      </Pressable>
+                      {taskPrimaryActions.map(renderPrimaryAction)}
                     </View>
                   ) : null}
                   </Pressable>

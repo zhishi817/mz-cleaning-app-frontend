@@ -26,6 +26,7 @@ export type InspectionMediaQueueItem = {
   business_saved: boolean
   uploaded_at?: string | null
   business_saved_at?: string | null
+  last_attempt_at?: string | null
   retain_until: string
   local_file_deleted_at?: string | null
   last_error?: string | null
@@ -40,6 +41,9 @@ export type InspectionMediaQueueItem = {
 
 const STORAGE_KEY = 'mzstay.inspection_media_queue.v1'
 const RETAIN_MS = 7 * 24 * 60 * 60 * 1000
+const UPLOAD_OPERATION_TIMEOUT_MS = 75 * 1000
+const BUSINESS_SAVE_OPERATION_TIMEOUT_MS = 30 * 1000
+const STALE_UPLOAD_ATTEMPT_MS = 2 * 60 * 1000
 const listeners = new Set<() => void>()
 const inFlightLocalUris = new Set<string>()
 
@@ -125,6 +129,29 @@ function shouldExpire(item: InspectionMediaQueueItem, now: number) {
 
 function isRetryableStatus(item: InspectionMediaQueueItem) {
   return item.upload_status === 'pending' || item.upload_status === 'uploading' || item.upload_status === 'failed_retryable' || (item.kind === 'lockbox_video' && !!item.uploaded_url && !item.business_saved)
+}
+
+function timestampMs(value: any) {
+  const t = new Date(String(value || '')).getTime()
+  return Number.isFinite(t) ? t : null
+}
+
+function isStaleUploadingAttempt(item: InspectionMediaQueueItem, now = Date.now()) {
+  if (item.upload_status !== 'uploading') return false
+  const startedAt = timestampMs(item.last_attempt_at || item.uploaded_at || item.created_at)
+  return startedAt != null && now - startedAt > STALE_UPLOAD_ATTEMPT_MS
+}
+
+function withOperationTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new ApiError(message, 0, 'TIMEOUT', true))
+    }, timeoutMs)
+  })
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
 }
 
 async function updateQueueItem(id: string, updater: (item: InspectionMediaQueueItem) => InspectionMediaQueueItem | null) {
@@ -283,14 +310,24 @@ export async function processInspectionMediaQueue(token: string) {
   for (const item of ordered) {
     if (item.business_saved || !isRetryableStatus(item) || item.local_file_deleted_at) continue
     const localUri = String(item.local_uri || '').trim()
-    if (!localUri || inFlightLocalUris.has(localUri)) continue
+    if (!localUri) continue
+    if (inFlightLocalUris.has(localUri)) {
+      if (!isStaleUploadingAttempt(item)) continue
+      inFlightLocalUris.delete(localUri)
+    }
     inFlightLocalUris.add(localUri)
     try {
       const alreadyUploadedUrl = String(item.uploaded_url || '').trim()
       if (!alreadyUploadedUrl) {
-        await updateQueueItem(item.id, (current) => ({ ...current, upload_status: 'uploading', last_error: null }))
+        await updateQueueItem(item.id, (current) => ({ ...current, upload_status: 'uploading', last_attempt_at: nowIso(), last_error: null }))
       }
-      const up = alreadyUploadedUrl ? { url: alreadyUploadedUrl } : await uploadQueueItem(token, item)
+      const up = alreadyUploadedUrl
+        ? { url: alreadyUploadedUrl }
+        : await withOperationTimeout(
+          uploadQueueItem(token, item),
+          UPLOAD_OPERATION_TIMEOUT_MS,
+          '视频上传超时，已保存在本机，稍后会自动重试',
+        )
       const uploadedUrl = String(up.url || '').trim() || alreadyUploadedUrl
       processed++
       await updateQueueItem(item.id, (current) => ({
@@ -301,7 +338,11 @@ export async function processInspectionMediaQueue(token: string) {
         last_error: null,
       }))
       if (item.kind === 'lockbox_video' && uploadedUrl) {
-        await uploadLockboxVideo(token, item.task_id, { media_url: uploadedUrl })
+        await withOperationTimeout(
+          uploadLockboxVideo(token, item.task_id, { media_url: uploadedUrl }),
+          BUSINESS_SAVE_OPERATION_TIMEOUT_MS,
+          '视频已上传但保存任务超时，稍后会自动重试',
+        )
         if (!item.local_file_deleted_at) deleteLocalFile(item.local_uri)
         await updateQueueItem(item.id, (current) => ({
           ...current,

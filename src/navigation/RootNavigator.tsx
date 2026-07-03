@@ -8,12 +8,13 @@ import * as Notifications from 'expo-notifications'
 import Constants from 'expo-constants'
 import { useAuth } from '../lib/auth'
 import { useI18n } from '../lib/i18n'
-import { findWorkTaskItemByAnyId, getWorkTasksSnapshot } from '../lib/workTasksStore'
+import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, refreshWorkTasksFromServer } from '../lib/workTasksStore'
 import { getNoticesSnapshot, initNoticesStore, subscribeNotices } from '../lib/noticesStore'
 import { registerExpoPushToken } from '../lib/api'
 import { syncInboxNotifications } from '../lib/notificationInbox'
 import { getPushDeviceId, setRegisteredExpoPushToken } from '../lib/pushTokenStorage'
-import { isTaskManagerUser } from '../lib/roles'
+import { isTaskManagerUser, roleNamesOf } from '../lib/roles'
+import { navigationForWorkTaskAction, preferredNoticeActionForTask } from '../lib/workTaskActions'
 import type { CompanyContentCategory, CompanyGuideRole } from '../lib/api'
 import LoginScreen from '../screens/LoginScreen'
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen'
@@ -90,8 +91,8 @@ const MeStack = createNativeStackNavigator<MeStackParamList>()
 export type TasksStackParamList = {
   TasksList: undefined
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
-  InspectionPanel: { taskId: string }
-  InspectionComplete: { taskId: string; skipInspectionPhotos?: boolean }
+  InspectionPanel: { taskId: string; sourceId?: string }
+  InspectionComplete: { taskId: string; sourceId?: string; skipInspectionPhotos?: boolean }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
   DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; targetRoles?: DayEndTargetRole[]; overviewMode?: boolean; overviewUsers?: DayEndOverviewUser[] }
@@ -104,8 +105,8 @@ export type NoticesStackParamList = {
   NoticeDetail: { id: string }
   InfoCenterDetail: { kind: 'property' | 'secret' | 'task' | 'announcement' | 'guide' | 'warehouse_guide'; title: string; subtitle?: string; body?: string; contentRaw?: string | null; docCategory?: CompanyContentCategory | null; guideRole?: CompanyGuideRole | null; url?: string | null; copyText?: string | null; secretId?: string }
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
-  InspectionPanel: { taskId: string }
-  InspectionComplete: { taskId: string; skipInspectionPhotos?: boolean }
+  InspectionPanel: { taskId: string; sourceId?: string }
+  InspectionComplete: { taskId: string; sourceId?: string; skipInspectionPhotos?: boolean }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
   DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; targetRoles?: DayEndTargetRole[]; overviewMode?: boolean; overviewUsers?: DayEndOverviewUser[] }
@@ -139,13 +140,50 @@ function pickTaskRouteIdFromNoticeData(data0: any) {
   return ''
 }
 
-function resolveTaskNoticeNavigation(params: { taskRouteId: string; role: string }) {
-  const role = String(params.role || '').trim()
+function pad2(value: number) {
+  return String(value).padStart(2, '0')
+}
+
+function formatDateKey(date: Date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
+async function refreshWorkTasksForNotice(params: { token: string; user: any; taskRouteId: string; noticeData: any }) {
+  const userId = String(params.user?.id || '').trim()
+  if (!userId) return
+  const existingTask = findWorkTaskItemByAnyId(params.taskRouteId)
+  const baseDateRaw = String(params.noticeData?.date || existingTask?.scheduled_date || (existingTask as any)?.date || '').slice(0, 10)
+  const parsedBase = /^\d{4}-\d{2}-\d{2}$/.test(baseDateRaw) ? new Date(`${baseDateRaw}T00:00:00`) : new Date()
+  await refreshWorkTasksFromServer({
+    token: params.token,
+    userId,
+    date_from: formatDateKey(addDays(parsedBase, -7)),
+    date_to: formatDateKey(addDays(parsedBase, 60)),
+    view: isTaskManagerUser(params.user) ? 'all' : 'mine',
+  })
+}
+
+function resolveTaskNoticeNavigation(params: { taskRouteId: string; user: any; noticeData?: any }) {
+  const roleNames = roleNamesOf(params.user)
   const task = findWorkTaskItemByAnyId(params.taskRouteId)
+  if (task && Array.isArray((task as any).available_actions)) {
+    const preferredAction = preferredNoticeActionForTask(task, params.noticeData || {}, { roleNames })
+    if (preferredAction?.enabled) {
+      const route = navigationForWorkTaskAction(task, preferredAction)
+      if (route) return route
+    }
+    return { screen: 'TaskDetail', params: { id: task.id } }
+  }
   const isCleaningTask = String(task?.source_type || '').trim() === 'cleaning_tasks'
   const isInspection = isCleaningTask && String(task?.task_kind || '').trim() === 'inspection'
-  const isManager = role === 'admin' || role === 'offline_manager' || role === 'customer_service'
-  const isInspector = role === 'cleaning_inspector' || role === 'cleaner_inspector'
+  const isManager = roleNames.includes('admin') || roleNames.includes('offline_manager') || roleNames.includes('customer_service')
+  const isInspector = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
   if (isManager && isCleaningTask) return { screen: 'ManagerDailyTask', params: { taskId: params.taskRouteId } }
   if (isInspector && isInspection) return { screen: 'InspectionPanel', params: { taskId: params.taskRouteId } }
   return { screen: 'TaskDetail', params: { id: params.taskRouteId } }
@@ -440,7 +478,19 @@ export default function RootNavigator() {
             include: (notice) => shouldShowTaskNoticeForCurrentUser(notice.data, userRef.current),
           })
           const targetId = notices.find((notice) => String(notice.data?.event_id || notice.id) === eventId)?.id || ''
+          const taskRouteId = pickTaskRouteIdFromNoticeData(data)
+          let taskRoute: { screen: string; params: Record<string, any> } | null = null
+          if (taskRouteId) {
+            try {
+              await refreshWorkTasksForNotice({ token: tokenRef.current, user: userRef.current, taskRouteId, noticeData: data })
+            } catch {}
+            taskRoute = resolveTaskNoticeNavigation({ taskRouteId, user: userRef.current, noticeData: data }) as any
+          }
           if (navRef.isReady()) {
+            if (taskRoute) {
+              navRef.navigate('Notices', { screen: taskRoute.screen, params: taskRoute.params } as any)
+              return
+            }
             navRef.navigate('Notices', { screen: 'NoticesList' } as any)
             if (targetId) setTimeout(() => {
               try {

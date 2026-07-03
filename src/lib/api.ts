@@ -550,11 +550,49 @@ export type GuestLuggageNotice = {
   }
 }
 
+export type WorkTaskActionId =
+  | 'upload_key_photo'
+  | 'fill_supplies'
+  | 'submit_inspection'
+  | 'upload_access_video'
+  | 'complete_cleaning'
+  | 'report_issue'
+  | 'mark_guest_checkout'
+
+export type WorkTaskActionTarget =
+  | 'TaskDetail'
+  | 'SuppliesForm'
+  | 'InspectionPanel'
+  | 'InspectionComplete'
+  | 'CleaningSelfComplete'
+  | 'FeedbackForm'
+
+export type WorkTaskAvailableAction = {
+  id: WorkTaskActionId
+  label: string
+  placement: 'primary' | 'more'
+  enabled: boolean
+  disabled_reason?: string
+  target?: WorkTaskActionTarget
+  intent: 'cleaning' | 'inspection' | 'site_action' | 'issue' | 'manager'
+  source_type?: string | null
+  source_id?: string | null
+}
+
+export type WorkTaskParticipant = {
+  user_id: string
+  participant_role?: 'assignee' | 'cleaner' | 'inspector' | 'collaborator' | string | null
+  action_ids?: (WorkTaskActionId | '*')[] | null
+  source_relation?: 'legacy' | 'manual' | string | null
+  source_type?: string | null
+  source_id?: string | null
+}
+
 export type WorkTask = {
   id: string
   task_kind: string
   execution_role?: 'cleaning' | 'inspection' | 'execution' | 'mixed' | 'work' | string | null
-  execution_semantics?: 'cleaning_execution' | 'checkin_inspection' | 'inspection_execution' | 'key_handover_execution' | 'mixed_cleaning_inspection' | 'work_task' | string | null
+  execution_semantics?: 'cleaning_execution' | 'checkin_inspection' | 'inspection_execution' | 'key_or_password_action' | 'mixed_cleaning_inspection' | 'work_task' | string | null
   source_type: string
   source_id: string
   source_ids?: string[]
@@ -650,6 +688,9 @@ export type WorkTask = {
     photo_url: string | null
     status: string
   }>
+  capabilities?: Record<string, any> | null
+  available_actions?: WorkTaskAvailableAction[] | null
+  participants?: WorkTaskParticipant[] | null
   property: WorkTaskProperty | null
 }
 

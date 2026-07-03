@@ -1,5 +1,28 @@
 export type InspectionMode = 'pending_decision' | 'same_day' | 'deferred' | 'self_complete' | 'checked_done'
 export type InspectionScope = 'inspect_and_hang' | 'password_only'
+export type TaskExecutionSemantics =
+  | 'cleaning_execution'
+  | 'checkin_inspection'
+  | 'inspection_execution'
+  | 'key_or_password_action'
+  | 'mixed_cleaning_inspection'
+  | 'work_task'
+
+const VALID_TASK_EXECUTION_SEMANTICS = new Set<TaskExecutionSemantics>([
+  'cleaning_execution',
+  'checkin_inspection',
+  'inspection_execution',
+  'key_or_password_action',
+  'mixed_cleaning_inspection',
+  'work_task',
+])
+
+export function normalizeTaskExecutionSemantics(value: any): TaskExecutionSemantics | null {
+  const raw = String(value || '').trim().toLowerCase()
+  if (!raw) return null
+  if (raw === 'key_handover_execution') return 'key_or_password_action'
+  return VALID_TASK_EXECUTION_SEMANTICS.has(raw as TaskExecutionSemantics) ? (raw as TaskExecutionSemantics) : null
+}
 
 export function isStayoverTaskType(taskType: any) {
   return String(taskType || '').trim().toLowerCase() === 'stayover_clean'
@@ -71,9 +94,9 @@ export function taskExecutionRole(task: {
 }) {
   const explicit = String(task?.execution_role || '').trim().toLowerCase()
   if (explicit === 'cleaning' || explicit === 'inspection' || explicit === 'execution' || explicit === 'mixed' || explicit === 'work') return explicit
-  const semantics = String(task?.execution_semantics || '').trim().toLowerCase()
+  const semantics = normalizeTaskExecutionSemantics(task?.execution_semantics)
   if (semantics === 'cleaning_execution') return 'cleaning'
-  if (semantics === 'key_handover_execution') return 'execution'
+  if (semantics === 'key_or_password_action') return 'execution'
   if (semantics === 'checkin_inspection' || semantics === 'inspection_execution') return 'inspection'
   if (semantics === 'mixed_cleaning_inspection') return 'mixed'
   const sourceType = String(task?.source_type || '').trim().toLowerCase()
@@ -113,6 +136,23 @@ export function isKeyHandoverExecutionTask(task: {
   return taskExecutionRole(task) === 'execution'
 }
 
+export function isCheckinSiteExecutionTask(task: {
+  execution_role?: any
+  execution_semantics?: any
+  source_type?: any
+  task_kind?: any
+  task_type?: any
+}) {
+  const sourceType = String(task?.source_type || '').trim().toLowerCase()
+  const taskType = String(task?.task_type || '').trim().toLowerCase()
+  if (sourceType !== 'cleaning_tasks' || taskType !== 'checkin_clean') return false
+  const taskKind = String(task?.task_kind || '').trim().toLowerCase()
+  if (taskKind === 'cleaning') return false
+  if (taskKind === 'inspection' || taskKind === 'execution') return true
+  const role = taskExecutionRole(task)
+  return role === 'inspection' || role === 'execution'
+}
+
 export function isPasswordOnlyInspectionTask(task: {
   execution_role?: any
   execution_semantics?: any
@@ -121,14 +161,7 @@ export function isPasswordOnlyInspectionTask(task: {
   task_type?: any
   inspection_scope?: any
 }) {
-  const sourceType = String(task?.source_type || '').trim().toLowerCase()
-  const taskKind = String(task?.task_kind || '').trim().toLowerCase()
-  const taskType = String(task?.task_type || '').trim().toLowerCase()
-  if (sourceType !== 'cleaning_tasks') return false
-  if (isKeyHandoverExecutionTask(task)) return true
-  if (taskKind === 'execution') return true
-  if (taskKind !== 'inspection') return false
-  return taskType === 'checkin_clean' && normalizeInspectionScope(task?.inspection_scope) === 'password_only'
+  return isCheckinSiteExecutionTask(task) && normalizeInspectionScope(task?.inspection_scope) === 'password_only'
 }
 
 export function shouldUseDeferredInspectionTitle(task: {

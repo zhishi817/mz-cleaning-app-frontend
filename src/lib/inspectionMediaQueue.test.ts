@@ -157,3 +157,44 @@ test('retries an interrupted uploading lockbox video after recovery', async () =
     business_saved: true,
   })
 })
+
+test('marks a hung lockbox video upload as retryable after queue timeout', async () => {
+  jest.useFakeTimers()
+  const api = require('./api') as {
+    uploadCleaningVideo: jest.Mock
+    uploadLockboxVideo: jest.Mock
+    isRetryableApiError: jest.Mock
+  }
+  api.isRetryableApiError.mockImplementation((error: any) => !!error?.retryable)
+  api.uploadCleaningVideo.mockReturnValue(new Promise(() => {}))
+  api.uploadLockboxVideo.mockResolvedValue({ ok: true })
+
+  const queueMod = require('./inspectionMediaQueue') as typeof import('./inspectionMediaQueue')
+
+  await queueMod.enqueueInspectionMediaItem({
+    task_id: 'cleaning-task-timeout',
+    kind: 'lockbox_video',
+    source_uri: 'file:///camera/lock-1.mov',
+    name: 'lock-1.mov',
+    mime_type: 'video/quicktime',
+  })
+
+  const processing = queueMod.processInspectionMediaQueue('token-timeout')
+  await jest.advanceTimersByTimeAsync(75_100)
+  const result = await processing
+
+  expect(result).toEqual({ processed: 0, remaining: 1 })
+  expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
+  expect(api.uploadLockboxVideo).not.toHaveBeenCalled()
+
+  const queuedAfterTimeout = await queueMod.listInspectionMediaQueueItemsForTask('cleaning-task-timeout', ['lockbox_video'])
+  expect(queuedAfterTimeout[0]).toMatchObject({
+    upload_status: 'failed_retryable',
+    uploaded_url: null,
+    business_saved: false,
+  })
+  expect(queuedAfterTimeout[0].last_error).toContain('视频上传超时')
+  expect(queuedAfterTimeout[0].last_attempt_at).toBeTruthy()
+
+  jest.useRealTimers()
+})

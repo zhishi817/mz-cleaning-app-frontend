@@ -222,6 +222,177 @@ test('key handover execution task shows password-only tag and executor role in l
   snapshot.items = previousItems
 })
 
+test('check-in site execution task shows inspection scope and assignee in list', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  snapshot.items = [
+    {
+      ...previousItems[0],
+      id: 'exec-inspect-1',
+      task_kind: 'execution',
+      execution_role: 'inspection',
+      execution_semantics: 'checkin_inspection',
+      task_type: 'checkin_clean',
+      inspection_scope: 'inspect_and_hang',
+      inspection_mode: 'same_day',
+      source_type: 'cleaning_tasks',
+      source_id: 'ct-exec-inspect-1',
+      assignee_id: 'carrie-id',
+      assignee_name: 'Carrie',
+      executor_name: null,
+      cleaner_id: null,
+      cleaner_name: null,
+      inspector_id: null,
+      inspector_name: null,
+      start_time: null,
+      end_time: '3pm',
+      property: {
+        ...previousItems[0].property,
+        code: 'FG1003',
+        region: '',
+      },
+    },
+  ]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-checkin-site-exec', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getAllByText('执行').length).toBeGreaterThan(0)
+    expect(ui.getByText('检查后挂钥匙')).toBeTruthy()
+    expect(ui.getByText('Carrie')).toBeTruthy()
+    expect(ui.queryByText('execution')).toBeNull()
+  })
+
+  const rendered = flattenRenderedText(ui.toJSON()).join('\n')
+  expect(rendered).toContain('执行\nCarrie')
+  expect(rendered).not.toContain('清洁\n-')
+  expect(rendered).not.toContain('检查\n-')
+
+  snapshot.items = previousItems
+})
+
+test('tasks screen renders primary server actions from available_actions', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  snapshot.items[0] = {
+    ...snapshot.items[0],
+    task_kind: 'inspection',
+    task_type: 'checkin_clean',
+    inspection_scope: 'password_only',
+    inspection_mode: 'same_day',
+    start_time: null,
+    end_time: '3pm',
+    available_actions: [
+      {
+        id: 'upload_access_video',
+        label: '后端视频动作',
+        placement: 'primary',
+        enabled: true,
+        target: 'InspectionComplete',
+        intent: 'site_action',
+      },
+      {
+        id: 'report_issue',
+        label: '后端问题反馈',
+        placement: 'more',
+        enabled: true,
+        target: 'FeedbackForm',
+        intent: 'issue',
+      },
+    ],
+  }
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={navigation as any}
+        route={{ key: 'tasks-server-actions', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText('后端视频动作')).toBeTruthy()
+    expect(ui.queryByText('后端问题反馈')).toBeNull()
+    expect(ui.queryByText('上传钥匙')).toBeNull()
+  })
+
+  fireEvent.press(ui.getByText('后端视频动作'))
+
+  await waitFor(() => {
+    expect(navigation.navigate).toHaveBeenCalledWith('InspectionComplete', { taskId: 'w1', skipInspectionPhotos: true })
+  })
+
+  snapshot.items[0] = previousTask
+})
+
+test('tasks screen card tap does not bypass server actions for manager roles', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin', 'offline_manager'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  snapshot.items[0] = {
+    ...snapshot.items[0],
+    task_kind: 'inspection',
+    task_type: 'checkout_clean',
+    inspection_scope: 'inspect_and_hang',
+    inspection_mode: 'same_day',
+    available_actions: [
+      {
+        id: 'submit_inspection',
+        label: '后端禁用检查',
+        placement: 'primary',
+        enabled: false,
+        disabled_reason: 'not_participant',
+        target: 'InspectionPanel',
+        intent: 'inspection',
+      },
+    ],
+  }
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={navigation as any}
+        route={{ key: 'tasks-card-server-actions', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByLabelText('task-card-w1')).toBeTruthy()
+  })
+
+  fireEvent.press(ui.getByLabelText('task-card-w1'))
+
+  expect(navigation.navigate).toHaveBeenCalledWith('TaskDetail', { id: 'w1' })
+  expect(navigation.navigate).not.toHaveBeenCalledWith('ManagerDailyTask', { taskId: 'w1' })
+  expect(navigation.navigate).not.toHaveBeenCalledWith('InspectionPanel', { taskId: 'w1' })
+
+  snapshot.items[0] = previousTask
+  mockAuthState.user = previousUser
+  mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+  mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+})
+
 test('tasks screen shows 晚入住 tag when checkin time is later than 6pm', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()

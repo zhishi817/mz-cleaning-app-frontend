@@ -4,7 +4,7 @@ import { fireEvent, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 
 let mockKeyQueueItem: any = null
-const mockAuthState = { user: { id: 'u1', username: 'tester', role: 'staff' }, token: 't1' }
+const mockAuthState: any = { user: { id: 'u1', username: 'tester', role: 'staff' }, token: 't1' }
 
 jest.mock('react-native-safe-area-context', () => {
   const React = require('react')
@@ -295,6 +295,264 @@ test('key handover execution task shows user-facing password-only label and vide
   snapshot.items[0].inspection_mode = undefined
   snapshot.items[0].start_time = '10am'
   snapshot.items[0].end_time = '3pm'
+})
+
+test('check-in site execution task shows scope and assignee in detail', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  snapshot.items[0].task_kind = 'execution'
+  snapshot.items[0].execution_role = 'inspection'
+  snapshot.items[0].execution_semantics = 'checkin_inspection'
+  snapshot.items[0].task_type = 'checkin_clean'
+  snapshot.items[0].inspection_scope = 'inspect_and_hang'
+  snapshot.items[0].inspection_mode = 'same_day'
+  snapshot.items[0].status = 'assigned'
+  snapshot.items[0].start_time = null
+  snapshot.items[0].end_time = '3pm'
+  snapshot.items[0].assignee_id = 'carrie-id'
+  snapshot.items[0].assignee_name = 'Carrie'
+  snapshot.items[0].executor_name = null
+  snapshot.items[0].cleaner_name = null
+  snapshot.items[0].inspector_name = null
+
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TaskDetailScreen navigation={{ goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-checkin-exec', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText('执行')).toBeTruthy()
+    expect(ui.getByText('检查执行方式：检查后挂钥匙')).toBeTruthy()
+    expect(ui.getByText('执行人员：Carrie')).toBeTruthy()
+    expect(ui.queryByText('execution')).toBeNull()
+  })
+
+  snapshot.items[0].task_kind = 'cleaning'
+  snapshot.items[0].execution_role = undefined
+  snapshot.items[0].execution_semantics = undefined
+  snapshot.items[0].task_type = undefined
+  snapshot.items[0].inspection_scope = undefined
+  snapshot.items[0].inspection_mode = undefined
+  snapshot.items[0].start_time = '10am'
+  snapshot.items[0].end_time = '3pm'
+  snapshot.items[0].assignee_id = null
+  snapshot.items[0].assignee_name = undefined
+  snapshot.items[0].executor_name = undefined
+  snapshot.items[0].cleaner_name = undefined
+  snapshot.items[0].inspector_name = undefined
+})
+
+test('task detail uses server available actions and shows disabled reason', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  snapshot.items[0].available_actions = [
+    {
+      id: 'submit_inspection',
+      label: '后端检查入口',
+      placement: 'primary',
+      enabled: false,
+      disabled_reason: 'not_participant',
+      target: 'InspectionPanel',
+      intent: 'inspection',
+    },
+    {
+      id: 'report_issue',
+      label: '后端问题反馈',
+      placement: 'more',
+      enabled: true,
+      target: 'FeedbackForm',
+      intent: 'issue',
+    },
+  ]
+
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TaskDetailScreen navigation={{ goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-server-actions', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText('后端检查入口')).toBeTruthy()
+    expect(ui.getByText('你已不再是执行人')).toBeTruthy()
+    expect(ui.getByText('后端问题反馈')).toBeTruthy()
+    expect(ui.queryByText(/upload key|上传钥匙/i)).toBeNull()
+  })
+
+  snapshot.items[0].available_actions = undefined
+})
+
+test('empty server available_actions disables legacy task detail actions', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  snapshot.items[0] = {
+    ...snapshot.items[0],
+    task_kind: 'cleaning',
+    task_type: 'checkout_clean',
+    status: 'assigned',
+    available_actions: [],
+  }
+
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TaskDetailScreen navigation={{ goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-empty-server-actions', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.queryByText(/upload key|上传钥匙/i)).toBeNull()
+    expect(ui.queryByText('补品填报')).toBeNull()
+    expect(ui.queryByText('房源问题反馈')).toBeNull()
+  })
+
+  snapshot.items[0] = previousTask
+})
+
+test('admin can enter inspection flow when submit_inspection is authorized by server action', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousUser = mockAuthState.user
+  const previousTask = { ...snapshot.items[0] }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  snapshot.items[0] = {
+    ...snapshot.items[0],
+    task_kind: 'inspection',
+    task_type: 'checkout_clean',
+    inspection_scope: 'inspect_and_hang',
+    inspection_mode: 'same_day',
+    status: 'to_inspect',
+    available_actions: [
+	      {
+	        id: 'submit_inspection',
+	        label: '开始检查',
+	        placement: 'primary',
+	        enabled: true,
+	        target: 'InspectionPanel',
+	        intent: 'inspection',
+	        source_id: 'ct-inspection-target',
+	      },
+	    ],
+	  }
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() }
+
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TaskDetailScreen navigation={navigation as any} route={{ key: 'k-admin-inspection', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText('开始检查')).toBeTruthy()
+  })
+
+  fireEvent.press(ui.getByText('开始检查'))
+
+	expect(navigation.navigate).toHaveBeenCalledWith('InspectionPanel', { taskId: 'w1', sourceId: 'ct-inspection-target' })
+
+  snapshot.items[0] = previousTask
+  mockAuthState.user = previousUser
+})
+
+test('cleaner can enter password-only access video flow from server action', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousUser = mockAuthState.user
+  const previousTask = { ...snapshot.items[0] }
+  mockAuthState.user = { id: 'cleaner-1', username: 'cleaner-user', role: 'cleaner', roles: ['cleaner'] }
+  snapshot.items[0] = {
+    ...snapshot.items[0],
+    task_kind: 'inspection',
+    task_type: 'checkin_clean',
+    inspection_scope: 'password_only',
+    inspection_mode: 'same_day',
+    status: 'to_hang_keys',
+    start_time: null,
+    end_time: '3pm',
+    available_actions: [
+	      {
+	        id: 'upload_access_video',
+	        label: '改密码视频入口',
+	        placement: 'primary',
+	        enabled: true,
+	        target: 'InspectionComplete',
+	        intent: 'site_action',
+	        source_id: 'ct-password-target',
+	      },
+	    ],
+	  }
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() }
+
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TaskDetailScreen navigation={navigation as any} route={{ key: 'k-cleaner-video', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText('改密码视频入口')).toBeTruthy()
+  })
+
+  fireEvent.press(ui.getByText('改密码视频入口'))
+
+	expect(navigation.navigate).toHaveBeenCalledWith('InspectionComplete', { taskId: 'w1', sourceId: 'ct-password-target', skipInspectionPhotos: true })
+
+  snapshot.items[0] = previousTask
+  mockAuthState.user = previousUser
+})
+
+test('non-participant server disabled action does not navigate even for admin role', async () => {
+  jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousUser = mockAuthState.user
+  const previousTask = { ...snapshot.items[0] }
+  mockAuthState.user = { id: 'admin-2', username: 'admin-no-task', role: 'admin', roles: ['admin'] }
+  snapshot.items[0] = {
+    ...snapshot.items[0],
+    task_kind: 'inspection',
+    task_type: 'checkout_clean',
+    inspection_scope: 'inspect_and_hang',
+    inspection_mode: 'same_day',
+    status: 'to_inspect',
+    available_actions: [
+      {
+        id: 'submit_inspection',
+        label: '不可进入检查',
+        placement: 'primary',
+        enabled: false,
+        disabled_reason: 'not_participant',
+        target: 'InspectionPanel',
+        intent: 'inspection',
+      },
+    ],
+  }
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() }
+
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TaskDetailScreen navigation={navigation as any} route={{ key: 'k-admin-denied', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText('不可进入检查')).toBeTruthy()
+    expect(ui.getByText('你已不再是执行人')).toBeTruthy()
+  })
+
+  fireEvent.press(ui.getByText('不可进入检查'))
+
+  expect(navigation.navigate).not.toHaveBeenCalled()
+  expect(Alert.alert).toHaveBeenCalledWith('暂不可操作', '你已不再是执行人')
+
+  snapshot.items[0] = previousTask
+  mockAuthState.user = previousUser
 })
 
 test('task detail shows 晚入住 tag when checkin time is later than 6pm', async () => {
