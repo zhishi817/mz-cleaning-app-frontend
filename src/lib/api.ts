@@ -2464,6 +2464,44 @@ export async function reorderWorkTasks(
   return (await parseJsonOrThrow(res)) as any
 }
 
+export type MixedWorkTaskReorderItem = {
+  kind: 'work' | 'cleaner' | 'inspector'
+  ids: string[]
+  sort_index: number
+}
+
+export async function reorderMixedWorkTasks(
+  token: string,
+  params: { date: string; items: MixedWorkTaskReorderItem[] },
+) {
+  const items = (Array.isArray(params.items) ? params.items : [])
+    .map((item) => ({
+      kind: item.kind,
+      ids: Array.from(new Set((Array.isArray(item.ids) ? item.ids : []).map((x) => String(x || '').trim()).filter(Boolean))),
+      sort_index: Number(item.sort_index),
+    }))
+    .filter((item) => (item.kind === 'work' || item.kind === 'cleaner' || item.kind === 'inspector') && item.ids.length && Number.isInteger(item.sort_index) && item.sort_index > 0)
+  if (!items.length) throw new Error('缺少任务顺序')
+  const urls = buildUrlCandidates('mzapp/work-tasks/mixed-reorder')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: params.date, items }),
+      },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
 export async function uploadMzappMedia(
   token: string,
   file: { uri: string; name: string; mimeType: string },

@@ -40,6 +40,7 @@ jest.mock('../../lib/api', () => ({
   listCleaningAppTasks: jest.fn(async () => []),
   listWorkTasks: jest.fn(async () => []),
   reorderCleaningTasks: jest.fn(async () => ({})),
+  reorderMixedWorkTasks: jest.fn(async () => ({})),
   reorderWorkTasks: jest.fn(async () => ({})),
   markGuestCheckedOutByOrder: jest.fn(async () => ({})),
   markGuestCheckedOutByTasks: jest.fn(async () => ({})),
@@ -163,6 +164,206 @@ test('tasks screen shows wifi info and copies wifi password', async () => {
     expect(ui.getByLabelText('wifi-copied-w1')).toBeTruthy()
     expect(ui.getAllByText('已复制').length).toBeGreaterThan(0)
   })
+})
+
+test('saving order keeps offline tasks in the same cleaning execution sequence', async () => {
+  const api = require('../../lib/api')
+  const store = require('../../lib/workTasksStore')
+  const reorderMixedWorkTasksMock = api.reorderMixedWorkTasks as jest.Mock
+  const patchWorkTaskItemsMock = store.patchWorkTaskItems as jest.Mock
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  reorderMixedWorkTasksMock.mockClear()
+  patchWorkTaskItemsMock.mockClear()
+  snapshot.items = [
+    {
+      ...previousItems[0],
+      id: 'clean-a',
+      task_kind: 'cleaning',
+      source_type: 'cleaning_tasks',
+      source_id: 'ct-clean-a',
+      title: 'A 清洁',
+      scheduled_date: mockTodayKey,
+      assignee_id: 'u1',
+      cleaner_id: 'u1',
+      inspector_id: null,
+      status: 'assigned',
+      property: { ...previousItems[0].property, code: 'A1001' },
+      date: mockTodayKey,
+    },
+    {
+      id: 'offline-b',
+      task_kind: 'offline',
+      source_type: 'cleaning_offline_tasks',
+      source_id: 'offline-b-source',
+      title: 'B 线下',
+      summary: '买耗材',
+      scheduled_date: mockTodayKey,
+      start_time: '',
+      end_time: '',
+      assignee_id: 'u1',
+      assignee_name: 'tester',
+      status: 'assigned',
+      urgency: 'medium',
+      property: null,
+      date: mockTodayKey,
+    },
+    {
+      ...previousItems[0],
+      id: 'clean-c',
+      task_kind: 'cleaning',
+      source_type: 'cleaning_tasks',
+      source_id: 'ct-clean-c',
+      title: 'C 清洁',
+      scheduled_date: mockTodayKey,
+      assignee_id: 'u1',
+      cleaner_id: 'u1',
+      inspector_id: null,
+      status: 'assigned',
+      property: { ...previousItems[0].property, code: 'C1003' },
+      date: mockTodayKey,
+    },
+  ]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-mixed-reorder', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText('排序')).toBeTruthy()
+    expect(ui.getByLabelText('task-card-clean-a')).toBeTruthy()
+    expect(ui.getByLabelText('task-card-offline-b')).toBeTruthy()
+    expect(ui.getByLabelText('task-card-clean-c')).toBeTruthy()
+  })
+
+  fireEvent.press(ui.getByText('排序'))
+  fireEvent.press(ui.getByLabelText('task-card-clean-a'))
+  fireEvent.press(ui.getByLabelText('task-card-offline-b'))
+  fireEvent.press(ui.getByLabelText('task-card-clean-c'))
+  fireEvent.press(ui.getByText('保存顺序'))
+
+  await waitFor(() => {
+    expect(reorderMixedWorkTasksMock).toHaveBeenCalledWith('local:test', {
+      date: mockTodayKey,
+      items: [
+        { kind: 'cleaner', ids: ['ct-clean-a'], sort_index: 1 },
+        { kind: 'work', ids: ['offline-b'], sort_index: 2 },
+        { kind: 'cleaner', ids: ['ct-clean-c'], sort_index: 3 },
+      ],
+    })
+  })
+  expect(patchWorkTaskItemsMock).toHaveBeenCalledWith([
+    { id: 'clean-a', patch: { sort_index: 1, sort_index_cleaner: 1 } },
+    { id: 'offline-b', patch: { sort_index: 2 } },
+    { id: 'clean-c', patch: { sort_index: 3, sort_index_cleaner: 3 } },
+  ])
+
+  snapshot.items = previousItems
+})
+
+test('day-end handover stays after ordered offline tasks', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  snapshot.items = [
+    {
+      ...previousItems[0],
+      id: 'clean-a',
+      task_kind: 'cleaning',
+      source_type: 'cleaning_tasks',
+      source_id: 'ct-clean-a',
+      title: 'A 清洁',
+      scheduled_date: mockTodayKey,
+      assignee_id: 'u1',
+      cleaner_id: 'u1',
+      inspector_id: null,
+      status: 'assigned',
+      sort_index: 1,
+      sort_index_cleaner: 1,
+      property: { ...previousItems[0].property, code: 'A1001' },
+      date: mockTodayKey,
+    },
+    {
+      ...previousItems[0],
+      id: 'clean-b',
+      task_kind: 'cleaning',
+      source_type: 'cleaning_tasks',
+      source_id: 'ct-clean-b',
+      title: 'B 清洁',
+      scheduled_date: mockTodayKey,
+      assignee_id: 'u1',
+      cleaner_id: 'u1',
+      inspector_id: null,
+      status: 'assigned',
+      sort_index: 2,
+      sort_index_cleaner: 2,
+      property: { ...previousItems[0].property, code: 'B1002' },
+      date: mockTodayKey,
+    },
+    {
+      ...previousItems[0],
+      id: 'clean-c',
+      task_kind: 'cleaning',
+      source_type: 'cleaning_tasks',
+      source_id: 'ct-clean-c',
+      title: 'C 清洁',
+      scheduled_date: mockTodayKey,
+      assignee_id: 'u1',
+      cleaner_id: 'u1',
+      inspector_id: null,
+      status: 'assigned',
+      sort_index: 3,
+      sort_index_cleaner: 3,
+      property: { ...previousItems[0].property, code: 'C1003' },
+      date: mockTodayKey,
+    },
+    {
+      id: 'offline-d',
+      task_kind: 'offline',
+      source_type: 'cleaning_offline_tasks',
+      source_id: 'offline-d-source',
+      title: 'D 线下',
+      summary: '补充线下事项',
+      scheduled_date: mockTodayKey,
+      start_time: '',
+      end_time: '',
+      assignee_id: 'u1',
+      assignee_name: 'tester',
+      status: 'assigned',
+      urgency: 'medium',
+      sort_index: 4,
+      property: null,
+      date: mockTodayKey,
+    },
+  ]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-day-end-after-offline', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByLabelText('task-card-offline-d')).toBeTruthy()
+    expect(ui.getByText('日终交接')).toBeTruthy()
+  })
+
+  const rendered = flattenRenderedText(ui.toJSON()).join('\n')
+  expect(rendered.indexOf('D 线下')).toBeGreaterThanOrEqual(0)
+  expect(rendered.indexOf('日终交接')).toBeGreaterThanOrEqual(0)
+  expect(rendered.indexOf('D 线下')).toBeLessThan(rendered.indexOf('日终交接'))
+
+  snapshot.items = previousItems
 })
 
 test('key handover execution task shows password-only tag and executor role in list', async () => {

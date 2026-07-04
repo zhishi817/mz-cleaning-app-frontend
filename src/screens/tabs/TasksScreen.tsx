@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { createCleaningOfflineTask, createManualCleaningTask, listCleaningAppPropertyCodes, reorderCleaningTasks, reorderWorkTasks } from '../../lib/api'
+import { createCleaningOfflineTask, createManualCleaningTask, listCleaningAppPropertyCodes, reorderMixedWorkTasks } from '../../lib/api'
 import { markGuestCheckedOutByOrder, markGuestCheckedOutByTasks } from '../../lib/api'
 import { listMzappAlerts, markMzappAlertRead } from '../../lib/api'
 import { getMyProfile } from '../../lib/api'
@@ -1594,7 +1594,7 @@ export default function TasksScreen(props: Props) {
       .filter(({ task }) => {
         const cleaning = isCleaningExecutionTask(task)
         const inspection = isInspectionExecutionTask(task)
-        if (!cleaning && !inspection) return false
+        if (!cleaning && !inspection) return isReorderableTask(task)
         if (canManagerMode && !isCleanerSelf && !isInspectorSelf) return cleaning
         if (roleNames.includes('cleaner_inspector')) return cleaning || inspection
         if (roleNames.includes('cleaning_inspector')) return inspection
@@ -1605,7 +1605,7 @@ export default function TasksScreen(props: Props) {
     const firstDone = eligibleIndexes.find(({ task }) => isDoneLikeStatus(String(task.status || '')))
     if (firstDone) return firstDone.index
     return eligibleIndexes[eligibleIndexes.length - 1].index + 1
-  }, [canManagerMode, isCleanerSelf, isInspectorSelf, roleNames, showDayEndCard, visibleTasks])
+  }, [canManagerMode, isCleanerSelf, isInspectorSelf, isReorderableTask, roleNames, showDayEndCard, visibleTasks])
 
 function showBanner(title: string, message: string) {
     setBanner({ title, message })
@@ -1965,42 +1965,36 @@ function showBanner(title: string, message: string) {
       if (orderList.length !== n) throw new Error(`请按顺序点选全部任务（已选 ${orderList.length}/${n}）`)
       const mapById = new Map<string, WorkTaskItem>()
       for (const t of reorderable) mapById.set(t.id, t)
-      const marks: Array<{ task: WorkTaskItem; mark: number }> = []
+      const marks: { task: WorkTaskItem; mark: number }[] = []
       for (let i = 0; i < orderList.length; i++) {
         const id = String(orderList[i] || '').trim()
         const task = mapById.get(id)
         if (!task) throw new Error('排序选择包含无效任务')
         marks.push({ task, mark: i + 1 })
       }
-      const cleanerGroups: string[][] = []
-      const inspectorGroups: string[][] = []
-      const workTaskIds: string[] = []
-      const localPatches: Array<{ id: string; patch: Partial<WorkTaskItem> }> = []
+      const reorderItems: { kind: 'work' | 'cleaner' | 'inspector'; ids: string[]; sort_index: number }[] = []
+      const localPatches: { id: string; patch: Partial<WorkTaskItem> }[] = []
       for (const { task, mark } of marks) {
         if (!isReorderableTask(task)) continue
         const cleaning = isCleaningExecutionTask(task)
         const inspection = isInspectionExecutionTask(task)
         if (!cleaning && !inspection) {
-          workTaskIds.push(String(task.id))
+          reorderItems.push({ kind: 'work', ids: [String(task.id)], sort_index: mark })
           localPatches.push({ id: String(task.id), patch: { sort_index: mark } as Partial<WorkTaskItem> })
           continue
         }
         if (cleaning) {
           const ids = executionTaskIdsForRole(task, 'cleaning')
-          cleanerGroups.push(ids)
+          if (ids.length) reorderItems.push({ kind: 'cleaner', ids, sort_index: mark })
           localPatches.push({ id: String(task.id), patch: { sort_index: mark, sort_index_cleaner: mark } as Partial<WorkTaskItem> })
         }
         if (inspection) {
           const ids = executionTaskIdsForRole(task, 'inspection')
-          inspectorGroups.push(ids)
+          if (ids.length) reorderItems.push({ kind: 'inspector', ids, sort_index: mark })
           localPatches.push({ id: String(task.id), patch: { sort_index: mark, sort_index_inspector: mark } as Partial<WorkTaskItem> })
         }
       }
-      await Promise.all([
-        workTaskIds.length ? reorderWorkTasks(token, { date: selectedDate, task_ids: workTaskIds }) : Promise.resolve(null),
-        cleanerGroups.length ? reorderCleaningTasks(token, { kind: 'cleaner', date: selectedDate, groups: cleanerGroups }) : Promise.resolve(null),
-        inspectorGroups.length ? reorderCleaningTasks(token, { kind: 'inspector', date: selectedDate, groups: inspectorGroups }) : Promise.resolve(null),
-      ])
+      await reorderMixedWorkTasks(token, { date: selectedDate, items: reorderItems })
       await patchWorkTaskItems(localPatches)
       setReorderMode(false)
       showBanner('已保存', '顺序已保存')
