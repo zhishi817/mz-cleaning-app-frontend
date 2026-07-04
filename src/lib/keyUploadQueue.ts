@@ -1,5 +1,6 @@
 import { startCleaningTask, uploadCleaningMedia } from './api'
-import { deleteDraftMedia, draftMimeTypeFrom, persistDraftMedia } from './localMediaDrafts'
+import { deleteDraftMedia, draftMimeTypeFrom, persistCompressedDraftMedia } from './localMediaDrafts'
+import { withLocalMediaLock } from './localMediaLocks'
 import { getJson, setJson } from './storage'
 
 export type KeyUploadStepStatus = 'pending' | 'syncing' | 'succeeded' | 'failed'
@@ -187,19 +188,20 @@ export async function enqueueKeyUpload(params: {
   const existing = await getKeyUploadQueueItem(cleaningTaskId)
   const fallbackName = cleanText(params.file_name) || cleanText(params.source_uri.split('/').pop()) || 'key'
   const resolvedMimeType = draftMimeTypeFrom(fallbackName, cleanText(params.mime_type), params.source_uri)
-  const localUri = persistDraftMedia({
+  const persisted = await persistCompressedDraftMedia({
     dirName: 'mzstay-key-uploads',
     prefix: 'key',
     sourceUri: params.source_uri,
     name: fallbackName,
     mimeType: resolvedMimeType,
+    kind: 'photo',
   })
   const next = await updateQueueItem(cleaningTaskId, (current) => ({
     id: current?.id || makeId('key_upload'),
     cleaning_task_id: cleaningTaskId,
-    local_uri: localUri,
-    name: fallbackName,
-    mime_type: resolvedMimeType,
+    local_uri: persisted.localUri,
+    name: persisted.name,
+    mime_type: persisted.mimeType,
     property_code: cleanText(params.property_code) || undefined,
     captured_at: cleanText(params.captured_at) || undefined,
     watermark_text: cleanText(params.watermark_text) || undefined,
@@ -213,7 +215,7 @@ export async function enqueueKeyUpload(params: {
       start_cleaning_task: current?.steps?.start_cleaning_task?.status === 'succeeded' ? baseStepState() : (current?.steps?.start_cleaning_task || baseStepState()),
     },
   }))
-  if (existing?.local_uri && existing.local_uri !== localUri) deleteDraftMedia(existing.local_uri)
+  if (existing?.local_uri && existing.local_uri !== persisted.localUri) deleteDraftMedia(existing.local_uri)
   return next
 }
 
@@ -241,7 +243,7 @@ export async function processKeyUploadQueue(token: string) {
       try {
         if (item.steps.upload_media.status !== 'succeeded') {
           await markStep(item.cleaning_task_id, 'upload_media', { status: 'syncing', started_at: nowIso(), error: null }, 'syncing', null)
-          const up = await uploadCleaningMedia(
+          const up = await withLocalMediaLock(item.local_uri, () => uploadCleaningMedia(
             token,
             { uri: item.local_uri, name: item.name, mimeType: item.mime_type },
             {
@@ -251,7 +253,7 @@ export async function processKeyUploadQueue(token: string) {
               property_code: item.property_code || '',
               captured_at: item.captured_at || '',
             },
-          )
+          ))
           await updateQueueItem(item.cleaning_task_id, (current) => current ? {
             ...current,
             status: 'syncing',
@@ -269,6 +271,8 @@ export async function processKeyUploadQueue(token: string) {
               },
             },
           } : current)
+          const persisted = await getKeyUploadQueueItem(item.cleaning_task_id)
+          if (cleanText(persisted?.uploaded_url) && persisted?.steps.upload_media.status === 'succeeded') deleteDraftMedia(persisted.local_uri)
         }
 
         const current = await getKeyUploadQueueItem(item.cleaning_task_id)

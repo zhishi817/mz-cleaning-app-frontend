@@ -1,6 +1,6 @@
 import { inspectionPhotoTaskIdsFromTask } from '../../lib/managerDailyTaskPhotos'
 
-test('inspection photo lookup uses active source ids when canonical display is available', () => {
+test('inspection photo lookup includes active and related cleaning task ids when canonical display is available', () => {
   expect(
     inspectionPhotoTaskIdsFromTask({
       source_type: 'cleaning_tasks',
@@ -11,7 +11,7 @@ test('inspection photo lookup uses active source ids when canonical display is a
       cleaning_task_ids: ['ct-cleaning'],
       inspection_task_ids: ['it-inspection'],
     } as any),
-  ).toEqual(['ct-active'])
+  ).toEqual(['ct-active', 'it-inspection', 'ct-cleaning', 'ct-source', 'it-source', 'ct-primary'])
 })
 
 test('inspection photo lookup falls back to source ids for older cached tasks', () => {

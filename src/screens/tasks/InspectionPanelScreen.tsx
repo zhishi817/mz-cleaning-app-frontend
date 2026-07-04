@@ -16,6 +16,7 @@ import {
   setInspectionPanelDraft,
 } from '../../lib/inspectionPanelDraft'
 import {
+  bindInspectionPanelCleaningTaskId,
   createInspectionPanelLocalMedia,
   discardInspectionPanelBatch,
   findInspectionPanelValidationIssue,
@@ -135,13 +136,14 @@ function batchStatusLabel(status: InspectionPanelBatchStatus | null) {
   return '未开始'
 }
 
-function batchStatusHint(status: InspectionPanelBatchStatus | null) {
-  if (status === 'pending_submit') return '本页已正式提交，正在等待同步。'
+function batchStatusHint(status: InspectionPanelBatchStatus | null, lastError?: string | null) {
+  const error = cleanText(lastError)
+  if (status === 'pending_submit') return error || '本页已保存到本机，正在等待同步。'
   if (status === 'syncing') return '当前正在上传图片并提交业务记录。'
   if (status === 'partial_failed') return '已有部分步骤成功；重试会从失败步骤继续，不会重复上传已成功内容。'
   if (status === 'failed') return '同步失败；重试会从失败步骤继续。若要改内容，需要先放弃当前失败批次并重建草稿。'
   if (status === 'synced') return '本次检查与补充已全部同步完成，可回看摘要。'
-  return '拍照和填写阶段只保存在本机，点击正式提交后才会开始上传。'
+  return '拍照和填写阶段只保存在本机，点击提交后会保存为待同步批次。'
 }
 
 function feedbackSummary(draft: InspectionPanelFeedbackDraftState | null) {
@@ -377,11 +379,19 @@ export default function InspectionPanelScreen(props: Props) {
   }, [restockPickerQuery, suppliesCatalog.items])
 
   const loadLocalState = useCallback(async (options?: { showSpinner?: boolean; forceDraftReload?: boolean }) => {
-    if (!task || !cleaningTaskId) return
+    if (!task) return
     const showSpinner = options?.showSpinner !== false
     const forceDraftReload = options?.forceDraftReload === true
     if (showSpinner) setLoading(true)
     try {
+      if (cleaningTaskId) {
+        await bindInspectionPanelCleaningTaskId({
+          task_id: task.id,
+          cleaning_task_id: cleaningTaskId,
+          property_id: propertyId,
+          property_code: propertyCode,
+        })
+      }
       const consumableSourceIds = consumableSourceIdsKey ? consumableSourceIdsKey.split('|').filter(Boolean) : []
       const [batch, draft, feedback, consumablesResponses] = await Promise.all([
         getInspectionPanelBatch(task.id),
@@ -429,7 +439,7 @@ export default function InspectionPanelScreen(props: Props) {
     } finally {
       if (showSpinner) setLoading(false)
     }
-  }, [cleaningTaskId, consumableSourceIdsKey, initialRestockItems, task, token])
+  }, [cleaningTaskId, consumableSourceIdsKey, initialRestockItems, propertyCode, propertyId, task, token])
 
   useEffect(() => {
     void loadLocalState({ showSpinner: true })
@@ -470,7 +480,7 @@ export default function InspectionPanelScreen(props: Props) {
     nextCleaningIssue = cleaningIssue,
     nextFeedbackDraft = feedbackDraft,
   ) => {
-    if (!task || !cleaningTaskId || isFrozen) return
+    if (!task || isFrozen) return
     const snapshot = buildSnapshot({
       taskId: task.id,
       cleaningTaskId,
@@ -555,7 +565,7 @@ export default function InspectionPanelScreen(props: Props) {
     try {
       await persistDraft(restock, restockConfirmedSufficient, roomPhotos)
       setRoomPhotosSavedAt(formatLocalTime())
-      Alert.alert(t('common_ok'), '照片已保存到本机草稿。尚未上传，正式提交后会自动上传。')
+      Alert.alert(t('common_ok'), '照片已保存到本机草稿。尚未上传，提交本页后会自动同步。')
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '照片保存失败，请重试'))
     } finally {
@@ -683,8 +693,14 @@ export default function InspectionPanelScreen(props: Props) {
       const submitted = await submitInspectionPanelBatch(task.id)
       setBatchItem(submitted)
       await processInspectionPanelSubmitQueue(token)
-      setBatchItem(await getInspectionPanelBatch(task.id))
-      Alert.alert(t('common_ok'), '本页检查与补充已正式提交。')
+      const latest = await getInspectionPanelBatch(task.id)
+      setBatchItem(latest)
+      Alert.alert(
+        t('common_ok'),
+        latest?.status === 'synced'
+          ? '检查与补充已同步到系统。'
+          : '检查与补充已保存到本机，网络恢复或任务信息刷新后会自动同步。可以继续进入完成页。',
+      )
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '提交失败'))
       setBatchItem(await getInspectionPanelBatch(task.id))
@@ -758,7 +774,7 @@ export default function InspectionPanelScreen(props: Props) {
   }
 
   const completeDisabled = !hasFormalSubmission || !!batchValidationError || (!!guestSpecialRequest && !guestNeedDone)
-  const syncHint = batchStatusHint(batchStatus)
+  const syncHint = batchStatusHint(batchStatus, batchItem?.last_error)
 
   if (!task) {
     return (
@@ -786,13 +802,13 @@ export default function InspectionPanelScreen(props: Props) {
               {batchValidationError ? `当前批次验证失败：${batchValidationError}` : syncHint}
             </Text>
             {!canDiscardFrozenBatch && isFrozen ? (
-              <Text style={styles.mutedSmall}>当前批次已正式提交并冻结，不能继续编辑本次 snapshot。</Text>
+              <Text style={styles.mutedSmall}>当前批次已保存并冻结，不能继续编辑本次 snapshot。</Text>
             ) : null}
             {isPasswordOnlyInspection ? (
               <View style={[styles.noticeCard, inspectionScopeNoticeStyles.card]}>
                 <Ionicons name="flash-outline" size={moderateScale(16)} color={inspectionScopeNoticeStyles.icon} />
                 <Text style={[styles.noticeCardText, inspectionScopeNoticeStyles.text]}>
-                  {`此任务为${inspectionScopeLabel((task as any)?.inspection_scope)}，只需必要说明与最终视频；拍照阶段只存本地，正式提交时才上传。`}
+                  {`此任务为${inspectionScopeLabel((task as any)?.inspection_scope)}，只需必要说明与最终视频；拍照阶段只存本地，提交本页时才进入同步队列。`}
                 </Text>
               </View>
             ) : null}
@@ -967,7 +983,7 @@ export default function InspectionPanelScreen(props: Props) {
                   </Pressable>
                 </View>
                 {isFrozen ? (
-                  <Text style={styles.mutedSmall}>本页已正式提交；如需补充照片，请先放弃当前提交批次并重建草稿。</Text>
+                  <Text style={styles.mutedSmall}>本页已保存为提交批次；如需补充照片，请先放弃当前提交批次并重建草稿。</Text>
                 ) : null}
                 {cleaningIssue.map((item, idx) => (
                   <View key={`${item.id}-${idx}`} style={styles.issueCard}>
@@ -1086,10 +1102,10 @@ export default function InspectionPanelScreen(props: Props) {
                 ) : null}
                 <Text style={styles.mutedSmall}>
                   {isFrozen
-                    ? '本页照片已随正式提交批次冻结保存；进入完成页不会删除这些照片。'
+                    ? '本页照片已随提交批次冻结保存在本机；进入完成页不会删除这些照片。'
                     : roomPhotosSavedAt
-                    ? `已于 ${roomPhotosSavedAt} 保存到本机草稿；正式提交后才会统一上传。`
-                    : '拍照后会自动保存到本机草稿；也可点击上方按钮再次确认。正式提交后才会统一上传。'}
+                    ? `已于 ${roomPhotosSavedAt} 保存到本机草稿；提交本页后才会统一同步。`
+                    : '拍照后会自动保存到本机草稿；也可点击上方按钮再次确认。提交本页后才会统一同步。'}
                 </Text>
               </View>
             ) : null}
@@ -1108,8 +1124,8 @@ export default function InspectionPanelScreen(props: Props) {
                   </Pressable>
                 </View>
               ) : null}
-              {!hasFormalSubmission ? <Text style={styles.mutedSmall}>先点击“提交本页检查与补充”，完成正式提交后才能进入完成页。</Text> : null}
-              {hasFormalSubmission && !batchValidationError ? <Text style={styles.mutedSmall}>检查与补充已正式提交。即使还在同步或失败状态，也可以继续进入完成页。</Text> : null}
+              {!hasFormalSubmission ? <Text style={styles.mutedSmall}>先点击“提交本页检查与补充”，保存本机批次后即可进入完成页。</Text> : null}
+              {hasFormalSubmission && !batchValidationError ? <Text style={styles.mutedSmall}>检查与补充已保存到本机。即使还在同步或失败状态，也可以继续进入完成页。</Text> : null}
               {batchValidationError ? <Text style={styles.warnSmall}>当前冻结批次不完整，不能进入完成页。请放弃并重建草稿后补齐内容。</Text> : null}
               <AppButton
                 label={

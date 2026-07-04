@@ -23,6 +23,7 @@ import { processDayEndHandoverQueue } from './dayEndHandoverQueue'
 import { processInspectionMediaQueue, pruneExpiredInspectionMediaItems } from './inspectionMediaQueue'
 import { processInspectionPanelSubmitQueue } from './inspectionPanelSubmitQueue'
 import { processKeyUploadQueue } from './keyUploadQueue'
+import { runLocalMediaHousekeeping } from './localMediaHousekeeping'
 import { clearRegisteredExpoPushToken, getRegisteredExpoPushToken } from './pushTokenStorage'
 import { deactivateWorkTasksRealtime } from './workTasksStore'
 
@@ -198,6 +199,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         await processCleaningConsumablesSubmitQueue(token, String(user?.username || '').trim())
         await processKeyUploadQueue(token)
         await processDayEndHandoverQueue(token)
+        await runLocalMediaHousekeeping()
       } catch {}
     }
     void runQueueMaintenance()

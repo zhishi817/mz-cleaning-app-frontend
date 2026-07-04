@@ -7,6 +7,11 @@ jest.mock('./localMediaDrafts', () => ({
   deleteDraftMedia: jest.fn(),
   draftMimeTypeFrom: jest.fn((_name: string, mimeType: string) => mimeType || 'image/jpeg'),
   persistDraftMedia: jest.fn(({ sourceUri }: { sourceUri: string }) => `file:///drafts/${String(sourceUri || '').split('/').pop() || 'photo.jpg'}`),
+  persistCompressedDraftMedia: jest.fn(async ({ sourceUri, name, mimeType }: { sourceUri: string; name: string; mimeType: string }) => ({
+    localUri: `file:///drafts/${String(sourceUri || '').split('/').pop() || 'photo.jpg'}`,
+    name,
+    mimeType,
+  })),
 }))
 
 function getAsyncStorage() {

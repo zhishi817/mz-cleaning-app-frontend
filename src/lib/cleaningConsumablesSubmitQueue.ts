@@ -7,6 +7,7 @@ import {
   setCleaningConsumablesDraft,
   type CleaningConsumablesDraft,
 } from './cleaningConsumablesDraft'
+import { withLocalMediaLock } from './localMediaLocks'
 import { getJson, setJson } from './storage'
 
 const STORAGE_KEY = 'mzstay.cleaning_consumables_submit_queue.v1'
@@ -66,6 +67,7 @@ async function uploadDraftPhotoIfNeeded(
   token: string,
   username: string,
   draft: CleaningConsumablesDraft,
+  uploadedLocalUris: string[],
   rawUrl: string,
   fallbackName: string,
   meta: Record<string, any>,
@@ -78,24 +80,27 @@ async function uploadDraftPhotoIfNeeded(
   const name = cleanText(photoMeta?.name) || fallbackName
   const mimeType = cleanText(photoMeta?.mime_type) || 'image/jpeg'
   const watermarkText = cleanText(photoMeta?.watermark_text) || buildWatermarkText(cleanText(draft.property_code), username, capturedAt)
-  const up = await uploadCleaningMedia(
-    token,
-    { uri: current, name, mimeType },
-    {
-      ...meta,
-      captured_at: capturedAt,
-      property_code: cleanText(draft.property_code) || undefined,
-      watermark: watermarkText ? '1' : '',
-      watermark_text: watermarkText || '',
-    },
+  const up = await withLocalMediaLock(current, () =>
+    uploadCleaningMedia(
+      token,
+      { uri: current, name, mimeType },
+      {
+        ...meta,
+        captured_at: capturedAt,
+        property_code: cleanText(draft.property_code) || undefined,
+        watermark: watermarkText ? '1' : '',
+        watermark_text: watermarkText || '',
+      },
+    ),
   )
-  deleteCleaningConsumablesPhoto(current)
+  const uploadedUrl = cleanText((up as any)?.url)
+  if (uploadedUrl) uploadedLocalUris.push(current)
   if (draft.photo_meta?.[current]) {
     const nextPhotoMeta = { ...(draft.photo_meta || {}) }
     delete nextPhotoMeta[current]
     draft.photo_meta = nextPhotoMeta
   }
-  return cleanText((up as any)?.url)
+  return uploadedUrl
 }
 
 async function materializeDraftForSubmit(token: string, username: string, draft: CleaningConsumablesDraft) {
@@ -105,6 +110,7 @@ async function materializeDraftForSubmit(token: string, username: string, draft:
     items: (draft.items || []).map((item) => ({ ...item, photo_urls: Array.isArray(item.photo_urls) ? [...item.photo_urls] : [] })),
     photo_meta: { ...(draft.photo_meta || {}) },
   }
+  const uploadedLocalUris: string[] = []
 
   async function persistProgress() {
     await setCleaningConsumablesDraft(nextDraft.task_id, {
@@ -117,6 +123,10 @@ async function materializeDraftForSubmit(token: string, username: string, draft:
       items: nextDraft.items,
       photo_meta: nextDraft.photo_meta || {},
     })
+    while (uploadedLocalUris.length) {
+      const uri = uploadedLocalUris.shift()
+      if (uri) deleteCleaningConsumablesPhoto(uri)
+    }
   }
 
   for (const item of nextDraft.items) {
@@ -125,7 +135,7 @@ async function materializeDraftForSubmit(token: string, username: string, draft:
       ? item.photo_urls
       : (cleanText(item.photo_url) ? [cleanText(item.photo_url)] : [])
     for (let i = 0; i < sourceUrls.length; i += 1) {
-      const uploaded = await uploadDraftPhotoIfNeeded(token, username, nextDraft, sourceUrls[i] || '', `${item.item_id}-${i + 1}.jpg`, { purpose: 'consumable_stock_photo' })
+      const uploaded = await uploadDraftPhotoIfNeeded(token, username, nextDraft, uploadedLocalUris, sourceUrls[i] || '', `${item.item_id}-${i + 1}.jpg`, { purpose: 'consumable_stock_photo' })
       if (uploaded) nextPhotoUrls.push(uploaded)
     }
     item.photo_urls = nextPhotoUrls
@@ -133,15 +143,15 @@ async function materializeDraftForSubmit(token: string, username: string, draft:
     await persistProgress()
   }
 
-  nextDraft.living_room_photo_url = await uploadDraftPhotoIfNeeded(token, username, nextDraft, cleanText(nextDraft.living_room_photo_url), 'living-room.jpg', { purpose: 'consumable_living_room_photo' }) || null
+  nextDraft.living_room_photo_url = await uploadDraftPhotoIfNeeded(token, username, nextDraft, uploadedLocalUris, cleanText(nextDraft.living_room_photo_url), 'living-room.jpg', { purpose: 'consumable_living_room_photo' }) || null
   await persistProgress()
-  nextDraft.remote_ac_photo_url = await uploadDraftPhotoIfNeeded(token, username, nextDraft, cleanText(nextDraft.remote_ac_photo_url), 'remote-ac.jpg', { purpose: 'consumable_remote_photo', area: 'ac_remote' }) || null
+  nextDraft.remote_ac_photo_url = await uploadDraftPhotoIfNeeded(token, username, nextDraft, uploadedLocalUris, cleanText(nextDraft.remote_ac_photo_url), 'remote-ac.jpg', { purpose: 'consumable_remote_photo', area: 'ac_remote' }) || null
   await persistProgress()
-  nextDraft.remote_tv_photo_url = await uploadDraftPhotoIfNeeded(token, username, nextDraft, cleanText(nextDraft.remote_tv_photo_url), 'remote-tv.jpg', { purpose: 'consumable_remote_photo', area: 'tv_remote' }) || null
+  nextDraft.remote_tv_photo_url = await uploadDraftPhotoIfNeeded(token, username, nextDraft, uploadedLocalUris, cleanText(nextDraft.remote_tv_photo_url), 'remote-tv.jpg', { purpose: 'consumable_remote_photo', area: 'tv_remote' }) || null
   await persistProgress()
 
   for (const [photoId, rawUrl] of Object.entries(nextDraft.extra_photo_urls || {})) {
-    nextDraft.extra_photo_urls![photoId] = await uploadDraftPhotoIfNeeded(token, username, nextDraft, cleanText(rawUrl), `${photoId}.jpg`, { purpose: 'consumable_scene_photo', scene: photoId }) || null
+    nextDraft.extra_photo_urls![photoId] = await uploadDraftPhotoIfNeeded(token, username, nextDraft, uploadedLocalUris, cleanText(rawUrl), `${photoId}.jpg`, { purpose: 'consumable_scene_photo', scene: photoId }) || null
     await persistProgress()
   }
 

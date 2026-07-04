@@ -8,6 +8,7 @@ import {
   pruneInspectionThumbnailCache,
 } from './inspectionThumbnailCache'
 import { deleteDraftMedia, draftMimeTypeFrom, persistDraftMedia } from './localMediaDrafts'
+import { withLocalMediaLock } from './localMediaLocks'
 import { getJson, setJson } from './storage'
 
 export type InspectionPanelBatchStatus =
@@ -185,7 +186,7 @@ function normalizeSnapshot(raw: any): InspectionPanelBatchSnapshot | null {
   if (!raw || typeof raw !== 'object') return null
   const taskId = cleanText(raw.task_id)
   const cleaningTaskId = cleanText(raw.cleaning_task_id)
-  if (!taskId || !cleaningTaskId) return null
+  if (!taskId) return null
   const room = baseRoomPhotos()
   for (const key of Object.keys(room) as InspectionPanelRoomPhotoArea[]) {
     room[key] = Array.isArray(raw?.room_photos?.[key]) ? raw.room_photos[key].map(normalizeMedia).filter(Boolean) as InspectionPanelBatchMedia[] : []
@@ -247,7 +248,7 @@ function normalizeQueueItem(raw: any): InspectionPanelSubmitQueueItem | null {
   const taskId = cleanText(raw.task_id)
   const cleaningTaskId = cleanText(raw.cleaning_task_id)
   const snapshot = normalizeSnapshot(raw.snapshot)
-  if (!submitId || !taskId || !cleaningTaskId || !snapshot) return null
+  if (!submitId || !taskId || !snapshot) return null
   const status = cleanText(raw.status)
   const steps = {
     upload_media: raw?.steps?.upload_media || baseStepState(),
@@ -260,13 +261,16 @@ function normalizeQueueItem(raw: any): InspectionPanelSubmitQueueItem | null {
   return {
     submit_id: submitId,
     task_id: taskId,
-    cleaning_task_id: cleaningTaskId,
+    cleaning_task_id: cleaningTaskId || cleanText(snapshot.cleaning_task_id),
     property_id: cleanText(raw.property_id) || null,
     property_code: cleanText(raw.property_code) || null,
     status: normalizedStatus,
     created_at: cleanText(raw.created_at) || nowIso(),
     updated_at: cleanText(raw.updated_at) || nowIso(),
-    snapshot: withUploadedMediaUrls(snapshot, steps.upload_media.output || {}),
+    snapshot: withUploadedMediaUrls({
+      ...snapshot,
+      cleaning_task_id: cleaningTaskId || cleanText(snapshot.cleaning_task_id),
+    }, steps.upload_media.output || {}),
     steps,
     last_error: cleanText(raw.last_error) || null,
   }
@@ -523,6 +527,19 @@ async function markActiveStepFailed(taskId: string, errorMessage: string) {
   })
 }
 
+async function markWaitingForTaskInfo(taskId: string) {
+  await updateQueueItem(taskId, (current) => current ? {
+    ...current,
+    status: current.status === 'draft' ? 'draft' : 'pending_submit',
+    updated_at: nowIso(),
+    last_error: '已保存到本机，等待任务信息刷新后自动同步。',
+  } : current)
+}
+
+function resetFailedStep(step: InspectionPanelSubmitStepState) {
+  return step.status === 'failed' ? baseStepState() : step
+}
+
 async function processUploadMediaStep(token: string, taskId: string) {
   const item = (await getInspectionPanelBatch(taskId))
   if (!item) return
@@ -544,7 +561,7 @@ async function processUploadMediaStep(token: string, taskId: string) {
       continue
     }
     if (!localUri) continue
-    const up = await uploadCleaningMedia(
+    const up = await withLocalMediaLock(localUri, () => uploadCleaningMedia(
       token,
       { uri: localUri, name: entry.media.name, mimeType: entry.media.mime_type },
       {
@@ -556,7 +573,7 @@ async function processUploadMediaStep(token: string, taskId: string) {
         note: cleanText(entry.media.note) || undefined,
       },
       { skipAuthInvalidation: true },
-    )
+    ))
     uploadedByKey[entry.key] = {
       remote_key: normalizeCleaningObjectKey(up.key) || undefined,
       remote_url: cleanText(up.url) || undefined,
@@ -569,6 +586,21 @@ async function processUploadMediaStep(token: string, taskId: string) {
     snapshot: withUploadedMediaUrls(latest.snapshot, uploadedByKey),
   } : latest)
   await markStep(taskId, 'upload_media', { status: 'succeeded', finished_at: nowIso(), output: uploadedByKey, error: null }, 'syncing', null)
+  await cleanupRemoteBackedBatchFiles(taskId)
+}
+
+async function cleanupRemoteBackedBatchFiles(taskId: string) {
+  const current = await getInspectionPanelBatch(taskId)
+  if (!current) return
+  const finalized = await prepareSyncedSnapshot(current.snapshot)
+  const next = await updateQueueItem(taskId, (item) => item ? {
+    ...item,
+    updated_at: nowIso(),
+    snapshot: finalized.snapshot,
+  } : item)
+  if (!next) return
+  for (const uri of finalized.originalUris) deleteDraftMedia(uri)
+  pruneInspectionThumbnailCache(finalized.thumbnailUris)
 }
 
 async function processRestockStep(token: string, taskId: string) {
@@ -768,6 +800,50 @@ export async function saveInspectionPanelDraftBatch(params: {
   })
 }
 
+export async function bindInspectionPanelCleaningTaskId(params: {
+  task_id: string
+  cleaning_task_id: string
+  property_id?: string | null
+  property_code?: string | null
+}) {
+  const taskId = cleanText(params.task_id)
+  const cleaningTaskId = cleanText(params.cleaning_task_id)
+  if (!taskId || !cleaningTaskId) return null
+  return await updateQueueItem(taskId, (current) => {
+    if (!current) return current
+    const existing = cleanText(current.cleaning_task_id)
+    const businessStepSucceeded =
+      current.steps.save_restock_proof.status === 'succeeded'
+      || current.steps.save_inspection_photos.status === 'succeeded'
+      || current.steps.create_feedback_batch.status === 'succeeded'
+      || current.steps.complete_feedback_projects.status === 'succeeded'
+    if (existing === cleaningTaskId || (existing && businessStepSucceeded) || current.status === 'synced') return current
+    const shouldResetFailedBusinessSteps = current.status === 'failed' || current.status === 'partial_failed'
+    return {
+      ...current,
+      cleaning_task_id: cleaningTaskId,
+      property_id: cleanText(params.property_id) || current.property_id || null,
+      property_code: cleanText(params.property_code) || current.property_code || null,
+      status: shouldResetFailedBusinessSteps ? 'pending_submit' : current.status,
+      updated_at: nowIso(),
+      snapshot: {
+        ...current.snapshot,
+        cleaning_task_id: cleaningTaskId,
+        property_id: cleanText(params.property_id) || current.snapshot.property_id || null,
+        property_code: cleanText(params.property_code) || current.snapshot.property_code || null,
+      },
+      steps: shouldResetFailedBusinessSteps ? {
+        ...current.steps,
+        save_restock_proof: resetFailedStep(current.steps.save_restock_proof),
+        save_inspection_photos: resetFailedStep(current.steps.save_inspection_photos),
+        create_feedback_batch: resetFailedStep(current.steps.create_feedback_batch),
+        complete_feedback_projects: resetFailedStep(current.steps.complete_feedback_projects),
+      } : current.steps,
+      last_error: null,
+    }
+  })
+}
+
 export async function submitInspectionPanelBatch(taskId: string) {
   const key = cleanText(taskId)
   if (!key) return null
@@ -841,6 +917,10 @@ export async function processInspectionPanelSubmitQueue(token: string) {
     let processed = 0
     for (const item of items) {
       try {
+        if (!cleanText(item.cleaning_task_id)) {
+          await markWaitingForTaskInfo(item.task_id)
+          continue
+        }
         const validationError = validateInspectionPanelSnapshot(item.snapshot)
         if (validationError) throw new ApiError(validationError, 0, 'INVALID_INSPECTION_PANEL_SNAPSHOT', false)
         await processUploadMediaStep(token, item.task_id)

@@ -63,6 +63,7 @@ jest.mock('../../lib/api', () => ({
 }))
 
 jest.mock('../../lib/inspectionPanelSubmitQueue', () => ({
+  bindInspectionPanelCleaningTaskId: jest.fn(async () => null),
   getInspectionPanelBatch: jest.fn(async () => null),
   subscribeInspectionPanelSubmitQueue: jest.fn(() => () => {}),
 }))
@@ -95,7 +96,9 @@ beforeEach(() => {
 	      created_at: '2026-07-03T00:00:00.000Z',
 	    },
 	  ]
-	  mockSnapshot.items[0].source_id = 'ct1'
+	mockSnapshot.items[0].source_id = 'ct1'
+  mockSnapshot.items[0].title = 'X 仅改密码'
+  mockSnapshot.items[0].inspection_scope = 'password_only'
 	  mockSnapshot.items[0].available_actions = [
     {
       id: 'upload_access_video',
@@ -199,3 +202,62 @@ test('password-only access video completion does not require inspection panel ba
 	    expect(api.uploadLockboxVideo).toHaveBeenCalledWith('t1', 'ct-action-target', { media_url: 'https://example.com/video.mov' })
 	  })
 	})
+
+test('non-password inspection can finish access video while inspection photos are still pending sync', async () => {
+  const api = require('../../lib/api')
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  ;(api.uploadLockboxVideo as jest.Mock).mockClear()
+  ;(queue.getInspectionPanelBatch as jest.Mock).mockResolvedValue({
+    status: 'pending_submit',
+    last_error: '已保存到本机，等待任务信息刷新后自动同步。',
+  })
+  mockSnapshot.items[0].title = 'X 检查后挂钥匙'
+  mockSnapshot.items[0].source_id = 'ct-merged-source'
+  mockSnapshot.items[0].inspection_scope = 'inspect_and_hang'
+  mockSnapshot.items[0].available_actions = [
+    {
+      id: 'submit_inspection',
+      label: '检查与补充',
+      placement: 'primary',
+      enabled: true,
+      target: 'InspectionPanel',
+      intent: 'inspection',
+      source_id: 'ct-inspection-target',
+    },
+    {
+      id: 'upload_access_video',
+      label: '标记已完成',
+      placement: 'primary',
+      enabled: true,
+      target: 'InspectionComplete',
+      intent: 'inspection',
+      source_id: 'ct-video-target',
+    },
+  ]
+  mockQueueItems[0].task_id = 'ct-video-target'
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
+  const InspectionCompleteScreen = require('./InspectionCompleteScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <InspectionCompleteScreen
+        navigation={navigation as any}
+        route={{ key: 'inspection-complete-pending', name: 'InspectionComplete', params: { taskId: 'w1' } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText(/检查与补充已保存到本机/)).toBeTruthy()
+    expect(ui.getByText(/视频已上传/)).toBeTruthy()
+  })
+
+  fireEvent.press(ui.getByText('进入检查与补充'))
+  expect(navigation.navigate).toHaveBeenCalledWith('InspectionPanel', { taskId: 'w1', sourceId: 'ct-inspection-target' })
+
+  fireEvent.press(ui.getByText('点击完成'))
+
+  await waitFor(() => {
+    expect(api.uploadLockboxVideo).toHaveBeenCalledWith('t1', 'ct-video-target', { media_url: 'https://example.com/video.mov' })
+  })
+})

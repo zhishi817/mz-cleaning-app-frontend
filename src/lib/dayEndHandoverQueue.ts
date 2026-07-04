@@ -1,6 +1,8 @@
 import { Directory, File, Paths } from 'expo-file-system'
 import { getJson, setJson } from './storage'
+import { compressImageForLocalStorage } from './imageCompression'
 import { isRetryableApiError, uploadCleaningMedia, uploadDayEndHandover } from './api'
+import { isLocalMediaLocked, withLocalMediaLock } from './localMediaLocks'
 
 export type DayEndDraftPhoto = {
   id: string
@@ -58,8 +60,28 @@ async function ensurePersistedUri(sourceUri: string, prefix: string) {
   dir.create({ intermediates: true, idempotent: true })
   const name = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`
   const target = new File(dir, name)
-  new File(sourceUri).copy(target)
+  const preparedUri = await compressImageForLocalStorage(sourceUri, { maxWidth: 1800, quality: 0.72 })
+  new File(preparedUri || sourceUri).copy(target)
   return target.uri
+}
+
+function deleteLocalFile(uri: string) {
+  const localUri = String(uri || '').trim()
+  if (!localUri || /^https?:\/\//i.test(localUri) || isLocalMediaLocked(localUri)) return
+  try { new File(localUri).delete() } catch {}
+}
+
+function deleteUploadedDraftFiles(draft: DayEndHandoverDraft) {
+  const allPhotos = [
+    ...(draft.key_items || []),
+    ...(draft.return_wash_items || []),
+    ...(draft.warehouse_key_items || []),
+    ...(draft.consumable_items || []),
+    ...((draft.reject_items || []).flatMap((item) => item.photos || [])),
+  ]
+  for (const item of allPhotos) {
+    if (String(item.uploaded_url || '').trim()) deleteLocalFile(item.uri)
+  }
 }
 
 function normalizeDraft(raw: any): DayEndHandoverDraft | null {
@@ -105,9 +127,7 @@ export async function clearDayEndHandoverDraft(userId: string, date: string) {
     ...((draft?.reject_items || []).flatMap((item) => item.photos || [])),
   ]
   for (const item of allPhotos) {
-    const localUri = String(item.uri || '').trim()
-    if (!localUri || /^https?:\/\//i.test(localUri)) continue
-    try { new File(localUri).delete() } catch {}
+    deleteLocalFile(item.uri)
   }
 }
 
@@ -168,7 +188,7 @@ export async function processDayEndHandoverQueue(token: string) {
           continue
         }
         try {
-          const up = await uploadCleaningMedia(
+          const up = await withLocalMediaLock(item.uri, () => uploadCleaningMedia(
             token,
             { uri: item.uri, name: `${prefix}-${item.id}.jpg`, mimeType: 'image/jpeg' },
             {
@@ -177,7 +197,7 @@ export async function processDayEndHandoverQueue(token: string) {
               watermark: item.watermark_text ? '1' : '',
               watermark_text: item.watermark_text || '',
             },
-          )
+          ))
           out.push({ ...item, uploaded_url: up.url })
         } catch (e: any) {
           if (isNetworkishError(e)) throw e
@@ -213,6 +233,9 @@ export async function processDayEndHandoverQueue(token: string) {
         if (nextDraft.pending_submit) {
           nextDraft.pending_submit = false
         }
+        drafts[k] = nextDraft
+        await saveAllDrafts(drafts)
+        deleteUploadedDraftFiles(nextDraft)
 
         const payload = {
           date: nextDraft.date,
@@ -247,8 +270,6 @@ export async function processDayEndHandoverQueue(token: string) {
           continue
         }
 
-        drafts[k] = nextDraft
-        await saveAllDrafts(drafts)
       } catch (e: any) {
         if (isNetworkishError(e)) break
       }

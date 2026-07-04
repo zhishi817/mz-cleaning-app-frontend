@@ -1,4 +1,6 @@
 import { Directory, File, Paths } from 'expo-file-system'
+import { compressImageForLocalStorage, isCompressibleImageMimeType } from './imageCompression'
+import { isLocalMediaLocked } from './localMediaLocks'
 import { getJson, remove, setJson } from './storage'
 
 export type CleaningConsumablesDraftItem = {
@@ -178,9 +180,24 @@ export function persistCleaningConsumablesPhoto(sourceUri: string, name: string,
   return target.uri
 }
 
+export async function persistCompressedCleaningConsumablesPhoto(sourceUri: string, name: string, mimeType: string, prefix: string) {
+  const shouldCompress = isCompressibleImageMimeType(mimeType)
+  const preparedUri = shouldCompress
+    ? await compressImageForLocalStorage(sourceUri, { maxWidth: 1800, quality: 0.72 })
+    : sourceUri
+  const finalName = shouldCompress ? `${cleanText(prefix) || 'photo'}-${Date.now()}.jpg` : name
+  const finalMimeType = shouldCompress ? 'image/jpeg' : mimeType
+  return {
+    localUri: persistCleaningConsumablesPhoto(preparedUri, finalName, finalMimeType, prefix),
+    name: finalName,
+    mimeType: finalMimeType,
+  }
+}
+
 export function deleteCleaningConsumablesPhoto(uri: string) {
   const localUri = cleanText(uri)
   if (!isLocalCleaningConsumablesPhotoUri(localUri)) return
+  if (isLocalMediaLocked(localUri)) return
   try {
     const file = new File(localUri)
     if (file.exists) file.delete()

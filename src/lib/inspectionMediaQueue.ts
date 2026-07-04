@@ -1,6 +1,8 @@
 import { Directory, File, Paths } from 'expo-file-system'
 import type { InspectionPhotoArea } from './api'
 import { ApiError, isRetryableApiError, uploadCleaningMedia, uploadCleaningVideo, uploadLockboxVideo } from './api'
+import { compressImageForLocalStorage, isCompressibleImageMimeType } from './imageCompression'
+import { isLocalMediaLocked, withLocalMediaLock } from './localMediaLocks'
 import { getJson, setJson } from './storage'
 
 export type InspectionQueueKind = 'inspection_photo' | 'restock_proof' | 'lockbox_video'
@@ -40,7 +42,7 @@ export type InspectionMediaQueueItem = {
 }
 
 const STORAGE_KEY = 'mzstay.inspection_media_queue.v1'
-const RETAIN_MS = 7 * 24 * 60 * 60 * 1000
+const RETAIN_MS = 30 * 24 * 60 * 60 * 1000
 const UPLOAD_OPERATION_TIMEOUT_MS = 75 * 1000
 const BUSINESS_SAVE_OPERATION_TIMEOUT_MS = 30 * 1000
 const STALE_UPLOAD_ATTEMPT_MS = 2 * 60 * 1000
@@ -101,20 +103,29 @@ function fileExists(uri: string) {
   }
 }
 
-function copyToPrivateDir(sourceUri: string, name: string, mimeType: string, kind: InspectionQueueKind) {
-  if (!fileExists(sourceUri)) throw new ApiError('原始文件不存在，请重新拍摄', 0, 'SOURCE_FILE_MISSING', false)
+async function copyToPrivateDir(sourceUri: string, name: string, mimeType: string, kind: InspectionQueueKind) {
+  let preparedUri = sourceUri
+  let preparedName = name
+  let preparedMimeType = mimeType
+  const shouldCompress = kind !== 'lockbox_video' && isCompressibleImageMimeType(mimeType)
+  if (shouldCompress) {
+    preparedUri = await compressImageForLocalStorage(sourceUri, { maxWidth: 1800, quality: 0.72 })
+    preparedMimeType = 'image/jpeg'
+    preparedName = `${kind}-${Date.now()}.jpg`
+  }
+  if (!fileExists(preparedUri)) throw new ApiError('原始文件不存在，请重新拍摄', 0, 'SOURCE_FILE_MISSING', false)
   const dir = ensurePrivateDir()
-  const ext = fileExtFrom(name, mimeType)
+  const ext = fileExtFrom(preparedName, preparedMimeType)
   const prefix = kind === 'lockbox_video' ? 'video' : 'photo'
   const target = new File(dir, `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`)
-  new File(sourceUri).copy(target)
+  new File(preparedUri).copy(target)
   if (!target.exists) throw new ApiError('本地文件保存失败，请重新拍摄', 0, 'PRIVATE_COPY_FAILED', false)
-  return target.uri
+  return { localUri: target.uri, name: preparedName, mimeType: preparedMimeType }
 }
 
 function deleteLocalFile(uri: string) {
   const localUri = String(uri || '').trim()
-  if (!localUri || inFlightLocalUris.has(localUri)) return
+  if (!localUri || inFlightLocalUris.has(localUri) || isLocalMediaLocked(localUri)) return
   try {
     new File(localUri).delete()
   } catch {}
@@ -194,14 +205,14 @@ export async function enqueueInspectionMediaItem(params: {
 }) {
   const createdAt = nowIso()
   const capturedAt = String(params.captured_at || createdAt)
-  const localUri = copyToPrivateDir(params.source_uri, params.name, params.mime_type, params.kind)
+  const privateCopy = await copyToPrivateDir(params.source_uri, params.name, params.mime_type, params.kind)
   const item: InspectionMediaQueueItem = {
     id: makeId(params.kind),
     task_id: String(params.task_id || '').trim(),
     kind: params.kind,
-    local_uri: localUri,
-    name: String(params.name || '').trim() || `${params.kind}-${Date.now()}`,
-    mime_type: String(params.mime_type || '').trim() || 'application/octet-stream',
+    local_uri: privateCopy.localUri,
+    name: String(privateCopy.name || '').trim() || `${params.kind}-${Date.now()}`,
+    mime_type: String(privateCopy.mimeType || '').trim() || 'application/octet-stream',
     created_at: createdAt,
     captured_at: capturedAt,
     uploaded_url: null,
@@ -292,9 +303,9 @@ async function uploadQueueItem(token: string, item: InspectionMediaQueueItem) {
   if (!localUri) throw new ApiError('缺少本地文件', 0, 'MISSING_LOCAL_FILE', false)
   if (!fileExists(localUri)) throw new ApiError('本地文件已丢失，请重新拍摄', 0, 'MISSING_LOCAL_FILE', false)
   if (item.kind === 'lockbox_video') {
-    return await uploadCleaningVideo(token, { uri: localUri, name: item.name, mimeType: item.mime_type })
+    return await withLocalMediaLock(localUri, () => uploadCleaningVideo(token, { uri: localUri, name: item.name, mimeType: item.mime_type }))
   }
-  return await uploadCleaningMedia(token, { uri: localUri, name: item.name, mimeType: item.mime_type }, uploadMeta(item) || undefined)
+  return await withLocalMediaLock(localUri, () => uploadCleaningMedia(token, { uri: localUri, name: item.name, mimeType: item.mime_type }, uploadMeta(item) || undefined))
 }
 
 export async function processInspectionMediaQueue(token: string) {
@@ -308,7 +319,7 @@ export async function processInspectionMediaQueue(token: string) {
   })
   let processed = 0
   for (const item of ordered) {
-    if (item.business_saved || !isRetryableStatus(item) || item.local_file_deleted_at) continue
+    if (item.business_saved || !isRetryableStatus(item) || (item.local_file_deleted_at && !item.uploaded_url)) continue
     const localUri = String(item.local_uri || '').trim()
     if (!localUri) continue
     if (inFlightLocalUris.has(localUri)) {
@@ -337,13 +348,22 @@ export async function processInspectionMediaQueue(token: string) {
         uploaded_at: nowIso(),
         last_error: null,
       }))
+      const persistedUpload = (await loadQueue()).find((current) => current.id === item.id)
+      if (
+        persistedUpload
+        && String(persistedUpload.uploaded_url || '').trim()
+        && persistedUpload.upload_status === 'uploaded'
+        && !persistedUpload.local_file_deleted_at
+      ) {
+        deleteLocalFile(persistedUpload.local_uri)
+        await updateInspectionMediaItem(persistedUpload.id, { local_file_deleted_at: nowIso() })
+      }
       if (item.kind === 'lockbox_video' && uploadedUrl) {
         await withOperationTimeout(
           uploadLockboxVideo(token, item.task_id, { media_url: uploadedUrl }),
           BUSINESS_SAVE_OPERATION_TIMEOUT_MS,
           '视频已上传但保存任务超时，稍后会自动重试',
         )
-        if (!item.local_file_deleted_at) deleteLocalFile(item.local_uri)
         await updateQueueItem(item.id, (current) => ({
           ...current,
           uploaded_url: uploadedUrl,

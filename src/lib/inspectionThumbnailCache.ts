@@ -1,8 +1,8 @@
 import { Directory, File, Paths } from 'expo-file-system'
 
 const CACHE_DIR_NAME = 'mzstay-inspection-thumbnails'
-export const INSPECTION_THUMBNAIL_MAX_FILES = 96
-export const INSPECTION_THUMBNAIL_MAX_BYTES = 24 * 1024 * 1024
+export const INSPECTION_THUMBNAIL_MAX_FILES = 64
+export const INSPECTION_THUMBNAIL_MAX_BYTES = 16 * 1024 * 1024
 
 type ThumbnailFileEntry = {
   uri: string

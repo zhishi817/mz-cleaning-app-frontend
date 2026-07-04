@@ -1,4 +1,6 @@
 import { Directory, File, Paths } from 'expo-file-system'
+import { compressImageForLocalStorage, isCompressibleImageMimeType } from './imageCompression'
+import { isLocalMediaLocked } from './localMediaLocks'
 
 function cleanText(value: any) {
   return String(value || '').trim()
@@ -72,9 +74,38 @@ export function persistDraftMedia(params: {
   return target.uri
 }
 
+export async function persistCompressedDraftMedia(params: {
+  dirName: string
+  prefix: string
+  sourceUri: string
+  name: string
+  mimeType: string
+  kind?: 'photo' | 'video'
+}) {
+  const mimeType = draftMimeTypeFrom(params.name, params.mimeType, params.sourceUri)
+  const shouldCompress = params.kind !== 'video' && isCompressibleImageMimeType(mimeType)
+  const sourceUri = shouldCompress
+    ? await compressImageForLocalStorage(params.sourceUri, { maxWidth: 1800, quality: 0.72 })
+    : params.sourceUri
+  const finalMimeType = shouldCompress ? 'image/jpeg' : mimeType
+  const finalName = shouldCompress ? `${cleanText(params.prefix) || 'photo'}-${Date.now()}.jpg` : params.name
+  return {
+    localUri: persistDraftMedia({
+      dirName: params.dirName,
+      prefix: params.prefix,
+      sourceUri,
+      name: finalName,
+      mimeType: finalMimeType,
+    }),
+    name: finalName,
+    mimeType: finalMimeType,
+  }
+}
+
 export function deleteDraftMedia(uri: string) {
   const localUri = cleanText(uri)
   if (!localUri || !localUri.startsWith('file://')) return
+  if (isLocalMediaLocked(localUri)) return
   try {
     const file = new File(localUri)
     if (file.exists) file.delete()

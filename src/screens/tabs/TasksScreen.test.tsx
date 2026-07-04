@@ -594,6 +594,45 @@ test('tasks screen card tap does not bypass server actions for manager roles', a
   mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
 })
 
+test('inspector fallback card tap passes source id to inspection panel', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = mockAuthState.user
+  mockAuthState.user = { id: 'inspector-1', username: 'inspector-user', role: 'cleaning_inspector', roles: ['cleaning_inspector'] }
+  snapshot.items[0] = {
+    ...snapshot.items[0],
+    task_kind: 'inspection',
+    task_type: 'checkout_clean',
+    inspection_scope: 'inspect_and_hang',
+    inspection_mode: 'same_day',
+    source_id: 'ct-fallback-source',
+    available_actions: undefined,
+  }
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={navigation as any}
+        route={{ key: 'tasks-card-inspector-fallback', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByLabelText('task-card-w1')).toBeTruthy()
+  })
+
+  fireEvent.press(ui.getByLabelText('task-card-w1'))
+
+  expect(navigation.navigate).toHaveBeenCalledWith('InspectionPanel', { taskId: 'w1', sourceId: 'ct-fallback-source' })
+
+  snapshot.items[0] = previousTask
+  mockAuthState.user = previousUser
+})
+
 test('tasks screen shows 晚入住 tag when checkin time is later than 6pm', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()

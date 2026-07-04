@@ -185,7 +185,10 @@ function resolveTaskNoticeNavigation(params: { taskRouteId: string; user: any; n
   const isManager = roleNames.includes('admin') || roleNames.includes('offline_manager') || roleNames.includes('customer_service')
   const isInspector = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
   if (isManager && isCleaningTask) return { screen: 'ManagerDailyTask', params: { taskId: params.taskRouteId } }
-  if (isInspector && isInspection) return { screen: 'InspectionPanel', params: { taskId: params.taskRouteId } }
+  if (isInspector && isInspection) {
+    const sourceId = String(task?.source_id || '').trim()
+    return { screen: 'InspectionPanel', params: { taskId: params.taskRouteId, ...(sourceId ? { sourceId } : {}) } }
+  }
   return { screen: 'TaskDetail', params: { id: params.taskRouteId } }
 }
 

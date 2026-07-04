@@ -636,7 +636,8 @@ export default function NoticesScreen(props: Props) {
         return
       }
       if (isInspector && isInspection) {
-        props.navigation.navigate('InspectionPanel', { taskId: item.taskId })
+        const sourceId = String((task as any)?.source_id || '').trim()
+        props.navigation.navigate('InspectionPanel', { taskId: item.taskId, ...(sourceId ? { sourceId } : {}) })
         return
       }
       props.navigation.navigate('TaskDetail', { id: item.taskId })

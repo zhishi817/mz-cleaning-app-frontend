@@ -146,6 +146,66 @@ test('allows carry-forward restock items without proof photos and persists the n
   )
 })
 
+test('keeps a submitted batch without cleaning task id and syncs after binding the action target', async () => {
+  const api = require('./api') as {
+    isRetryableApiError: jest.Mock
+    saveInspectionPhotos: jest.Mock
+    saveRestockProof: jest.Mock
+    uploadCleaningMedia: jest.Mock
+  }
+  api.isRetryableApiError.mockReturnValue(false)
+  api.saveRestockProof.mockResolvedValue({ ok: true })
+  api.saveInspectionPhotos.mockResolvedValue({ ok: true })
+
+  const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+
+  await queueMod.saveInspectionPanelDraftBatch({
+    task_id: 'task-wait-source',
+    cleaning_task_id: '',
+    snapshot: {
+      ...baseSnapshot('task-wait-source'),
+      cleaning_task_id: '',
+      restock_confirmed_sufficient: true,
+      room_photo_requirement: 'guest_arrival_confirmed',
+    },
+  })
+  await queueMod.submitInspectionPanelBatch('task-wait-source')
+
+  const waiting = await queueMod.processInspectionPanelSubmitQueue('token-wait')
+
+  expect(waiting).toEqual({ processed: 0, remaining: 1 })
+  expect(api.saveRestockProof).not.toHaveBeenCalled()
+  expect(api.saveInspectionPhotos).not.toHaveBeenCalled()
+  expect(await queueMod.getInspectionPanelBatch('task-wait-source')).toMatchObject({
+    status: 'pending_submit',
+    cleaning_task_id: '',
+    last_error: '已保存到本机，等待任务信息刷新后自动同步。',
+  })
+
+  await queueMod.bindInspectionPanelCleaningTaskId({
+    task_id: 'task-wait-source',
+    cleaning_task_id: 'cleaning-action-target',
+    property_id: 'property-1',
+    property_code: 'A1201',
+  })
+  const synced = await queueMod.processInspectionPanelSubmitQueue('token-wait')
+
+  expect(synced).toEqual({ processed: 1, remaining: 0 })
+  expect(api.saveRestockProof).toHaveBeenCalledWith(
+    'token-wait',
+    'cleaning-action-target',
+    expect.any(Object),
+    { skipAuthInvalidation: true },
+  )
+  expect(api.saveInspectionPhotos).toHaveBeenCalledWith(
+    'token-wait',
+    'cleaning-action-target',
+    expect.any(Object),
+    { skipAuthInvalidation: true },
+  )
+  expect((await queueMod.getInspectionPanelBatch('task-wait-source'))?.status).toBe('synced')
+})
+
 test('blocks a legacy pending batch with missing required photos before any API call', async () => {
   const api = require('./api') as {
     saveInspectionPhotos: jest.Mock

@@ -13,8 +13,7 @@ import {
   setInspectionPanelFeedbackDraft,
   type InspectionPanelFeedbackPhotoMetaMap,
 } from '../../lib/inspectionPanelFeedbackDraft'
-import { draftMimeTypeFrom, persistDraftMedia } from '../../lib/localMediaDrafts'
-import { compressImageForUpload } from '../../lib/imageCompression'
+import { draftMimeTypeFrom, persistCompressedDraftMedia } from '../../lib/localMediaDrafts'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getJson, remove as removeStorage, setJson } from '../../lib/storage'
 import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
@@ -947,23 +946,22 @@ export default function FeedbackFormScreen(props: Props) {
           if (!uri) continue
           const capturedAt = new Date().toISOString()
           if (isInspectionPanelBatchMode) {
-            const preparedUri = await compressImageForUpload(uri)
-            const convertedToJpeg = !!preparedUri && preparedUri !== uri
-            const fallbackName = convertedToJpeg ? `feedback-${Date.now()}.jpg` : String(asset?.fileName || uri.split('/').pop() || `feedback-${Date.now()}`)
-            const resolvedMimeType = convertedToJpeg ? 'image/jpeg' : draftMimeTypeFrom(fallbackName, String(asset?.mimeType || ''), uri)
-            const localUri = persistDraftMedia({
+            const fallbackName = String(asset?.fileName || uri.split('/').pop() || `feedback-${Date.now()}`)
+            const resolvedMimeType = draftMimeTypeFrom(fallbackName, String(asset?.mimeType || ''), uri)
+            const persisted = await persistCompressedDraftMedia({
               dirName: 'mzstay-inspection-feedback-drafts',
               prefix: 'feedback',
-              sourceUri: preparedUri || uri,
+              sourceUri: uri,
               name: fallbackName,
               mimeType: resolvedMimeType,
+              kind: 'photo',
             })
-            uploaded.push(localUri)
+            uploaded.push(persisted.localUri)
             setPanelPhotoMeta((prev) => ({
               ...prev,
-              [localUri]: {
-                name: fallbackName,
-                mime_type: resolvedMimeType,
+              [persisted.localUri]: {
+                name: persisted.name,
+                mime_type: persisted.mimeType,
                 captured_at: capturedAt,
                 watermark_text: buildWatermarkText(capturedAt),
               },

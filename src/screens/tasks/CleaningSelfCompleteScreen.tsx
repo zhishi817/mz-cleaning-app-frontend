@@ -10,7 +10,7 @@ import {
   deleteCleaningConsumablesPhoto,
   getCleaningConsumablesDraft,
   isLocalCleaningConsumablesPhotoUri,
-  persistCleaningConsumablesPhoto,
+  persistCompressedCleaningConsumablesPhoto,
   removeCleaningConsumablesDraft,
   setCleaningConsumablesDraft,
   type CleaningConsumablesDraftItem,
@@ -460,10 +460,10 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     const name = String(asset.fileName || sourceUri.split('/').pop() || fallbackName)
     const mimeType = String(asset.mimeType || 'image/jpeg')
     const capturedAt = new Date().toISOString()
-    const localUri = persistCleaningConsumablesPhoto(sourceUri, name, mimeType, prefix)
+    const persisted = await persistCompressedCleaningConsumablesPhoto(sourceUri, name, mimeType, prefix)
     const username = String((user as any)?.username || (user as any)?.email || '').trim()
-    rememberDraftPhoto(localUri, { name, mimeType, capturedAt, watermarkText: buildWatermarkText(propertyCode, username, capturedAt) })
-    return localUri
+    rememberDraftPhoto(persisted.localUri, { name: persisted.name, mimeType: persisted.mimeType, capturedAt, watermarkText: buildWatermarkText(propertyCode, username, capturedAt) })
+    return persisted.localUri
   }
 
   async function uploadDraftPhotoIfNeeded(

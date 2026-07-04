@@ -9,6 +9,7 @@ import { API_BASE_URL } from '../../config/env'
 import { deleteLockboxVideo, uploadLockboxVideo } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import {
+  bindInspectionPanelCleaningTaskId,
   getInspectionPanelBatch,
   subscribeInspectionPanelSubmitQueue,
   type InspectionPanelBatchStatus,
@@ -37,13 +38,18 @@ import { actionDisabledReasonText } from '../../lib/workTaskActions'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'InspectionComplete'>
 
-function inspectionBatchStatusHint(status: InspectionPanelBatchStatus | null) {
-  if (status === 'pending_submit') return '检查与补充已正式提交，当前待同步。'
+function cleanText(value: any) {
+  return String(value ?? '').trim()
+}
+
+function inspectionBatchStatusHint(status: InspectionPanelBatchStatus | null, lastError?: string | null) {
+  const error = cleanText(lastError)
+  if (status === 'pending_submit') return error || '检查与补充已保存到本机，当前待同步。'
   if (status === 'syncing') return '检查与补充正在同步中，可先继续完成挂钥匙视频。'
   if (status === 'partial_failed') return '检查与补充部分同步失败，可先完成本页，稍后回检查页重试同步。'
   if (status === 'failed') return '检查与补充同步失败，可先完成本页，稍后回检查页重试同步。'
   if (status === 'synced') return '检查与补充已同步完成。'
-  return ''
+  return '检查与补充尚未发现已提交批次；可先保存视频，之后回检查页确认照片本机草稿。'
 }
 
 function noticeToneStylePair(tone: TaskTone) {
@@ -91,9 +97,15 @@ export default function InspectionCompleteScreen(props: Props) {
   const [missing, setMissing] = useState<string[]>([])
   const [validationReady, setValidationReady] = useState(false)
   const [panelBatchStatus, setPanelBatchStatus] = useState<InspectionPanelBatchStatus | null>(null)
+  const [panelBatchError, setPanelBatchError] = useState<string | null>(null)
 
   const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
-  const cleaningTaskId = String(props.route.params.sourceId || task?.source_id || '').trim()
+  const serverActions = Array.isArray((task as any)?.available_actions) ? (((task as any).available_actions || []) as any[]) : null
+  const accessVideoAction = serverActions?.find((action) => String(action?.id || '') === 'upload_access_video') || null
+  const submitInspectionAction = serverActions?.find((action) => String(action?.id || '') === 'submit_inspection') || null
+  const actionSourceId = cleanText(accessVideoAction?.source_id)
+  const inspectionPanelSourceId = cleanText(submitInspectionAction?.source_id) || cleanText(props.route.params.sourceId) || actionSourceId || cleanText(task?.source_id)
+  const cleaningTaskId = cleanText(props.route.params.sourceId) || actionSourceId || cleanText(task?.source_id)
   const [lockboxDeleted, setLockboxDeleted] = useState(false)
   const lockboxFromTask = lockboxDeleted ? '' : String((task as any)?.lockbox_video_url || '').trim()
   const effectiveLockboxUrl = String(lockboxItem?.uploaded_url || lockboxItem?.local_uri || lockboxFromTask || '').trim() || null
@@ -105,14 +117,11 @@ export default function InspectionCompleteScreen(props: Props) {
   const inspectionScopeNoticeStyles = noticeToneStylePair(getInspectionScopeTone(isPasswordOnlyInspection))
   const oldCode = String((task as any)?.old_code || '').trim()
   const newCode = String((task as any)?.new_code || '').trim()
-  const serverActions = Array.isArray((task as any)?.available_actions) ? (((task as any).available_actions || []) as any[]) : null
-  const accessVideoAction = serverActions?.find((action) => String(action?.id || '') === 'upload_access_video') || null
   const accessVideoDeniedReason = serverActions
     ? accessVideoAction?.enabled
       ? ''
       : actionDisabledReasonText(accessVideoAction?.disabled_reason || '当前任务没有可提交的访问凭证操作')
     : ''
-  const submitInspectionAction = serverActions?.find((action) => String(action?.id || '') === 'submit_inspection') || null
   const canOpenInspectionPanel = !isPasswordOnlyInspection && (!serverActions || submitInspectionAction?.enabled === true)
 
   const reloadLockboxItem = useCallback(async () => {
@@ -130,16 +139,25 @@ export default function InspectionCompleteScreen(props: Props) {
       setLoading(true)
       setValidationReady(false)
       const needs: string[] = []
+      if (!isPasswordOnlyInspection && inspectionPanelSourceId) {
+        await bindInspectionPanelCleaningTaskId({
+          task_id: props.route.params.taskId,
+          cleaning_task_id: inspectionPanelSourceId,
+          property_id: cleanText((task as any)?.property_id || (task as any)?.property?.id),
+          property_code: cleanText((task as any)?.property?.code),
+        })
+      }
       const batch = isPasswordOnlyInspection ? null : await getInspectionPanelBatch(props.route.params.taskId)
       const status = batch?.status || null
       setPanelBatchStatus(status)
-      if (!isPasswordOnlyInspection && (!batch || status === 'draft')) needs.push('请先在“检查与补充”页点击正式提交')
+      setPanelBatchError(batch?.last_error || null)
+      if (!isPasswordOnlyInspection && (!batch || status === 'draft')) needs.push('检查照片尚未保存为提交批次')
       setMissing(needs)
       setValidationReady(true)
     } finally {
       setLoading(false)
     }
-  }, [cleaningTaskId, isPasswordOnlyInspection, props.route.params.taskId])
+  }, [cleaningTaskId, inspectionPanelSourceId, isPasswordOnlyInspection, props.route.params.taskId, task])
 
   useEffect(() => {
     refresh()
@@ -174,7 +192,6 @@ export default function InspectionCompleteScreen(props: Props) {
     if (!cleaningTaskId) return Alert.alert(t('common_error'), '缺少任务信息')
     if (accessVideoDeniedReason) return Alert.alert('暂不可操作', accessVideoDeniedReason)
     if (!validationReady || loading) return Alert.alert(t('common_error'), '正在校验检查与补充状态，请稍候')
-    if (missing.length) return Alert.alert(t('common_error'), missing.join('、'))
     try {
       setUploading(true)
       const perm = await ImagePicker.requestCameraPermissionsAsync()
@@ -332,25 +349,25 @@ export default function InspectionCompleteScreen(props: Props) {
         {!validationReady || loading ? (
           <Text style={styles.muted}>正在校验检查与补充状态...</Text>
         ) : missing.length ? (
-          <Text style={styles.warn}>{`未满足：${missing.join('、')}`}</Text>
+          <Text style={styles.pending}>{`${missing.join('、')}；可先保存视频，之后回检查页确认照片。`}</Text>
         ) : isPasswordOnlyInspection ? (
           <View style={[styles.noticeCard, inspectionScopeNoticeStyles.card]}>
             <Ionicons name="flash-outline" size={moderateScale(16)} color={inspectionScopeNoticeStyles.icon} />
             <Text style={[styles.noticeCardText, inspectionScopeNoticeStyles.text]}>此任务为{inspectionScopeLabel((task as any)?.inspection_scope)}，无需重复检查照片或消耗品确认。</Text>
           </View>
         ) : (
-          <Text style={styles.ok}>检查与补充已正式提交，可继续完成当前步骤</Text>
+          <Text style={panelBatchStatus === 'synced' ? styles.ok : styles.pending}>检查与补充已保存到本机，可继续完成当前步骤</Text>
         )}
-        {!missing.length && panelBatchStatus && inspectionBatchStatusHint(panelBatchStatus) ? (
+        {!isPasswordOnlyInspection && inspectionBatchStatusHint(panelBatchStatus, panelBatchError) ? (
           <Text style={panelBatchStatus === 'failed' || panelBatchStatus === 'partial_failed' ? styles.warn : styles.muted}>
-            {inspectionBatchStatusHint(panelBatchStatus)}
+            {inspectionBatchStatusHint(panelBatchStatus, panelBatchError)}
           </Text>
         ) : null}
         {isEarlyCheckinSkipAttempt ? <Text style={styles.warnSmall}>早入住不可跳过检查照片，请返回检查与补充正常拍照。</Text> : null}
         {accessVideoDeniedReason ? <Text style={styles.warnSmall}>{`暂不可操作：${accessVideoDeniedReason}`}</Text> : null}
         {canOpenInspectionPanel ? (
           <Pressable
-            onPress={() => props.navigation.navigate('InspectionPanel', { taskId: task.id })}
+            onPress={() => props.navigation.navigate('InspectionPanel', { taskId: task.id, ...(inspectionPanelSourceId ? { sourceId: inspectionPanelSourceId } : {}) })}
             style={({ pressed }) => [styles.linkBtn, pressed ? styles.pressed : null]}
           >
             <Text style={styles.linkText}>进入检查与补充</Text>

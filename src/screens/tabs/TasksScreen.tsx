@@ -2892,7 +2892,8 @@ function showBanner(title: string, message: string) {
                       return
                     }
                     if (isInspector0 && isInspection0) {
-                      props.navigation.navigate('InspectionPanel', { taskId: task.id })
+                      const sourceId = String((task as any)?.source_id || '').trim()
+                      props.navigation.navigate('InspectionPanel', { taskId: task.id, ...(sourceId ? { sourceId } : {}) })
                       return
                     }
                     props.navigation.navigate('TaskDetail', { id: task.id })
