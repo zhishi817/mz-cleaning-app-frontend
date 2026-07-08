@@ -33,10 +33,12 @@ test('queue request can handle 401 without invalidating the global session', asy
   expect(fetchMock).toHaveBeenCalledWith(
     expect.any(String),
     expect.objectContaining({
-      headers: expect.objectContaining({
-        Authorization: 'Bearer expired-token',
-        'X-Skip-Auth-Invalidation': '1',
-      }),
+      cache: 'no-store',
     }),
   )
+  const sentHeaders = (fetchMock as jest.Mock).mock.calls[0]?.[1]?.headers as Headers
+  expect(sentHeaders.get('Authorization')).toBe('Bearer expired-token')
+  expect(sentHeaders.get('X-Skip-Auth-Invalidation')).toBe('1')
+  expect(sentHeaders.get('Cache-Control')).toBe('no-cache')
+  expect(sentHeaders.get('Pragma')).toBe('no-cache')
 })

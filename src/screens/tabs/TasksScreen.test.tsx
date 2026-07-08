@@ -23,6 +23,10 @@ function flattenRenderedText(node: any): string[] {
   return flattenRenderedText(node.children || [])
 }
 
+function expandTask(ui: ReturnType<typeof render>, taskId: string) {
+  fireEvent.press(ui.getByLabelText(`task-collapse-${taskId}`))
+}
+
 jest.mock('../../components/GuestLuggageCard', () => () => null)
 
 jest.mock('../../lib/auth', () => ({
@@ -96,6 +100,7 @@ jest.mock('../../lib/workTasksStore', () => {
         assignee_id: 'u1',
         status: 'assigned',
         urgency: 'medium',
+        guest_special_request: '请多放两条浴巾',
         property: {
           id: 'p1',
           code: 'Aura2707',
@@ -126,7 +131,7 @@ jest.mock('../../lib/workTasksStore', () => {
   }
 })
 
-test('tasks screen shows wifi info and copies wifi password', async () => {
+test('tasks screen defaults tasks collapsed, shows guest request, and expands details', async () => {
   const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
 
   const ui = render(
@@ -138,25 +143,27 @@ test('tasks screen shows wifi info and copies wifi password', async () => {
     </I18nProvider>,
   )
 
+  await waitFor(() => expect(ui.getByLabelText('task-collapse-w1')).toBeTruthy())
+  expect(ui.getAllByText('请多放两条浴巾').length).toBeGreaterThan(0)
+  expect(ui.queryByText('AuraWiFi')).toBeNull()
+  expect(ui.queryByText('pw-1234')).toBeNull()
+
+  expandTask(ui, 'w1')
+
   await waitFor(() => {
     expect(ui.getByText('AuraWiFi')).toBeTruthy()
     expect(ui.getByText('pw-1234')).toBeTruthy()
   })
 
-  fireEvent.press(ui.getByLabelText('task-collapse-w1'))
+  expandTask(ui, 'w1')
 
   await waitFor(() => {
     expect(ui.queryByText('AuraWiFi')).toBeNull()
     expect(ui.queryByText('pw-1234')).toBeNull()
   })
 
-  fireEvent.press(ui.getByLabelText('task-collapse-w1'))
-
-  await waitFor(() => {
-    expect(ui.getByText('AuraWiFi')).toBeTruthy()
-    expect(ui.getByText('pw-1234')).toBeTruthy()
-  })
-
+  expandTask(ui, 'w1')
+  await waitFor(() => expect(ui.getByLabelText('wifi-copy-w1')).toBeTruthy())
   fireEvent.press(ui.getByLabelText('wifi-copy-w1'))
 
   await waitFor(() => {
@@ -409,6 +416,9 @@ test('key handover execution task shows password-only tag and executor role in l
     </I18nProvider>,
   )
 
+  await waitFor(() => expect(ui.getByLabelText('task-collapse-exec-1')).toBeTruthy())
+  expandTask(ui, 'exec-1')
+
   await waitFor(() => {
     expect(ui.getAllByText('执行').length).toBeGreaterThan(0)
     expect(ui.getByText('仅改密码')).toBeTruthy()
@@ -465,6 +475,9 @@ test('check-in site execution task shows inspection scope and assignee in list',
       />
     </I18nProvider>,
   )
+
+  await waitFor(() => expect(ui.getByLabelText('task-collapse-exec-inspect-1')).toBeTruthy())
+  expandTask(ui, 'exec-inspect-1')
 
   await waitFor(() => {
     expect(ui.getAllByText('执行').length).toBeGreaterThan(0)
@@ -523,6 +536,9 @@ test('tasks screen renders primary server actions from available_actions', async
       />
     </I18nProvider>,
   )
+
+  await waitFor(() => expect(ui.getByLabelText('task-collapse-w1')).toBeTruthy())
+  expandTask(ui, 'w1')
 
   await waitFor(() => {
     expect(ui.getByText('后端视频动作')).toBeTruthy()
@@ -695,6 +711,9 @@ test('property follow-up task prioritizes content before assignee and address', 
       />
     </I18nProvider>,
   )
+
+  await waitFor(() => expect(ui.getByLabelText('task-collapse-maintenance-1')).toBeTruthy())
+  expandTask(ui, 'maintenance-1')
 
   await waitFor(() => {
     expect(ui.getByText('任务内容')).toBeTruthy()
@@ -971,6 +990,8 @@ test('admin manager view shows MSQ warehouse key card for Southbank work even wh
   )
 
   await waitFor(() => {
+    expect(ui.getByText('全部')).toBeTruthy()
+    expect(ui.getByText('我的')).toBeTruthy()
     expect(ui.getByText('MSQ 仓库钥匙')).toBeTruthy()
   })
 

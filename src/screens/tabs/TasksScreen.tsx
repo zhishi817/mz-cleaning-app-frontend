@@ -677,7 +677,10 @@ export default function TasksScreen(props: Props) {
   }, [])
 
   const toggleTaskCollapsed = useCallback((taskId: string) => {
-    setCollapsedTaskIds((prev) => ({ ...prev, [taskId]: !prev[taskId] }))
+    setCollapsedTaskIds((prev) => {
+      const currentlyCollapsed = prev[taskId] ?? true
+      return { ...prev, [taskId]: !currentlyCollapsed }
+    })
   }, [])
 
   const flashCopiedFeedback = useCallback((key: string) => {
@@ -2775,7 +2778,7 @@ function showBanner(title: string, message: string) {
               const isEarlyCheckin = hasCheckin && isEarlyCheckinDisplay(task, checkinTime)
               const isLateCheckin = hasCheckin && isLateCheckinDisplay(task, checkinTime)
               const titleSuffix = cleaningTaskTitleSuffix(task as any)
-              const taskCollapsed = !!collapsedTaskIds[String(task.id)]
+              const taskCollapsed = collapsedTaskIds[String(task.id)] ?? true
               const addressCopied = copiedFeedbackKey === `address:${task.id}`
               const wifiCopied = copiedFeedbackKey === `wifi:${task.id}`
               const offlineTitleRaw = String(task.title || '').trim()
@@ -2988,6 +2991,18 @@ function showBanner(title: string, message: string) {
                       </>
                     )}
                   </View>
+
+                  {taskCollapsed && guestSpecialRequest ? (
+                    <View style={styles.collapsedGuestRequest}>
+                      <Ionicons name="chatbubble-ellipses-outline" size={moderateScale(16)} color="#2563EB" />
+                      <View style={styles.collapsedGuestRequestTextWrap}>
+                        <Text style={styles.collapsedGuestRequestLabel}>客人需求</Text>
+                        <Text style={styles.collapsedGuestRequestText} numberOfLines={2}>
+                          {guestSpecialRequest}
+                        </Text>
+                      </View>
+                    </View>
+                  ) : null}
 
                   {!taskCollapsed && isCleaningSource ? (
                     <>
@@ -3669,6 +3684,10 @@ const styles = StyleSheet.create({
   taskHeroAsideCompact: { gap: 6 },
   collapseBtn: { minHeight: 36, minWidth: 72, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 18, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#E5E7EB', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, flexShrink: 0, alignSelf: 'center' },
   collapseBtnText: { color: '#6B7280', fontSize: moderateScale(12), fontWeight: '800' },
+  collapsedGuestRequest: { marginTop: 10, borderRadius: 14, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  collapsedGuestRequestTextWrap: { flex: 1, minWidth: 0 },
+  collapsedGuestRequestLabel: { color: '#1D4ED8', fontSize: moderateScale(11), fontWeight: '800' },
+  collapsedGuestRequestText: { marginTop: 2, color: '#111827', fontSize: moderateScale(13), lineHeight: moderateScale(18), fontWeight: '700' },
   orderPill: { width: 26, height: 26, borderRadius: 13, borderWidth: hairline(), borderColor: '#DBEAFE', backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' },
   orderPillActive: { borderColor: '#2563EB', backgroundColor: '#2563EB' },
   orderPillText: { fontSize: 12, fontWeight: '900', color: '#2563EB' },

@@ -83,10 +83,13 @@ async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: num
       controller.abort()
     } catch {}
   }, timeoutMs)
+  const headers = new Headers(init?.headers || {})
+  if (!headers.has('Cache-Control')) headers.set('Cache-Control', 'no-cache')
+  if (!headers.has('Pragma')) headers.set('Pragma', 'no-cache')
   try {
-    const res = await fetch(input, { ...init, signal: controller.signal })
-    const authHeader = (init?.headers as any)?.Authorization || (init?.headers as any)?.authorization
-    const skipAuthInvalidation = String((init?.headers as any)?.['X-Skip-Auth-Invalidation'] || '').trim() === '1'
+    const res = await fetch(input, { ...init, headers, cache: 'no-store', signal: controller.signal })
+    const authHeader = headers.get('Authorization')
+    const skipAuthInvalidation = String(headers.get('X-Skip-Auth-Invalidation') || '').trim() === '1'
     if (res.status === 401 && authHeader && !skipAuthInvalidation) notifyAuthInvalidated('session_expired')
     return res
   } catch (e: any) {
