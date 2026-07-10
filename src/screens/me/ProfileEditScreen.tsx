@@ -60,6 +60,14 @@ function profileFromRemote(remote: any, fallback: Profile): Profile {
   }
 }
 
+function profileApiText(value: string) {
+  return String(value || '').trim()
+}
+
+function profileApiUrl(value: string | null) {
+  return String(value || '').trim()
+}
+
 async function pickSingleImage(t: (key: any) => string) {
   const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
   if (status !== 'granted') {
@@ -123,8 +131,8 @@ export default function ProfileEditScreen() {
       const next = profileFromRemote(updated, { ...form, avatar_url: up.url })
       setForm(next)
       await setProfile(user, next)
-    } catch {
-      Alert.alert(t('common_error'), t('profile_pick_failed'))
+    } catch (error: any) {
+      Alert.alert(t('common_error'), String(error?.message || t('profile_pick_failed')))
     } finally {
       setUploadingAvatar(false)
     }
@@ -149,8 +157,8 @@ export default function ProfileEditScreen() {
       setForm(next)
       await setProfile(user, next)
       Alert.alert(t('common_ok'), t('common_saved'))
-    } catch {
-      Alert.alert(t('common_error'), t('profile_upload_failed'))
+    } catch (error: any) {
+      Alert.alert(t('common_error'), String(error?.message || t('profile_upload_failed')))
     } finally {
       setUploadingPhotoId(false)
     }
@@ -187,22 +195,22 @@ export default function ProfileEditScreen() {
       if (token) {
         const updated = await updateMyProfile(token, {
           display_name: cleaned.display_name,
-          phone_au: cleaned.phone_au || null,
-          avatar_url: cleaned.avatar_url,
-          legal_name: showComplianceFields ? (cleaned.legal_name || null) : undefined,
-          bank_account_name: showComplianceFields ? (cleaned.bank_account_name || null) : undefined,
-          bank_bsb: showComplianceFields ? (cleaned.bank_bsb || null) : undefined,
-          bank_account_number: showComplianceFields ? (cleaned.bank_account_number || null) : undefined,
-          personal_abn: showComplianceFields ? (cleaned.personal_abn || null) : undefined,
-          photo_id_url: showComplianceFields ? cleaned.photo_id_url : undefined,
+          phone_au: profileApiText(cleaned.phone_au),
+          avatar_url: profileApiUrl(cleaned.avatar_url),
+          legal_name: showComplianceFields ? profileApiText(cleaned.legal_name) : undefined,
+          bank_account_name: showComplianceFields ? profileApiText(cleaned.bank_account_name) : undefined,
+          bank_bsb: showComplianceFields ? profileApiText(cleaned.bank_bsb) : undefined,
+          bank_account_number: showComplianceFields ? profileApiText(cleaned.bank_account_number) : undefined,
+          personal_abn: showComplianceFields ? profileApiText(cleaned.personal_abn) : undefined,
+          photo_id_url: showComplianceFields ? profileApiUrl(cleaned.photo_id_url) : undefined,
         })
         Object.assign(cleaned, profileFromRemote(updated, cleaned))
       }
       await setProfile(user, cleaned)
       setForm(cleaned)
       Alert.alert(t('common_ok'), t('common_saved'))
-    } catch {
-      Alert.alert(t('common_error'), t('profile_save_failed'))
+    } catch (error: any) {
+      Alert.alert(t('common_error'), String(error?.message || t('profile_save_failed')))
     } finally {
       setSaving(false)
     }
