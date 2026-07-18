@@ -2126,6 +2126,24 @@ export async function listUsers(token: string) {
   }>
 }
 
+export type CompanyOfflinePassword = {
+  id: string
+  title: string
+  property_code?: string | null
+  property_codes?: string[] | null
+  property_ids?: string[] | null
+  secret_kind?: string | null
+  box_number?: string | null
+  location?: string | null
+  rotation_interval_days?: number | null
+  next_rotation_at?: string | null
+  note?: string | null
+  status?: 'active' | 'inactive' | string | null
+  secret?: string | null
+  has_key?: boolean | null
+  updated_at?: string | null
+}
+
 export async function listCompanySecretsForApp(token: string) {
   const urls = buildUrlCandidates('cms/company/secrets/app-list')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -2140,7 +2158,7 @@ export async function listCompanySecretsForApp(token: string) {
   }
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as Array<{ id: string; title: string; username?: string | null; note?: string | null; secret?: string | null; updated_at?: string | null }>
+  return (await parseJsonOrThrow(res)) as CompanyOfflinePassword[]
 }
 
 export type CompanyContentAudienceScope = 'all_staff' | 'cleaners' | 'warehouse_staff' | 'maintenance_staff' | 'managers'
