@@ -4,7 +4,9 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
 import * as ImagePicker from 'expo-image-picker'
+import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { API_BASE_URL } from '../../config/env'
 import { useAuth } from '../../lib/auth'
 import { cleaningTaskTitleSuffix, effectiveInspectionMode, inspectionModeLabel, inspectionScopeLabel, isCheckinSiteExecutionTask, isKeyHandoverExecutionTask, isPasswordOnlyInspectionTask, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
 import { useI18n } from '../../lib/i18n'
@@ -75,6 +77,21 @@ function extractFirstUrl(text: any) {
   const s = String(text || '')
   const m = s.match(/https?:\/\/[^\s)]+/i)
   return m?.[0] ? String(m[0]) : null
+}
+
+function normalizeBase(base: string) {
+  return String(base || '').trim().replace(/\/+$/g, '')
+}
+
+function toAbsoluteUrl(rawUrl: any) {
+  const value = String(rawUrl ?? '').trim()
+  if (!value) return ''
+  if (/^https?:\/\//i.test(value)) return value
+  if (value.startsWith('//')) return `https:${value}`
+  const base = normalizeBase(API_BASE_URL)
+  const root = base.replace(/\/auth\/?$/g, '').replace(/\/api\/?$/g, '')
+  if (!root) return value
+  return value.startsWith('/') ? `${root}${value}` : value
 }
 
 function stripPhotoLines(text: any) {
@@ -172,6 +189,10 @@ export default function TaskDetailScreen(props: Props) {
   const { width, height } = useWindowDimensions()
   const roleNames = useMemo(() => roleNamesOf(user), [user])
   const canManagerView = useMemo(() => roleNames.some(isManagerRole), [roleNames])
+  const canViewLockboxVideo = useMemo(
+    () => roleNames.some((role) => ['admin', 'offline_manager', 'customer_service', 'cleaning_inspector', 'cleaner_inspector'].includes(String(role).trim().toLowerCase())),
+    [roleNames],
+  )
   const insets = useSafeAreaInsets()
   const [hasInit, setHasInit] = useState(false)
   const [resolvingRemote, setResolvingRemote] = useState(false)
@@ -1008,10 +1029,34 @@ export default function TaskDetailScreen(props: Props) {
           </>
         ) : null}
 
-        {isCleaningSource && taskActions.length ? (
-          <View style={[styles.actionsRow, isCompactLayout ? styles.actionsRowCompact : null]}>
-            {taskActions.map(renderTaskActionButton)}
-          </View>
+        {canViewLockboxVideo && isCleaningSource && lockboxVideoUrl ? (
+          <>
+            <View style={styles.line} />
+            <Text style={styles.sectionTitle}>执行人上传的视频</Text>
+            <View testID="task-detail-lockbox-video" style={styles.videoCard}>
+              <Video
+                source={{ uri: toAbsoluteUrl(lockboxVideoUrl) }}
+                style={styles.videoInline}
+                resizeMode={ResizeMode.CONTAIN}
+                shouldPlay={false}
+                useNativeControls
+              />
+            </View>
+          </>
+        ) : null}
+
+        {isCleaningSource ? (
+          taskActions.length ? (
+            <>
+              <View style={[styles.actionsRow, isCompactLayout ? styles.actionsRowCompact : null]}>
+                {taskActions.map(renderTaskActionButton)}
+              </View>
+            </>
+          ) : (
+            <View style={styles.markWrap}>
+              <Text style={styles.mutedSmall}>当前任务暂无可用操作，请刷新任务后重试。</Text>
+            </View>
+          )
         ) : (
           <View style={styles.markWrap}>
             {offlineDetail || detailText ? (
@@ -1255,7 +1300,8 @@ const styles = StyleSheet.create({
   restockItem: { padding: 12, borderRadius: 14, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6' },
   restockTitle: { color: '#111827', fontWeight: '900' },
   restockNote: { marginTop: 6, color: '#6B7280', fontWeight: '700' },
-  videoInline: { width: '100%', height: moderateScale(220), backgroundColor: '#0B0F17' },
+  videoCard: { width: '100%', height: moderateScale(220), marginTop: 10, borderRadius: 12, overflow: 'hidden', backgroundColor: '#0B0F17' },
+  videoInline: { width: '100%', height: '100%', backgroundColor: '#0B0F17' },
   previewBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.86)', padding: 12, justifyContent: 'center' },
   previewCard: { flex: 1, borderRadius: 16, overflow: 'hidden', backgroundColor: '#000000' },
   previewTopRow: { minHeight: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'flex-end', paddingHorizontal: 10 },

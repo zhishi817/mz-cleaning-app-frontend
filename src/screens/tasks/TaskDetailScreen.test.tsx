@@ -628,3 +628,34 @@ test('offline task can be marked done without uploading photos first', async () 
   snapshot.items[0].end_time = '3pm'
   snapshot.items[0].summary = null
 })
+
+test('ordinary cleaner cannot see lockbox video in task detail', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = mockAuthState.user
+  mockAuthState.user = { id: 'cleaner-1', username: 'cleaner', role: 'cleaner', roles: ['cleaner'] }
+  snapshot.items[0] = {
+    ...previousTask,
+    source_type: 'cleaning_tasks',
+    task_kind: 'cleaning',
+    lockbox_video_url: 'https://example.com/lockbox.mp4',
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-cleaner-lockbox', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.queryByText('执行人上传的视频')).toBeNull()
+      expect(ui.queryByTestId('task-detail-lockbox-video')).toBeNull()
+    })
+  } finally {
+    snapshot.items[0] = previousTask
+    mockAuthState.user = previousUser
+  }
+})
