@@ -3,7 +3,7 @@
 ## CRL-20260725-023 — 普通清洁员隐藏挂钥匙视频
 
 - **Status:** ready
-- **Updated:** 2026-07-25 22:36 Australia/Melbourne
+- **Updated:** 2026-07-25 22:56 Australia/Melbourne
 - **Request:** 清洁人员不需要看到挂钥匙视频；检查员、兼任检查员和管理角色保持查看能力。
 - **Outcome:** 任务详情按角色隐藏普通 cleaner 的挂钥匙视频；后端 root repo 同步过滤 `/mzapp/work-tasks` 的视频字段，客户端保留防御性判断。
 
@@ -40,7 +40,7 @@
 - Risk: 已经缓存到本地的旧 payload 可能在刷新前仍保留字段，服务端下一次同步会清除；客户端也不会渲染普通 cleaner 的视频。
 - **Rollback:** 回退 `TaskDetailScreen.tsx` 的角色判断和对应测试；无需数据库回滚。
 - **Sensitive-information review:** 未添加或记录 secrets、`.env` 内容、token、密码、数据库 URL、credentials、cookie、私钥或生产数据。
-- **Git state:** mobile `Dev` worktree 存在其他线程预先未提交改动；本单元需 selective hunk stage，明确排除 `.env.local`、`.env.example` 和 `.index.ts.swp`。
+- **Git state:** mobile 本地 `Dev` commit `ab3cf11` 已创建；未执行 push 或部署；其他线程预先未提交改动保持不动，并明确排除 `.env.local`、`.env.example` 和 `.index.ts.swp`。
 
 ## CRL-20260725-021 — 修复检查与补品保存的超长幂等 ID失败
 
