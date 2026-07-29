@@ -2,7 +2,7 @@
 
 ## CRL-20260730-001 — 稳定任务页异步 UI 回归测试
 
-- **Status:** committed
+- **Status:** pushed
 - **Updated:** 2026-07-30 Australia/Melbourne
 - **Request:** 在不降低 mobile `check:fast`、`check:full` 或 `check:ci` 质量门槛的前提下，修复 CI 中两个移动端业务屏幕测试的失败。
 - **Outcome:** 任务页的既有折叠、展开和复制反馈断言保持不变；仅为完整异步 UI 场景显式设置 10 秒测试上限，避免 `--detectOpenHandles` 或较慢 CI 因 Jest 默认 5 秒而误报。该测试级 UI 稳定性不直接对应现有 FR，页面、API、权限、任务数据和质量脚本不变。
@@ -31,11 +31,11 @@
 
 - The 10-second ceiling is a test-runner allowance, not a retry or product behavior change; a real assertion failure still fails.
 - Sensitive-information review: no secrets, production data, API calls, or deployment configuration.
-- Git state: committed as `aee9575` on `codex/governance-ledger-mobile-20260729`; not pushed by this receipt.
+- Git state: pushed to `origin/codex/governance-ledger-mobile-20260729` at `1cd4784e8c7f7a243586c836059371cbe6f17c43`; no PR merge, deployment, or force push.
 
 ## CRL-20260730-002 — 稳定检查问题照片追加重试测试
 
-- **Status:** committed
+- **Status:** pushed
 - **Updated:** 2026-07-30 Australia/Melbourne
 - **Request:** 在不降低 mobile `check:fast`、`check:full` 或 `check:ci` 质量门槛的前提下，修复 CI 中两个移动端业务屏幕测试的失败。
 - **Outcome:** FR-005 的检查后问题照片追加断言保持不变；第二次异步追加仍须成功、且不得重新上传已确认照片。仅将该等待窗口设为 5 秒并将该测试总上限设为 10 秒，以容纳慢速 CI mock 调度。
@@ -64,7 +64,7 @@
 
 - The 5-second wait and 10-second ceiling preserve the exact retry/no-duplicate-upload invariant; they do not add retries, alter API calls, or suppress assertion failures.
 - Sensitive-information review: no secrets, production data, API calls, or deployment configuration.
-- Git state: committed as `aee9575` on `codex/governance-ledger-mobile-20260729`; not pushed by this receipt.
+- Git state: pushed to `origin/codex/governance-ledger-mobile-20260729` at `1cd4784e8c7f7a243586c836059371cbe6f17c43`; no PR merge, deployment, or force push.
 
 ## CRL-20260729-004 — 移动端 PR 精确范围 Ledger 审计
 
