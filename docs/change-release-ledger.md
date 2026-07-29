@@ -10,6 +10,40 @@
 303:## CRL-20260725-016 — 检查人员任务同步显示客服标记的退房状态
 # Change Release Ledger
 
+## CRL-20260729-003 — 移动端质量命令层级
+
+- **Status:** ready
+- **Updated:** 2026-07-29 Australia/Melbourne
+- **Request:** Phase 2：建立移动端 `check:fast`、`check:full`、`check:ci`、`check:release` 的稳定语义，并与根仓库质量命令兼容。
+- **Outcome:** 移动端 Fast 运行 Ledger、typecheck、lint、严格按钮审计和三项高价值 action/store/status Jest；Full 直接继承 Fast 后执行全量 Jest；CI 非交互调用 Full；Release 复用 Full，不擅自执行 EAS、真机、migration 或生产 smoke。
+
+### Files / Areas
+
+- `package.json` — modified: 新增高价值 Fast Jest 和四层质量入口。
+- `.github/workflows/quality.yml` — modified: 明确 workflow 调用非交互质量入口。
+- `docs/change-release-ledger.md` — modified: 记录本治理单元。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies: none.
+- Cross-repository dependency: 根 CRL-20260729-011 调用本仓库的 `check:fast` / `check:full`；两个 CRL 必须一同发布，避免根 CI checkout 到尚未具备新命令的移动端 `Dev`。
+- Related units: 根 CRL-20260729-009、CRL-20260729-010、CRL-20260729-011。
+
+### Validation
+
+- Passed: package command graph confirms `check:full` directly calls `check:fast`, while `check:ci` and `check:release` call Full; Ruby YAML parse for `.github/workflows/quality.yml` and `git diff --check` passed.
+- Passed: `npm run check:release` — Fast passed Ledger audit (3/3), typecheck, lint (0 errors / 111 existing warnings), strict button audit (22 documented legacy exceptions), and selected action/store/status Jest (3 suites / 13 tests); Full then passed Jest (50 suites / 242 tests).
+- Passed: `npm run check:ci` — the same non-interactive Full path passed.
+- Passed: independent read-only release review returned GO with no P0/P1, no business/lockfile/generated-file/secret mixing, and no production-write path.
+- Pending: clean-worktree verification after the local code commit.
+
+### Risks / Release Notes
+
+- Risk: Fast Jest 只覆盖 action/store/status 的高价值纯客户端规则，不代替全量 Jest、真机、模拟器、EAS/native、相机/弱网或通知点击验证。
+- Release order: 先推送本条 CRL-20260729-003，再推送根 CRL-20260729-011；两者不可拆分，避免根 CI checkout 到尚无新 Fast 命令的移动端 `Dev`。
+- Sensitive-information review: no secrets, `.env` values, tokens, cookies, passwords, database URLs, private keys, production data, or sensitive logs are added.
+- Git state: uncommitted, isolated Phase 2 candidate branch.
+
 ## CRL-20260729-001 — 移动端质量防护独立基线
 
 - **Status:** pushed

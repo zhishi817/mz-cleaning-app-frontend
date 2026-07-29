@@ -27,5 +27,5 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Typecheck, lint, and Jest
+      - name: Run non-interactive quality gate
         run: npm run check:ci

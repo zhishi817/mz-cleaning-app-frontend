@@ -12,7 +12,11 @@
     "check:buttons": "python3 scripts/audit_button_contract.py --strict",
     "test": "jest",
     "typecheck": "tsc -p tsconfig.json",
-    "check:ci": "npm run check:ledger && npm run typecheck && npm run lint && npm run check:buttons && npm test -- --runInBand"
+    "test:fast": "jest --runInBand --no-cache src/lib/workTaskActions.test.ts src/lib/workTasksStore.test.ts src/lib/taskVisualTheme.test.ts",
+    "check:fast": "npm run check:ledger && npm run typecheck && npm run lint && npm run check:buttons && npm run test:fast",
+    "check:full": "npm run check:fast && npm test -- --runInBand",
+    "check:ci": "npm run check:full",
+    "check:release": "npm run check:full"
   },
   "dependencies": {
     "@expo/vector-icons": "~15.0.2",
