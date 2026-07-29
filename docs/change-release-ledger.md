@@ -1,5 +1,60 @@
 # Change Release Ledger
 
++## CRL-20260729-001 — 移动端质量防护独立基线
+45:## CRL-20260725-023 — 普通清洁员隐藏挂钥匙视频
+87:## CRL-20260725-021 — 修复检查与补品保存的超长幂等 ID失败
+129:## CRL-20260725-020 — 检查页补品加载态与读取失败防止误判为空
+171:## CRL-20260725-019 — 检查照片本机就绪后才允许视频并支持客人到达豁免
+217:## CRL-20260725-018 — 检查人员补充项新增入口区分本次与下次退房
+258:## CRL-20260725-017 — 修复退房标记覆盖清洁与检查进行状态
+303:## CRL-20260725-016 — 检查人员任务同步显示客服标记的退房状态
+# Change Release Ledger
+
+## CRL-20260729-001 — 移动端质量防护独立基线
+
+- **Status:** ready
+- **Updated:** 2026-07-29 Australia/Melbourne
+- **Request:** 固化独立移动端仓库的 Agent 规则、CI、质量入口、按钮审计和台账审计，使干净 clone/worktree 不依赖父仓库未提交文件。
+- **Outcome:** 移动端拥有自己的 `AGENTS.md`、Node 版本、GitHub Actions 质量 workflow、`check:ci`、按钮审计和 Ledger 审计；干净候选 worktree 可独立执行完整质量命令。跨仓库功能仍需引用根仓库 FR/CRL 并等待后续精确组合验证。
+
+### Implementation
+
+- Previous behavior: 本地 `check:ci` 和 workflow 依赖未提交文件；按钮审计从父仓库 `.codex` 路径读取；独立移动端仓库没有 Agent 规则或自身 Ledger 审计。
+- New behavior: 所有运行时质量脚本位于移动端仓库；`check:ci` 先执行本仓库 Ledger 审计，再执行 typecheck、lint、严格按钮审计和非交互 Jest；Agent 规则明确真机、模拟器、EAS/native 与自动测试的证据边界。按钮审计列出 22 条路径/样式/属性/数值精确、且当前源码仍命中的既有例外，其中 4 条是本候选针对当前 `Dev` 复核的布局/视觉例外：两个 44pt `AppButton` 的 `minWidth: 0` 均分布局、一个基础 `minHeight: 44` 按钮的等宽布局，以及一个 44×44 `AppIconButton` 外层中的 40×40 视觉框。`--strict` 只阻断未登记的新尺寸；22 条例外是待迁移/设备验证的已知债务，不构成完整 44pt 合规证明。
+- Key decisions: 不修改应用逻辑、版本号、依赖或锁文件；`package.json` 只选择质量 scripts 的 hunk，候选基线继续使用已提交的 `version: 1.0.23`，主工作区另有的 `1.0.25` 版本改动明确排除。Phase 2 才拆分并统一 `check:fast`、`check:full`、`check:release` 语义。
+
+### Files / Areas
+
+- `AGENTS.md` — added: 独立移动端 Agent、安全、跨仓库和验证规则。
+- `.github/workflows/quality.yml` — added: locked install 后运行非交互质量门。
+- `.nvmrc` — added: 固定 CI Node `20.19.4`。
+- `package.json` — modified: 仅 quality scripts hunk 增加本地 Ledger/按钮审计并将其接入 `check:ci`。
+- `scripts/audit_change_release_ledger.py` — added: 审计独立移动端仓库的当前 Git 变更路径是否在本地 ledger 记录。
+- `scripts/audit_button_contract.py` — added: 移动端按钮尺寸静态审计的唯一运行时来源。
+- `docs/change-release-ledger.md` — modified: 记录本治理单元，并与旧的未完成质量门禁单元澄清归属。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies: none.
+- Config / environment: CI 只使用 lockfile `npm ci` 和 Node `20.19.4`，不需要 production secret。
+- Related units: 根仓库 `CRL-20260729-009`；已有 `CRL-20260720-006` 中的业务屏幕测试和安全区改动继续独立，不随本单元选择性发布。
+
+### Validation
+
+- Passed in the clean mobile candidate worktree before stale-exception cleanup: `npm ci`; `npm run check:ci` (ledger audit 7/7, typecheck, lint 0 errors / 111 existing warnings, strict button audit with 57 documented legacy exceptions, Jest 50 suites / 242 tests); `git diff --check`; and Ruby YAML parse for `.github/workflows/quality.yml`. The 35 stale exceptions were then removed; a final full rerun is pending.
+- Passed after stale-exception cleanup: source scan found 22 configured / 22 current matches / 0 stale / 0 unrecorded findings; `npm run check:ci` passed again (ledger 7/7, typecheck, lint 0 errors / 111 existing warnings, strict button audit reporting 22 documented exceptions, Jest 50 suites / 242 tests), followed by `git diff --check`, ledger audit, and workflow YAML parse.
+- Passed: independent read-only review returned GO after removing 35 stale allowlist records; it found no P0/P1/P2, business/UI/API/version/EAS/lockfile mixing, secret, production-write, or external-sync risk.
+- Pending: `actionlint` is unavailable locally; GitHub Actions dispatch, iOS/Android simulator, physical devices, EAS/native build, production API, production-data writes, and external sync are not run.
+- Not run: EAS/native build、iOS/Android 模拟器、真实设备、生产 API、生产数据写入或外部同步；均不属于本治理单元。
+
+### Risks / Release Notes
+
+- Risk: 当前移动端 worktree 含有大量业务改动；必须只 stage 本单元文件及 `package.json` 的 quality hunk，不能带入版本号或业务源文件。
+- Audit scope: 通过 `check:buttons --strict` 只证明不存在未登记的新可疑按钮尺寸；它不证明 22 条当前历史例外都满足 44pt 触控契约。每条例外都保留在脚本中作为精确债务记录；扫描不再命中的 35 条陈旧例外已删除，后续迁移或真机验证后才能继续删除。
+- Sensitive-information review: 本单元不读取、不记录或提交 `.env`、token、cookie、密码、数据库 URL、私钥、设备日志或本地缓存。
+- Rollback: 回退本单元列出的治理文件及对应 package scripts hunk；无需回退应用逻辑或数据。
+- **Git state:** isolated `codex/phase1-mobile-quality-baseline` candidate, reviewed and ready for local commit, unpushed.
+
 ## CRL-20260729-002 — 已选跨仓库发布单元的移动端映射
 
 - **Status:** pushed
@@ -1360,9 +1415,6 @@
 - `src/screens/tabs/TasksScreen.test.tsx` — modified: mock 安全区上下文组件。
 - `src/screens/tabs/NoticesScreen.tsx` — modified: 使用安全区上下文组件。
 - `src/screens/tabs/NoticesScreen.test.tsx` — modified: mock 安全区上下文组件。
-- `package.json` — modified: 增加 `check:ci`。
-- `.nvmrc` — added: 固定 Node 20.19.4。
-- `.github/workflows/quality.yml` — added: locked install、typecheck、lint、Jest 质量门禁。
 - `docs/change-release-ledger.md` — added: 记录本 release unit。
 
 ### Impact / Dependencies
@@ -1394,3 +1446,8 @@
 - Rollback: 删除本 release unit 列出的新增测试、CI/Node 配置和安全区改动，并恢复两个页面原有 import。
 - Sensitive-information review: 未记录密码、token、cookie、私钥、数据库 URL、`.env` 内容或敏感日志。
 - Git state: uncommitted；未执行 stage、commit、push 或发布。
+
+### Governance extraction — 2026-07-29
+
+- `package.json` 的质量 scripts hunk、`.nvmrc` 和 `.github/workflows/quality.yml` 从这个长期未完成的屏幕测试单元中拆出，由 `CRL-20260729-001` 单独治理、验证和选择性提交。
+- 本单元保留屏幕测试和 SafeArea 业务/UI 范围；不得因为治理文件的提交而把这些未完成页面改动混入发布。

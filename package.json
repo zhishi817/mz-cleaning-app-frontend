@@ -8,10 +8,11 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "eslint .",
+    "check:ledger": "python3 scripts/audit_change_release_ledger.py",
+    "check:buttons": "python3 scripts/audit_button_contract.py --strict",
     "test": "jest",
     "typecheck": "tsc -p tsconfig.json",
-    "check:buttons": "python3 ../.codex/skills/mz-mobile-button-rules/scripts/audit_button_contract.py --strict",
-    "check:ci": "npm run typecheck && npm run lint && npm run check:buttons && npm test -- --runInBand"
+    "check:ci": "npm run check:ledger && npm run typecheck && npm run lint && npm run check:buttons && npm test -- --runInBand"
   },
   "dependencies": {
     "@expo/vector-icons": "~15.0.2",
