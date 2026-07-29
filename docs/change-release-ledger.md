@@ -1,5 +1,40 @@
 # Change Release Ledger
 
+## CRL-20260729-004 — 移动端 PR 精确范围 Ledger 审计
+
+- **Status:** in-progress
+- **Updated:** 2026-07-29 Australia/Melbourne
+- **Request:** 修复独立移动端仓库的 PR 范围 Ledger 审计：精确 base/head、三点 diff、whitespace 检查和无回退失败语义。
+- **Outcome:** 移动端 Ledger 审计支持 `--base/--head` 严格范围；CI 在 PR 中完整 fetch 后传入 GitHub payload 的两端 SHA。审计在 ref 缺失、fetch 不完整、Git diff 错误或 whitespace 问题时非零退出，并将 rename 的旧/新路径及删除路径纳入 Ledger 覆盖。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — modified: 增加严格范围解析、三点 diff、rename/delete 与 whitespace 检查。
+- `scripts/tests/test_audit_change_release_ledger.py` — added: 覆盖未登记已提交文件、错误 SHA、rename/delete、detached HEAD 与 whitespace 失败。
+- `package.json` — modified: Ledger 范围回归测试进入 Fast。
+- `.github/workflows/quality.yml` — modified: PR workflow 使用精确 base/head 并启用完整 fetch。
+- `docs/change-release-ledger.md` — modified: 记录本治理单元。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies: none.
+- Related units: root `CRL-20260729-012`; 两端保持相同失败语义，避免根/移动端 PR 审计范围不一致。
+
+### Validation
+
+- Passed: `npm run test:ledger-range-audit` — 5 tests cover an unregistered committed file, invalid SHA without a zero-change fallback, rename/delete coverage, detached HEAD, and `git diff --check` whitespace failure.
+- Passed: `python3 scripts/audit_change_release_ledger.py` (5 changed / 5 recorded), Ruby YAML parse for `.github/workflows/quality.yml`, static confirmation that the PR workflow passes `github.event.pull_request.base.sha` and `.head.sha` after `fetch-depth: 0`, and `git diff --check`.
+- Passed: a second independent read-only review found no P0/P1, reran the 5 range regressions, Ledger coverage, YAML parse and diff checks, and confirmed no business logic, secret, production-write or deployment surface.
+- Pending: a GitHub PR run proving the exact payload SHA behavior. `npm run check:fast` is not run in this fresh worktree because dependencies have not been installed; installing them requires the repository's explicit permission gate.
+- Not run: production API、数据库写入、外部同步、EAS/native 或业务功能测试；均不属于本治理修正。
+
+### Risks / Release Notes
+
+- 缺失或不可解析的 base/head 故意失败，不会降级为 `Changed files: 0`。
+- Rename 要求同时记录旧路径和新路径；删除文件也必须在 Ledger 中出现。
+- Sensitive-information review: no secrets, `.env` values, tokens, cookies, passwords, database URLs, private keys, production data, or sensitive logs are added.
+- Git state: isolated branch `codex/governance-ledger-mobile-20260729`; not staged, committed, pushed, merged, or deployed.
+
 +## CRL-20260729-001 — 移动端质量防护独立基线
 45:## CRL-20260725-023 — 普通清洁员隐藏挂钥匙视频
 87:## CRL-20260725-021 — 修复检查与补品保存的超长幂等 ID失败
