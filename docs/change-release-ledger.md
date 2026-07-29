@@ -1,5 +1,34 @@
 # Change Release Ledger
 
+## CRL-20260729-004 — Mobile PR quality-gate acceptance fixture
+
+- **Status:** ready
+- **Updated:** 2026-07-29 Australia/Melbourne
+- **Request:** Re-run Phase 3 acceptance with an isolated draft PR that deliberately fails a Fast unit contract test.
+- **Outcome:** The acceptance branch contains one test-only assertion failure for the PR quality workflow; it must never be merged or deployed.
+
+### Files / Areas
+
+- `src/lib/workTaskActions.test.ts` — modified: intentional acceptance-only failing assertion in a Fast test.
+- `docs/change-release-ledger.md` — modified: records the test-only acceptance fixture.
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Related units: CRL-20260729-003 (mobile quality commands).
+
+### Validation
+
+- Pending: push the isolated draft PR and obtain GitHub Actions failure evidence.
+- Pending: verify that the PR base/head ledger audit notices an intentionally unrecorded scope file.
+
+### Risks / Release Notes
+
+- Risk: the assertion is intentionally failing; this branch is acceptance-only and must not be merged, released, or deployed.
+- Rollback: close the draft PR and delete its temporary branch.
+- Sensitive-information review: no secrets, credentials, production data, or `.env` content included.
+- Git state: temporary acceptance branch only.
+
 +## CRL-20260729-001 — 移动端质量防护独立基线
 45:## CRL-20260725-023 — 普通清洁员隐藏挂钥匙视频
 87:## CRL-20260725-021 — 修复检查与补品保存的超长幂等 ID失败

@@ -1,0 +1,2 @@
+Acceptance-only fixture: intentionally omitted from the Ledger Files / Areas list.
+It proves whether the PR base/head ledger audit inspects committed changes in a clean checkout.
