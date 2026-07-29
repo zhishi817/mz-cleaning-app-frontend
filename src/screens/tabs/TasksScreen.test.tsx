@@ -186,7 +186,7 @@ test('tasks screen defaults tasks collapsed, shows guest request, and expands de
     expect(ui.getByLabelText('wifi-copied-w1')).toBeTruthy()
     expect(ui.getAllByText('已复制').length).toBeGreaterThan(0)
   })
-})
+}, 10_000)
 
 test('周五、周六、周日将日期栏定位到末端，避免今天卡片被裁切', () => {
   const { shouldScrollWeekRowToEnd } = require('./TasksScreen') as typeof import('./TasksScreen')

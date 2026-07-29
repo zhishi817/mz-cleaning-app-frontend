@@ -420,5 +420,5 @@ test('进入检查与补充先确认房号，成功同步后仅可从相册追�
     expect(api.appendInspectionIssuePhotos).toHaveBeenCalledTimes(2)
     expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
     expect(ui.queryByTestId('inspection-post-submit-issue-submit')).toBeNull()
-  })
-})
+  }, { timeout: 5_000 })
+}, 10_000)

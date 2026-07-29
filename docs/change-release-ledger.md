@@ -1,5 +1,106 @@
 # Change Release Ledger
 
+## CRL-20260730-001 — 稳定任务页异步 UI 回归测试
+
+- **Status:** pushed
+- **Updated:** 2026-07-30 Australia/Melbourne
+- **Request:** 在不降低 mobile `check:fast`、`check:full` 或 `check:ci` 质量门槛的前提下，修复 CI 中两个移动端业务屏幕测试的失败。
+- **Outcome:** 任务页的既有折叠、展开和复制反馈断言保持不变；仅为完整异步 UI 场景显式设置 10 秒测试上限，避免 `--detectOpenHandles` 或较慢 CI 因 Jest 默认 5 秒而误报。该测试级 UI 稳定性不直接对应现有 FR，页面、API、权限、任务数据和质量脚本不变。
+
+### Files / Areas
+
+- `src/screens/tabs/TasksScreen.test.tsx` — modified: 保留默认收起、展开详情和复制反馈断言，设置受控的异步测试上限。
+- `docs/change-release-ledger.md` — modified: 记录本独立 P2 测试稳定性单元。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies: none.
+- Related FR / CRL: no existing FR directly covers this collapsed Wi-Fi/detail test; Registry is intentionally unchanged. Related test-history CRL: `CRL-20260720-006`.
+- Quality commands: test remains part of full Jest, which remains invoked by `check:full` and `check:ci`; Fast and CI command definitions are not changed.
+
+### Validation
+
+- Passed before edit: targeted and full Jest both pass normally; targeted `--detectOpenHandles` reproduces the previous 5-second timeout.
+- Passed: `npm test -- --runInBand --no-cache --detectOpenHandles src/screens/tabs/TasksScreen.test.tsx` — 24 tests passed; the protected scenario completed in 5.901 seconds without changing its business assertions.
+- Passed: `npm test -- --runInBand --no-cache src/screens/tabs/TasksScreen.test.tsx src/screens/tasks/InspectionPanelScreen.test.tsx` — 2 suites / 34 tests.
+- Passed: `npm run check:fast`; `npm run check:full`; `npm run check:ci` — Fast includes Ledger/typecheck/lint/button/contract tests; Full and CI each completed 50 suites / 242 tests. Lint remains 0 errors / 111 pre-existing warnings.
+- Passed: mobile Ledger audit (3 changed / 3 recorded), root `python3 scripts/audit_feature_regression_registry.py` (8 FRs / 90 mappings), and `git diff --check`.
+- Passed: independent read-only review — GO; no P0/P1/P2 after FR scope correction. GitHub PR #7 (`codex/governance-ledger-mobile-20260729` → `Dev`) is open and unmerged; `Mobile quality` run #8 passed its Ledger-range audit and non-interactive quality gate.
+
+### Risks / Release Notes
+
+- The 10-second ceiling is a test-runner allowance, not a retry or product behavior change; a real assertion failure still fails.
+- Sensitive-information review: no secrets, production data, API calls, or deployment configuration.
+- Git state: pushed to `origin/codex/governance-ledger-mobile-20260729` at `eb8c853fd785f153d799185584524825a18a0a17`; GitHub PR #7 to `Dev` is open and unmerged. No deployment or force push.
+
+## CRL-20260730-002 — 稳定检查问题照片追加重试测试
+
+- **Status:** pushed
+- **Updated:** 2026-07-30 Australia/Melbourne
+- **Request:** 在不降低 mobile `check:fast`、`check:full` 或 `check:ci` 质量门槛的前提下，修复 CI 中两个移动端业务屏幕测试的失败。
+- **Outcome:** FR-005 的检查后问题照片追加断言保持不变；第二次异步追加仍须成功、且不得重新上传已确认照片。仅将该等待窗口设为 5 秒并将该测试总上限设为 10 秒，以容纳慢速 CI mock 调度。
+
+### Files / Areas
+
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — modified: 保留首次业务保存失败、二次追加成功、上传仅一次的断言，设置受控的异步等待上限。
+- `docs/change-release-ledger.md` — modified: 记录本独立 P2 测试稳定性单元。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies: none.
+- Related FR / CRL: root `FR-005`; `CRL-20260728-001`.
+- Quality commands: test remains part of full Jest, which remains invoked by `check:full` and `check:ci`; Fast and CI command definitions are not changed.
+
+### Validation
+
+- Passed before edit: targeted and full Jest both pass normally; remote CI failure showed the final default 1-second `waitFor` did not observe the second mocked append in time.
+- Passed: `npm test -- --runInBand --no-cache --detectOpenHandles src/screens/tasks/InspectionPanelScreen.test.tsx` — 10 tests passed; the retry/no-duplicate-upload scenario completed in 1.252 seconds.
+- Passed: `npm test -- --runInBand --no-cache src/screens/tabs/TasksScreen.test.tsx src/screens/tasks/InspectionPanelScreen.test.tsx` — 2 suites / 34 tests.
+- Passed: `npm run check:fast`; `npm run check:full`; `npm run check:ci` — Fast includes Ledger/typecheck/lint/button/contract tests; Full and CI each completed 50 suites / 242 tests. Lint remains 0 errors / 111 pre-existing warnings.
+- Passed: mobile Ledger audit (3 changed / 3 recorded), root `python3 scripts/audit_feature_regression_registry.py` (8 FRs / 90 mappings), and `git diff --check`.
+- Passed: independent read-only review — GO; no P0/P1/P2 after FR scope correction. GitHub PR #7 (`codex/governance-ledger-mobile-20260729` → `Dev`) is open and unmerged; `Mobile quality` run #8 passed its Ledger-range audit and non-interactive quality gate.
+
+### Risks / Release Notes
+
+- The 5-second wait and 10-second ceiling preserve the exact retry/no-duplicate-upload invariant; they do not add retries, alter API calls, or suppress assertion failures.
+- Sensitive-information review: no secrets, production data, API calls, or deployment configuration.
+- Git state: pushed to `origin/codex/governance-ledger-mobile-20260729` at `eb8c853fd785f153d799185584524825a18a0a17`; GitHub PR #7 to `Dev` is open and unmerged. No deployment or force push.
+
+## CRL-20260729-004 — 移动端 PR 精确范围 Ledger 审计
+
+- **Status:** in-progress
+- **Updated:** 2026-07-29 Australia/Melbourne
+- **Request:** 修复独立移动端仓库的 PR 范围 Ledger 审计：精确 base/head、三点 diff、whitespace 检查和无回退失败语义。
+- **Outcome:** 移动端 Ledger 审计支持 `--base/--head` 严格范围；CI 在 PR 中完整 fetch 后传入 GitHub payload 的两端 SHA。审计在 ref 缺失、fetch 不完整、Git diff 错误或 whitespace 问题时非零退出，并将 rename 的旧/新路径及删除路径纳入 Ledger 覆盖。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — modified: 增加严格范围解析、三点 diff、rename/delete 与 whitespace 检查。
+- `scripts/tests/test_audit_change_release_ledger.py` — added: 覆盖未登记已提交文件、错误 SHA、rename/delete、detached HEAD 与 whitespace 失败。
+- `package.json` — modified: Ledger 范围回归测试进入 Fast。
+- `.github/workflows/quality.yml` — modified: PR workflow 使用精确 base/head 并启用完整 fetch。
+- `docs/change-release-ledger.md` — modified: 记录本治理单元。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies: none.
+- Related units: root `CRL-20260729-012`; 两端保持相同失败语义，避免根/移动端 PR 审计范围不一致。
+
+### Validation
+
+- Passed: `npm run test:ledger-range-audit` — 5 tests cover an unregistered committed file, invalid SHA without a zero-change fallback, rename/delete coverage, detached HEAD, and `git diff --check` whitespace failure.
+- Passed: `python3 scripts/audit_change_release_ledger.py` (5 changed / 5 recorded), Ruby YAML parse for `.github/workflows/quality.yml`, static confirmation that the PR workflow passes `github.event.pull_request.base.sha` and `.head.sha` after `fetch-depth: 0`, and `git diff --check`.
+- Passed: a second independent read-only review found no P0/P1, reran the 5 range regressions, Ledger coverage, YAML parse and diff checks, and confirmed no business logic, secret, production-write or deployment surface.
+- Pending: a GitHub PR run proving the exact payload SHA behavior. `npm run check:fast` is not run in this fresh worktree because dependencies have not been installed; installing them requires the repository's explicit permission gate.
+- Not run: production API、数据库写入、外部同步、EAS/native 或业务功能测试；均不属于本治理修正。
+
+### Risks / Release Notes
+
+- 缺失或不可解析的 base/head 故意失败，不会降级为 `Changed files: 0`。
+- Rename 要求同时记录旧路径和新路径；删除文件也必须在 Ledger 中出现。
+- Sensitive-information review: no secrets, `.env` values, tokens, cookies, passwords, database URLs, private keys, production data, or sensitive logs are added.
+- Git state: governance-only commit `e3cad7b144adf499adef16fe9e7a23779c3d4f49` is pushed to `origin/codex/governance-ledger-mobile-20260729`; it is not merged into `Dev`/`main` and nothing is deployed.
+
 +## CRL-20260729-001 — 移动端质量防护独立基线
 45:## CRL-20260725-023 — 普通清洁员隐藏挂钥匙视频
 87:## CRL-20260725-021 — 修复检查与补品保存的超长幂等 ID失败
