@@ -12,7 +12,7 @@
 
 ## CRL-20260729-003 — 移动端质量命令层级
 
-- **Status:** ready
+- **Status:** committed
 - **Updated:** 2026-07-29 Australia/Melbourne
 - **Request:** Phase 2：建立移动端 `check:fast`、`check:full`、`check:ci`、`check:release` 的稳定语义，并与根仓库质量命令兼容。
 - **Outcome:** 移动端 Fast 运行 Ledger、typecheck、lint、严格按钮审计和三项高价值 action/store/status Jest；Full 直接继承 Fast 后执行全量 Jest；CI 非交互调用 Full；Release 复用 Full，不擅自执行 EAS、真机、migration 或生产 smoke。
@@ -35,14 +35,15 @@
 - Passed: `npm run check:release` — Fast passed Ledger audit (3/3), typecheck, lint (0 errors / 111 existing warnings), strict button audit (22 documented legacy exceptions), and selected action/store/status Jest (3 suites / 13 tests); Full then passed Jest (50 suites / 242 tests).
 - Passed: `npm run check:ci` — the same non-interactive Full path passed.
 - Passed: independent read-only release review returned GO with no P0/P1, no business/lockfile/generated-file/secret mixing, and no production-write path.
-- Pending: clean-worktree verification after the local code commit.
+- Passed after code commit `5622c800939ea2164aab9ee73a7b4bfeee3f871d`: the nested new mobile worktree used its own fresh `npm ci` result and `npm run check:ci` passed (Fast 3 suites / 13 tests; Full Jest 50 suites / 242 tests; Ledger audit began at 0 changed files / 0 recorded files). Jest retained its existing asynchronous-handle exit notice but returned exit code 0.
 
 ### Risks / Release Notes
 
 - Risk: Fast Jest 只覆盖 action/store/status 的高价值纯客户端规则，不代替全量 Jest、真机、模拟器、EAS/native、相机/弱网或通知点击验证。
 - Release order: 先推送本条 CRL-20260729-003，再推送根 CRL-20260729-011；两者不可拆分，避免根 CI checkout 到尚无新 Fast 命令的移动端 `Dev`。
 - Sensitive-information review: no secrets, `.env` values, tokens, cookies, passwords, database URLs, private keys, production data, or sensitive logs are added.
-- Git state: uncommitted, isolated Phase 2 candidate branch.
+- Dependency audit note: fresh `npm ci` reported 30 existing audit advisories; no dependency, lockfile or audit-fix change was made.
+- Git state: code commit `5622c800939ea2164aab9ee73a7b4bfeee3f871d` on isolated `codex/phase2-mobile-quality-command-layers`; this documentation receipt is uncommitted and unpushed.
 
 ## CRL-20260729-001 — 移动端质量防护独立基线
 
