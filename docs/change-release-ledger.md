@@ -1,5 +1,71 @@
 # Change Release Ledger
 
+## CRL-20260730-001 — 稳定任务页异步 UI 回归测试
+
+- **Status:** ready
+- **Updated:** 2026-07-30 Australia/Melbourne
+- **Request:** 在不降低 mobile `check:fast`、`check:full` 或 `check:ci` 质量门槛的前提下，修复 CI 中两个移动端业务屏幕测试的失败。
+- **Outcome:** 任务页的既有折叠、展开和复制反馈断言保持不变；仅为完整异步 UI 场景显式设置 10 秒测试上限，避免 `--detectOpenHandles` 或较慢 CI 因 Jest 默认 5 秒而误报。该测试级 UI 稳定性不直接对应现有 FR，页面、API、权限、任务数据和质量脚本不变。
+
+### Files / Areas
+
+- `src/screens/tabs/TasksScreen.test.tsx` — modified: 保留默认收起、展开详情和复制反馈断言，设置受控的异步测试上限。
+- `docs/change-release-ledger.md` — modified: 记录本独立 P2 测试稳定性单元。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies: none.
+- Related FR / CRL: no existing FR directly covers this collapsed Wi-Fi/detail test; Registry is intentionally unchanged. Related test-history CRL: `CRL-20260720-006`.
+- Quality commands: test remains part of full Jest, which remains invoked by `check:full` and `check:ci`; Fast and CI command definitions are not changed.
+
+### Validation
+
+- Passed before edit: targeted and full Jest both pass normally; targeted `--detectOpenHandles` reproduces the previous 5-second timeout.
+- Passed: `npm test -- --runInBand --no-cache --detectOpenHandles src/screens/tabs/TasksScreen.test.tsx` — 24 tests passed; the protected scenario completed in 5.901 seconds without changing its business assertions.
+- Passed: `npm test -- --runInBand --no-cache src/screens/tabs/TasksScreen.test.tsx src/screens/tasks/InspectionPanelScreen.test.tsx` — 2 suites / 34 tests.
+- Passed: `npm run check:fast`; `npm run check:full`; `npm run check:ci` — Fast includes Ledger/typecheck/lint/button/contract tests; Full and CI each completed 50 suites / 242 tests. Lint remains 0 errors / 111 pre-existing warnings.
+- Passed: mobile Ledger audit (3 changed / 3 recorded), root `python3 scripts/audit_feature_regression_registry.py` (8 FRs / 90 mappings), and `git diff --check`.
+- Passed: independent read-only review — GO; no P0/P1/P2 after FR scope correction. No PR, merge, deployment, or production validation.
+
+### Risks / Release Notes
+
+- The 10-second ceiling is a test-runner allowance, not a retry or product behavior change; a real assertion failure still fails.
+- Sensitive-information review: no secrets, production data, API calls, or deployment configuration.
+- Git state: uncommitted in `codex/governance-ledger-mobile-20260729`.
+
+## CRL-20260730-002 — 稳定检查问题照片追加重试测试
+
+- **Status:** ready
+- **Updated:** 2026-07-30 Australia/Melbourne
+- **Request:** 在不降低 mobile `check:fast`、`check:full` 或 `check:ci` 质量门槛的前提下，修复 CI 中两个移动端业务屏幕测试的失败。
+- **Outcome:** FR-005 的检查后问题照片追加断言保持不变；第二次异步追加仍须成功、且不得重新上传已确认照片。仅将该等待窗口设为 5 秒并将该测试总上限设为 10 秒，以容纳慢速 CI mock 调度。
+
+### Files / Areas
+
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — modified: 保留首次业务保存失败、二次追加成功、上传仅一次的断言，设置受控的异步等待上限。
+- `docs/change-release-ledger.md` — modified: 记录本独立 P2 测试稳定性单元。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies: none.
+- Related FR / CRL: root `FR-005`; `CRL-20260728-001`.
+- Quality commands: test remains part of full Jest, which remains invoked by `check:full` and `check:ci`; Fast and CI command definitions are not changed.
+
+### Validation
+
+- Passed before edit: targeted and full Jest both pass normally; remote CI failure showed the final default 1-second `waitFor` did not observe the second mocked append in time.
+- Passed: `npm test -- --runInBand --no-cache --detectOpenHandles src/screens/tasks/InspectionPanelScreen.test.tsx` — 10 tests passed; the retry/no-duplicate-upload scenario completed in 1.252 seconds.
+- Passed: `npm test -- --runInBand --no-cache src/screens/tabs/TasksScreen.test.tsx src/screens/tasks/InspectionPanelScreen.test.tsx` — 2 suites / 34 tests.
+- Passed: `npm run check:fast`; `npm run check:full`; `npm run check:ci` — Fast includes Ledger/typecheck/lint/button/contract tests; Full and CI each completed 50 suites / 242 tests. Lint remains 0 errors / 111 pre-existing warnings.
+- Passed: mobile Ledger audit (3 changed / 3 recorded), root `python3 scripts/audit_feature_regression_registry.py` (8 FRs / 90 mappings), and `git diff --check`.
+- Passed: independent read-only review — GO; no P0/P1/P2 after FR scope correction. No PR, merge, deployment, or production validation.
+
+### Risks / Release Notes
+
+- The 5-second wait and 10-second ceiling preserve the exact retry/no-duplicate-upload invariant; they do not add retries, alter API calls, or suppress assertion failures.
+- Sensitive-information review: no secrets, production data, API calls, or deployment configuration.
+- Git state: uncommitted in `codex/governance-ledger-mobile-20260729`.
+
 ## CRL-20260729-004 — 移动端 PR 精确范围 Ledger 审计
 
 - **Status:** in-progress
