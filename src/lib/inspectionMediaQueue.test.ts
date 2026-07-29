@@ -61,6 +61,7 @@ jest.mock('./api', () => ({
   uploadCleaningMedia: jest.fn(),
   uploadCleaningVideo: jest.fn(),
   uploadLockboxVideo: jest.fn(),
+  uploadSelfLockboxVideo: jest.fn(),
 }))
 
 function getAsyncStorage() {
@@ -107,6 +108,7 @@ test('retries lockbox business save without re-uploading the local video', async
   expect(queuedAfterFirst[0]).toMatchObject({
     uploaded_url: 'https://cdn.example.com/lock-1.mov',
     business_saved: false,
+    local_file_deleted_at: null,
   })
 
   const second = await queueMod.processInspectionMediaQueue('token-1')
@@ -120,6 +122,39 @@ test('retries lockbox business save without re-uploading the local video', async
     uploaded_url: 'https://cdn.example.com/lock-1.mov',
     business_saved: true,
   })
+  expect(queuedAfterSecond[0]?.local_file_deleted_at).toBeTruthy()
+})
+
+test('uses the self-complete business route while retaining the same local-first video queue', async () => {
+  const api = require('./api') as {
+    uploadCleaningVideo: jest.Mock
+    uploadLockboxVideo: jest.Mock
+    uploadSelfLockboxVideo: jest.Mock
+  }
+  api.uploadCleaningVideo.mockResolvedValue({ url: 'https://cdn.example.com/self-complete-lock.mov' })
+  api.uploadSelfLockboxVideo.mockResolvedValue({ ok: true })
+
+  const queueMod = require('./inspectionMediaQueue') as typeof import('./inspectionMediaQueue')
+  await queueMod.enqueueInspectionMediaItem({
+    task_id: 'self-complete-task',
+    kind: 'lockbox_video',
+    source_uri: 'file:///camera/lock-1.mov',
+    name: 'self-complete-lock.mov',
+    mime_type: 'video/quicktime',
+    captured_at: '2026-07-29T02:03:04.000Z',
+    meta: { lockbox_submission_mode: 'self_complete' },
+  })
+
+  await queueMod.processInspectionMediaQueue('token-self-complete')
+
+  expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
+  expect(api.uploadSelfLockboxVideo).toHaveBeenCalledWith('token-self-complete', 'self-complete-task', {
+    media_url: 'https://cdn.example.com/self-complete-lock.mov',
+    captured_at: '2026-07-29T02:03:04.000Z',
+  })
+  expect(api.uploadLockboxVideo).not.toHaveBeenCalled()
+  const [queued] = await queueMod.listInspectionMediaQueueItemsForTask('self-complete-task', ['lockbox_video'])
+  expect(queued).toMatchObject({ business_saved: true, uploaded_url: 'https://cdn.example.com/self-complete-lock.mov' })
 })
 
 test('retries an interrupted uploading lockbox video after recovery', async () => {

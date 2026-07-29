@@ -9,6 +9,7 @@ import { logCopyCompanySecretForApp } from '../../lib/api'
 import { companyContentCategoryLabel, companyGuideRoleLabel, hasStructuredCompanyContent, parseCompanyContentBlocks, type CompanyContentBlock, type CompanyContentStepItem } from '../../lib/companyContent'
 import { hairline, moderateScale } from '../../lib/scale'
 import type { NoticesStackParamList } from '../../navigation/RootNavigator'
+import { layoutTokens } from '../../lib/theme'
 import { useI18n } from '../../lib/i18n'
 
 type Props = NativeStackScreenProps<NoticesStackParamList, 'InfoCenterDetail'>
@@ -405,15 +406,15 @@ const styles = StyleSheet.create({
   linkCardTitle: { color: '#1D4ED8', fontWeight: '900' },
   linkCardSubtitle: { marginTop: 4, color: '#475569', fontWeight: '700', lineHeight: 18 },
   actionsRow: { marginTop: 14, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
-  actionBtn: { flex: 1, minWidth: 128, minHeight: 40, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
+  actionBtn: { flex: 1, minWidth: 128, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 14, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: layoutTokens.button.gap },
   actionText: { color: '#FFFFFF', fontWeight: '800', textAlign: 'center' },
   viewerBackdrop: { flex: 1, backgroundColor: 'rgba(2, 6, 23, 0.96)', paddingTop: 48, paddingBottom: 26 },
   viewerTopBar: { paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   viewerTitle: { flex: 1, minWidth: 0, color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
-  viewerCloseBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
+  viewerCloseBtn: { width: layoutTokens.button.iconTouchSize, height: layoutTokens.button.iconTouchSize, borderRadius: layoutTokens.button.iconTouchSize / 2, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
   viewerScroll: { flex: 1, marginTop: 12 },
   viewerScrollContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
-  viewerOpenBtn: { alignSelf: 'center', minHeight: 42, paddingHorizontal: 16, borderRadius: 21, backgroundColor: '#2563EB', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  viewerOpenBtn: { alignSelf: 'center', minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 21, backgroundColor: '#2563EB', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: layoutTokens.button.gap },
   viewerOpenText: { color: '#FFFFFF', fontWeight: '900' },
   pressed: { opacity: 0.92 },
 })

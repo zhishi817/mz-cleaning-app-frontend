@@ -30,7 +30,10 @@ test('retries key upload from start_cleaning_task without re-uploading media', a
     startCleaningTask: jest.Mock
     uploadCleaningMedia: jest.Mock
   }
-  api.uploadCleaningMedia.mockResolvedValue({ url: 'https://cdn.example.com/key-1.heic' })
+  api.uploadCleaningMedia.mockResolvedValue({
+    key: 'cleaning/media/cleaning-task-1/key-1',
+    url: 'https://cdn.example.com/cleaning/media/cleaning-task-1/key-1',
+  })
   api.startCleaningTask
     .mockRejectedValueOnce(new Error('start task failed'))
     .mockResolvedValueOnce({ ok: true })
@@ -51,6 +54,9 @@ test('retries key upload from start_cleaning_task without re-uploading media', a
   expect(first).toEqual({ processed: 0, remaining: 1 })
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
   expect(api.startCleaningTask).toHaveBeenCalledTimes(1)
+  expect(api.startCleaningTask).toHaveBeenNthCalledWith(1, 'token-1', 'cleaning-task-1', expect.objectContaining({
+    media_url: 'cleaning/media/cleaning-task-1/key-1',
+  }))
   const failedItem = await queueMod.getKeyUploadQueueItem('cleaning-task-1')
   expect(failedItem?.status).toBe('failed')
   expect(failedItem?.steps.upload_media.status).toBe('succeeded')
@@ -62,6 +68,7 @@ test('retries key upload from start_cleaning_task without re-uploading media', a
   expect(second).toEqual({ processed: 1, remaining: 0 })
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
   expect(api.startCleaningTask).toHaveBeenCalledTimes(2)
+  expect(require('./localMediaDrafts').deleteDraftMedia).not.toHaveBeenCalled()
   expect(await queueMod.getKeyUploadQueueItem('cleaning-task-1')).toBeNull()
-  expect(queueMod.selectKeyPhotoEffectiveState({ key_photo_url: 'https://cdn.example.com/key-1.heic', has_local_pending: true })).toBe('recorded')
+  expect(queueMod.selectKeyPhotoEffectiveState({ key_photo_url: 'cleaning/media/cleaning-task-1/key-1', has_local_pending: true })).toBe('recorded')
 })

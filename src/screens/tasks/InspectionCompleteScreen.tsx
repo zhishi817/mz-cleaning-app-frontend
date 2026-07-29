@@ -10,9 +10,11 @@ import { deleteLockboxVideo, uploadLockboxVideo } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import {
   bindInspectionPanelCleaningTaskId,
+  getInspectionPanelVideoReadiness,
   getInspectionPanelBatch,
   subscribeInspectionPanelSubmitQueue,
   type InspectionPanelBatchStatus,
+  type InspectionPanelVideoReadiness,
 } from '../../lib/inspectionPanelSubmitQueue'
 import { useI18n } from '../../lib/i18n'
 import {
@@ -45,11 +47,11 @@ function cleanText(value: any) {
 function inspectionBatchStatusHint(status: InspectionPanelBatchStatus | null, lastError?: string | null) {
   const error = cleanText(lastError)
   if (status === 'pending_submit') return error || '检查与补充已保存到本机，当前待同步。'
-  if (status === 'syncing') return '检查与补充正在同步中，可先继续完成挂钥匙视频。'
-  if (status === 'partial_failed') return '检查与补充部分同步失败，可先完成本页，稍后回检查页重试同步。'
-  if (status === 'failed') return '检查与补充同步失败，可先完成本页，稍后回检查页重试同步。'
+  if (status === 'syncing') return '检查与补充正在同步中；本机照片会保留，任务会等待照片业务保存。'
+  if (status === 'partial_failed') return '检查与补充部分同步失败；本机照片会保留，稍后回检查页重试。'
+  if (status === 'failed') return '检查与补充同步失败；本机照片会保留，稍后回检查页重试。'
   if (status === 'synced') return '检查与补充已同步完成。'
-  return '检查与补充尚未发现已提交批次；可先保存视频，之后回检查页确认照片本机草稿。'
+  return '检查与补充尚未发现已提交批次，请先保存本机照片。'
 }
 
 function noticeToneStylePair(tone: TaskTone) {
@@ -98,6 +100,11 @@ export default function InspectionCompleteScreen(props: Props) {
   const [validationReady, setValidationReady] = useState(false)
   const [panelBatchStatus, setPanelBatchStatus] = useState<InspectionPanelBatchStatus | null>(null)
   const [panelBatchError, setPanelBatchError] = useState<string | null>(null)
+  const [panelVideoReadiness, setPanelVideoReadiness] = useState<InspectionPanelVideoReadiness>({
+    ready: false,
+    reason: '请先完成检查与补充照片。',
+    skipInspectionPhotos: false,
+  })
 
   const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
   const serverActions = Array.isArray((task as any)?.available_actions) ? (((task as any).available_actions || []) as any[]) : null
@@ -149,9 +156,13 @@ export default function InspectionCompleteScreen(props: Props) {
       }
       const batch = isPasswordOnlyInspection ? null : await getInspectionPanelBatch(props.route.params.taskId)
       const status = batch?.status || null
+      const videoReadiness = isPasswordOnlyInspection
+        ? { ready: true, reason: null, skipInspectionPhotos: true }
+        : getInspectionPanelVideoReadiness(batch)
       setPanelBatchStatus(status)
       setPanelBatchError(batch?.last_error || null)
-      if (!isPasswordOnlyInspection && (!batch || status === 'draft')) needs.push('检查照片尚未保存为提交批次')
+      setPanelVideoReadiness(videoReadiness)
+      if (!isPasswordOnlyInspection && !videoReadiness.ready) needs.push(videoReadiness.reason || '检查与补充照片尚未完成本机保存')
       setMissing(needs)
       setValidationReady(true)
     } finally {
@@ -164,12 +175,23 @@ export default function InspectionCompleteScreen(props: Props) {
   }, [refresh])
 
   useEffect(() => {
+    let cancelled = false
     void reloadLockboxItem()
+    if (token && cleaningTaskId) {
+      void processInspectionMediaQueue(token)
+        .catch(() => null)
+        .finally(() => {
+          if (!cancelled) void reloadLockboxItem()
+        })
+    }
     const unsubscribe = subscribeInspectionMediaQueue(() => {
       void reloadLockboxItem()
     })
-    return unsubscribe
-  }, [reloadLockboxItem])
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [cleaningTaskId, reloadLockboxItem, token])
 
   useEffect(() => {
     const unsubscribe = subscribeInspectionPanelSubmitQueue(() => {
@@ -191,7 +213,12 @@ export default function InspectionCompleteScreen(props: Props) {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!cleaningTaskId) return Alert.alert(t('common_error'), '缺少任务信息')
     if (accessVideoDeniedReason) return Alert.alert('暂不可操作', accessVideoDeniedReason)
-    if (!validationReady || loading) return Alert.alert(t('common_error'), '正在校验检查与补充状态，请稍候')
+    if (!isPasswordOnlyInspection && !panelVideoReadiness.ready) {
+      if (canOpenInspectionPanel) {
+        props.navigation.navigate('InspectionPanel', { taskId: task?.id || props.route.params.taskId, ...(inspectionPanelSourceId ? { sourceId: inspectionPanelSourceId } : {}) })
+      }
+      return
+    }
     try {
       setUploading(true)
       const perm = await ImagePicker.requestCameraPermissionsAsync()
@@ -223,7 +250,7 @@ export default function InspectionCompleteScreen(props: Props) {
         meta: {},
       })
       setLockboxItem(queued)
-      Alert.alert(t('common_ok'), '视频已保存到本机，联网后会自动上传并保存。')
+      Alert.alert(t('common_ok'), '视频已保存到本机，正在上传并保存任务记录；如果保存失败，可点击完成重试。')
       void processInspectionMediaQueue(token)
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '上传失败'))
@@ -236,24 +263,39 @@ export default function InspectionCompleteScreen(props: Props) {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!cleaningTaskId) return Alert.alert(t('common_error'), '缺少任务信息')
     if (accessVideoDeniedReason) return Alert.alert('暂不可操作', accessVideoDeniedReason)
+    if (!isPasswordOnlyInspection && !panelVideoReadiness.ready) return Alert.alert('请先完成检查与补充', panelVideoReadiness.reason || '请先完成检查与补充照片。')
+    const inspectionPhotosPending = !isPasswordOnlyInspection && panelBatchStatus !== 'synced'
     if (lockboxSaved) {
-      Alert.alert(t('common_ok'), '挂钥匙视频已同步完成')
+      Alert.alert(t('common_ok'), inspectionPhotosPending ? '视频已保存，检查照片待同步，任务尚未完成。' : '挂钥匙视频已同步完成')
       props.navigation.goBack()
       return
     }
     if (!lockboxItem?.uploaded_url) {
       const expiredWithoutRemote = !!lockboxItem?.local_file_deleted_at && !lockboxItem?.uploaded_url
-      return Alert.alert(t('common_error'), expiredWithoutRemote ? '本地视频已过期清理，请重新拍摄。' : '请等待视频上传完成后再提交。')
+      if (expiredWithoutRemote) return Alert.alert(t('common_error'), '本地视频已过期清理，请重新拍摄。')
+      if (lockboxItem) {
+        void processInspectionMediaQueue(token)
+        Alert.alert(t('common_ok'), '视频已保存到本机，任务记录尚未保存；请点击完成重试。')
+        props.navigation.goBack()
+        return
+      }
+      return Alert.alert(t('common_error'), '请先拍摄视频。')
     }
     try {
       setSubmitting(true)
-      await uploadLockboxVideo(token, cleaningTaskId, { media_url: lockboxItem.uploaded_url })
+      const result = await uploadLockboxVideo(token, cleaningTaskId, { media_url: lockboxItem.uploaded_url })
       await updateInspectionMediaItem(lockboxItem.id, {
         business_saved: true,
         business_saved_at: new Date().toISOString(),
         last_error: null,
       })
-      Alert.alert(t('common_ok'), '视频已提交，任务已完成')
+      const serverFinalizationPending = result?.action_result?.finalization_pending === true
+      Alert.alert(
+        t('common_ok'),
+        !isPasswordOnlyInspection && (inspectionPhotosPending || serverFinalizationPending)
+          ? '视频已提交，检查照片待同步，任务尚未完成。'
+          : '视频已提交，任务已完成',
+      )
       props.navigation.goBack()
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '提交失败'))
@@ -308,18 +350,33 @@ export default function InspectionCompleteScreen(props: Props) {
     )
   }
 
-  const canComplete = !accessVideoDeniedReason && !!lockboxItem?.uploaded_url && !submitting && !deleting && !lockboxSaved
+  const canComplete = !accessVideoDeniedReason
+    && (isPasswordOnlyInspection || panelVideoReadiness.ready)
+    && !!lockboxItem
+    && !submitting
+    && !deleting
+    && !lockboxSaved
+  const inspectionPhotosPending = !isPasswordOnlyInspection && panelBatchStatus !== 'synced'
   const lockboxUploadStale = staleQueueUpload(lockboxItem)
   const canRetryLockboxUpload = !!lockboxItem && !lockboxSaved && !submitting && !deleting && (lockboxUploadStale || lockboxItem.upload_status === 'failed_retryable')
+  const videoCaptureDisabled = uploading
+    || deleting
+    || submitting
+    || !!accessVideoDeniedReason
+    || !validationReady
+    || (!isPasswordOnlyInspection && !panelVideoReadiness.ready)
   const uploadHint = (() => {
     if (!lockboxItem && lockboxSaved) return '挂钥匙视频已同步完成。'
     if (!lockboxItem) return ''
     if (lockboxSaved) return '挂钥匙视频已同步完成。'
     if (lockboxUploadStale) return '视频上传可能已卡住，视频仍保存在本机，可点击重试上传。'
     if (lockboxItem.upload_status === 'pending' || lockboxItem.upload_status === 'uploading') return '视频已保存到本机，正在自动上传。'
-    if (lockboxItem.uploaded_url && !lockboxItem.business_saved) return '视频已上传，联网恢复后会自动保存；如需立刻完成，也可以手动点击提交。'
-    if (lockboxItem.local_file_deleted_at && !lockboxItem.uploaded_url) return '本地视频已过期清理，请重新拍摄。'
+    if (lockboxItem.uploaded_url && !lockboxItem.business_saved && lockboxItem.last_error) {
+      return `视频文件已上传，但任务记录保存失败：${lockboxItem.last_error}。请点击“点击完成”重试。`
+    }
     if (lockboxItem.last_error) return String(lockboxItem.last_error)
+    if (lockboxItem.uploaded_url && !lockboxItem.business_saved) return '视频文件已上传，但任务记录尚未保存。请点击“点击完成”完成保存；系统也会自动重试。'
+    if (lockboxItem.local_file_deleted_at && !lockboxItem.uploaded_url) return '本地视频已过期清理，请重新拍摄。'
     return ''
   })()
 
@@ -349,14 +406,14 @@ export default function InspectionCompleteScreen(props: Props) {
         {!validationReady || loading ? (
           <Text style={styles.muted}>正在校验检查与补充状态...</Text>
         ) : missing.length ? (
-          <Text style={styles.pending}>{`${missing.join('、')}；可先保存视频，之后回检查页确认照片。`}</Text>
+          <Text style={styles.pending}>{`${missing.join('、')}；请先返回检查与补充完成本机保存后再拍视频。`}</Text>
         ) : isPasswordOnlyInspection ? (
           <View style={[styles.noticeCard, inspectionScopeNoticeStyles.card]}>
             <Ionicons name="flash-outline" size={moderateScale(16)} color={inspectionScopeNoticeStyles.icon} />
             <Text style={[styles.noticeCardText, inspectionScopeNoticeStyles.text]}>此任务为{inspectionScopeLabel((task as any)?.inspection_scope)}，无需重复检查照片或消耗品确认。</Text>
           </View>
         ) : (
-          <Text style={panelBatchStatus === 'synced' ? styles.ok : styles.pending}>检查与补充已保存到本机，可继续完成当前步骤</Text>
+          <Text style={panelBatchStatus === 'synced' ? styles.ok : styles.pending}>检查与补充照片已完整保存到本机，可继续拍摄视频</Text>
         )}
         {!isPasswordOnlyInspection && inspectionBatchStatusHint(panelBatchStatus, panelBatchError) ? (
           <Text style={panelBatchStatus === 'failed' || panelBatchStatus === 'partial_failed' ? styles.warn : styles.muted}>
@@ -384,8 +441,8 @@ export default function InspectionCompleteScreen(props: Props) {
         </View>
         <Text style={styles.mutedSmall}>
           {isPasswordOnlyInspection
-            ? '此任务只需修改密码并拍视频留存；如果现场发现异常，再返回上一页补充问题反馈。弱网下视频会先保存在本机，联网后自动上传并保存。'
-            : '请先修改密码盒密码并拍视频；如果是直接把钥匙给客人，也需要拍视频留存。弱网下视频会先保存在本机，联网后自动上传并保存。'}
+            ? '此任务只需修改密码并拍视频留存；如果现场发现异常，再返回上一页补充问题反馈。视频会先保存到本机，再自动上传并保存；如保存失败会显示具体原因。'
+            : '请先完成检查与补充照片并保存到本机，再修改密码盒密码并拍视频；如果是直接把钥匙给客人，也需要拍视频留存。视频会先保存到本机，再自动上传并保存；如保存失败会显示具体原因。'}
         </Text>
         <View style={styles.codePanel}>
           <View style={styles.codeRow}>
@@ -409,7 +466,7 @@ export default function InspectionCompleteScreen(props: Props) {
           </View>
         ) : null}
         {uploadHint ? (
-          <Text style={lockboxItem?.uploaded_url ? styles.ok : styles.pending}>{uploadHint}</Text>
+          <Text style={lockboxItem?.last_error ? styles.warn : lockboxItem?.uploaded_url ? styles.ok : styles.pending}>{uploadHint}</Text>
         ) : null}
         {canRetryLockboxUpload ? (
           <Pressable
@@ -436,22 +493,22 @@ export default function InspectionCompleteScreen(props: Props) {
     <SafeAreaBottomBar>
       <View style={styles.row}>
         <AppButton
-          label={uploading ? t('common_loading') : lockboxItem?.uploaded_url ? '重拍视频' : '拍视频并上传'}
+          label={lockboxItem?.uploaded_url ? '重拍视频' : '拍视频并上传'}
           onPress={onUploadVideo}
-          disabled={uploading || deleting || submitting || !!accessVideoDeniedReason}
+          disabled={videoCaptureDisabled}
+          loading={uploading}
           tone="secondary"
-          style={[styles.grayBtn, uploading || deleting || submitting || !!accessVideoDeniedReason ? styles.disabled : null]}
+          style={[styles.grayBtn, videoCaptureDisabled ? styles.disabled : null]}
         />
         <AppButton
-          label={
-            submitting
-              ? t('common_loading')
-              : lockboxSaved
-                ? '已同步完成'
-                : (isPasswordOnlyInspection ? '改密码完成' : '点击完成')
-          }
+          label={lockboxSaved
+            ? '已同步完成'
+            : !isPasswordOnlyInspection && !panelVideoReadiness.ready
+              ? '先完成检查与补充'
+              : (isPasswordOnlyInspection ? '改密码完成' : inspectionPhotosPending ? '提交视频（任务待完成）' : '点击完成')}
           onPress={onSubmitComplete}
           disabled={!canComplete}
+          loading={submitting}
           style={!canComplete ? styles.disabledPrimary : null}
         />
       </View>
@@ -477,7 +534,7 @@ const styles = StyleSheet.create({
   noticeCard: { marginTop: 8, minHeight: 40, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, borderWidth: hairline(), flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   noticeCardText: { flex: 1, minWidth: 0, fontWeight: '900', lineHeight: 18 },
   pressed: { opacity: 0.92 },
-  linkBtn: { marginTop: 10, minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
+  linkBtn: { marginTop: 10, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: layoutTokens.button.radius, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
   linkText: { fontWeight: '900', color: '#2563EB', textAlign: 'center' },
 
   sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
@@ -489,19 +546,19 @@ const styles = StyleSheet.create({
   codeValue: { flex: 1, minWidth: 0, color: '#111827', fontWeight: '900', textAlign: 'right' },
   codeValueStrong: { color: '#2563EB' },
   codeValueMissing: { color: '#B45309' },
-  previewBtn: { marginTop: 10, minHeight: 38, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', alignSelf: 'flex-start' },
+  previewBtn: { marginTop: 10, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: layoutTokens.button.radius, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', alignSelf: 'flex-start' },
   previewText: { fontWeight: '900', color: '#111827', textAlign: 'center' },
   videoWrap: { marginTop: 12, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#0B0F17' },
   video: { width: '100%', height: 220, backgroundColor: '#0B0F17' },
-  deleteBtn: { marginTop: 10, minHeight: 38, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FECACA', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, alignSelf: 'flex-start' },
+  deleteBtn: { marginTop: 10, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: layoutTokens.button.radius, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FECACA', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: layoutTokens.button.gap, alignSelf: 'flex-start' },
   deleteText: { fontWeight: '900', color: '#B91C1C', textAlign: 'center' },
-  retryBtn: { marginTop: 10, minHeight: 38, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, alignSelf: 'flex-start' },
+  retryBtn: { marginTop: 10, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: layoutTokens.button.radius, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: layoutTokens.button.gap, alignSelf: 'flex-start' },
   retryText: { fontWeight: '900', color: '#2563EB', textAlign: 'center' },
 
   row: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
-  grayBtn: { flex: 1, flexShrink: 1, minWidth: 140, minHeight: 44, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  grayBtn: { flex: 1, flexShrink: 1, minWidth: 140, minHeight: layoutTokens.button.height, borderRadius: layoutTokens.button.radius, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0 },
   grayText: { fontWeight: '900', color: '#111827', textAlign: 'center' },
-  primaryBtn: { flex: 1, flexShrink: 1, minWidth: 140, minHeight: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  primaryBtn: { flex: 1, flexShrink: 1, minWidth: 140, minHeight: layoutTokens.button.height, borderRadius: layoutTokens.button.radius, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0 },
   primaryText: { fontWeight: '900', color: '#FFFFFF', textAlign: 'center' },
   disabled: { opacity: 0.65 },
   disabledPrimary: { backgroundColor: '#93C5FD' },

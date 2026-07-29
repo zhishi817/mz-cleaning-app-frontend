@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
+import { Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
@@ -23,9 +23,10 @@ import {
 import { hairline, isCompactWidth, moderateScale } from '../../lib/scale'
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, refreshWorkTasksFromServer, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
-import { deleteKeyPhoto, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, updateWorkTaskPhotos, uploadMzappMedia } from '../../lib/api'
+import { deleteKeyPhoto, listCleaningAppPropertyCodes, listUsers, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, updateCleaningOfflineTask, updateWorkTaskPhotos, uploadMzappMedia } from '../../lib/api'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import { normalizeHttpUrl } from '../../lib/urls'
+import { isPropertyFollowupTask, propertyFollowupTaskDetail, propertyFollowupTaskTitle } from '../../lib/propertyFollowupTaskDisplay'
 import { resolveKeyRequirementTags } from '../../lib/keyRequirementTags'
 import {
   checkinTimeForDisplay,
@@ -38,11 +39,15 @@ import {
   turnoverDisplayOf,
 } from '../../lib/turnoverDisplay'
 import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
-import { buildCleaningMediaImageSource } from '../../lib/cleaningMedia'
+import CleaningMediaImage from '../../components/CleaningMediaImage'
+import CleaningMediaPreview from '../../components/CleaningMediaPreview'
+import AppIconButton from '../../components/ui/AppIconButton'
 import { actionDisabledReasonText, availableActionsForTask, navigationForWorkTaskAction } from '../../lib/workTaskActions'
 import type { WorkTaskAvailableAction } from '../../lib/api'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
+type OfflineEditUserOption = { id: string; username?: string | null; display_name?: string | null }
+type OfflineEditPropertyOption = { id: string; code: string; region?: string | null }
 
 function taskKindLabel(kind: string) {
   const s = String(kind || '').trim().toLowerCase()
@@ -124,6 +129,10 @@ function photoUrlsFromText(text: any) {
 function normalizePhotoUrls(input: any) {
   const values = Array.isArray(input) ? input : []
   return Array.from(new Set(values.map((item) => String(item || '').trim()).filter(Boolean)))
+}
+
+function offlineEditUserName(user: OfflineEditUserOption) {
+  return String(user.display_name || user.username || user.id || '').trim() || user.id
 }
 
 function urgencyMeta(value: any) {
@@ -212,6 +221,18 @@ export default function TaskDetailScreen(props: Props) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [autoUploadKeyDone, setAutoUploadKeyDone] = useState(false)
   const [checkedOutPending, setCheckedOutPending] = useState(false)
+  const [offlineEditOpen, setOfflineEditOpen] = useState(false)
+  const [offlineEditBusy, setOfflineEditBusy] = useState(false)
+  const [offlineEditLoadingOptions, setOfflineEditLoadingOptions] = useState(false)
+  const [offlineEditDate, setOfflineEditDate] = useState('')
+  const [offlineEditTitle, setOfflineEditTitle] = useState('')
+  const [offlineEditContent, setOfflineEditContent] = useState('')
+  const [offlineEditPropertyId, setOfflineEditPropertyId] = useState<string | null>(null)
+  const [offlineEditAssigneeId, setOfflineEditAssigneeId] = useState<string | null>(null)
+  const [offlineEditUsers, setOfflineEditUsers] = useState<OfflineEditUserOption[]>([])
+  const [offlineEditProperties, setOfflineEditProperties] = useState<OfflineEditPropertyOption[]>([])
+  const [offlineEditAssigneeOpen, setOfflineEditAssigneeOpen] = useState(false)
+  const [offlineEditPropertyOpen, setOfflineEditPropertyOpen] = useState(false)
 
   useEffect(() => {
     setHasInit(true)
@@ -225,11 +246,40 @@ export default function TaskDetailScreen(props: Props) {
   const items = getWorkTasksSnapshot().items
   const task = useMemo<WorkTaskItem | null>(() => findWorkTaskItemByAnyId(id), [id, items])
   const previewSize = useMemo(() => ({ width, height }), [height, width])
-  const previewSource = useMemo(() => (previewUrl ? buildCleaningMediaImageSource(token, previewUrl) : null), [previewUrl, token])
   const taskPhotoUrlsKey = useMemo(() => JSON.stringify(normalizePhotoUrls((task as any)?.photo_urls)), [task])
   const isCompactLayout = isCompactWidth(width)
   const guestLuggage = (task as any)?.guest_luggage || null
   const cleaningTaskId = String((task as any)?.source_id || '').trim()
+  const isOfflineTaskForEdit = String(task?.task_kind || '').toLowerCase() === 'offline'
+  const canEditOfflineTask = isOfflineTaskForEdit && canManagerView
+
+  useEffect(() => {
+    if (!offlineEditOpen || !token || !canEditOfflineTask) return
+    let cancelled = false
+    setOfflineEditLoadingOptions(true)
+    Promise.all([
+      listUsers(token).catch(() => []),
+      listCleaningAppPropertyCodes(token).catch(() => []),
+    ]).then(([userRows, propertyRows]) => {
+      if (cancelled) return
+      setOfflineEditUsers((Array.isArray(userRows) ? userRows : [])
+        .map((item: any) => ({
+          id: String(item?.id || '').trim(),
+          username: item?.username == null ? null : String(item.username),
+          display_name: item?.display_name == null ? null : String(item.display_name),
+        }))
+        .filter((item) => !!item.id)
+        .sort((a, b) => offlineEditUserName(a).localeCompare(offlineEditUserName(b), 'en')))
+      setOfflineEditProperties((Array.isArray(propertyRows) ? propertyRows : [])
+        .map((item: any) => ({ id: String(item?.id || '').trim(), code: String(item?.code || '').trim(), region: item?.region == null ? null : String(item.region) }))
+        .filter((item) => !!item.id))
+    }).finally(() => {
+      if (!cancelled) setOfflineEditLoadingOptions(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [canEditOfflineTask, offlineEditOpen, token])
 
   const reloadKeyQueueItem = useCallback(async () => {
     if (!cleaningTaskId) {
@@ -329,7 +379,17 @@ export default function TaskDetailScreen(props: Props) {
           mime_type: String(a.mimeType || 'image/jpeg'),
         })
         await reloadKeyQueueItem()
-        void processKeyUploadQueue(token)
+        void processKeyUploadQueue(token).then(() => {
+          if (!user?.id) return
+          const { date_from, date_to } = buildDetailFallbackRange()
+          return refreshWorkTasksFromServer({
+            token,
+            userId: String(user.id),
+            date_from,
+            date_to,
+            view: canManagerView ? 'all' : 'mine',
+          }).catch(() => null)
+        })
         Alert.alert(t('common_ok'), '钥匙照片已暂存，正在同步。')
       } catch (e: any) {
         Alert.alert(t('common_error'), String(e?.message || '保存失败'))
@@ -630,7 +690,10 @@ export default function TaskDetailScreen(props: Props) {
   const region = String(task.property?.region || '').trim()
   const code = String(task.property?.code || '').trim()
   const unitType = String(task.property?.unit_type || '').trim()
-  const title = `${region ? `${region} ` : ''}${code || task.title || '-'}`.trim()
+  const followupTitle = isPropertyFollowupTask(task) ? propertyFollowupTaskTitle(task) : ''
+  const title = isPropertyFollowupTask(task) && followupTitle
+    ? [region ? `${region} ${code}` : code, followupTitle || task.title || '-'].filter(Boolean).join(' · ').trim()
+    : `${region ? `${region} ` : ''}${code || task.title || '-'}`.trim()
   const checkoutTime = checkoutTimeForDisplay(task)
   const checkinTime = checkinTimeForDisplay(task)
   const guideUrl = normalizeHttpUrl(task.property?.access_guide_link)
@@ -682,6 +745,72 @@ export default function TaskDetailScreen(props: Props) {
   const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
   const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
   const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
+  const selectedOfflineEditAssignee = offlineEditUsers.find((item) => item.id === offlineEditAssigneeId) || null
+  const selectedOfflineEditProperty = offlineEditProperties.find((item) => item.id === offlineEditPropertyId) || null
+
+  function openOfflineEdit() {
+    if (!task || !canEditOfflineTask) return
+    setOfflineEditDate(String(task.scheduled_date || task.date || '').slice(0, 10))
+    setOfflineEditTitle(String(task.title || '').trim())
+    setOfflineEditContent(stripPhotoLines(task.summary))
+    setOfflineEditPropertyId(String(task.property_id || task.property?.id || '').trim() || null)
+    setOfflineEditAssigneeId(String(task.assignee_id || '').trim() || null)
+    setOfflineEditAssigneeOpen(false)
+    setOfflineEditPropertyOpen(false)
+    setOfflineEditOpen(true)
+  }
+
+  async function saveOfflineEdit() {
+    if (!task || !token || !canEditOfflineTask || offlineEditBusy) return
+    const date = String(offlineEditDate || '').trim()
+    const title0 = String(offlineEditTitle || '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      Alert.alert(t('common_error'), '请输入正确的执行日期（YYYY-MM-DD）')
+      return
+    }
+    if (!title0) {
+      Alert.alert(t('common_error'), '请输入任务标题')
+      return
+    }
+    const sourceId = String(task.source_id || '').trim() || String(task.id || '').replace(/^cleaning_offline_tasks:/, '')
+    if (!sourceId) return
+    setOfflineEditBusy(true)
+    try {
+      const updated = await updateCleaningOfflineTask(token, sourceId, {
+        date,
+        title: title0,
+        content: String(offlineEditContent || '').trim(),
+        property_id: offlineEditPropertyId,
+        assignee_id: offlineEditAssigneeId,
+      })
+      const nextProperty = selectedOfflineEditProperty
+        ? {
+            id: selectedOfflineEditProperty.id,
+            code: selectedOfflineEditProperty.code,
+            region: selectedOfflineEditProperty.region || null,
+            address: String(task.property?.address || ''),
+            unit_type: String(task.property?.unit_type || ''),
+          }
+        : null
+      patchWorkTaskItem(task.id, {
+        title: String(updated?.title || title0),
+        summary: updated?.content == null ? String(offlineEditContent || '').trim() : String(updated.content || ''),
+        scheduled_date: String(updated?.date || date).slice(0, 10),
+        date: String(updated?.date || date).slice(0, 10),
+        property_id: updated?.property_id == null ? offlineEditPropertyId : updated.property_id,
+        property: nextProperty,
+        assignee_id: updated?.assignee_id == null ? offlineEditAssigneeId : updated.assignee_id,
+        status: String(updated?.status || (offlineEditAssigneeId ? 'assigned' : task.status)),
+      } as any)
+      setOfflineEditOpen(false)
+      Alert.alert(t('common_ok'), '线下任务已保存')
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '保存失败'))
+    } finally {
+      setOfflineEditBusy(false)
+    }
+  }
+
   const inspectionMode = effectiveInspectionMode(task as any)
   const inspectionPlanLabel = inspectionModeLabel(inspectionMode, String((task as any).inspection_due_date || '').trim() || null)
   const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
@@ -717,10 +846,22 @@ export default function TaskDetailScreen(props: Props) {
   const hasServerTaskActions = Array.isArray((task as any)?.available_actions)
   const renderTaskActionButton = (action: WorkTaskAvailableAction) => {
     const disabledReason = action.disabled_reason ? actionDisabledReasonText(action.disabled_reason) : ''
+    const checkedOutVisual = action.id === 'mark_guest_checkout' && isCheckedOut
+    const isEqualWidthAction = action.id === 'upload_key_photo' || action.id === 'fill_supplies'
+    const isFullWidthAction = action.id === 'report_issue'
     const localDisabled =
-      (action.id === 'upload_key_photo' && (keyUploading || keyPhotoEffectiveState !== 'missing' || isCleaningSubmitted))
+      (action.id === 'upload_key_photo' && (keyUploading || keyPhotoEffectiveState !== 'missing'))
       || (action.id === 'mark_guest_checkout' && (!token || isHistoricalTask || checkedOutPending))
-    const disabled = !action.enabled || localDisabled
+    const isTaskCompletedAction = action.disabled_reason === 'task_completed'
+    const isReadOnlyInspectionAction = action.id === 'submit_inspection' && action.read_only === true
+    const isSuppliesRecordedAction = action.id === 'fill_supplies' && (isCleaningSubmitted || isTaskCompletedAction)
+    const disabled = !isReadOnlyInspectionAction && (isSuppliesRecordedAction || !action.enabled || localDisabled)
+    const showActionReason = disabled
+      && !!disabledReason
+      && hasServerTaskActions
+      && !(action.id === 'upload_key_photo' && keyPhotoEffectiveState !== 'missing')
+      && !isTaskCompletedAction
+      && !isSuppliesRecordedAction
     const label = action.id === 'upload_key_photo'
       ? (keyUploading
         ? t('common_loading')
@@ -728,11 +869,27 @@ export default function TaskDetailScreen(props: Props) {
           ? '钥匙已记录'
           : keyPhotoEffectiveState === 'pending_sync'
             ? '钥匙待同步'
-            : (isCleaningSubmitted ? '钥匙记录' : action.label))
-      : action.id === 'mark_guest_checkout' && checkedOutPending
-        ? '提交中...'
-        : action.label
+            : action.label)
+      : isSuppliesRecordedAction
+        ? '补品已记录'
+        : isReadOnlyInspectionAction
+          ? '查看检查照片'
+        : isTaskCompletedAction
+          ? '任务已完成'
+          : action.id === 'mark_guest_checkout' && checkedOutPending
+            ? '提交中...'
+            : action.label
     const onPress = () => {
+      if (isSuppliesRecordedAction) {
+        const route = navigationForWorkTaskAction(task, action)
+        if (route) props.navigation.navigate(route.screen as any, route.params as any)
+        return
+      }
+      if (isReadOnlyInspectionAction) {
+        const route = navigationForWorkTaskAction(task, action)
+        if (route) props.navigation.navigate(route.screen as any, route.params as any)
+        return
+      }
       if (disabled) {
         if (disabledReason && hasServerTaskActions) Alert.alert('暂不可操作', disabledReason)
         return
@@ -745,12 +902,20 @@ export default function TaskDetailScreen(props: Props) {
     return (
       <Pressable
         key={`${action.id}:${action.target || ''}:${action.label}`}
+        testID={`task-detail-action-${task.id}-${action.id}`}
         onPress={onPress}
-        disabled={disabled && !disabledReason}
-        style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, disabled ? styles.actionBtnDisabled : null]}
+        disabled={disabled && !disabledReason && !isSuppliesRecordedAction}
+        style={({ pressed }) => [
+          styles.actionBtn,
+          isCompactLayout ? styles.actionBtnCompact : null,
+          isEqualWidthAction ? styles.actionBtnEqualWidth : null,
+          isFullWidthAction ? styles.actionBtnFullWidth : null,
+          pressed ? styles.pressed : null,
+          checkedOutVisual || (disabled && !isReadOnlyInspectionAction) ? styles.actionBtnDisabled : null,
+        ]}
       >
-        <Text style={[styles.actionText, disabled ? { color: '#6B7280' } : null]}>{label}</Text>
-        {disabled && disabledReason && hasServerTaskActions ? <Text style={styles.actionReasonText}>{disabledReason}</Text> : null}
+        <Text style={[styles.actionText, checkedOutVisual || (disabled && !isReadOnlyInspectionAction) ? { color: '#6B7280' } : null]}>{label}</Text>
+        {showActionReason ? <Text style={styles.actionReasonText}>{disabledReason}</Text> : null}
       </Pressable>
     )
   }
@@ -758,7 +923,7 @@ export default function TaskDetailScreen(props: Props) {
     if (isCleaningSource) return null
     if (isOfflineTask) return null
     const s = stripPhotoLines(task.summary)
-    return s || null
+    return propertyFollowupTaskDetail(task, s) || null
   })()
   const isAlreadyDone = (() => {
     const s = String(task.status || '').trim().toLowerCase()
@@ -790,70 +955,84 @@ export default function TaskDetailScreen(props: Props) {
       />
 
       <View style={styles.card}>
-        <View style={[styles.titleRow, isCompactLayout ? styles.titleRowCompact : null]}>
-          <Text style={styles.title}>{title2}</Text>
-          <View style={[styles.statusPill, metaStyles.pill]}>
-            <Text style={[styles.statusText, metaStyles.text]}>{meta.text}</Text>
-          </View>
-        </View>
-
-        <View style={styles.tagsRow}>
-          {isStayoverTask ? (
-            <View style={stayoverTagStyles.container}>
-              <Text style={stayoverTagStyles.text}>入住中清洁</Text>
+        <View style={[styles.titleMetaRow, isCompactLayout ? styles.titleRowCompact : null]}>
+          <View style={styles.titleMainColumn}>
+            <Text style={styles.title}>{title2}</Text>
+            <View style={styles.tagsRow}>
+              {isStayoverTask ? (
+                <View style={stayoverTagStyles.container}>
+                  <Text style={stayoverTagStyles.text}>入住中清洁</Text>
+                </View>
+              ) : (
+                <>
+                  <View style={kindTagStyles.container}>
+                    <Text style={kindTagStyles.text}>{isKeyHandoverTask || isCheckinSiteExecution ? '执行' : kind}</Text>
+                  </View>
+                  {showCheckout ? (
+                    <View style={checkoutTagStyles.container}>
+                      <Text style={checkoutTagStyles.text}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
+                    </View>
+                  ) : null}
+                  {showCheckin ? (
+                    <View style={checkinTagStyles.container}>
+                      <Text style={checkinTagStyles.text}>{`需挂${checkinSets}套钥匙`}</Text>
+                    </View>
+                  ) : null}
+                  {isLateCheckout ? (
+                    <View style={lateCheckoutTagStyles.container}>
+                      <Text style={lateCheckoutTagStyles.text}>晚退房</Text>
+                    </View>
+                  ) : null}
+                  {isEarlyCheckin ? (
+                    <View style={earlyCheckinTagStyles.container}>
+                      <Text style={earlyCheckinTagStyles.text}>早入住</Text>
+                    </View>
+                  ) : null}
+                  {isLateCheckin ? (
+                    <View style={earlyCheckinTagStyles.container}>
+                      <Text style={earlyCheckinTagStyles.text}>晚入住</Text>
+                    </View>
+                  ) : null}
+                  {showInspectionPlanTag ? (
+                    <View style={inspectionPlanTagStyles.container}>
+                      <Text style={inspectionPlanTagStyles.text}>{inspectionPlanLabel}</Text>
+                    </View>
+                  ) : null}
+                  {showInspectionScope ? (
+                    <View style={inspectionScopeTagStyles.container}>
+                      <Text style={inspectionScopeTagStyles.text}>{inspectionScopeText}</Text>
+                    </View>
+                  ) : null}
+                  {!isOfflineTask && urgency ? (
+                    <View style={[styles.urgencyPill, urgency.pill]}>
+                      <Text style={[styles.urgencyText, urgency.textStyle]}>{urgency.text}</Text>
+                    </View>
+                  ) : null}
+                  {unitType ? (
+                    <View style={styles.tagGray}>
+                      <Text style={styles.tagGrayText}>{unitType}</Text>
+                    </View>
+                  ) : null}
+                </>
+              )}
             </View>
-          ) : (
-            <>
-              <View style={kindTagStyles.container}>
-                <Text style={kindTagStyles.text}>{isKeyHandoverTask || isCheckinSiteExecution ? '执行' : kind}</Text>
-              </View>
-              {showCheckout ? (
-                <View style={checkoutTagStyles.container}>
-                  <Text style={checkoutTagStyles.text}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
-                </View>
-              ) : null}
-              {showCheckin ? (
-                <View style={checkinTagStyles.container}>
-                  <Text style={checkinTagStyles.text}>{`需挂${checkinSets}套钥匙`}</Text>
-                </View>
-              ) : null}
-              {isLateCheckout ? (
-                <View style={lateCheckoutTagStyles.container}>
-                  <Text style={lateCheckoutTagStyles.text}>晚退房</Text>
-                </View>
-              ) : null}
-              {isEarlyCheckin ? (
-                <View style={earlyCheckinTagStyles.container}>
-                  <Text style={earlyCheckinTagStyles.text}>早入住</Text>
-                </View>
-              ) : null}
-              {isLateCheckin ? (
-                <View style={earlyCheckinTagStyles.container}>
-                  <Text style={earlyCheckinTagStyles.text}>晚入住</Text>
-                </View>
-              ) : null}
-              {showInspectionPlanTag ? (
-                <View style={inspectionPlanTagStyles.container}>
-                  <Text style={inspectionPlanTagStyles.text}>{inspectionPlanLabel}</Text>
-                </View>
-              ) : null}
-              {showInspectionScope ? (
-                <View style={inspectionScopeTagStyles.container}>
-                  <Text style={inspectionScopeTagStyles.text}>{inspectionScopeText}</Text>
-                </View>
-              ) : null}
-              {urgency ? (
-                <View style={[styles.urgencyPill, urgency.pill]}>
-                  <Text style={[styles.urgencyText, urgency.textStyle]}>{urgency.text}</Text>
-                </View>
-              ) : null}
-              {unitType ? (
-                <View style={styles.tagGray}>
-                  <Text style={styles.tagGrayText}>{unitType}</Text>
-                </View>
-              ) : null}
-            </>
-          )}
+          </View>
+          <View style={styles.titleSideColumn}>
+            <View style={[styles.statusPill, metaStyles.pill]}>
+              <Text style={[styles.statusText, metaStyles.text]}>{meta.text}</Text>
+            </View>
+            {canEditOfflineTask ? (
+              <Pressable
+                testID="offline-edit-button"
+                onPress={openOfflineEdit}
+                disabled={offlineEditBusy}
+                style={({ pressed }) => [styles.editOfflineBtn, pressed ? styles.pressed : null, offlineEditBusy ? styles.editOfflineBtnDisabled : null]}
+              >
+                <Ionicons name="create-outline" size={moderateScale(14)} color={offlineEditBusy ? '#9CA3AF' : '#2563EB'} />
+                <Text style={[styles.editOfflineText, offlineEditBusy ? styles.editOfflineTextDisabled : null]}>编辑任务</Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
 
         {isCheckinSiteExecution ? (
@@ -1006,14 +1185,22 @@ export default function TaskDetailScreen(props: Props) {
             <Text style={styles.sectionTitle}>钥匙照片</Text>
             <Text style={styles.summary}>{keyPhotoStatusText}</Text>
             <Pressable
+              testID="task-detail-key-photo"
               onPress={() => setPreviewUrl(keyPhotoUrl)}
               style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
             >
-              <Image source={{ uri: keyPhotoUrl }} style={styles.photo} resizeMode="contain" />
+              <CleaningMediaImage
+                token={token}
+                localUri={String(keyPhotoUrl).startsWith('file://') ? keyPhotoUrl : null}
+                remoteReference={keyPhotoUrl}
+                style={styles.photo}
+                resizeMode="contain"
+              />
             </Pressable>
             {keyPhotoVisibleError ? <Text style={styles.summary}>{keyPhotoVisibleError}</Text> : null}
             {canDeleteKeyPhoto ? (
               <Pressable
+                testID="task-detail-delete-key-photo"
                 onPress={() =>
                   Alert.alert('确认删除？', '删除后需要重新上传钥匙照片。', [
                     { text: '取消', style: 'cancel' },
@@ -1071,12 +1258,14 @@ export default function TaskDetailScreen(props: Props) {
                 <Text style={styles.mutedSmall}>
                   {taskPhotoUrls.length ? `已添加 ${taskPhotoUrls.length} 张照片，线下执行人可查看` : '可添加现场说明照片给线下执行人查看'}
                 </Text>
-                <View style={[styles.markUploadRow, isCompactLayout ? styles.actionsRowCompact : null]}>
-                  <Pressable onPress={() => onAppendTaskPhotos('camera')} disabled={taskPhotoSaving} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, taskPhotoSaving ? styles.markBtnDisabled : null]}>
-                    <Text style={styles.markBtnText}>{taskPhotoSaving ? '保存中...' : '拍照添加'}</Text>
+                <View style={styles.compactActionRow}>
+                  <Pressable testID="offline-task-photo-camera" onPress={() => onAppendTaskPhotos('camera')} disabled={taskPhotoSaving} style={({ pressed }) => [styles.compactActionBtn, pressed ? styles.pressed : null, taskPhotoSaving ? styles.compactActionBtnDisabled : null]}>
+                    <Ionicons name="camera-outline" size={moderateScale(16)} color={taskPhotoSaving ? '#9CA3AF' : '#2563EB'} />
+                    <Text style={[styles.compactActionText, taskPhotoSaving ? styles.compactActionTextDisabled : null]}>{taskPhotoSaving ? '保存中...' : '拍照添加'}</Text>
                   </Pressable>
-                  <Pressable onPress={() => onAppendTaskPhotos('library')} disabled={taskPhotoSaving} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, taskPhotoSaving ? styles.markBtnDisabled : null]}>
-                    <Text style={styles.markBtnText}>相册添加</Text>
+                  <Pressable testID="offline-task-photo-library" onPress={() => onAppendTaskPhotos('library')} disabled={taskPhotoSaving} style={({ pressed }) => [styles.compactActionBtn, pressed ? styles.pressed : null, taskPhotoSaving ? styles.compactActionBtnDisabled : null]}>
+                    <Ionicons name="images-outline" size={moderateScale(16)} color={taskPhotoSaving ? '#9CA3AF' : '#2563EB'} />
+                    <Text style={[styles.compactActionText, taskPhotoSaving ? styles.compactActionTextDisabled : null]}>相册添加</Text>
                   </Pressable>
                 </View>
                 {taskPhotoUrls.length ? (
@@ -1087,11 +1276,11 @@ export default function TaskDetailScreen(props: Props) {
                           onPress={() => setPreviewUrl(String(url))}
                           style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
                         >
-                          <Image source={buildCleaningMediaImageSource(token, url)} style={styles.markPhotoThumb} resizeMode="cover" />
+                          <CleaningMediaImage token={token} remoteReference={url} style={styles.markPhotoThumb} resizeMode="cover" />
                         </Pressable>
-                        <Pressable onPress={() => removeTaskPhoto(index)} disabled={taskPhotoSaving} style={({ pressed }) => [styles.markPhotoRemoveBtn, pressed ? styles.pressed : null]}>
+                        <AppIconButton accessibilityLabel="删除任务照片" onPress={() => removeTaskPhoto(index)} disabled={taskPhotoSaving} style={styles.markPhotoRemoveBtn} visualStyle={styles.markPhotoRemoveVisual}>
                           <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
-                        </Pressable>
+                        </AppIconButton>
                       </View>
                     ))}
                   </ScrollView>
@@ -1104,12 +1293,14 @@ export default function TaskDetailScreen(props: Props) {
                 ? `已上传 ${effectiveMarkPhotoUrls.length} 张照片，可继续追加或删除`
                 : (requiresMarkPhotos ? '未上传照片（需要拍照/相册上传后才能提交）' : '照片可选，可直接提交，也可补充拍照留档')}
             </Text>
-            <View style={[styles.markUploadRow, isCompactLayout ? styles.actionsRowCompact : null]}>
-              <Pressable onPress={() => onAppendPhotosForMarking('camera')} disabled={marking} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}>
-                <Text style={styles.markBtnText}>拍照上传</Text>
+            <View style={styles.compactActionRow}>
+              <Pressable testID="offline-task-mark-camera" onPress={() => onAppendPhotosForMarking('camera')} disabled={marking} style={({ pressed }) => [styles.compactActionBtn, pressed ? styles.pressed : null, marking ? styles.compactActionBtnDisabled : null]}>
+                <Ionicons name="camera-outline" size={moderateScale(16)} color={marking ? '#9CA3AF' : '#2563EB'} />
+                <Text style={[styles.compactActionText, marking ? styles.compactActionTextDisabled : null]}>拍照上传</Text>
               </Pressable>
-              <Pressable onPress={() => onAppendPhotosForMarking('library')} disabled={marking} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}>
-                <Text style={styles.markBtnText}>相册上传</Text>
+              <Pressable testID="offline-task-mark-library" onPress={() => onAppendPhotosForMarking('library')} disabled={marking} style={({ pressed }) => [styles.compactActionBtn, pressed ? styles.pressed : null, marking ? styles.compactActionBtnDisabled : null]}>
+                <Ionicons name="images-outline" size={moderateScale(16)} color={marking ? '#9CA3AF' : '#2563EB'} />
+                <Text style={[styles.compactActionText, marking ? styles.compactActionTextDisabled : null]}>相册上传</Text>
               </Pressable>
             </View>
             {effectiveMarkPhotoUrls.length ? (
@@ -1120,11 +1311,11 @@ export default function TaskDetailScreen(props: Props) {
                       onPress={() => setPreviewUrl(String(url))}
                       style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
                     >
-                      <Image source={{ uri: String(url) }} style={styles.markPhotoThumb} resizeMode="cover" />
+                      <CleaningMediaImage token={token} remoteReference={String(url)} style={styles.markPhotoThumb} resizeMode="cover" />
                     </Pressable>
-                    <Pressable onPress={() => removeMarkPhoto(index)} style={({ pressed }) => [styles.markPhotoRemoveBtn, pressed ? styles.pressed : null]}>
+                    <AppIconButton accessibilityLabel="删除标记照片" onPress={() => removeMarkPhoto(index)} style={styles.markPhotoRemoveBtn} visualStyle={styles.markPhotoRemoveVisual}>
                       <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
-                    </Pressable>
+                    </AppIconButton>
                   </View>
                 ))}
               </ScrollView>
@@ -1139,23 +1330,25 @@ export default function TaskDetailScreen(props: Props) {
               placeholderTextColor="#9CA3AF"
             />
 
-            <View style={[styles.markRow, isCompactLayout ? styles.actionsRowCompact : null]}>
+            <View style={isOfflineTask ? styles.compactCompletionRow : [styles.markRow, isCompactLayout ? styles.actionsRowCompact : null]}>
               <Pressable
+                testID={isOfflineTask ? 'offline-task-complete' : undefined}
                 onPress={() => {
                   setShowUnfinished(false)
                   onMarkDone()
                 }}
                 disabled={marking || isAlreadyDone}
-                style={({ pressed }) => [styles.markPrimary, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking || isAlreadyDone ? styles.markBtnDisabled : null]}
+                style={({ pressed }) => [isOfflineTask ? styles.compactPrimaryBtn : styles.markPrimary, !isOfflineTask && isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking || isAlreadyDone ? styles.markBtnDisabled : null]}
               >
                 <Text style={styles.markPrimaryText}>标记完成</Text>
               </Pressable>
               <Pressable
+                testID={isOfflineTask ? 'offline-task-not-complete' : undefined}
                 onPress={() => setShowUnfinished(v => !v)}
                 disabled={marking}
-                style={({ pressed }) => [styles.markBtn, { flex: 1, marginTop: 0 }, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}
+                style={({ pressed }) => [isOfflineTask ? styles.compactSecondaryBtn : [styles.markBtn, { flex: 1, marginTop: 0 }], !isOfflineTask && isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}
               >
-                <Text style={styles.markBtnText}>未完成</Text>
+                <Text style={isOfflineTask ? styles.compactSecondaryText : styles.markBtnText}>未完成</Text>
               </Pressable>
             </View>
 
@@ -1179,6 +1372,70 @@ export default function TaskDetailScreen(props: Props) {
         )}
       </View>
     </ScrollView>
+    <Modal visible={offlineEditOpen} transparent animationType="slide" onRequestClose={() => (offlineEditBusy ? undefined : setOfflineEditOpen(false))}>
+      <View style={styles.editModalBackdrop}>
+        <View style={[styles.editModalCard, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+          <View style={styles.editModalHeader}>
+            <Text style={styles.editModalTitle}>编辑线下任务</Text>
+            <Pressable onPress={() => setOfflineEditOpen(false)} disabled={offlineEditBusy} style={({ pressed }) => [styles.previewCloseBtn, pressed ? styles.pressed : null]}>
+              <Text style={styles.editModalCloseText}>关闭</Text>
+            </Pressable>
+          </View>
+          <ScrollView style={styles.editModalScroll} contentContainerStyle={styles.editModalContent} keyboardShouldPersistTaps="handled">
+            <Text style={styles.label}>执行日期</Text>
+            <TextInput accessibilityLabel="offline-edit-date" value={offlineEditDate} onChangeText={setOfflineEditDate} editable={!offlineEditBusy} style={styles.input} placeholder="YYYY-MM-DD" placeholderTextColor="#9CA3AF" />
+            <Text style={styles.label}>任务标题</Text>
+            <TextInput accessibilityLabel="offline-edit-title" value={offlineEditTitle} onChangeText={setOfflineEditTitle} editable={!offlineEditBusy} style={styles.input} placeholder="任务标题" placeholderTextColor="#9CA3AF" />
+            <Text style={styles.label}>任务内容</Text>
+            <TextInput accessibilityLabel="offline-edit-content" value={offlineEditContent} onChangeText={setOfflineEditContent} editable={!offlineEditBusy} style={[styles.input, styles.editModalTextArea]} placeholder="补充说明" placeholderTextColor="#9CA3AF" multiline />
+            <Text style={styles.label}>房源（可选）</Text>
+            <Pressable accessibilityLabel="offline-edit-property" onPress={() => setOfflineEditPropertyOpen((prev) => !prev)} disabled={offlineEditBusy} style={({ pressed }) => [styles.editModalSelect, pressed ? styles.pressed : null]}>
+              <Text style={styles.editModalSelectText} numberOfLines={1}>{selectedOfflineEditProperty?.code || String(task.property?.code || offlineEditPropertyId || '').trim() || '未关联房源'}</Text>
+              <Ionicons name={offlineEditPropertyOpen ? 'chevron-up' : 'chevron-down'} size={moderateScale(16)} color="#6B7280" />
+            </Pressable>
+            {offlineEditPropertyOpen ? (
+              <View testID="offline-edit-property-options" style={styles.editModalOptionList}>
+                <ScrollView style={styles.editModalOptionScroll} nestedScrollEnabled showsVerticalScrollIndicator keyboardShouldPersistTaps="handled">
+                  <Pressable accessibilityLabel="offline-edit-property-none" onPress={() => { setOfflineEditPropertyId(null); setOfflineEditPropertyOpen(false) }} style={styles.editModalOptionItem}>
+                    <Text style={styles.editModalOptionText}>未关联房源</Text>
+                  </Pressable>
+                  {offlineEditProperties.map((item) => (
+                    <Pressable key={item.id} accessibilityLabel={`offline-edit-property-${item.id}`} onPress={() => { setOfflineEditPropertyId(item.id); setOfflineEditPropertyOpen(false) }} style={[styles.editModalOptionItem, item.id === offlineEditPropertyId ? styles.editModalOptionItemOn : null]}>
+                      <Text style={styles.editModalOptionText}>{item.code || item.id}</Text>
+                    </Pressable>
+                  ))}
+                  {!offlineEditProperties.length ? <Text style={styles.mutedSmall}>{offlineEditLoadingOptions ? '房源加载中...' : '暂无房源选项'}</Text> : null}
+                </ScrollView>
+              </View>
+            ) : null}
+            <Text style={styles.label}>执行人</Text>
+            <Pressable accessibilityLabel="offline-edit-assignee" onPress={() => setOfflineEditAssigneeOpen((prev) => !prev)} disabled={offlineEditBusy} style={({ pressed }) => [styles.editModalSelect, pressed ? styles.pressed : null]}>
+              <Text style={[styles.editModalSelectText, !selectedOfflineEditAssignee && !offlineEditAssigneeId ? styles.editModalPlaceholder : null]} numberOfLines={1}>{selectedOfflineEditAssignee ? offlineEditUserName(selectedOfflineEditAssignee) : (offlineEditAssigneeId || '未分配')}</Text>
+              <Ionicons name={offlineEditAssigneeOpen ? 'chevron-up' : 'chevron-down'} size={moderateScale(16)} color="#6B7280" />
+            </Pressable>
+            {offlineEditAssigneeOpen ? (
+              <View testID="offline-edit-assignee-options" style={styles.editModalOptionList}>
+                <ScrollView style={styles.editModalOptionScroll} nestedScrollEnabled showsVerticalScrollIndicator keyboardShouldPersistTaps="handled">
+                  <Pressable accessibilityLabel="offline-edit-assignee-none" onPress={() => { setOfflineEditAssigneeId(null); setOfflineEditAssigneeOpen(false) }} style={[styles.editModalOptionItem, !offlineEditAssigneeId ? styles.editModalOptionItemOn : null]}>
+                    <Text style={styles.editModalOptionText}>未分配</Text>
+                  </Pressable>
+                  {offlineEditUsers.map((item) => (
+                    <Pressable key={item.id} accessibilityLabel={`offline-edit-assignee-${item.id}`} onPress={() => { setOfflineEditAssigneeId(item.id); setOfflineEditAssigneeOpen(false) }} style={[styles.editModalOptionItem, item.id === offlineEditAssigneeId ? styles.editModalOptionItemOn : null]}>
+                      <Text style={styles.editModalOptionText} numberOfLines={1}>{offlineEditUserName(item)}</Text>
+                    </Pressable>
+                  ))}
+                  {!offlineEditUsers.length ? <Text style={styles.mutedSmall}>{offlineEditLoadingOptions ? '执行人加载中...' : '暂无可选执行人'}</Text> : null}
+                </ScrollView>
+              </View>
+            ) : null}
+            <Text style={styles.mutedSmall}>任务类型保持创建时设置。</Text>
+          </ScrollView>
+          <Pressable testID="offline-edit-save" onPress={() => { void saveOfflineEdit() }} disabled={offlineEditBusy} style={({ pressed }) => [styles.editModalSaveBtn, pressed ? styles.pressed : null, offlineEditBusy ? styles.actionBtnDisabled : null]}>
+            <Text style={styles.editModalSaveText}>{offlineEditBusy ? '保存中...' : '保存修改'}</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
     <Modal visible={!!previewUrl} transparent animationType="fade" onRequestClose={() => setPreviewUrl(null)}>
       <Pressable style={styles.previewBackdrop} onPress={() => setPreviewUrl(null)}>
         <Pressable style={styles.previewCard} onPress={() => {}}>
@@ -1197,9 +1454,9 @@ export default function TaskDetailScreen(props: Props) {
             bounces={false}
             centerContent
           >
-            {previewSource ? (
+            {previewUrl ? (
               <View style={{ width: previewSize.width, height: Math.max(240, previewSize.height - insets.top - insets.bottom - 80) }}>
-                <Image source={previewSource} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+                <CleaningMediaPreview token={token} reference={previewUrl} style={{ width: '100%', height: '100%' }} />
               </View>
             ) : null}
           </ScrollView>
@@ -1214,7 +1471,9 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#F6F7FB' },
   content: { padding: 16 },
   card: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14, borderWidth: hairline(), borderColor: '#EEF0F6' },
-  titleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  titleMetaRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  titleMainColumn: { flex: 1, minWidth: 0 },
+  titleSideColumn: { width: 96, alignItems: 'flex-end' },
   titleRowCompact: { alignItems: 'flex-start' },
   title: { flex: 1, minWidth: 0, flexShrink: 1, fontSize: moderateScale(18), lineHeight: moderateScale(23), fontWeight: '900', color: '#111827' },
   statusPill: { minHeight: 26, paddingHorizontal: 10, paddingVertical: 3, borderRadius: 13, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
@@ -1260,20 +1519,26 @@ const styles = StyleSheet.create({
   rowText: { flex: 1, minWidth: 0, flexShrink: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600', lineHeight: moderateScale(19) },
   actionsRow: { marginTop: 14, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   actionsRowCompact: { flexDirection: 'column' },
-  actionBtn: { flex: 1, flexGrow: 1, flexShrink: 1, minWidth: 128, minHeight: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  actionBtn: { flex: 1, flexGrow: 1, flexShrink: 1, minWidth: 128, minHeight: 44, borderRadius: 10, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 0 },
   actionBtnCompact: { width: '100%', flexBasis: '100%', flexGrow: 0 },
+  actionBtnEqualWidth: { flex: 1, flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 },
+  actionBtnFullWidth: { flex: 0, flexGrow: 0, flexBasis: '100%', width: '100%' },
   actionBtnDisabled: { backgroundColor: '#E5E7EB' },
   actionText: { flexShrink: 1, fontWeight: '900', color: '#FFFFFF', fontSize: 13, lineHeight: 17, textAlign: 'center' },
   actionReasonText: { marginTop: 2, color: '#6B7280', fontSize: 11, lineHeight: 14, textAlign: 'center' },
-  dangerBtn: { marginTop: 10, minHeight: 40, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  editOfflineBtn: { alignSelf: 'flex-end', marginTop: 8, minHeight: 44, borderRadius: 9, backgroundColor: '#F5F8FF', borderWidth: hairline(), borderColor: '#BFDBFE', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingHorizontal: 16, paddingVertical: 0 },
+  editOfflineBtnDisabled: { backgroundColor: '#F3F4F6', borderColor: '#E5E7EB' },
+  editOfflineText: { fontWeight: '900', color: '#2563EB', fontSize: 12 },
+  editOfflineTextDisabled: { color: '#9CA3AF' },
+  dangerBtn: { marginTop: 10, minHeight: 44, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 0 },
   dangerText: { fontWeight: '900', color: '#B91C1C', fontSize: 13 },
   line: { marginTop: 14, height: hairline(), backgroundColor: '#EEF0F6' },
   sectionTitle: { marginTop: 14, fontSize: 13, fontWeight: '900', color: '#111827' },
   summary: { marginTop: 8, color: '#374151', fontWeight: '700', lineHeight: 18 },
   linkInlineRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
   linkInlineText: { flexShrink: 1, minWidth: 0, color: '#2563EB', fontSize: moderateScale(14), fontWeight: '800' },
-  photoWrap: { marginTop: 10, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6' },
-  photo: { width: '100%', height: moderateScale(220), backgroundColor: '#F3F4F6' },
+  photoWrap: { width: '100%', height: moderateScale(220), marginTop: 10, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#0B0F17' },
+  photo: { width: '100%', height: '100%', backgroundColor: '#0B0F17' },
   metaText: { marginTop: 12, color: '#9CA3AF', fontWeight: '700', fontSize: 12 },
   pressed: { opacity: 0.92 },
   muted: { padding: 16, color: '#6B7280', fontWeight: '700' },
@@ -1284,18 +1549,46 @@ const styles = StyleSheet.create({
   label: { marginTop: 14, marginBottom: 8, color: '#111827', fontWeight: '900' },
   input: { height: 44, borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, fontWeight: '700', color: '#111827' },
   markRow: { marginTop: 14, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
-  markBtn: { marginTop: 12, minHeight: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  markBtn: { marginTop: 12, minHeight: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 0 },
   markUploadRow: { marginTop: 12, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   markUploadBtn: { flex: 1, marginTop: 0 },
+  compactActionRow: { marginTop: 10, flexDirection: 'row', gap: 8 },
+  compactActionBtn: { flex: 1, minHeight: 44, borderRadius: 10, borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#F5F8FF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 0 },
+  compactActionBtnDisabled: { borderColor: '#E5E7EB', backgroundColor: '#F3F4F6' },
+  compactActionText: { color: '#2563EB', fontSize: 12, fontWeight: '900' },
+  compactActionTextDisabled: { color: '#9CA3AF' },
+  compactCompletionRow: { marginTop: 14, flexDirection: 'row', gap: 8 },
+  compactPrimaryBtn: { flex: 1, minHeight: 44, borderRadius: 10, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 0 },
+  compactSecondaryBtn: { flex: 1, minHeight: 44, borderRadius: 10, borderWidth: hairline(), borderColor: '#D1D5DB', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 0 },
+  compactSecondaryText: { color: '#4B5563', fontSize: 13, fontWeight: '900' },
   markPhotoList: { gap: 10, paddingTop: 12, paddingBottom: 4 },
-  markPhotoCard: { width: moderateScale(112), position: 'relative' },
+  markPhotoCard: { width: 96, position: 'relative' },
   markPhotoThumbWrap: { borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F3F4F6' },
-  markPhotoThumb: { width: '100%', height: moderateScale(112) },
-  markPhotoRemoveBtn: { position: 'absolute', top: 8, right: 8, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(17,24,39,0.84)', alignItems: 'center', justifyContent: 'center' },
+  markPhotoThumb: { width: '100%', height: 96 },
+  markPhotoRemoveBtn: { position: 'absolute', top: 4, right: 4 },
+  markPhotoRemoveVisual: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(17,24,39,0.84)' },
   markBtnText: { flexShrink: 1, fontWeight: '900', color: '#FFFFFF', fontSize: 13, lineHeight: 17, textAlign: 'center' },
-  markPrimary: { flex: 1, flexShrink: 1, minWidth: 128, minHeight: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  markPrimary: { flex: 1, flexShrink: 1, minWidth: 128, minHeight: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 0 },
   markPrimaryText: { flexShrink: 1, color: '#FFFFFF', fontWeight: '900', fontSize: 13, lineHeight: 17, textAlign: 'center' },
   markBtnDisabled: { backgroundColor: '#E5E7EB' },
+  editModalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,23,42,0.45)' },
+  editModalCard: { maxHeight: '92%', borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingTop: 14 },
+  editModalHeader: { minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  editModalTitle: { flex: 1, color: '#111827', fontSize: moderateScale(18), fontWeight: '900' },
+  editModalCloseText: { color: '#374151', fontWeight: '900' },
+  editModalScroll: { flexGrow: 0 },
+  editModalContent: { paddingBottom: 12 },
+  editModalTextArea: { minHeight: 88, paddingTop: 10, textAlignVertical: 'top' },
+  editModalSelect: { minHeight: 44, borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  editModalSelectText: { flex: 1, minWidth: 0, color: '#111827', fontWeight: '800' },
+  editModalPlaceholder: { color: '#9CA3AF' },
+  editModalOptionList: { height: 190, marginTop: 4, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' },
+  editModalOptionScroll: { flex: 1 },
+  editModalOptionItem: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', borderBottomWidth: hairline(), borderBottomColor: '#F3F4F6' },
+  editModalOptionItemOn: { backgroundColor: '#EFF6FF' },
+  editModalOptionText: { color: '#111827', fontWeight: '900' },
+  editModalSaveBtn: { minHeight: 44, marginTop: 8, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  editModalSaveText: { color: '#FFFFFF', fontWeight: '900', fontSize: 14 },
   restockWrap: { marginTop: 10, gap: 12 },
   restockItem: { padding: 12, borderRadius: 14, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6' },
   restockTitle: { color: '#111827', fontWeight: '900' },
@@ -1305,7 +1598,7 @@ const styles = StyleSheet.create({
   previewBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.86)', padding: 12, justifyContent: 'center' },
   previewCard: { flex: 1, borderRadius: 16, overflow: 'hidden', backgroundColor: '#000000' },
   previewTopRow: { minHeight: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'flex-end', paddingHorizontal: 10 },
-  previewCloseBtn: { height: 32, paddingHorizontal: 12, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
+  previewCloseBtn: { minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
   previewCloseText: { color: '#FFFFFF', fontWeight: '900' },
   previewScrollContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
 })

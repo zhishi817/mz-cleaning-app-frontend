@@ -91,13 +91,13 @@ const MeStack = createNativeStackNavigator<MeStackParamList>()
 export type TasksStackParamList = {
   TasksList: undefined
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
-  InspectionPanel: { taskId: string; sourceId?: string }
+  InspectionPanel: { taskId: string; sourceId?: string; readOnly?: boolean }
   InspectionComplete: { taskId: string; sourceId?: string; skipInspectionPhotos?: boolean }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
   DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; targetRoles?: DayEndTargetRole[]; overviewMode?: boolean; overviewUsers?: DayEndOverviewUser[] }
   FeedbackForm: { taskId: string; source?: 'inspection_panel_batch' }
-  SuppliesForm: { taskId: string }
+  SuppliesForm: { taskId: string; readOnly?: boolean }
 }
 
 export type NoticesStackParamList = {
@@ -105,13 +105,13 @@ export type NoticesStackParamList = {
   NoticeDetail: { id: string }
   InfoCenterDetail: { kind: 'property' | 'secret' | 'task' | 'announcement' | 'guide' | 'warehouse_guide'; title: string; subtitle?: string; body?: string; contentRaw?: string | null; docCategory?: CompanyContentCategory | null; guideRole?: CompanyGuideRole | null; url?: string | null; copyText?: string | null; secretId?: string }
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
-  InspectionPanel: { taskId: string; sourceId?: string }
+  InspectionPanel: { taskId: string; sourceId?: string; readOnly?: boolean }
   InspectionComplete: { taskId: string; sourceId?: string; skipInspectionPhotos?: boolean }
   CleaningSelfComplete: { taskId: string }
   ManagerDailyTask: { taskId: string }
   DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; targetRoles?: DayEndTargetRole[]; overviewMode?: boolean; overviewUsers?: DayEndOverviewUser[] }
   FeedbackForm: { taskId: string; source?: 'inspection_panel_batch' }
-  SuppliesForm: { taskId: string }
+  SuppliesForm: { taskId: string; readOnly?: boolean }
 }
 
 export type ContactsStackParamList = {
@@ -172,6 +172,8 @@ async function refreshWorkTasksForNotice(params: { token: string; user: any; tas
 function resolveTaskNoticeNavigation(params: { taskRouteId: string; user: any; noticeData?: any }) {
   const roleNames = roleNamesOf(params.user)
   const task = findWorkTaskItemByAnyId(params.taskRouteId)
+  const isCleaningTask = String(task?.source_type || '').trim() === 'cleaning_tasks'
+  if (isTaskManagerUser(params.user) && isCleaningTask) return { screen: 'ManagerDailyTask', params: { taskId: params.taskRouteId } }
   if (task && Array.isArray((task as any).available_actions)) {
     const preferredAction = preferredNoticeActionForTask(task, params.noticeData || {}, { roleNames })
     if (preferredAction?.enabled) {
@@ -180,11 +182,8 @@ function resolveTaskNoticeNavigation(params: { taskRouteId: string; user: any; n
     }
     return { screen: 'TaskDetail', params: { id: task.id } }
   }
-  const isCleaningTask = String(task?.source_type || '').trim() === 'cleaning_tasks'
   const isInspection = isCleaningTask && String(task?.task_kind || '').trim() === 'inspection'
-  const isManager = roleNames.includes('admin') || roleNames.includes('offline_manager') || roleNames.includes('customer_service')
   const isInspector = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
-  if (isManager && isCleaningTask) return { screen: 'ManagerDailyTask', params: { taskId: params.taskRouteId } }
   if (isInspector && isInspection) {
     const sourceId = String(task?.source_id || '').trim()
     return { screen: 'InspectionPanel', params: { taskId: params.taskRouteId, ...(sourceId ? { sourceId } : {}) } }

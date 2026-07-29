@@ -35,7 +35,7 @@ function nowIso() {
 }
 
 function baseRoomPhotos() {
-  return { living: [], sofa: [], bedroom: [], kitchen: [] } as Record<InspectionPanelRoomPhotoArea, InspectionPanelBatchMedia[]>
+  return { living: [], sofa: [], bedroom: [], kitchen: [], bathroom: [] } as Record<InspectionPanelRoomPhotoArea, InspectionPanelBatchMedia[]>
 }
 
 function normalizeMedia(item: any): InspectionPanelBatchMedia | null {

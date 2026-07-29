@@ -22,14 +22,15 @@ export function actionDisabledReasonText(reason: any) {
   if (value === 'not_participant') return '你已不再是执行人'
   if (value === 'task_completed') return '任务已完成'
   if (value === 'pending_inspection_decision') return '待确认检查安排'
+  if (value === 'cleaning_submission_required') return '请先等待清洁提交补品记录和房源照片'
   if (value === 'already_recorded') return '已记录'
   return value
 }
 
 export type WorkTaskActionRoute =
   | { screen: 'TaskDetail'; params: { id: string; action?: 'upload_key' | 'complete' } }
-  | { screen: 'SuppliesForm'; params: { taskId: string } }
-  | { screen: 'InspectionPanel'; params: { taskId: string; sourceId?: string } }
+  | { screen: 'SuppliesForm'; params: { taskId: string; readOnly?: boolean } }
+  | { screen: 'InspectionPanel'; params: { taskId: string; sourceId?: string; readOnly?: boolean } }
   | { screen: 'InspectionComplete'; params: { taskId: string; sourceId?: string; skipInspectionPhotos?: boolean } }
   | { screen: 'CleaningSelfComplete'; params: { taskId: string } }
   | { screen: 'FeedbackForm'; params: { taskId: string; source?: 'inspection_panel_batch' } }
@@ -37,6 +38,10 @@ export type WorkTaskActionRoute =
 function isCleaningWorkSubmitted(status0: any) {
   const status = lower(status0)
   return ['cleaned', 'restock_pending', 'restocked', 'to_inspect', 'to_hang_keys', 'keys_hung', 'done', 'completed', 'ready'].includes(status)
+}
+
+function isTerminalCleaningTask(status0: any) {
+  return ['cancelled', 'canceled', 'done', 'completed', 'ready'].includes(lower(status0))
 }
 
 function hasServerActions(task: WorkTaskItem | null | undefined) {
@@ -49,10 +54,38 @@ function legacyAction(params: Omit<WorkTaskAvailableAction, 'enabled'> & { enabl
 
 export function availableActionsForTask(task: WorkTaskItem | null | undefined, options?: { roleNames?: string[] }): WorkTaskAvailableAction[] {
   if (!task) return []
-  if (hasServerActions(task)) return (((task as any).available_actions || []) as WorkTaskAvailableAction[]).filter(Boolean)
-
   const roleNames = options?.roleNames || []
   const isCleaningSource = task.source_type === 'cleaning_tasks'
+  const isCustomerService = roleNames.includes('customer_service') && !roleNames.includes('admin') && !roleNames.includes('offline_manager')
+  const isManager = roleNames.includes('admin') || roleNames.includes('offline_manager') || roleNames.includes('customer_service')
+
+  // Customer service has a historical manager-only entrypoint even for older
+  // payloads that still contain worker actions. Keep that compatibility path;
+  // admin/offline-manager roles use server actions whenever they are present.
+  if (isCleaningSource && isCustomerService) {
+    const isPasswordOnly = isPasswordOnlyInspectionTask(task as any)
+    const isCheckoutTask = lower((task as any).task_type) === 'checkout_clean' || !!cleanText((task as any).start_time)
+    const actions: WorkTaskAvailableAction[] = []
+    if (!isPasswordOnly && (isCheckoutTask || cleanText((task as any).order_id_checkout) || cleanText((task as any).order_id))) {
+      actions.push(legacyAction({ id: 'mark_guest_checkout', label: cleanText((task as any).checked_out_at) ? '取消已退房' : '标记已退房', placement: 'primary', target: 'TaskDetail', intent: 'manager' }))
+    }
+    actions.push(legacyAction({ id: 'report_issue', label: '问题反馈', placement: 'primary', target: 'FeedbackForm', intent: 'issue' }))
+    return actions
+  }
+
+  if (hasServerActions(task)) return (((task as any).available_actions || []) as WorkTaskAvailableAction[]).filter(Boolean)
+
+  if (isCleaningSource && isManager) {
+    const isPasswordOnly = isPasswordOnlyInspectionTask(task as any)
+    const isCheckoutTask = lower((task as any).task_type) === 'checkout_clean' || !!cleanText((task as any).start_time)
+    const actions: WorkTaskAvailableAction[] = []
+    if (!isPasswordOnly && (isCheckoutTask || cleanText((task as any).order_id_checkout) || cleanText((task as any).order_id))) {
+      actions.push(legacyAction({ id: 'mark_guest_checkout', label: cleanText((task as any).checked_out_at) ? '取消已退房' : '标记已退房', placement: 'primary', target: 'TaskDetail', intent: 'manager' }))
+    }
+    actions.push(legacyAction({ id: 'report_issue', label: '问题反馈', placement: 'primary', target: 'FeedbackForm', intent: 'issue' }))
+    return actions
+  }
+
   const taskKind = lower(task.task_kind)
   const taskType = lower((task as any).task_type)
   const isCleaningTask = isCleaningSource && taskKind === 'cleaning'
@@ -66,7 +99,6 @@ export function availableActionsForTask(task: WorkTaskItem | null | undefined, o
   const isDirectCompleteEligible = isCleaningTask && (isSelfCompleteEligible || isStayoverTask)
   const isPendingInspectionDecision = isCleaningTask && !isStayoverTask && inspectionMode === 'pending_decision'
   const isCleaningSubmitted = isCleaningTask && isCleaningWorkSubmitted(task.status)
-  const isCustomerService = roleNames.includes('customer_service')
   const isInspectorUser = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
   const actions: WorkTaskAvailableAction[] = []
 
@@ -86,19 +118,16 @@ export function availableActionsForTask(task: WorkTaskItem | null | undefined, o
   }
 
   if (isCleaningTask) {
-    if (isCustomerService) {
-      if (isCheckoutTask) actions.push(legacyAction({ id: 'mark_guest_checkout', label: cleanText((task as any).checked_out_at) ? '取消已退房' : '标记已退房', placement: 'primary', target: 'TaskDetail', intent: 'manager' }))
-      actions.push(legacyAction({ id: 'report_issue', label: '房源问题反馈', placement: 'more', target: 'FeedbackForm', intent: 'issue' }))
-      return actions
-    }
+    const hasKeyPhoto = !!cleanText((task as any).key_photo_url)
+    const keyUploadBlockedByCompletion = isTerminalCleaningTask(task.status) && (hasKeyPhoto || ['cancelled', 'canceled'].includes(lower(task.status)))
     if (!isStayoverTask) {
       actions.push(legacyAction({
         id: 'upload_key_photo',
-        label: isCleaningSubmitted ? '钥匙记录' : '上传钥匙',
+        label: hasKeyPhoto ? '钥匙已记录' : '上传钥匙',
         placement: 'primary',
         target: 'TaskDetail',
         intent: 'cleaning',
-        enabled: !isCleaningSubmitted,
+        enabled: !keyUploadBlockedByCompletion,
       }))
     }
     actions.push(legacyAction({
@@ -131,9 +160,23 @@ export function navigationForWorkTaskAction(task: WorkTaskItem, action: WorkTask
   const actionSourceId = cleanText((action as any)?.source_id)
   if (action.id === 'upload_key_photo') return { screen: 'TaskDetail', params: { id: task.id, action: 'upload_key' } }
   if (action.id === 'mark_guest_checkout') return { screen: 'TaskDetail', params: { id: task.id } }
-  if (action.id === 'fill_supplies') return { screen: 'SuppliesForm', params: { taskId: task.id } }
+  if (action.id === 'fill_supplies') {
+    const hasCleaningSubmissionSignal = typeof (task as any)?.cleaning_submission_ready === 'boolean'
+    const readOnly = action.disabled_reason === 'task_completed'
+      || (hasCleaningSubmissionSignal ? (task as any).cleaning_submission_ready === true : isCleaningWorkSubmitted(task.status))
+    return { screen: 'SuppliesForm', params: { taskId: task.id, ...(readOnly ? { readOnly: true } : {}) } }
+  }
   if (action.id === 'complete_cleaning') return { screen: 'CleaningSelfComplete', params: { taskId: task.id } }
-  if (action.id === 'submit_inspection') return { screen: 'InspectionPanel', params: { taskId: task.id, ...(actionSourceId ? { sourceId: actionSourceId } : {}) } }
+  if (action.id === 'submit_inspection') {
+    return {
+      screen: 'InspectionPanel',
+      params: {
+        taskId: task.id,
+        ...(actionSourceId ? { sourceId: actionSourceId } : {}),
+        ...(action.read_only ? { readOnly: true } : {}),
+      },
+    }
+  }
   if (action.id === 'upload_access_video') {
     return {
       screen: 'InspectionComplete',

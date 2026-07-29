@@ -5,6 +5,7 @@ import { File } from 'expo-file-system'
 type Json = any
 type AuthenticatedRequestOptions = {
   skipAuthInvalidation?: boolean
+  skipImageCompression?: boolean
 }
 
 function authenticatedHeaders(
@@ -104,12 +105,28 @@ async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: num
   }
 }
 
-function toApiError(res: Response, message: string) {
+function toApiError(res: Response, message: string, errorCode?: string) {
   const status = Number(res.status || 0)
   if (status === 401) return new ApiError(message || '登录已失效，请重新登录', status, 'UNAUTHORIZED', false)
   if (status === 403) return new ApiError(message || '权限不足', status, 'FORBIDDEN', false)
+  if (status === 409) return new ApiError(message || '提交内容已冲突，请重新提交', status, errorCode || 'IDEMPOTENCY_CONFLICT', false)
   if (status >= 500) return new ApiError(message || '服务器错误，请稍后重试', status, 'SERVER_ERROR', true)
   return new ApiError(message || `请求失败 (${status})`, status, undefined, false)
+}
+
+async function responseErrorCode(res: Response) {
+  try {
+    const json = await res.clone().json() as any
+    return String(json?.code || '').trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function toApiErrorFromResponse(res: Response) {
+  const code = await responseErrorCode(res)
+  const message = await parseErrorMessage(res)
+  return toApiError(res, message, code)
 }
 
 export function isRetryableApiError(error: unknown) {
@@ -132,6 +149,13 @@ async function parseErrorMessage(res: Response) {
     }
     try {
       const json = JSON.parse(txt) as any
+      const errorCode = String(json?.code || '').trim()
+      if (errorCode === 'CLEANING_SUBMISSION_REQUIRED' || String(json?.message || '').trim() === 'cleaning_submission_required') {
+        return '请先等待清洁提交补品记录和房源照片，再提交检查。'
+      }
+      if (errorCode === 'IMAGE_FORMAT_UNSUPPORTED' || String(json?.message || '').trim() === 'image_format_unsupported') {
+        return '照片格式无法处理，请重新拍摄或选择 JPG/PNG 图片。'
+      }
       const msg = json?.message
       if (typeof msg === 'string' && msg.trim()) {
         const raw = msg.trim()
@@ -242,7 +266,7 @@ export async function loginApi(params: { username: string; password: string }) {
   }
 
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw await toApiErrorFromResponse(res)
   const data = (await parseJsonOrThrow(res)) as Json
   const token = String(data?.token || '')
   if (!token) throw new Error('登录成功但未返回 token')
@@ -576,6 +600,7 @@ export type WorkTaskAvailableAction = {
   placement: 'primary' | 'more'
   enabled: boolean
   disabled_reason?: string
+  read_only?: boolean
   target?: WorkTaskActionTarget
   intent: 'cleaning' | 'inspection' | 'site_action' | 'issue' | 'manager'
   source_type?: string | null
@@ -622,6 +647,7 @@ export type WorkTask = {
   inspection_due_date?: string | null
   status: string
   cleaning_status?: string | null
+  cleaning_submission_ready?: boolean | null
   inspection_status?: string | null
   urgency: string
   sort_index?: number | null
@@ -779,7 +805,6 @@ export async function createCleaningOfflineTask(
     content?: string | null
     kind: string
     status: 'todo' | 'done'
-    urgency: 'low' | 'medium' | 'high' | 'urgent'
     property_id?: string | null
     assignee_id?: string | null
   },
@@ -791,6 +816,36 @@ export async function createCleaningOfflineTask(
     lastRes = await fetchWithTimeout(
       url,
       { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function updateCleaningOfflineTask(
+  token: string,
+  id: string,
+  params: {
+    date?: string
+    task_type?: 'property' | 'company' | 'other'
+    title?: string
+    content?: string | null
+    kind?: string
+    status?: 'todo' | 'done'
+    property_id?: string | null
+    assignee_id?: string | null
+  },
+) {
+  const urls = buildUrlCandidates(`cleaning/offline-tasks/${encodeURIComponent(id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
       15000,
     )
     if (lastRes.status !== 404) break
@@ -1381,17 +1436,25 @@ export async function completePropertyFeedbackProject(
   throw new Error(msg || '提交完成失败')
 }
 
-async function prepareImageUploadUri(uri: string) {
-  const sourceUri = String(uri || '').trim()
+function jpegNameFrom(name: string) {
+  const value = String(name || '').trim()
+  const base = value.replace(/\.[^./]+$/, '').trim() || 'photo'
+  return `${base}.jpg`
+}
+
+async function prepareImageUpload(file: { uri: string; name: string; mimeType: string }) {
+  const sourceUri = String(file.uri || '').trim()
   if (!sourceUri) throw new Error('missing uri')
-  try {
-    const mod = await import('./imageCompression')
-    const fn = (mod as any)?.compressImageForUpload
-    if (typeof fn !== 'function') return sourceUri
-    const compressedUri = await fn(sourceUri)
-    return String(compressedUri || '').trim() || sourceUri
-  } catch {
-    return sourceUri
+  const mod = await import('./imageCompression')
+  const fn = (mod as any)?.compressImageForUpload
+  if (typeof fn !== 'function') throw new Error('照片压缩模块不可用，请重新拍摄')
+  const compressedUri = String(await fn(sourceUri) || '').trim()
+  if (!compressedUri) throw new Error('照片格式转换失败，请重新拍摄')
+  const converted = compressedUri !== sourceUri
+  return {
+    uri: compressedUri,
+    name: converted ? jpegNameFrom(file.name) : file.name,
+    mimeType: converted ? 'image/jpeg' : file.mimeType,
   }
 }
 
@@ -1403,8 +1466,8 @@ export async function uploadCleaningMedia(
 ) {
   const urls = buildUrlCandidates('cleaning-app/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const compressedUri = await prepareImageUploadUri(file.uri)
-  if (!new File(compressedUri).exists) throw new ApiError('本地文件已丢失，请重新拍摄', 0, 'MISSING_LOCAL_FILE', false)
+  const preparedFile = options?.skipImageCompression ? file : await prepareImageUpload(file)
+  if (!new File(preparedFile.uri).exists) throw new ApiError('本地文件已丢失，请重新拍摄', 0, 'MISSING_LOCAL_FILE', false)
   const form = new FormData()
   if (meta) {
     for (const [k, v] of Object.entries(meta)) {
@@ -1412,7 +1475,7 @@ export async function uploadCleaningMedia(
       if (vv) form.append(k, vv)
     }
   }
-  form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
+  form.append('file', { uri: preparedFile.uri, name: preparedFile.name, type: preparedFile.mimeType } as any)
 
   let lastRes: Response | null = null
   for (const url of urls) {
@@ -1428,7 +1491,7 @@ export async function uploadCleaningMedia(
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
+  if (!res.ok) throw await toApiErrorFromResponse(res)
   const data = (await parseJsonOrThrow(res)) as any
   const u = String(data?.url || '').trim()
   const key = String(data?.key || '').trim()
@@ -1774,7 +1837,43 @@ export async function uploadSelfLockboxVideo(token: string, cleaningTaskId: stri
   return (await parseJsonOrThrow(res)) as any
 }
 
-export type InspectionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'shower_drain' | 'unclean'
+export type InspectionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'bathroom' | 'shower_drain' | 'unclean'
+
+export type WorkTaskFormPhotoRecord = {
+  id: string
+  task_id: string
+  source: 'inspection' | 'restock' | 'consumable' | 'issue' | string
+  area?: string | null
+  item_id?: string | null
+  label?: string | null
+  url: string
+  uploaded_key?: string | null
+  captured_at?: string | null
+  created_at?: string | null
+  uploader_id?: string | null
+  status?: 'synced' | 'synced_unlabeled' | string
+}
+
+export async function getWorkTaskFormPhotos(token: string, workTaskRef: string, sourceIds: string[] = []) {
+  const params = new URLSearchParams()
+  const ids = Array.from(new Set(sourceIds.map((item) => String(item || '').trim()).filter(Boolean))).slice(0, 50)
+  if (ids.length) params.set('source_ids', ids.join(','))
+  const query = params.toString()
+  const path = `mzapp/work-tasks/${encodeURIComponent(workTaskRef)}/form-photos${query ? `?${query}` : ''}`
+  const urls = buildUrlCandidates(path)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as {
+    task_ids?: string[]
+    items: WorkTaskFormPhotoRecord[]
+  }
+}
 
 export async function getInspectionPhotos(token: string, cleaningTaskId: string) {
   const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/inspection-photos`)
@@ -1785,7 +1884,7 @@ export async function getInspectionPhotos(token: string, cleaningTaskId: string)
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
     items: Array<{ area: string; url: string; note?: string | null; captured_at?: string | null; created_at?: string | null }>
   }
@@ -1794,7 +1893,12 @@ export async function getInspectionPhotos(token: string, cleaningTaskId: string)
 export async function saveInspectionPhotos(
   token: string,
   cleaningTaskId: string,
-  params: { items: Array<{ area: InspectionPhotoArea; url: string; note?: string | null; captured_at?: string }>; submit_id?: string; step_key?: string },
+  params: {
+    items: Array<{ area: InspectionPhotoArea; url: string; note?: string | null; captured_at?: string }>
+    guest_arrival_confirmed?: boolean
+    submit_id?: string
+    step_key?: string
+  },
   options?: AuthenticatedRequestOptions,
 ) {
   const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/inspection-photos`)
@@ -1809,7 +1913,33 @@ export async function saveInspectionPhotos(
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
+  if (!res.ok) throw await toApiErrorFromResponse(res)
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function appendInspectionIssuePhotos(
+  token: string,
+  cleaningTaskId: string,
+  params: {
+    items: { url: string; note?: string | null; captured_at?: string }[]
+    submit_id: string
+    step_key: string
+  },
+  options?: AuthenticatedRequestOptions,
+) {
+  const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/inspection-issue-photos`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: authenticatedHeaders(token, options, { 'Content-Type': 'application/json' }), body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw await toApiErrorFromResponse(res)
   return (await parseJsonOrThrow(res)) as any
 }
 
@@ -1822,7 +1952,7 @@ export async function getRestockProof(token: string, cleaningTaskId: string) {
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
     items: Array<{ item_id: string; proof_url: string | null; proof_urls?: string[]; status?: string | null; qty?: number | null; note?: string | null; created_at?: string | null }>
     confirmed_sufficient?: boolean
@@ -1853,11 +1983,11 @@ export async function saveRestockProof(
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
+  if (!res.ok) throw await toApiErrorFromResponse(res)
   return (await parseJsonOrThrow(res)) as any
 }
 
-export type CompletionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'vacuum_used'
+export type CompletionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'shower_drain' | 'remote_tv' | 'remote_ac' | 'vacuum_used' | 'remote_controls'
 
 export async function getCompletionPhotos(token: string, cleaningTaskId: string) {
   const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/completion-photos`)
@@ -1868,7 +1998,7 @@ export async function getCompletionPhotos(token: string, cleaningTaskId: string)
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
     items: Array<{ area: string; url: string; note?: string | null; captured_at?: string | null; created_at?: string | null }>
   }
@@ -1877,7 +2007,11 @@ export async function getCompletionPhotos(token: string, cleaningTaskId: string)
 export async function saveCompletionPhotos(
   token: string,
   cleaningTaskId: string,
-  params: { items: Array<{ area: CompletionPhotoArea; url: string; note?: string | null; captured_at?: string }> },
+  params: {
+    items: Array<{ area: CompletionPhotoArea; url: string; note?: string | null; captured_at?: string }>
+    submit_id?: string
+    step_key?: string
+  },
 ) {
   const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/completion-photos`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -1891,7 +2025,7 @@ export async function saveCompletionPhotos(
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw await toApiErrorFromResponse(res)
   return (await parseJsonOrThrow(res)) as any
 }
 
@@ -2054,7 +2188,11 @@ export async function markInboxNotificationsRead(token: string, params: { ids?: 
 export async function submitCleaningConsumables(
   token: string,
   taskId: string,
-  params: { living_room_photo_url?: string | null; items: Array<{ item_id: string; status: 'ok' | 'low'; qty?: number; note?: string; photo_url?: string; photo_urls?: string[] }> },
+  params: {
+    living_room_photo_url?: string | null
+    items: Array<{ item_id: string; status: 'ok' | 'low'; qty?: number; note?: string; photo_url?: string; photo_urls?: string[] }>
+    submit_id?: string
+  },
 ) {
   const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(taskId)}/consumables`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -2072,7 +2210,7 @@ export async function submitCleaningConsumables(
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as any
 }
 
@@ -2095,7 +2233,7 @@ export async function getCleaningConsumables(
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
     living_room_photo_url?: string | null
     items: Array<{ id: string; item_id: string; qty: number; need_restock: boolean; note?: string | null; status?: string | null; photo_url?: string | null; photo_urls?: string[]; item_label?: string | null; created_at?: string | null }>
@@ -2330,6 +2468,8 @@ export async function getMyProfile(token: string) {
     bank_account_number?: string | null
     personal_abn?: string | null
     photo_id_url?: string | null
+    visa_document_url?: string | null
+    visa_grant_number?: string | null
   }
 }
 
@@ -2345,6 +2485,8 @@ export async function updateMyProfile(
     bank_account_number?: string | null
     personal_abn?: string | null
     photo_id_url?: string | null
+    visa_document_url?: string | null
+    visa_grant_number?: string | null
   },
 ) {
   const urls = buildUrlCandidates('users/me')
@@ -2373,6 +2515,8 @@ export async function updateMyProfile(
     bank_account_number?: string | null
     personal_abn?: string | null
     photo_id_url?: string | null
+    visa_document_url?: string | null
+    visa_grant_number?: string | null
   }
 }
 
@@ -2530,7 +2674,7 @@ export async function uploadMzappMedia(
 ) {
   const urls = buildUrlCandidates('mzapp/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const compressedUri = await prepareImageUploadUri(file.uri)
+  const preparedFile = await prepareImageUpload(file)
   const form = new FormData()
   if (meta) {
     for (const [k, v] of Object.entries(meta)) {
@@ -2538,7 +2682,7 @@ export async function uploadMzappMedia(
       if (vv) form.append(k, vv)
     }
   }
-  form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
+  form.append('file', { uri: preparedFile.uri, name: preparedFile.name, type: preparedFile.mimeType } as any)
   let lastRes: Response | null = null
   for (const url of urls) {
     lastRes = await fetchWithTimeout(
@@ -2575,9 +2719,9 @@ export async function uploadMzappExpenseReceipt(
 ) {
   const urls = buildUrlCandidates('mzapp/expenses/receipts/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const compressedUri = await prepareImageUploadUri(file.uri)
+  const preparedFile = await prepareImageUpload(file)
   const form = new FormData()
-  form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
+  form.append('file', { uri: preparedFile.uri, name: preparedFile.name, type: preparedFile.mimeType } as any)
   let lastRes: Response | null = null
   for (const url of urls) {
     lastRes = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form as any }, 30000)
@@ -2730,9 +2874,9 @@ export async function uploadMzappExpenseReceiptImage(
 ) {
   const urls = buildUrlCandidates('mzapp/expense-receipts/images/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const compressedUri = await prepareImageUploadUri(file.uri)
+  const preparedFile = await prepareImageUpload(file)
   const form = new FormData()
-  form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
+  form.append('file', { uri: preparedFile.uri, name: preparedFile.name, type: preparedFile.mimeType } as any)
   let lastRes: Response | null = null
   for (const url of urls) {
     lastRes = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form as any }, 30000)

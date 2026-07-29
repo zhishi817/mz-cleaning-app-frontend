@@ -41,6 +41,29 @@ function isDoneLikeStatus(status0: string) {
   return s === 'done' || s === 'completed' || s === 'ready' || s === 'keys_hung' || s === 'cleaned' || s === 'restock_pending' || s === 'restocked' || s === 'inspected'
 }
 
+function isPendingInspectionStatus(status0: string) {
+  const s = String(status0 || '').trim().toLowerCase()
+  return s === 'todo' || s === 'pending' || s === 'unassigned' || s === 'assigned'
+}
+
+export function isTaskWorkflowProgressStatus(status0: string) {
+  const s = String(status0 || '').trim().toLowerCase()
+  return s === 'in_progress' || s === 'to_inspect' || s === 'to_hang_keys' || s === 'to_complete'
+}
+
+export function getEffectiveTaskStatus(task: Partial<WorkTaskItem> | null | undefined, status0?: string) {
+  const status = String(status0 ?? task?.status ?? '').trim().toLowerCase()
+  const source = String(task?.source_type || '').trim().toLowerCase()
+  const kind = String(task?.task_kind || '').trim().toLowerCase()
+  if (source === 'cleaning_tasks' && kind === 'inspection') {
+    const cleaningStatus = String((task as any)?.cleaning_status || '').trim().toLowerCase()
+    const inspectionStatus = String((task as any)?.inspection_status || '').trim().toLowerCase()
+    if (cleaningStatus === 'in_progress' || inspectionStatus === 'in_progress') return 'in_progress'
+    if (isDoneLikeStatus(cleaningStatus) && isPendingInspectionStatus(inspectionStatus)) return 'to_inspect'
+  }
+  return status
+}
+
 function baseStatusMeta(status: string) {
   const s = String(status || '').trim().toLowerCase()
   if (s === 'done' || s === 'completed') return { text: '已完成', tone: 'success' as const }
@@ -56,18 +79,20 @@ function baseStatusMeta(status: string) {
 }
 
 export function getTaskStatusMeta(task: WorkTaskItem, roleNames: string[]) {
-  const s = String(task.status || '').trim().toLowerCase()
+  const s = getEffectiveTaskStatus(task)
   const meta = baseStatusMeta(s)
   const source = String(task.source_type || '').trim().toLowerCase()
   const kind = String(task.task_kind || '').trim().toLowerCase()
 
   if (source === 'cleaning_tasks' && kind === 'inspection') {
+    const checkedOutAt = String((task as any).checked_out_at || '').trim()
     const hasInspector = !!(
       String((task as any).inspector_id || '').trim()
       || String((task as any).inspector_name || '').trim()
       || String((task as any).assignee_id || '').trim()
     )
     if (s === 'cleaned' || s === 'restock_pending' || s === 'restocked') return { text: '待检查', tone: 'pending' as const }
+    if (checkedOutAt && !isTaskWorkflowProgressStatus(s) && !isDoneLikeStatus(s) && s !== 'cancelled' && s !== 'canceled') return { text: '已退房', tone: 'special' as const }
     if ((s === 'todo' || s === 'pending' || s === 'unassigned') && hasInspector) return { text: '已分配', tone: 'normal' as const }
     return meta
   }

@@ -2,6 +2,7 @@ import { Directory, File, Paths } from 'expo-file-system'
 import { getJson, setJson } from './storage'
 import { compressImageForLocalStorage } from './imageCompression'
 import { isRetryableApiError, uploadCleaningMedia, uploadDayEndHandover } from './api'
+import { cleaningMediaReference } from './cleaningMedia'
 import { isLocalMediaLocked, withLocalMediaLock } from './localMediaLocks'
 
 export type DayEndDraftPhoto = {
@@ -198,7 +199,7 @@ export async function processDayEndHandoverQueue(token: string) {
               watermark_text: item.watermark_text || '',
             },
           ))
-          out.push({ ...item, uploaded_url: up.url })
+          out.push({ ...item, uploaded_url: cleaningMediaReference(up) })
         } catch (e: any) {
           if (isNetworkishError(e)) throw e
           out.push(item)

@@ -7,6 +7,7 @@ type ImageManipulatorModule = {
     saveOptions: { compress: number; format: string },
   ) => Promise<{ uri?: string | null }>
   SaveFormat?: { JPEG?: string }
+  default?: ImageManipulatorModule
 }
 
 async function getImageSize(uri: string): Promise<{ width: number; height: number } | null> {
@@ -37,15 +38,30 @@ export async function compressImageForLocalStorage(uri: string, options?: { maxW
   const quality = Math.min(1, Math.max(0.1, Number(options?.quality || 0.72) || 0.72))
   const actions = width > maxWidth ? [{ resize: { width: maxWidth } }] : []
   try {
-    const mod = (await import('expo-image-manipulator')) as ImageManipulatorModule
-    if (typeof mod?.manipulateAsync !== 'function') return u
-    const r = await mod.manipulateAsync(
+    const mod = require('expo-image-manipulator') as ImageManipulatorModule
+    const manipulateAsync = mod?.manipulateAsync || mod?.default?.manipulateAsync
+    const saveFormat = mod?.SaveFormat || mod?.default?.SaveFormat
+    if (typeof manipulateAsync !== 'function') {
+      const error: any = new Error('照片格式转换失败，请重新拍摄')
+      error.code = 'IMAGE_CONVERSION_FAILED'
+      throw error
+    }
+    const r = await manipulateAsync(
       u,
       actions,
-      { compress: quality, format: mod.SaveFormat?.JPEG || 'jpeg' },
+      { compress: quality, format: saveFormat?.JPEG || 'jpeg' },
     )
-    return String(r?.uri || '').trim() || u
-  } catch {
-    return u
+    const outputUri = String(r?.uri || '').trim()
+    if (!outputUri || outputUri === u) {
+      const error: any = new Error('照片格式转换失败，请重新拍摄')
+      error.code = 'IMAGE_CONVERSION_FAILED'
+      throw error
+    }
+    return outputUri
+  } catch (error: any) {
+    if (error?.code === 'IMAGE_CONVERSION_FAILED') throw error
+    const conversionError: any = new Error('照片格式转换失败，请重新拍摄')
+    conversionError.code = 'IMAGE_CONVERSION_FAILED'
+    throw conversionError
   }
 }

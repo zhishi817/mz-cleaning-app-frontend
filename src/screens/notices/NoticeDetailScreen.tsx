@@ -4,6 +4,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getNoticesSnapshot, initNoticesStore, markNoticeRead, subscribeNotices, type Notice } from '../../lib/noticesStore'
+import { layoutTokens } from '../../lib/theme'
 import { getPresentedNotice } from '../../lib/noticePresentation'
 import type { NoticesStackParamList } from '../../navigation/RootNavigator'
 import { useI18n } from '../../lib/i18n'
@@ -224,6 +225,10 @@ export default function NoticeDetailScreen(props: Props) {
         props.navigation.navigate('TaskDetail', { id: taskRouteId })
         return
       }
+      if (isTaskManagerUser(storedUser) && String(task.source_type || '').trim() === 'cleaning_tasks') {
+        props.navigation.navigate('ManagerDailyTask', { taskId: task.id })
+        return
+      }
       const preferredAction = preferredNoticeActionForTask(task, noticeData, { roleNames: roleNamesOf(storedUser) })
       if (preferredAction && !preferredAction.enabled) {
         Alert.alert('暂不可操作', actionDisabledReasonText(preferredAction.disabled_reason || '任务已不可执行'))
@@ -392,7 +397,7 @@ const styles = StyleSheet.create({
   infoLabel: { color: '#64748B', fontSize: 12, fontWeight: '800' },
   infoValue: { marginTop: 6, color: '#111827', fontSize: 15, fontWeight: '900' },
   noteCard: { marginTop: 14, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E5E7EB', padding: 12 },
-  actionBtn: { marginTop: 14, minHeight: 42, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  actionBtn: { marginTop: 14, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: layoutTokens.button.radius, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: layoutTokens.button.gap },
   actionBtnDisabled: { opacity: 0.65 },
   actionText: { color: '#2563EB', fontWeight: '900', textAlign: 'center' },
   noteLabel: { color: '#6B7280', fontSize: 12, fontWeight: '900' },

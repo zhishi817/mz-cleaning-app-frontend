@@ -19,18 +19,20 @@ export function cleaningMediaReference(upload: { key?: string | null; url?: stri
   return normalizeCleaningObjectKey(upload?.key) || cleanText(upload?.url)
 }
 
-function cleaningMediaProxyUrl(reference: string) {
+export type CleaningMediaImageVariant = 'original' | 'thumbnail' | 'preview'
+
+function cleaningMediaProxyUrl(reference: string, variant: CleaningMediaImageVariant = 'original') {
   const base = normalizeBase(API_BASE_URL)
   const apiRoot = base.replace(/\/auth\/?$/g, '')
   if (!apiRoot) return ''
   const key = normalizeCleaningObjectKey(reference)
   const query = key ? `key=${encodeURIComponent(key)}` : `url=${encodeURIComponent(reference)}`
-  return `${apiRoot}/cleaning-app/media/image?${query}`
+  const variantQuery = variant === 'original' ? '' : `&variant=${variant}`
+  return `${apiRoot}/cleaning-app/media/image?${query}${variantQuery}`
 }
 
 function isLegacyPrivateR2Url(value: string) {
   if (!/^https?:\/\//i.test(value)) return false
-  if (value.includes('.r2.cloudflarestorage.com/') || value.includes('.r2.dev/')) return true
   try {
     return new URL(value).pathname.includes('/cleaning/')
   } catch {
@@ -38,13 +40,17 @@ function isLegacyPrivateR2Url(value: string) {
   }
 }
 
-export function buildCleaningMediaImageSource(token: string | null | undefined, rawReference: any) {
+export function buildCleaningMediaImageSource(
+  token: string | null | undefined,
+  rawReference: any,
+  variant: CleaningMediaImageVariant = 'original',
+) {
   const reference = cleanText(rawReference)
   if (!reference) return { uri: '' }
   const key = normalizeCleaningObjectKey(reference)
   if (key || isLegacyPrivateR2Url(reference)) {
     return {
-      uri: cleaningMediaProxyUrl(key || reference),
+      uri: cleaningMediaProxyUrl(key || reference, variant),
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     }
   }

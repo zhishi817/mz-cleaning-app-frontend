@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import * as ImagePicker from 'expo-image-picker'
 import { Ionicons } from '@expo/vector-icons'
@@ -10,6 +10,9 @@ import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { isRetryableApiError, listCleaningAppLinenTypes, listCleaningAppPropertyCodes, listCleaningAppTasks, listDayEndBackupKeys, listDayEndHandover, listWorkTasks, uploadCleaningMedia, uploadDayEndHandover } from '../../lib/api'
 import { clearDayEndHandoverDraft, getDayEndHandoverDraft, persistDayEndDraftPhoto, saveDayEndHandoverDraft, type DayEndHandoverDraft, type DayEndRejectDraftItem } from '../../lib/dayEndHandoverQueue'
+import { cleaningMediaReference } from '../../lib/cleaningMedia'
+import CleaningMediaImage from '../../components/CleaningMediaImage'
+import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 import type { DayEndOverviewUser, DayEndRoleStats, DayEndTargetRole, TasksStackParamList } from '../../navigation/RootNavigator'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'DayEndBackupKeys'>
@@ -736,33 +739,34 @@ export default function DayEndBackupKeysScreen(props: Props) {
       const mimeType = String(a.mimeType || 'image/jpeg')
       const purpose = kind === 'key' ? 'backup_key_return' : kind === 'return_wash' ? 'return_wash_linen' : kind === 'warehouse_key' ? 'warehouse_key_return' : kind === 'consumable' ? 'remaining_consumables' : 'reject_linen_return'
       const up = await uploadCleaningMedia(token, { uri, name, mimeType }, { purpose, captured_at: capturedAt, watermark: '1', watermark_text: watermarkText })
+      const remoteReference = cleaningMediaReference(up)
       if (kind === 'key') {
         setKeyItems((prev) => {
-          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: up.url } : x))
+          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: remoteReference } : x))
           persistSectionAfterCapture('key', { nextKeyItems: next })
           return next
         })
       } else if (kind === 'return_wash') {
         setReturnWashItems((prev) => {
-          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: up.url } : x))
+          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: remoteReference } : x))
           persistSectionAfterCapture('return_wash', { nextReturnWashItems: next })
           return next
         })
       } else if (kind === 'warehouse_key') {
         setWarehouseKeyItems((prev) => {
-          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: up.url } : x))
+          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: remoteReference } : x))
           persistSectionAfterCapture('warehouse_key', { nextWarehouseKeyItems: next, nextWarehouseKeyNotUsed: false })
           return next
         })
       } else if (kind === 'consumable') {
         setConsumableItems((prev) => {
-          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: up.url } : x))
+          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: remoteReference } : x))
           persistSectionAfterCapture('consumable', { nextConsumableItems: next })
           return next
         })
       }
       else if (rejectItemId) {
-        updateRejectPhotos(rejectItemId, (photos) => photos.map((x) => (x.id === tempId ? { ...x, uploaded_url: up.url } : x)))
+        updateRejectPhotos(rejectItemId, (photos) => photos.map((x) => (x.id === tempId ? { ...x, uploaded_url: remoteReference } : x)))
       }
       promptContinueCapture(kind, rejectItemId)
     } catch (e: any) {
@@ -861,7 +865,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
         {items.map((it, index) => (
           <View key={it.id} style={styles.gridItem}>
             <Pressable onPress={() => openPhotoViewer(items, index)} style={({ pressed }) => [styles.gridImgPress, pressed ? styles.pressed : null]}>
-              <Image source={{ uri: toAbsoluteUrl(it.uploaded_url || it.uri) }} style={styles.gridImg} resizeMode="contain" />
+              <CleaningMediaImage token={token} remoteReference={it.uploaded_url || it.uri} style={styles.gridImg} resizeMode="contain" />
             </Pressable>
             <View style={styles.gridFoot}>
               <Text style={styles.gridMeta} numberOfLines={1}>{it.uploaded_url ? '已上传' : '已离线保存'}</Text>
@@ -1217,7 +1221,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
             </Pressable>
           ) : null}
           {viewerUrls[viewerIndex] ? (
-            <Image source={{ uri: viewerUrls[viewerIndex] }} style={styles.viewerImage} resizeMode="contain" />
+            <CleaningMediaPreview token={token} reference={viewerUrls[viewerIndex]} style={styles.viewerImage} />
           ) : null}
           {viewerUrls.length > 1 ? (
             <Pressable onPress={() => movePhotoViewer(1)} style={({ pressed }) => [styles.viewerNavBtn, styles.viewerNavRight, pressed ? styles.pressed : null]}>
@@ -1241,19 +1245,19 @@ const styles = StyleSheet.create({
   muted: { marginTop: 10, color: '#6B7280', fontWeight: '700' },
   mutedSmall: { marginTop: 8, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   errorText: { marginTop: 8, color: '#B91C1C', fontWeight: '800', fontSize: 12 },
-  sectionBtn: { marginTop: 12, minHeight: 40, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
+  sectionBtn: { marginTop: 12, minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
   sectionBtnText: { color: '#2563EB', fontWeight: '900', textAlign: 'center' },
   sectionBtnSelected: { backgroundColor: '#ECFDF5', borderColor: '#BBF7D0' },
   sectionBtnSelectedText: { color: '#16A34A' },
   sectionActionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   sectionActionBtn: { flexGrow: 1, flexBasis: '47%', minWidth: 130 },
-  sectionSubmitBtn: { marginTop: 12, minHeight: 42, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
+  sectionSubmitBtn: { marginTop: 12, minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 12, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
   sectionSubmitDisabled: { backgroundColor: '#A7F3D0' },
   sectionSubmitText: { color: '#FFFFFF', fontWeight: '900', textAlign: 'center' },
   grid: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  gridItem: { flexBasis: '47%', flexGrow: 1, minWidth: 120, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F9FAFB' },
-  gridImgPress: { width: '100%', height: 160, backgroundColor: '#F3F4F6' },
-  gridImg: { width: '100%', height: 160, backgroundColor: '#F3F4F6' },
+  gridItem: { width: 96, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F9FAFB' },
+  gridImgPress: { width: 96, height: 96, backgroundColor: '#F3F4F6' },
+  gridImg: { width: 96, height: 96, backgroundColor: '#F3F4F6' },
   gridFoot: { padding: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
   gridMeta: { color: '#6B7280', fontWeight: '800', flex: 1, minWidth: 0 },
   removeBtn: { height: 28, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
@@ -1264,7 +1268,7 @@ const styles = StyleSheet.create({
   rejectTitle: { flex: 1, minWidth: 0, fontSize: 14, fontWeight: '900', color: '#111827' },
   fieldLabel: { marginTop: 10, color: '#374151', fontWeight: '800', fontSize: 12 },
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
-  chip: { height: 34, paddingHorizontal: 12, borderRadius: 17, borderWidth: hairline(), borderColor: '#D1D5DB', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+  chip: { minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 17, borderWidth: hairline(), borderColor: '#D1D5DB', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
   chipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
   chipText: { color: '#374151', fontWeight: '800', fontSize: 12 },
   chipTextActive: { color: '#FFFFFF' },
@@ -1275,9 +1279,9 @@ const styles = StyleSheet.create({
   suggestRow: { minHeight: 40, justifyContent: 'center', paddingHorizontal: 12, borderBottomWidth: hairline(), borderBottomColor: '#EEF0F6' },
   suggestText: { color: '#111827', fontWeight: '800' },
   inlineRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' },
-  addPhotoBtn: { minHeight: 32, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', flexDirection: 'row', alignItems: 'center', gap: 6 },
+  addPhotoBtn: { minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 16, borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', flexDirection: 'row', alignItems: 'center', gap: 6 },
   addPhotoText: { color: '#2563EB', fontWeight: '900', fontSize: 12, textAlign: 'center' },
-  submitBtn: { marginTop: 4, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
+  submitBtn: { marginTop: 4, minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 12, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
   submitBtnDisabled: { backgroundColor: '#A7F3D0' },
   submitText: { color: '#FFFFFF', fontWeight: '900', textAlign: 'center' },
   overviewList: { gap: 10 },
@@ -1299,7 +1303,7 @@ const styles = StyleSheet.create({
   viewerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)' },
   viewerTop: { minHeight: 56, paddingHorizontal: 16, paddingBottom: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   viewerCount: { color: '#FFFFFF', fontWeight: '900', fontSize: 13 },
-  viewerCloseBtn: { minHeight: 36, paddingHorizontal: 14, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
+  viewerCloseBtn: { minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
   viewerCloseText: { color: '#FFFFFF', fontWeight: '900' },
   viewerBody: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   viewerImage: { width: '100%', height: '100%' },

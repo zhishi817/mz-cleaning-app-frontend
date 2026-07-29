@@ -25,6 +25,8 @@ import {
   saveInspectionPanelDraftBatch,
   submitInspectionPanelBatch,
   subscribeInspectionPanelSubmitQueue,
+  inspectionPanelFailedStepDetails,
+  inspectionPanelLocalMediaSummary,
   validateInspectionPanelSnapshot,
   type InspectionPanelBatchMedia,
   type InspectionPanelBatchRestockItem,
@@ -37,15 +39,20 @@ import { inspectionScopeLabel, isPasswordOnlyInspectionTask } from '../../lib/cl
 import { compressImageForUpload } from '../../lib/imageCompression'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
+import { layoutTokens } from '../../lib/theme'
 import { canSkipInspectionPhotosForGuestArrival, isEarlyCheckinTime } from '../../lib/taskTime'
 import { getInspectionScopeTone, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
 import { checkinTimeForDisplay, cleaningExecutionTaskIdsFromTask, guestRequestForDisplay, isEarlyCheckinDisplay } from '../../lib/turnoverDisplay'
+import { consumableRestockStandard } from '../../lib/consumableRestockStandards'
 import { ensureSuppliesCatalogLoaded, retrySuppliesCatalog, useSuppliesCatalogStore } from '../../lib/useSuppliesCatalogStore'
 import { getWorkTasksSnapshot, patchWorkTaskItem, subscribeWorkTasks } from '../../lib/workTasksStore'
-import { getCleaningConsumables } from '../../lib/api'
+import { appendInspectionIssuePhotos, getCleaningConsumables, getInspectionPhotos, uploadCleaningMedia } from '../../lib/api'
+import { cleaningMediaReference } from '../../lib/cleaningMedia'
+import { getJson, remove as removeStorage, setJson } from '../../lib/storage'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import CleaningMediaImage from '../../components/CleaningMediaImage'
+import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 import AppButton from '../../components/ui/AppButton'
 import AppTextInput from '../../components/ui/AppTextInput'
 import ResponsiveImageGrid from '../../components/ui/ResponsiveImageGrid'
@@ -61,19 +68,63 @@ type ViewerTarget = {
   remoteReference?: string | null
 }
 
+type PostSubmitIssueDraft = {
+  submit_id: string
+  items: InspectionPanelBatchMedia[]
+  last_error?: string | null
+}
+
 const ROOM_AREAS: { key: InspectionPanelRoomPhotoArea; label: string; hint: string; max: number }[] = [
-  { key: 'living', label: '客厅', hint: '建议拍整体环境', max: 3 },
+  { key: 'living', label: '客厅', hint: '建议拍客厅整体', max: 3 },
   { key: 'sofa', label: '沙发', hint: '建议拍沙发表面', max: 2 },
   { key: 'bedroom', label: '卧室', hint: '重点拍地毯情况', max: 8 },
   { key: 'kitchen', label: '厨房', hint: '建议拍整体', max: 2 },
+  { key: 'bathroom', label: '浴室', hint: '需要拍浴室整体', max: 3 },
 ]
 
 function baseRoomPhotos(): RoomPhotoMap {
-  return { living: [], sofa: [], bedroom: [], kitchen: [] }
+  return { living: [], sofa: [], bedroom: [], kitchen: [], bathroom: [] }
+}
+
+function buildRemoteInspectionPhotoState(items: any[]) {
+  const roomPhotos = baseRoomPhotos()
+  const cleaningIssue: InspectionPanelBatchMedia[] = []
+  for (const [index, item] of (Array.isArray(items) ? items : []).entries()) {
+    const url = cleanText(item?.url)
+    const area = cleanText(item?.area).toLowerCase()
+    if (!url || (!Object.prototype.hasOwnProperty.call(roomPhotos, area) && area !== 'unclean')) continue
+    const media: InspectionPanelBatchMedia = {
+      id: `remote-inspection-${area}-${index}`,
+      local_uri: null,
+      thumbnail_uri: null,
+      uploaded_key: null,
+      uploaded_url: url,
+      name: `已同步${area}检查照片`,
+      mime_type: 'image/jpeg',
+      captured_at: cleanText(item?.captured_at) || cleanText(item?.created_at) || '1970-01-01T00:00:00.000Z',
+      note: cleanText(item?.note) || null,
+    }
+    if (area === 'unclean') cleaningIssue.push(media)
+    else (roomPhotos as any)[area].push(media)
+  }
+  return {
+    roomPhotos,
+    cleaningIssue,
+    total: Object.values(roomPhotos).reduce((sum, values) => sum + values.length, 0) + cleaningIssue.length,
+  }
 }
 
 function cleanText(value: any) {
   return String(value || '').trim()
+}
+
+function postSubmitIssueDraftKey(taskId: string) {
+  return `mzstay.inspection_post_submit_issue_draft.v1:${cleanText(taskId)}`
+}
+
+function makePostSubmitIssueId(taskId: string) {
+  const entropy = Math.random().toString(36).slice(2, 10)
+  return `inspection-issue-${cleanText(taskId).slice(0, 36) || 'task'}-${Date.now().toString(36)}-${entropy}`
 }
 
 function formatLocalTime(value = new Date()) {
@@ -105,6 +156,7 @@ function cloneRoomPhotos(roomPhotos: RoomPhotoMap): RoomPhotoMap {
     sofa: [...(roomPhotos.sofa || [])],
     bedroom: [...(roomPhotos.bedroom || [])],
     kitchen: [...(roomPhotos.kitchen || [])],
+    bathroom: [...(roomPhotos.bathroom || [])],
   }
 }
 
@@ -140,8 +192,8 @@ function batchStatusHint(status: InspectionPanelBatchStatus | null, lastError?: 
   const error = cleanText(lastError)
   if (status === 'pending_submit') return error || '本页已保存到本机，正在等待同步。'
   if (status === 'syncing') return '当前正在上传图片并提交业务记录。'
-  if (status === 'partial_failed') return '已有部分步骤成功；重试会从失败步骤继续，不会重复上传已成功内容。'
-  if (status === 'failed') return '同步失败；重试会从失败步骤继续。若要改内容，需要先放弃当前失败批次并重建草稿。'
+  if (status === 'partial_failed') return `${error ? `最近错误：${error}。` : ''}已有部分步骤成功；重试会从失败步骤继续，不会重复上传已成功内容。`
+  if (status === 'failed') return `${error ? `最近错误：${error}。` : ''}同步失败；重试会从失败步骤继续。若要改内容，需要先放弃当前失败批次并重建草稿。`
   if (status === 'synced') return '本次检查与补充已全部同步完成，可回看摘要。'
   return '拍照和填写阶段只保存在本机，点击提交后会保存为待同步批次。'
 }
@@ -291,15 +343,22 @@ export default function InspectionPanelScreen(props: Props) {
   const [roomPhotosSavedAt, setRoomPhotosSavedAt] = useState<string | null>(null)
   const [viewerTarget, setViewerTarget] = useState<ViewerTarget | null>(null)
   const [restockPickerOpen, setRestockPickerOpen] = useState(false)
+  const [restockPickerMode, setRestockPickerMode] = useState<'other' | 'next'>('other')
   const [restockPickerQuery, setRestockPickerQuery] = useState('')
   const [restockPickerSelectedIds, setRestockPickerSelectedIds] = useState<string[]>([])
   const [restock, setRestock] = useState<RestockState[]>([])
+  const [restockLoading, setRestockLoading] = useState(true)
+  const [restockLoadError, setRestockLoadError] = useState(false)
   const [restockConfirmedSufficient, setRestockConfirmedSufficient] = useState(false)
   const [guestArrivalPhotoSkipConfirmed, setGuestArrivalPhotoSkipConfirmed] = useState(false)
   const [roomPhotos, setRoomPhotos] = useState<RoomPhotoMap>(baseRoomPhotos())
+  const roomPhotosRef = useRef<RoomPhotoMap>(baseRoomPhotos())
   const [cleaningIssue, setCleaningIssue] = useState<InspectionPanelBatchMedia[]>([])
   const [feedbackDraft, setFeedbackDraft] = useState<InspectionPanelFeedbackDraftState | null>(null)
   const [batchItem, setBatchItem] = useState<InspectionPanelSubmitQueueItem | null>(null)
+  const [roomConfirmed, setRoomConfirmed] = useState(false)
+  const [postSubmitIssueDraft, setPostSubmitIssueDraft] = useState<PostSubmitIssueDraft | null>(null)
+  const [postSubmitIssueSubmitting, setPostSubmitIssueSubmitting] = useState(false)
   const [guestNeedDone, setGuestNeedDone] = useState(false)
   const [showValidationIssue, setShowValidationIssue] = useState(false)
   const draftHydratedRef = useRef(false)
@@ -313,9 +372,35 @@ export default function InspectionPanelScreen(props: Props) {
     photos: true,
   })
 
+  const commitRoomPhotos = useCallback((nextRoomPhotos: RoomPhotoMap) => {
+    const next = cloneRoomPhotos(nextRoomPhotos)
+    roomPhotosRef.current = next
+    setRoomPhotos(next)
+    return next
+  }, [])
+
   useEffect(() => {
     draftHydratedRef.current = false
     draftPersistChainRef.current = Promise.resolve()
+  }, [props.route.params.taskId])
+
+  useEffect(() => {
+    let cancelled = false
+    setPostSubmitIssueDraft(null)
+    const taskId = cleanText(props.route.params.taskId)
+    if (!taskId) return
+    void getJson<PostSubmitIssueDraft>(postSubmitIssueDraftKey(taskId)).then((saved) => {
+      if (cancelled || !saved) return
+      const submitId = cleanText(saved.submit_id)
+      const items = Array.isArray(saved.items)
+        ? saved.items.filter((item) => cleanText(item?.id) && (cleanText(item?.local_uri) || mediaRemoteReference(item as InspectionPanelBatchMedia)))
+        : []
+      if (!submitId || !items.length) return
+      setPostSubmitIssueDraft({ submit_id: submitId, items, last_error: cleanText(saved.last_error) || null })
+    }).catch(() => null)
+    return () => {
+      cancelled = true
+    }
   }, [props.route.params.taskId])
 
   useEffect(() => {
@@ -327,6 +412,12 @@ export default function InspectionPanelScreen(props: Props) {
 
   const task = getWorkTasksSnapshot().items.find((x) => x.id === props.route.params.taskId) || null
   const cleaningTaskId = cleanText(props.route.params.sourceId) || cleanText(task?.source_id)
+  const readOnly = props.route.params.readOnly === true
+  const completedInspectionView = ['done', 'completed', 'ready', 'keys_hung'].includes(cleanText(task?.status).toLowerCase())
+  const skipRoomConfirmation = readOnly || completedInspectionView
+  useEffect(() => {
+    setRoomConfirmed(skipRoomConfirmation)
+  }, [props.route.params.taskId, skipRoomConfirmation])
   const propertyId = cleanText(task?.property_id || task?.property?.id)
   const propertyCode = cleanText(task?.property?.code)
   const propertyAddr = cleanText(task?.property?.address)
@@ -336,6 +427,12 @@ export default function InspectionPanelScreen(props: Props) {
   const guestArrivalPhotoSkipEligible = canSkipInspectionPhotosForGuestArrival(checkinTime)
   const isEarlyCheckinGuest = isEarlyCheckinDisplay(task) || isEarlyCheckinTime(checkinTime)
   const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
+  const inspectionSubmitAction = (Array.isArray((task as any)?.available_actions) ? (task as any).available_actions : [])
+    .find((action: any) => String(action?.id || '') === 'submit_inspection')
+  const cleaningSubmissionBlocked = !isPasswordOnlyInspection && (
+    (task && typeof (task as any).cleaning_submission_ready === 'boolean' && (task as any).cleaning_submission_ready === false)
+    || String(inspectionSubmitAction?.disabled_reason || '') === 'cleaning_submission_required'
+  )
   const roomPhotoRequirement: InspectionPanelRoomPhotoRequirement = isPasswordOnlyInspection
     ? 'password_only'
     : guestArrivalPhotoSkipEligible && guestArrivalPhotoSkipConfirmed
@@ -344,7 +441,8 @@ export default function InspectionPanelScreen(props: Props) {
   const inspectionScopeNoticeStyles = noticeToneStylePair(getInspectionScopeTone(isPasswordOnlyInspection))
   const batchStatus = batchItem?.status || 'draft'
   const hasFormalSubmission = batchStatus !== 'draft'
-  const isFrozen = batchStatus !== 'draft'
+  const isFrozen = readOnly || batchStatus !== 'draft'
+  const canAppendPostSubmitCleaningIssue = !readOnly && batchStatus === 'synced' && !!cleaningTaskId
   const isOnline = netInfo.isConnected !== false && netInfo.isInternetReachable !== false
   const batchValidationError = hasFormalSubmission && batchItem ? validateInspectionPanelSnapshot(batchItem.snapshot) : null
   const canRetryFailedBatch = batchStatus === 'failed' || batchStatus === 'partial_failed'
@@ -383,6 +481,8 @@ export default function InspectionPanelScreen(props: Props) {
     const showSpinner = options?.showSpinner !== false
     const forceDraftReload = options?.forceDraftReload === true
     if (showSpinner) setLoading(true)
+    setRestockLoading(true)
+    setRestockLoadError(false)
     try {
       if (cleaningTaskId) {
         await bindInspectionPanelCleaningTaskId({
@@ -393,29 +493,41 @@ export default function InspectionPanelScreen(props: Props) {
         })
       }
       const consumableSourceIds = consumableSourceIdsKey ? consumableSourceIdsKey.split('|').filter(Boolean) : []
-      const [batch, draft, feedback, consumablesResponses] = await Promise.all([
+      const [batch, draft, feedback, consumableResults, remoteInspectionPhotos] = await Promise.all([
         getInspectionPanelBatch(task.id),
         getInspectionPanelDraft(task.id),
         getInspectionPanelFeedbackDraft(task.id),
         token && consumableSourceIds.length
-          ? Promise.all(consumableSourceIds.map((id) => getCleaningConsumables(token, id).catch(() => null)))
+          ? Promise.allSettled(consumableSourceIds.map((id) => getCleaningConsumables(token, id)))
+          : Promise.resolve([]),
+        readOnly && token && cleaningTaskId
+          ? getInspectionPhotos(token, cleaningTaskId).then((result) => result?.items || []).catch(() => [])
           : Promise.resolve([]),
       ])
+      const consumablesResponses = consumableResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])
+      const consumableLoadFailed = consumableSourceIds.length > 0 && (!token || consumableResults.some((result) => result.status === 'rejected'))
       const remoteRestockItems = buildRestockFromConsumables(consumablesResponses)
+      const remotePhotoState = readOnly ? buildRemoteInspectionPhotoState(remoteInspectionPhotos) : null
       const sourceSnapshot = batch && batch.status !== 'draft' ? batch.snapshot : null
       setBatchItem(batch)
       setFeedbackDraft(sourceSnapshot?.feedback || feedback || null)
       if (sourceSnapshot) {
+        setRestockLoadError(false)
         setRestock(sourceSnapshot.restock.map(cloneRestockItem))
         setRestockConfirmedSufficient(!!sourceSnapshot.restock_confirmed_sufficient)
         setGuestArrivalPhotoSkipConfirmed(sourceSnapshot.room_photo_requirement === 'guest_arrival_confirmed')
-        setRoomPhotos(cloneRoomPhotos(sourceSnapshot.room_photos || baseRoomPhotos()))
-        setCleaningIssue([...(sourceSnapshot.cleaning_issue || [])])
+        commitRoomPhotos(remotePhotoState?.total ? remotePhotoState.roomPhotos : cloneRoomPhotos(sourceSnapshot.room_photos || baseRoomPhotos()))
+        setCleaningIssue(remotePhotoState?.total ? remotePhotoState.cleaningIssue : [...(sourceSnapshot.cleaning_issue || [])])
         draftHydratedRef.current = true
         return
       }
+      setRestockLoadError(consumableLoadFailed)
       if (draftHydratedRef.current && !forceDraftReload) {
         if (feedback) setFeedbackDraft(feedback)
+        if (remotePhotoState?.total) {
+          commitRoomPhotos(remotePhotoState.roomPhotos)
+          setCleaningIssue(remotePhotoState.cleaningIssue)
+        }
         const incoming = mergeRestockItems(initialRestockItems.map(cloneRestockItem), remoteRestockItems)
         if (incoming.length) {
           setRestock((prev) => mergeRestockItems(prev, incoming))
@@ -433,13 +545,14 @@ export default function InspectionPanelScreen(props: Props) {
       )
       setRestockConfirmedSufficient(!!draft?.restock_confirmed_sufficient && !remoteRestockItems.length)
       setGuestArrivalPhotoSkipConfirmed(draft?.room_photo_requirement === 'guest_arrival_confirmed')
-      setRoomPhotos(cloneRoomPhotos(draft?.room_photos || baseRoomPhotos()))
-      setCleaningIssue([...(draft?.cleaning_issue || [])])
+      commitRoomPhotos(remotePhotoState?.total ? remotePhotoState.roomPhotos : cloneRoomPhotos(draft?.room_photos || baseRoomPhotos()))
+      setCleaningIssue(remotePhotoState?.total ? remotePhotoState.cleaningIssue : [...(draft?.cleaning_issue || [])])
       draftHydratedRef.current = true
     } finally {
+      setRestockLoading(false)
       if (showSpinner) setLoading(false)
     }
-  }, [cleaningTaskId, consumableSourceIdsKey, initialRestockItems, propertyCode, propertyId, task, token])
+  }, [cleaningTaskId, commitRoomPhotos, consumableSourceIdsKey, initialRestockItems, propertyCode, propertyId, readOnly, task, token])
 
   useEffect(() => {
     void loadLocalState({ showSpinner: true })
@@ -530,21 +643,26 @@ export default function InspectionPanelScreen(props: Props) {
   async function onAddRoomPhoto(area: InspectionPanelRoomPhotoArea) {
     if (isFrozen) return
     const limit = ROOM_AREAS.find((item) => item.key === area)?.max || 1
-    if ((roomPhotos[area] || []).length >= limit) return
+    const currentRoomPhotos = roomPhotosRef.current
+    if ((currentRoomPhotos[area] || []).length >= limit) return
     const ok = await ensureCameraPerm()
     if (!ok) return Alert.alert(t('common_error'), '需要相机权限')
     const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
     if (res.canceled || !res.assets?.length) return
-    const media = await createMediaFromAsset(res.assets[0], `inspection-${area}`)
-    if (!media) return
-    const nextRoomPhotos = {
-      ...roomPhotos,
-      [area]: [...(roomPhotos[area] || []), media],
+    let media: InspectionPanelBatchMedia | null = null
+    try {
+      media = await createMediaFromAsset(res.assets[0], `inspection-${area}`)
+    } catch (error: any) {
+      Alert.alert(t('common_error'), String(error?.message || '照片格式转换失败，请重新拍摄'))
+      return
     }
-    setRoomPhotos(nextRoomPhotos)
+    if (!media) return
+    const nextRoomPhotos = cloneRoomPhotos(currentRoomPhotos)
+    nextRoomPhotos[area] = [...(currentRoomPhotos[area] || []), media]
+    const committedRoomPhotos = commitRoomPhotos(nextRoomPhotos)
     setRoomPhotosSavedAt(null)
     try {
-      await persistDraft(restock, restockConfirmedSufficient, nextRoomPhotos)
+      await persistDraft(restock, restockConfirmedSufficient, committedRoomPhotos)
       setRoomPhotosSavedAt(formatLocalTime())
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '照片自动保存失败，请点击“保存照片”重试'))
@@ -554,7 +672,9 @@ export default function InspectionPanelScreen(props: Props) {
   function onRemoveRoomPhoto(area: InspectionPanelRoomPhotoArea, idx: number) {
     if (isFrozen) return
     setRoomPhotosSavedAt(null)
-    setRoomPhotos((prev) => ({ ...prev, [area]: prev[area].filter((_, index) => index !== idx) }))
+    const nextRoomPhotos = cloneRoomPhotos(roomPhotosRef.current)
+    nextRoomPhotos[area] = nextRoomPhotos[area].filter((_, index) => index !== idx)
+    commitRoomPhotos(nextRoomPhotos)
   }
 
   async function onSaveRoomPhotos() {
@@ -585,11 +705,148 @@ export default function InspectionPanelScreen(props: Props) {
     if (res.canceled || !res.assets?.length) return
     const created: InspectionPanelBatchMedia[] = []
     for (const asset of (res.assets as any[]).slice(0, 12 - cleaningIssue.length)) {
-      const media = await createMediaFromAsset(asset, 'unclean', '')
-      if (media) created.push(media)
+      try {
+        const media = await createMediaFromAsset(asset, 'unclean', '')
+        if (media) created.push(media)
+      } catch (error: any) {
+        Alert.alert(t('common_error'), String(error?.message || '照片格式转换失败，请重新拍摄'))
+        return
+      }
     }
     if (!created.length) return
     setCleaningIssue((prev) => [...prev, ...created].slice(0, 12))
+  }
+
+  async function persistPostSubmitIssueDraft(next: PostSubmitIssueDraft | null) {
+    const taskId = cleanText(props.route.params.taskId)
+    if (!taskId) return
+    if (!next?.items.length) {
+      await removeStorage(postSubmitIssueDraftKey(taskId))
+      return
+    }
+    await setJson(postSubmitIssueDraftKey(taskId), next)
+  }
+
+  async function onAddPostSubmitCleaningIssueFromLibrary() {
+    if (!canAppendPostSubmitCleaningIssue) return
+    const remaining = Math.max(0, 12 - cleaningIssue.length - (postSubmitIssueDraft?.items.length || 0))
+    if (!remaining) {
+      Alert.alert(t('common_error'), '清洁问题照片最多 12 张')
+      return
+    }
+    const permitted = await ensureLibraryPerm()
+    if (!permitted) return Alert.alert(t('common_error'), '需要相册权限')
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images',
+      quality: 0.75,
+      allowsMultipleSelection: true,
+      selectionLimit: remaining,
+      orderedSelection: true,
+    })
+    if (res.canceled || !res.assets?.length) return
+    const created: InspectionPanelBatchMedia[] = []
+    for (const asset of (res.assets as any[]).slice(0, remaining)) {
+      try {
+        const media = await createMediaFromAsset(asset, 'inspection-issue', '')
+        if (media) created.push(media)
+      } catch (error: any) {
+        Alert.alert(t('common_error'), String(error?.message || '照片格式转换失败，请重新选择'))
+        return
+      }
+    }
+    if (!created.length) return
+    const next: PostSubmitIssueDraft = {
+      submit_id: postSubmitIssueDraft?.submit_id || makePostSubmitIssueId(props.route.params.taskId),
+      items: [...(postSubmitIssueDraft?.items || []), ...created],
+      last_error: null,
+    }
+    setPostSubmitIssueDraft(next)
+    try {
+      await persistPostSubmitIssueDraft(next)
+    } catch (error: any) {
+      Alert.alert(t('common_error'), String(error?.message || '问题照片保存到本机失败'))
+    }
+  }
+
+  function updatePostSubmitCleaningIssueNote(idx: number, value: string) {
+    if (!postSubmitIssueDraft) return
+    const next = {
+      ...postSubmitIssueDraft,
+      items: postSubmitIssueDraft.items.map((item, index) => (index === idx ? { ...item, note: value.slice(0, 300) } : item)),
+    }
+    setPostSubmitIssueDraft(next)
+    void persistPostSubmitIssueDraft(next).catch(() => null)
+  }
+
+  function removePostSubmitCleaningIssue(idx: number) {
+    if (!postSubmitIssueDraft) return
+    const items = postSubmitIssueDraft.items.filter((_, index) => index !== idx)
+    const next = items.length ? { ...postSubmitIssueDraft, items, last_error: null } : null
+    setPostSubmitIssueDraft(next)
+    void persistPostSubmitIssueDraft(next).catch(() => null)
+  }
+
+  async function onSubmitPostSubmitCleaningIssue() {
+    if (!canAppendPostSubmitCleaningIssue || !token || !postSubmitIssueDraft?.items.length) return
+    setPostSubmitIssueSubmitting(true)
+    let next = postSubmitIssueDraft
+    try {
+      const uploadedItems: InspectionPanelBatchMedia[] = []
+      for (const item of next.items) {
+        let uploaded = item
+        let remoteReference = mediaRemoteReference(uploaded)
+        if (!remoteReference) {
+          const localUri = cleanText(uploaded.local_uri)
+          if (!localUri) throw new Error('缺少可提交的问题照片')
+          const upload = await uploadCleaningMedia(
+            token,
+            {
+              uri: localUri,
+              name: cleanText(uploaded.name) || `inspection-issue-${Date.now()}.jpg`,
+              mimeType: cleanText(uploaded.mime_type) || 'image/jpeg',
+            },
+            {
+              watermark: '1',
+              purpose: 'inspection_issue',
+              property_code: propertyCode || undefined,
+              captured_at: cleanText(uploaded.captured_at) || undefined,
+              watermark_text: `${propertyCode || '未知房号'}\n${cleanText(uploaded.captured_at).replace('T', ' ').slice(0, 16)}`,
+            },
+          )
+          remoteReference = cleaningMediaReference(upload)
+          if (!remoteReference) throw new Error('问题照片上传后缺少媒体引用')
+          uploaded = {
+            ...uploaded,
+            uploaded_key: remoteReference.startsWith('cleaning/') ? remoteReference : null,
+            uploaded_url: remoteReference.startsWith('cleaning/') ? null : remoteReference,
+          }
+          next = { ...next, items: next.items.map((entry) => entry.id === uploaded.id ? uploaded : entry), last_error: null }
+          setPostSubmitIssueDraft(next)
+          await persistPostSubmitIssueDraft(next)
+        }
+        uploadedItems.push(uploaded)
+      }
+      await appendInspectionIssuePhotos(token, cleaningTaskId, {
+        items: uploadedItems.map((item) => ({
+          url: mediaRemoteReference(item),
+          note: cleanText(item.note) || null,
+          captured_at: cleanText(item.captured_at) || undefined,
+        })),
+        submit_id: next.submit_id,
+        step_key: 'append_inspection_issue_photos',
+      }, { skipAuthInvalidation: true })
+      setCleaningIssue((current) => [...current, ...uploadedItems])
+      setPostSubmitIssueDraft(null)
+      await persistPostSubmitIssueDraft(null)
+      Alert.alert(t('common_ok'), '清洁问题已提交')
+    } catch (error: any) {
+      const failed = { ...next, last_error: String(error?.message || '清洁问题提交失败，请重试') }
+      setPostSubmitIssueDraft(failed)
+      await persistPostSubmitIssueDraft(failed).catch(() => null)
+      Alert.alert(t('common_error'), failed.last_error || '清洁问题提交失败，请重试')
+    } finally {
+      setPostSubmitIssueSubmitting(false)
+    }
   }
 
   function onChangeCleaningIssueNote(idx: number, value: string) {
@@ -602,15 +859,34 @@ export default function InspectionPanelScreen(props: Props) {
     setCleaningIssue((prev) => prev.filter((_, index) => index !== idx))
   }
 
+  async function captureRestockProof() {
+    const ok = await ensureCameraPerm()
+    if (!ok) {
+      Alert.alert(t('common_error'), '需要相机权限')
+      return null
+    }
+    const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+    if (res.canceled || !res.assets?.length) return null
+    try {
+      return await createMediaFromAsset(res.assets[0], 'restock')
+    } catch (error: any) {
+      Alert.alert(t('common_error'), String(error?.message || '照片格式转换失败，请重新拍摄'))
+      return null
+    }
+  }
+
   async function onTakeRestockProof(idx: number) {
     if (isFrozen) return
-    const ok = await ensureCameraPerm()
-    if (!ok) return Alert.alert(t('common_error'), '需要相机权限')
-    const res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
-    if (res.canceled || !res.assets?.length) return
-    const media = await createMediaFromAsset(res.assets[0], 'restock')
+    const media = await captureRestockProof()
     if (!media) return
     setRestock((prev) => prev.map((item, index) => (index === idx ? { ...item, proof_media: [...item.proof_media, media] } : item)))
+  }
+
+  async function onMarkRestocked(idx: number) {
+    if (isFrozen) return
+    const media = await captureRestockProof()
+    if (!media) return
+    setRestock((prev) => prev.map((item, index) => (index === idx ? { ...item, status: 'restocked', proof_media: [...item.proof_media, media] } : item)))
   }
 
   function validateDraft() {
@@ -649,6 +925,10 @@ export default function InspectionPanelScreen(props: Props) {
 
   async function onSubmitPage() {
     if (!task || !token) return
+    if (cleaningSubmissionBlocked) {
+      Alert.alert('暂不可提交检查', '请先等待清洁提交补品记录和房源照片，清洁完成后刷新任务再提交检查。')
+      return
+    }
     const currentBatch = await getInspectionPanelBatch(task.id)
     if (currentBatch && currentBatch.status !== 'draft') {
       setSubmitting(true)
@@ -718,7 +998,7 @@ export default function InspectionPanelScreen(props: Props) {
     setRestock(initialRestockItems.map(cloneRestockItem))
     setRestockConfirmedSufficient(false)
     setGuestArrivalPhotoSkipConfirmed(false)
-    setRoomPhotos(baseRoomPhotos())
+    commitRoomPhotos(baseRoomPhotos())
     setCleaningIssue([])
     setFeedbackDraft(await getInspectionPanelFeedbackDraft(task.id))
   }
@@ -737,8 +1017,15 @@ export default function InspectionPanelScreen(props: Props) {
 
   function closeRestockPicker() {
     setRestockPickerOpen(false)
+    setRestockPickerMode('other')
     setRestockPickerQuery('')
     setRestockPickerSelectedIds([])
+  }
+
+  function openRestockPicker(mode: 'other' | 'next') {
+    if (isFrozen) return
+    setRestockPickerMode(mode)
+    setRestockPickerOpen(true)
   }
 
   function toggleRestockPickerItem(itemId0: string) {
@@ -756,11 +1043,12 @@ export default function InspectionPanelScreen(props: Props) {
       .filter((itemId) => !existing.has(itemId))
       .map((itemId) => {
         const source = suppliesCatalog.items.find((item) => cleanText(item.id) === itemId)
+        const status: RestockState['status'] = restockPickerMode === 'next' ? 'carry_forward' : null
         return {
           item_id: itemId,
           label: cleanText(source?.label) || itemId,
           qty: null,
-          status: null,
+          status,
           source_photo_url: null,
           proof_media: [],
           note: '',
@@ -774,7 +1062,43 @@ export default function InspectionPanelScreen(props: Props) {
   }
 
   const completeDisabled = !hasFormalSubmission || !!batchValidationError || (!!guestSpecialRequest && !guestNeedDone)
-  const syncHint = batchStatusHint(batchStatus, batchItem?.last_error)
+  const syncHint = readOnly ? '只读查看模式，已同步照片不可修改。' : batchStatusHint(batchStatus, batchItem?.last_error)
+  const failedStepDetails = inspectionPanelFailedStepDetails(batchItem)
+  const localMediaSummary = inspectionPanelLocalMediaSummary(batchItem)
+  const restockAddButtons = (
+    <View style={styles.restockAddRow}>
+      <Pressable
+        testID="inspection-add-other-restock"
+        onPress={() => openRestockPicker('other')}
+        disabled={isFrozen}
+        style={({ pressed }) => [styles.previewBtn, styles.restockAddButton, isFrozen ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
+      >
+        <Text style={styles.previewBtnText}>添加其他要补充项</Text>
+      </Pressable>
+      <Pressable
+        testID="inspection-add-next-restock"
+        onPress={() => openRestockPicker('next')}
+        disabled={isFrozen}
+        style={({ pressed }) => [styles.previewBtn, styles.restockAddButton, isFrozen ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
+      >
+        <Text style={styles.previewBtnText}>添加下次要补充项</Text>
+      </Pressable>
+    </View>
+  )
+  const restockLoadErrorView = (
+    <View testID="inspection-restock-load-error" style={styles.inlineErrorCard}>
+      <Text style={styles.inlineErrorTitle}>补充项读取失败</Text>
+      <Text style={styles.inlineErrorText}>暂时无法确认消耗品状态，请重试后再确认现场是否充足。</Text>
+      <Pressable
+        testID="inspection-retry-restock-load"
+        onPress={() => !isFrozen && void loadLocalState({ showSpinner: true, forceDraftReload: true })}
+        disabled={isFrozen}
+        style={({ pressed }) => [styles.inlineRetryBtn, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}
+      >
+        <Text style={styles.inlineRetryText}>重试读取</Text>
+      </Pressable>
+    </View>
+  )
 
   if (!task) {
     return (
@@ -797,12 +1121,10 @@ export default function InspectionPanelScreen(props: Props) {
               </View>
             </View>
             {propertyAddr ? <Text style={styles.sub}>{propertyAddr}</Text> : null}
-            <Text style={styles.mutedSmall}>{`当前状态：${batchStatusLabel(batchStatus)}`}</Text>
-            <Text style={batchStatus === 'failed' || batchStatus === 'partial_failed' || batchValidationError ? styles.warnSmall : styles.mutedSmall}>
-              {batchValidationError ? `当前批次验证失败：${batchValidationError}` : syncHint}
-            </Text>
-            {!canDiscardFrozenBatch && isFrozen ? (
-              <Text style={styles.mutedSmall}>当前批次已保存并冻结，不能继续编辑本次 snapshot。</Text>
+            {readOnly ? (
+              <Text testID="inspection-read-only-banner" style={styles.readOnlyBanner}>
+                只读查看：任务已完成，检查照片已从系统同步加载，不能修改或再次提交。
+              </Text>
             ) : null}
             {isPasswordOnlyInspection ? (
               <View style={[styles.noticeCard, inspectionScopeNoticeStyles.card]}>
@@ -829,8 +1151,8 @@ export default function InspectionPanelScreen(props: Props) {
           <GuestLuggageCard
             notice={(task as any).guest_luggage || null}
             token={token}
-            showAcknowledge
-            onChanged={(notice) => patchWorkTaskItem(task.id, { guest_luggage: notice } as any)}
+            showAcknowledge={!readOnly}
+            onChanged={readOnly ? undefined : (notice) => patchWorkTaskItem(task.id, { guest_luggage: notice } as any)}
           />
 
           <View
@@ -844,43 +1166,46 @@ export default function InspectionPanelScreen(props: Props) {
             {expanded.restock ? (
               !restock.length ? (
                 <View style={styles.block}>
-                  {draftValidationIssue?.section === 'restock' ? (
+                  {restockLoading ? (
+                    <Text testID="inspection-restock-loading" style={styles.mutedSmall}>正在读取补充项...</Text>
+                  ) : restockLoadError ? restockLoadErrorView : null}
+                  {!restockLoading && !restockLoadError && draftValidationIssue?.section === 'restock' ? (
                     <View style={styles.inlineErrorCard}>
                       <Text style={styles.inlineErrorTitle}>还有内容没完成</Text>
                       <Text style={styles.inlineErrorText}>{draftValidationIssue.message}</Text>
                     </View>
                   ) : null}
-                  <Text style={styles.mutedSmall}>{restockConfirmedSufficient ? '已确认当前消耗品充足。' : '当前没有待补充项，请确认现场消耗品都充足，或添加下次退房要补的项目。'}</Text>
-                  <View style={styles.row}>
-                    <Pressable
-                      onPress={() => !isFrozen && setRestockConfirmedSufficient(true)}
-                      disabled={isFrozen}
-                      style={({ pressed }) => [styles.primaryBtn, restockConfirmedSufficient ? styles.primaryBtnSuccess : null, isFrozen ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
-                    >
-                      <Text style={styles.primaryText}>{restockConfirmedSufficient ? '已确认充足' : '确认都充足'}</Text>
-                    </Pressable>
-                    <Pressable onPress={() => setRestockPickerOpen(true)} disabled={isFrozen} style={({ pressed }) => [styles.previewBtn, isFrozen ? styles.submitDisabled : null, pressed ? styles.pressed : null]}>
-                      <Text style={styles.previewBtnText}>添加下次要补充项</Text>
-                    </Pressable>
-                  </View>
+                  {!restockLoading && !restockLoadError ? (
+                    <>
+                      <Text style={styles.mutedSmall}>{restockConfirmedSufficient ? '已确认当前消耗品充足。' : '当前没有待补充项，请确认现场消耗品都充足，或添加其他要补充项或下次退房要补的项目。'}</Text>
+                      <Pressable
+                        onPress={() => !isFrozen && setRestockConfirmedSufficient(true)}
+                        disabled={isFrozen}
+                        style={({ pressed }) => [styles.primaryBtn, styles.restockConfirmButton, restockConfirmedSufficient ? styles.primaryBtnSuccess : null, isFrozen ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
+                      >
+                        <Text style={styles.primaryText}>{restockConfirmedSufficient ? '已确认充足' : '确认都充足'}</Text>
+                      </Pressable>
+                      {restockAddButtons}
+                    </>
+                  ) : null}
                 </View>
               ) : (
                 <>
+                  {restockLoadError ? restockLoadErrorView : null}
                   {draftValidationIssue?.section === 'restock' ? (
                     <View style={styles.inlineErrorCard}>
                       <Text style={styles.inlineErrorTitle}>还有内容没完成</Text>
                       <Text style={styles.inlineErrorText}>{draftValidationIssue.message}</Text>
                     </View>
                   ) : null}
-                  <View style={styles.row}>
-                    <Pressable onPress={() => setRestockPickerOpen(true)} disabled={isFrozen} style={({ pressed }) => [styles.previewBtn, isFrozen ? styles.submitDisabled : null, pressed ? styles.pressed : null]}>
-                      <Text style={styles.previewBtnText}>添加下次要补充项</Text>
-                    </Pressable>
-                  </View>
+                  {restockAddButtons}
                   {restock.map((item, idx) => (
                     <View key={item.item_id} style={[styles.block, draftValidationIssue?.section === 'restock' && draftValidationIssue.item_id === item.item_id ? styles.validationBlock : null]}>
                       <View style={styles.inlineHeadRow}>
-                        <Text style={styles.label}>{item.label}</Text>
+                        <View style={styles.restockTitleWrap}>
+                          <Text style={styles.label}>{item.label}</Text>
+                          {consumableRestockStandard(item.item_id, item.label) ? <Text style={styles.restockStandard}>{`补充标准：${consumableRestockStandard(item.item_id, item.label)}`}</Text> : null}
+                        </View>
                         {item.origin === 'manual' ? (
                           <Pressable onPress={() => !isFrozen && setRestock((prev) => prev.filter((_, index) => index !== idx))} disabled={isFrozen} style={({ pressed }) => [styles.removeBtn, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}>
                             <Text style={styles.removeBtnText}>移除</Text>
@@ -889,10 +1214,10 @@ export default function InspectionPanelScreen(props: Props) {
                       </View>
                       <Text style={styles.mutedSmall}>{item.qty != null ? `建议补充：${item.qty}` : ''}</Text>
                       <View style={styles.row}>
-                        <Pressable onPress={() => !isFrozen && setRestock((prev) => prev.map((entry, index) => (index === idx ? { ...entry, status: 'restocked' } : entry)))} disabled={isFrozen} style={({ pressed }) => [styles.chip, styles.chipHalf, item.status === 'restocked' ? styles.chipActive : null, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}>
+                        <Pressable onPress={() => void onMarkRestocked(idx)} disabled={isFrozen} style={({ pressed }) => [styles.chip, styles.chipHalf, item.status === 'restocked' ? styles.chipActive : null, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}>
                           <Text style={[styles.chipText, item.status === 'restocked' ? styles.chipTextActive : null]}>已补充</Text>
                         </Pressable>
-                        <Pressable onPress={() => !isFrozen && setRestock((prev) => prev.map((entry, index) => (index === idx ? { ...entry, status: 'carry_forward', proof_media: [] } : entry)))} disabled={isFrozen} style={({ pressed }) => [styles.chip, styles.chipHalf, item.status === 'carry_forward' ? styles.chipActive : null, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}>
+                        <Pressable testID={`inspection-restock-${item.item_id}-carry-forward`} onPress={() => !isFrozen && setRestock((prev) => prev.map((entry, index) => (index === idx ? { ...entry, status: 'carry_forward', proof_media: [] } : entry)))} disabled={isFrozen} style={({ pressed }) => [styles.chip, styles.chipHalf, item.status === 'carry_forward' ? styles.chipActive : null, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}>
                           <Text style={[styles.chipText, item.status === 'carry_forward' ? styles.chipTextActive : null]}>下次退房补</Text>
                         </Pressable>
                         <Pressable onPress={() => !isFrozen && setRestock((prev) => prev.map((entry, index) => (index === idx ? { ...entry, status: 'unavailable', proof_media: [] } : entry)))} disabled={isFrozen} style={({ pressed }) => [styles.chip, styles.chipFull, item.status === 'unavailable' ? styles.chipActive : null, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}>
@@ -955,35 +1280,47 @@ export default function InspectionPanelScreen(props: Props) {
             </Pressable>
             {expanded.cleaningIssue ? (
               <View style={styles.block}>
-                <Text style={styles.mutedSmall}>如发现清洁没做到位，可补充照片和备注。此阶段只会保存在本地草稿。</Text>
+                <Text style={styles.mutedSmall}>
+                  {canAppendPostSubmitCleaningIssue
+                    ? '本次检查已同步：仅可从相册补充新的清洁问题，其他检查与补充照片已锁定。'
+                    : '如发现清洁没做到位，可补充照片和备注。此阶段只会保存在本地草稿。'}
+                </Text>
                 <View style={styles.uploadActionsRow}>
-                  <Pressable
-                    onPress={() => void onAddCleaningIssuePhoto('camera')}
-                    disabled={isFrozen}
-                    style={({ pressed }) => [
-                      styles.photoBtn,
-                      styles.uploadActionBtn,
-                      isFrozen ? styles.actionBtnDisabled : null,
-                      pressed ? styles.pressed : null,
-                    ]}
-                  >
-                    <Text style={styles.photoBtnText}>拍照上传</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => void onAddCleaningIssuePhoto('library')}
-                    disabled={isFrozen}
-                    style={({ pressed }) => [
-                      styles.photoBtn,
-                      styles.uploadActionBtn,
-                      isFrozen ? styles.actionBtnDisabled : null,
-                      pressed ? styles.pressed : null,
-                    ]}
-                  >
-                    <Text style={styles.photoBtnText}>相册上传</Text>
-                  </Pressable>
+                  {!isFrozen ? (
+                    <>
+                      <Pressable
+                        onPress={() => void onAddCleaningIssuePhoto('camera')}
+                        style={({ pressed }) => [styles.photoBtn, styles.uploadActionBtn, pressed ? styles.pressed : null]}
+                      >
+                        <Text style={styles.photoBtnText}>拍照上传</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => void onAddCleaningIssuePhoto('library')}
+                        style={({ pressed }) => [styles.photoBtn, styles.uploadActionBtn, pressed ? styles.pressed : null]}
+                      >
+                        <Text style={styles.photoBtnText}>相册上传</Text>
+                      </Pressable>
+                    </>
+                  ) : null}
+                  {canAppendPostSubmitCleaningIssue ? (
+                    <Pressable
+                      testID="inspection-post-submit-issue-library"
+                      onPress={() => void onAddPostSubmitCleaningIssueFromLibrary()}
+                      disabled={postSubmitIssueSubmitting}
+                      style={({ pressed }) => [styles.photoBtn, styles.uploadActionBtn, postSubmitIssueSubmitting ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}
+                    >
+                      <Text style={styles.photoBtnText}>从相册选择问题照片</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
                 {isFrozen ? (
-                  <Text style={styles.mutedSmall}>本页已保存为提交批次；如需补充照片，请先放弃当前提交批次并重建草稿。</Text>
+                  <Text style={styles.mutedSmall}>
+                    {readOnly
+                      ? '当前为只读查看，已同步照片不可修改。'
+                      : canAppendPostSubmitCleaningIssue
+                        ? '新增问题照片会追加提交，不会修改已提交的检查与补充照片。'
+                        : '本页已保存为提交批次；如需补充照片，请先放弃当前提交批次并重建草稿。'}
+                  </Text>
                 ) : null}
                 {cleaningIssue.map((item, idx) => (
                   <View key={`${item.id}-${idx}`} style={styles.issueCard}>
@@ -1007,6 +1344,39 @@ export default function InspectionPanelScreen(props: Props) {
                     <AppTextInput value={cleanText(item.note)} onChangeText={(value) => onChangeCleaningIssueNote(idx, value)} editable={!isFrozen} style={[styles.input, styles.note]} placeholder="备注（可选）" multiline />
                   </View>
                 ))}
+                {postSubmitIssueDraft?.items.map((item, idx) => (
+                  <View key={`post-submit-${item.id}-${idx}`} style={styles.issueCard}>
+                    <View style={styles.row}>
+                      <Pressable onPress={() => setViewerTarget(mediaViewerTarget(item))} style={({ pressed }) => [styles.uncleanThumbWrap, pressed ? styles.pressed : null]}>
+                        <CleaningMediaImage
+                          token={token}
+                          isOnline={isOnline}
+                          localUri={item.local_uri}
+                          thumbnailUri={item.thumbnail_uri}
+                          remoteReference={mediaRemoteReference(item)}
+                          style={styles.uncleanThumb}
+                        />
+                      </Pressable>
+                      <Pressable onPress={() => removePostSubmitCleaningIssue(idx)} disabled={postSubmitIssueSubmitting} style={({ pressed }) => [styles.removeBtn, postSubmitIssueSubmitting ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}>
+                        <Text style={styles.removeBtnText}>删除</Text>
+                      </Pressable>
+                    </View>
+                    <AppTextInput value={cleanText(item.note)} onChangeText={(value) => updatePostSubmitCleaningIssueNote(idx, value)} editable={!postSubmitIssueSubmitting} style={[styles.input, styles.note]} placeholder="问题备注（可选）" multiline />
+                  </View>
+                ))}
+                {canAppendPostSubmitCleaningIssue && postSubmitIssueDraft?.items.length ? (
+                  <View style={styles.postSubmitIssueActions}>
+                    {postSubmitIssueDraft.last_error ? <Text style={styles.warnSmall}>{postSubmitIssueDraft.last_error}</Text> : null}
+                    <AppButton
+                      testID="inspection-post-submit-issue-submit"
+                      label={postSubmitIssueSubmitting ? '正在提交清洁问题' : '提交清洁问题'}
+                      onPress={() => void onSubmitPostSubmitCleaningIssue()}
+                      disabled={postSubmitIssueSubmitting}
+                      loading={postSubmitIssueSubmitting}
+                      fullWidth
+                    />
+                  </View>
+                ) : null}
               </View>
             ) : null}
           </View>
@@ -1019,12 +1389,16 @@ export default function InspectionPanelScreen(props: Props) {
             {expanded.propertyIssue ? (
               <View style={styles.block}>
                 <Text style={styles.mutedSmall}>{feedbackSummary(feedbackDraft)}</Text>
-                <Pressable
-                  onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id, source: 'inspection_panel_batch' })}
-                  style={({ pressed }) => [styles.primaryBtn, { marginTop: 12 }, pressed ? styles.pressed : null]}
-                >
-                  <Text style={styles.primaryText}>进入问题反馈</Text>
-                </Pressable>
+                {readOnly ? (
+                  <Text style={styles.mutedSmall}>当前为只读查看，不能新增房源问题反馈。</Text>
+                ) : (
+                  <Pressable
+                    onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id, source: 'inspection_panel_batch' })}
+                    style={({ pressed }) => [styles.primaryBtn, { marginTop: 12 }, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={styles.primaryText}>进入问题反馈</Text>
+                  </Pressable>
+                )}
               </View>
             ) : null}
           </View>
@@ -1060,8 +1434,9 @@ export default function InspectionPanelScreen(props: Props) {
                           roomPhotos[area.key].map((photo, idx) => (
                             <Pressable
                               key={`${photo.id}-${idx}`}
+                              testID={`inspection-photo-${area.key}-${idx}`}
                               onPress={() => setViewerTarget(mediaViewerTarget(photo))}
-                              onLongPress={() => onRemoveRoomPhoto(area.key, idx)}
+                              onLongPress={() => !readOnly && onRemoveRoomPhoto(area.key, idx)}
                               style={({ pressed }) => [styles.thumbMiniWrap, pressed ? styles.pressed : null]}
                             >
                               <CleaningMediaImage
@@ -1091,7 +1466,7 @@ export default function InspectionPanelScreen(props: Props) {
                 />
                 {!isFrozen ? (
                   <AppButton
-                    label={savingRoomPhotos ? '保存中…' : '保存照片'}
+                    label="保存照片"
                     onPress={() => void onSaveRoomPhotos()}
                     disabled={savingRoomPhotos}
                     loading={savingRoomPhotos}
@@ -1102,7 +1477,7 @@ export default function InspectionPanelScreen(props: Props) {
                 ) : null}
                 <Text style={styles.mutedSmall}>
                   {isFrozen
-                    ? '本页照片已随提交批次冻结保存在本机；进入完成页不会删除这些照片。'
+                    ? (readOnly ? '已同步照片支持点击查看大图，当前为只读状态。' : '本页照片已随提交批次冻结保存在本机；进入完成页不会删除这些照片。')
                     : roomPhotosSavedAt
                     ? `已于 ${roomPhotosSavedAt} 保存到本机草稿；提交本页后才会统一同步。`
                     : '拍照后会自动保存到本机草稿；也可点击上方按钮再次确认。提交本页后才会统一同步。'}
@@ -1114,6 +1489,11 @@ export default function InspectionPanelScreen(props: Props) {
           <View style={styles.card}>
             <View style={styles.sectionHead}>{sectionTitle('checkmark-circle-outline', '5. 标记已完成')}</View>
             <View style={styles.block}>
+              {readOnly ? (
+                <Text testID="inspection-read-only-complete-hint" style={styles.readOnlyBanner}>
+                  任务已完成。此处只保留检查照片查看，不能再次提交或修改任务。
+                </Text>
+              ) : <>
               {guestSpecialRequest ? (
                 <View style={styles.guestNeedCard}>
                   <Text style={styles.guestNeedTitle}>客人需求（需要确认已完成）</Text>
@@ -1125,18 +1505,14 @@ export default function InspectionPanelScreen(props: Props) {
                 </View>
               ) : null}
               {!hasFormalSubmission ? <Text style={styles.mutedSmall}>先点击“提交本页检查与补充”，保存本机批次后即可进入完成页。</Text> : null}
-              {hasFormalSubmission && !batchValidationError ? <Text style={styles.mutedSmall}>检查与补充已保存到本机。即使还在同步或失败状态，也可以继续进入完成页。</Text> : null}
+              {hasFormalSubmission && !batchValidationError ? <Text style={styles.mutedSmall}>检查与补充已保存到本机。即使还在同步或失败状态，也可以继续进入视频页；任务会等待检查照片同步完成后再完成。</Text> : null}
               {batchValidationError ? <Text style={styles.warnSmall}>当前冻结批次不完整，不能进入完成页。请放弃并重建草稿后补齐内容。</Text> : null}
               <AppButton
-                label={
-                  hasFormalSubmission
-                    ? batchValidationError
-                      ? '照片不完整，请重建草稿'
-                      : (isPasswordOnlyInspection ? '进入改密码并完成' : '进入标记已完成')
-                    : submitting
-                      ? t('common_loading')
-                      : '提交本页检查与补充'
-                }
+                label={hasFormalSubmission
+                  ? batchValidationError
+                    ? '照片不完整，请重建草稿'
+                    : (isPasswordOnlyInspection ? '进入改密码并完成' : batchItem?.status === 'synced' ? '进入标记已完成' : '进入视频提交（任务待完成）')
+                  : '提交本页检查与补充'}
                 onPress={() => {
                   if (hasFormalSubmission) {
                     if (batchValidationError) return
@@ -1150,12 +1526,39 @@ export default function InspectionPanelScreen(props: Props) {
                   void onSubmitPage()
                 }}
                 disabled={hasFormalSubmission ? completeDisabled : submitting || !token}
+                loading={submitting}
                 fullWidth
                 style={[
                   styles.completeSectionButton,
                   (hasFormalSubmission ? completeDisabled : submitting || !token) ? styles.submitDisabled : null,
                 ]}
-              />
+                />
+              </>}
+            </View>
+          </View>
+
+          <View testID="inspection-sync-status-card" style={styles.card}>
+            <View style={styles.block}>
+              <Text style={styles.mutedSmall}>{`当前状态：${batchStatusLabel(batchStatus)}`}</Text>
+              <Text style={batchStatus === 'failed' || batchStatus === 'partial_failed' || batchValidationError ? styles.warnSmall : styles.mutedSmall}>
+                {batchValidationError ? `当前批次验证失败：${batchValidationError}` : syncHint}
+              </Text>
+              {failedStepDetails.length ? (
+                <View testID="inspection-sync-failed-steps" style={styles.syncDetailCard}>
+                  <Text style={styles.syncDetailTitle}>失败步骤</Text>
+                  {failedStepDetails.map((step) => (
+                    <Text key={step.key} style={styles.syncDetailText}>{`${step.label}：${step.error}`}</Text>
+                  ))}
+                </View>
+              ) : null}
+              {localMediaSummary ? (
+                <Text testID="inspection-local-media-summary" style={styles.localMediaText}>
+                  {`本批次照片共 ${localMediaSummary.total} 张；本机仍保留 ${localMediaSummary.retained} 张，已有远端引用 ${localMediaSummary.remoteReferenced} 张。同步失败时不会因重试自动删除仍保留的本地照片。`}
+                </Text>
+              ) : null}
+              {!canDiscardFrozenBatch && isFrozen ? (
+                <Text style={styles.mutedSmall}>当前批次已保存并冻结，不能继续编辑本次 snapshot。</Text>
+              ) : null}
             </View>
           </View>
 
@@ -1191,7 +1594,7 @@ export default function InspectionPanelScreen(props: Props) {
         <Pressable style={styles.viewerMask} onPress={closeRestockPicker}>
           <Pressable style={styles.pickerCard} onPress={() => {}}>
             <View style={styles.pickerHead}>
-              <Text style={styles.pickerTitle}>选择补充项</Text>
+              <Text style={styles.pickerTitle}>{restockPickerMode === 'next' ? '选择下次退房要补充项' : '选择其他要补充项'}</Text>
               <Pressable onPress={closeRestockPicker} style={({ pressed }) => [styles.pickerClose, pressed ? styles.pressed : null]}>
                 <Text style={styles.pickerCloseText}>关闭</Text>
               </Pressable>
@@ -1237,7 +1640,11 @@ export default function InspectionPanelScreen(props: Props) {
               {!restockPickerItems.length && !suppliesCatalog.loading && !suppliesCatalog.error ? <Text style={styles.mutedSmall}>未找到</Text> : null}
             </ScrollView>
             <View style={styles.pickerFooter}>
-              <Text style={styles.pickerFooterText}>{restockPickerSelectedIds.length ? `已选 ${restockPickerSelectedIds.length} 项` : '可先多选，再加入补充列表'}</Text>
+              <Text style={styles.pickerFooterText}>
+                {restockPickerSelectedIds.length
+                  ? `已选 ${restockPickerSelectedIds.length} 项`
+                  : restockPickerMode === 'next' ? '加入后会直接记为下次退房补' : '加入后请再选择本次处理结果'}
+              </Text>
               <Pressable onPress={() => addManualRestockItems(restockPickerSelectedIds)} disabled={!restockPickerSelectedIds.length} style={({ pressed }) => [styles.primaryBtn, styles.pickerConfirmBtn, !restockPickerSelectedIds.length ? styles.submitDisabled : null, pressed ? styles.pressed : null]}>
                 <Text style={styles.primaryText}>加入补充列表</Text>
               </Pressable>
@@ -1247,24 +1654,41 @@ export default function InspectionPanelScreen(props: Props) {
       </Modal>
 
       <Modal visible={!!viewerTarget} transparent animationType="fade" onRequestClose={() => setViewerTarget(null)}>
-        <Pressable style={styles.viewerMask} onPress={() => setViewerTarget(null)}>
+        <Pressable testID="inspection-photo-viewer-mask" style={styles.viewerMask} onPress={() => setViewerTarget(null)}>
           <View style={[styles.viewerTopRow, { paddingTop: Math.max(10, insets.top) }]} pointerEvents="none">
             <Text style={styles.viewerCloseText}>点击任意位置关闭</Text>
           </View>
           {viewerTarget ? (
-            <View style={{ flex: 1 }} pointerEvents="none">
-              <CleaningMediaImage
-                token={token}
-                isOnline={isOnline}
-                localUri={viewerTarget.localUri}
-                thumbnailUri={viewerTarget.thumbnailUri}
-                remoteReference={viewerTarget.remoteReference}
-                style={styles.viewerImg}
-                resizeMode="contain"
-              />
-            </View>
+            <CleaningMediaPreview
+              testID="inspection-photo-viewer"
+              token={token}
+              reference={viewerTarget.remoteReference || viewerTarget.localUri || viewerTarget.thumbnailUri}
+              thumbnailReference={viewerTarget.localUri || viewerTarget.thumbnailUri || viewerTarget.remoteReference}
+              style={styles.viewerImg}
+            />
           ) : null}
         </Pressable>
+      </Modal>
+
+      <Modal
+        visible={!!task && !skipRoomConfirmation && !roomConfirmed}
+        transparent
+        animationType="fade"
+        onRequestClose={() => props.navigation.goBack()}
+      >
+        <View testID="inspection-room-confirmation" style={styles.roomConfirmMask}>
+          <View style={styles.roomConfirmCard}>
+            <Text style={styles.roomConfirmTitle}>确认当前任务房号</Text>
+            <Text style={styles.roomConfirmMessage}>请确认后再开始检查与补充，避免填错房源。</Text>
+            <Text testID="inspection-room-confirmation-code" style={styles.roomConfirmCode}>{propertyCode || task?.title || '房号未加载'}</Text>
+            {propertyAddr ? <Text style={styles.roomConfirmAddress}>{propertyAddr}</Text> : null}
+            {!propertyCode ? <Text style={styles.roomConfirmWarning}>房号尚未加载，请返回任务列表后重试。</Text> : null}
+            <View style={styles.roomConfirmActions}>
+              <AppButton label="返回任务" onPress={() => props.navigation.goBack()} tone="secondary" style={styles.roomConfirmButton} />
+              <AppButton label="房号正确，继续" onPress={() => setRoomConfirmed(true)} disabled={!propertyCode} style={styles.roomConfirmButton} />
+            </View>
+          </View>
+        </View>
       </Modal>
     </View>
   )
@@ -1280,9 +1704,14 @@ const styles = StyleSheet.create({
   badge: { minHeight: 30, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '70%', flexShrink: 1 },
   badgeText: { color: '#2563EB', fontWeight: '900', flexShrink: 1 },
   sub: { marginTop: 8, color: '#6B7280', fontWeight: '700' },
+  readOnlyBanner: { marginTop: 10, paddingHorizontal: 10, paddingVertical: 9, borderRadius: 10, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', color: '#1D4ED8', fontWeight: '900', lineHeight: 18 },
   muted: { marginTop: 6, color: '#6B7280', fontWeight: '700' },
   mutedSmall: { marginTop: 8, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   warnSmall: { marginTop: 8, color: '#B45309', fontWeight: '900', fontSize: 12 },
+  syncDetailCard: { marginTop: 10, padding: 10, borderRadius: 12, backgroundColor: '#FFF7ED', borderWidth: hairline(), borderColor: '#FCD34D', gap: 4 },
+  syncDetailTitle: { color: '#9A3412', fontWeight: '900' },
+  syncDetailText: { color: '#B45309', fontWeight: '700', lineHeight: 18 },
+  localMediaText: { marginTop: 8, color: '#2563EB', fontWeight: '700', fontSize: 12, lineHeight: 18 },
   pressed: { opacity: 0.92 },
   sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -1291,8 +1720,10 @@ const styles = StyleSheet.create({
   validationBlock: { borderTopColor: '#F59E0B' },
   inlineHeadRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   label: { color: '#111827', fontWeight: '900' },
+  restockTitleWrap: { flex: 1, minWidth: 0 },
+  restockStandard: { marginTop: 3, color: '#475569', fontSize: 12, fontWeight: '700', lineHeight: 17 },
   row: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
-  chip: { flex: 1, minWidth: 120, height: 36, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  chip: { flex: 1, minWidth: 120, minHeight: layoutTokens.button.height, paddingVertical: 0, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   chipHalf: { flexBasis: '47%', minWidth: 132 },
   chipFull: { flexBasis: '100%', minWidth: 0 },
   chipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
@@ -1300,18 +1731,21 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#FFFFFF' },
   input: { borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, fontWeight: '700', color: '#111827' },
   note: { minHeight: 96, paddingTop: 10, paddingBottom: 10, textAlignVertical: 'top', marginTop: 10 },
-  photoBtn: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  photoBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: layoutTokens.button.radius, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   photoBtnText: { fontWeight: '900', color: '#111827', textAlign: 'center', flexShrink: 1 },
-  previewBtn: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
+  previewBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: layoutTokens.button.radius, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
   previewBtnText: { fontWeight: '900', color: '#2563EB', textAlign: 'center' },
-  primaryBtn: { minHeight: 44, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  primaryBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: layoutTokens.button.radius, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  restockConfirmButton: { width: '100%' },
+  restockAddRow: { marginTop: 10, flexDirection: 'row', alignItems: 'stretch', gap: 10, flexWrap: 'wrap' },
+  restockAddButton: { flex: 1, minWidth: 136 },
   primaryBtnSuccess: { backgroundColor: '#16A34A' },
   primaryText: { color: '#FFFFFF', fontWeight: '900', textAlign: 'center' },
   submitDisabled: { backgroundColor: '#93C5FD' },
   bottomSecondaryRow: { marginTop: 10, flexDirection: 'row', alignItems: 'stretch', gap: 10 },
   bottomSecondaryButton: { flex: 1, minWidth: 0 },
   actionBtnDisabled: { opacity: 0.55 },
-  removeBtn: { height: 34, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#FEE2E2', borderWidth: hairline(), borderColor: '#FECACA', alignItems: 'center', justifyContent: 'center' },
+  removeBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: layoutTokens.button.radius, backgroundColor: '#FEE2E2', borderWidth: hairline(), borderColor: '#FECACA', alignItems: 'center', justifyContent: 'center' },
   removeBtnText: { fontWeight: '900', color: '#991B1B' },
   noticeCard: { marginTop: 10, minHeight: 40, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, borderWidth: hairline(), flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   noticeCardText: { flex: 1, minWidth: 0, fontWeight: '900', lineHeight: 18 },
@@ -1322,13 +1756,14 @@ const styles = StyleSheet.create({
   restockNoNeedText: { marginTop: 0, textAlign: 'center' },
   proofThumbCard: { position: 'relative' },
   proofThumbWrap: { width: 96, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
-  proofThumb: { width: '100%', height: 72 },
+  proofThumb: { width: '100%', height: 96 },
   proofHint: { paddingHorizontal: 6, paddingVertical: 5, fontSize: 10, lineHeight: 12, fontWeight: '700', color: '#374151', backgroundColor: '#FFFFFF' },
   proofDeleteBtn: { position: 'absolute', top: 6, right: 6, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.96)', borderWidth: hairline(), borderColor: '#FECACA', alignItems: 'center', justifyContent: 'center' },
   issueCard: { marginTop: 10 },
   uploadActionsRow: { marginTop: 10, flexDirection: 'row', alignItems: 'stretch', gap: 10, flexWrap: 'wrap' },
   uploadActionBtn: { flexGrow: 1, flexBasis: 136, minWidth: 136 },
-  uncleanThumbWrap: { width: 92, height: 92, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
+  postSubmitIssueActions: { marginTop: 12, gap: 8 },
+  uncleanThumbWrap: { width: 96, height: 96, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   uncleanThumb: { width: '100%', height: '100%' },
   photoCard: { flexBasis: '47%', flexGrow: 1, minWidth: 120, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6', borderRadius: 14, padding: 10 },
   validationPhotoCard: { borderColor: '#F59E0B', backgroundColor: '#FFF7ED' },
@@ -1337,18 +1772,18 @@ const styles = StyleSheet.create({
   photoCount: { color: '#6B7280', fontWeight: '900', fontSize: 12 },
   photoHint: { marginTop: 4, minHeight: 16, color: '#6B7280', fontWeight: '700', fontSize: 11, lineHeight: 15 },
   thumbRow: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  thumbMiniWrap: { width: 54, height: 54, borderRadius: 10, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
+  thumbMiniWrap: { width: 96, height: 96, borderRadius: 10, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   thumbMini: { width: '100%', height: '100%' },
-  thumbMiniEmpty: { width: 54, height: 54, borderRadius: 10, borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', gap: 2 },
+  thumbMiniEmpty: { width: 96, height: 96, borderRadius: 10, borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', gap: 2 },
   photoEmptyText: { color: '#9CA3AF', fontWeight: '800', fontSize: 11 },
-  smallBtn: { marginTop: 10, height: 34, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
+  smallBtn: { marginTop: 10, minHeight: layoutTokens.button.height, paddingVertical: 0, borderRadius: layoutTokens.button.radius, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
   smallBtnText: { color: '#2563EB', fontWeight: '900' },
   savePhotosButton: { marginTop: 12 },
   completeSectionButton: { marginTop: 14 },
   guestNeedCard: { marginBottom: 12, padding: 12, borderRadius: 14, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6' },
   guestNeedTitle: { color: '#111827', fontWeight: '900' },
   guestNeedText: { marginTop: 8, color: '#111827', fontWeight: '700', lineHeight: 20 },
-  guestNeedCheckRow: { marginTop: 10, height: 40, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E5E7EB', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  guestNeedCheckRow: { marginTop: 10, minHeight: layoutTokens.button.height, borderRadius: layoutTokens.button.radius, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E5E7EB', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, flexDirection: 'row', alignItems: 'center', gap: 10 },
   guestNeedCheckText: { color: '#111827', fontWeight: '900' },
   guestArrivalSkipRow: { marginTop: 10, minHeight: 44, borderRadius: 12, backgroundColor: '#FFF7ED', borderWidth: hairline(), borderColor: '#FDBA74', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
   guestArrivalSkipText: { flex: 1, minWidth: 0, color: '#9A3412', fontWeight: '900', lineHeight: 18 },
@@ -1356,10 +1791,19 @@ const styles = StyleSheet.create({
   viewerTopRow: { position: 'absolute', top: 0, left: 0, right: 0, height: 54, paddingHorizontal: 12, justifyContent: 'center', zIndex: 2 },
   viewerCloseText: { color: '#FFFFFF', fontWeight: '900' },
   viewerImg: { flex: 1 },
+  roomConfirmMask: { flex: 1, justifyContent: 'center', padding: 20, backgroundColor: 'rgba(15,23,42,0.56)' },
+  roomConfirmCard: { borderRadius: 18, backgroundColor: '#FFFFFF', padding: 18, gap: 10 },
+  roomConfirmTitle: { color: '#111827', fontSize: 18, fontWeight: '900', textAlign: 'center' },
+  roomConfirmMessage: { color: '#475467', fontWeight: '700', lineHeight: 20, textAlign: 'center' },
+  roomConfirmCode: { color: '#1D4ED8', fontSize: 24, fontWeight: '900', textAlign: 'center' },
+  roomConfirmAddress: { color: '#667085', fontWeight: '700', lineHeight: 18, textAlign: 'center' },
+  roomConfirmWarning: { color: '#B45309', fontWeight: '800', lineHeight: 18, textAlign: 'center' },
+  roomConfirmActions: { flexDirection: 'row', gap: layoutTokens.button.rowGap, marginTop: 4 },
+  roomConfirmButton: { flex: 1, minWidth: 0 },
   pickerCard: { marginHorizontal: 16, marginTop: 90, backgroundColor: '#FFFFFF', borderRadius: 16, padding: 12 },
   pickerHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   pickerTitle: { fontSize: 16, fontWeight: '900', color: '#111827' },
-  pickerClose: { height: 34, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  pickerClose: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: layoutTokens.button.radius, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   pickerCloseText: { fontWeight: '900', color: '#111827' },
   pickerRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, borderBottomWidth: hairline(), borderBottomColor: '#EEF0F6', paddingHorizontal: 6, paddingVertical: 10 },
   pickerRowSelected: { backgroundColor: '#EFF6FF' },
@@ -1374,6 +1818,6 @@ const styles = StyleSheet.create({
   inlineErrorCard: { marginTop: 10, borderRadius: 14, backgroundColor: '#FFF7ED', borderWidth: hairline(), borderColor: '#FCD34D', padding: 12, gap: 8 },
   inlineErrorTitle: { color: '#9A3412', fontWeight: '900' },
   inlineErrorText: { color: '#B45309', fontWeight: '700', lineHeight: 18 },
-  inlineRetryBtn: { alignSelf: 'flex-start', minHeight: 34, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#EA580C', alignItems: 'center', justifyContent: 'center' },
+  inlineRetryBtn: { alignSelf: 'flex-start', minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 10, backgroundColor: '#EA580C', alignItems: 'center', justifyContent: 'center' },
   inlineRetryText: { color: '#FFFFFF', fontWeight: '900' },
 })

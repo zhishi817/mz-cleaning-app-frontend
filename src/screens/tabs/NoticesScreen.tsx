@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
+import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useIsFocused } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import { companyContentBody, companyContentCategoryLabel, companyContentSummary, companyGuideRoleLabel } from '../../lib/companyContent'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
+import { layoutTokens } from '../../lib/theme'
 import { getJson, setJson } from '../../lib/storage'
 import { getNoticesSnapshot, initNoticesStore, markNoticeRead, refreshNotices, subscribeNotices, type Notice } from '../../lib/noticesStore'
 import { getPresentedNotice } from '../../lib/noticePresentation'
@@ -704,6 +706,10 @@ export default function NoticesScreen(props: Props) {
       const isCleaningTask = String(item.taskSourceType || '').trim() === 'cleaning_tasks'
       const isInspection = isCleaningTask && String(item.taskKind || '').trim() === 'inspection'
       const task = historyTasks.find((it) => String(it.id || '').trim() === item.taskId) || null
+      if (isTaskManagerUser(user) && isCleaningTask) {
+        props.navigation.navigate('ManagerDailyTask', { taskId: item.taskId })
+        return
+      }
       if (task && Array.isArray((task as any).available_actions)) {
         const action = preferredNoticeActionForTask(task as any, {}, { roleNames: roleNamesOf(user) })
         const route = action?.enabled ? navigationForWorkTaskAction(task as any, action) : null
@@ -714,12 +720,7 @@ export default function NoticesScreen(props: Props) {
         props.navigation.navigate('TaskDetail', { id: item.taskId })
         return
       }
-      const isManager = isTaskManagerUser(user)
       const isInspector = isTaskInspectorUser(user)
-      if (isManager && isCleaningTask) {
-        props.navigation.navigate('ManagerDailyTask', { taskId: item.taskId })
-        return
-      }
       if (isInspector && isInspection) {
         const sourceId = String((task as any)?.source_id || '').trim()
         props.navigation.navigate('InspectionPanel', { taskId: item.taskId, ...(sourceId ? { sourceId } : {}) })
@@ -1111,7 +1112,7 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#F6F7FB' },
   topBar: { paddingHorizontal: 16, paddingTop: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   pageTitle: { fontSize: moderateScale(22), fontWeight: '900', color: '#111827' },
-  bellBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  bellBtn: { width: layoutTokens.button.iconTouchSize, height: layoutTokens.button.iconTouchSize, borderRadius: layoutTokens.button.iconTouchSize / 2, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   bellDot: { position: 'absolute', right: 10, top: 10, width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#EF4444' },
 
   searchWrap: {
@@ -1296,14 +1297,15 @@ const styles = StyleSheet.create({
   searchEmptyText: { paddingVertical: 8, color: '#94A3B8', fontWeight: '700', fontSize: 12, lineHeight: 18 },
   searchMoreBtn: {
     marginTop: 2,
-    minHeight: 38,
+    minHeight: layoutTokens.button.height,
     borderRadius: 12,
     backgroundColor: '#EFF6FF',
     borderWidth: hairline(),
     borderColor: '#BFDBFE',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: layoutTokens.button.horizontalPadding,
+    paddingVertical: 0,
   },
   searchMoreBtnDisabled: { opacity: 0.7 },
   searchMoreBtnText: { color: '#2563EB', fontWeight: '900', fontSize: 13 },

@@ -3,6 +3,15 @@ import { fireEvent, render, waitFor } from '@testing-library/react-native'
 import * as Clipboard from 'expo-clipboard'
 import { I18nProvider } from '../../lib/i18n'
 
+jest.mock('react-native-safe-area-context', () => {
+  const React = require('react')
+  const { View } = require('react-native')
+  return {
+    SafeAreaView: (props: any) => React.createElement(View, props),
+    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+  }
+})
+
 const pad2 = (value: number) => String(value).padStart(2, '0')
 const mockToday = new Date()
 const mockTodayKey = `${mockToday.getFullYear()}-${pad2(mockToday.getMonth() + 1)}-${pad2(mockToday.getDate())}`
@@ -27,6 +36,11 @@ function expandTask(ui: ReturnType<typeof render>, taskId: string) {
   fireEvent.press(ui.getByLabelText(`task-collapse-${taskId}`))
 }
 
+function flattenTestStyle(style: any): Record<string, any> {
+  if (Array.isArray(style)) return Object.assign({}, ...style.map(flattenTestStyle))
+  return style && typeof style === 'object' ? style : {}
+}
+
 jest.mock('../../components/GuestLuggageCard', () => () => null)
 
 jest.mock('../../lib/auth', () => ({
@@ -41,6 +55,7 @@ jest.mock('../../lib/api', () => ({
   createCleaningOfflineTask: jest.fn(async () => ({})),
   createManualCleaningTask: jest.fn(async () => ({})),
   listCleaningAppPropertyCodes: jest.fn(async () => []),
+  listUsers: jest.fn(async () => []),
   listCleaningAppTasks: jest.fn(async () => []),
   listWorkTasks: jest.fn(async () => []),
   reorderCleaningTasks: jest.fn(async () => ({})),
@@ -171,6 +186,71 @@ test('tasks screen defaults tasks collapsed, shows guest request, and expands de
     expect(ui.getByLabelText('wifi-copied-w1')).toBeTruthy()
     expect(ui.getAllByText('已复制').length).toBeGreaterThan(0)
   })
+})
+
+test('周五、周六、周日将日期栏定位到末端，避免今天卡片被裁切', () => {
+  const { shouldScrollWeekRowToEnd } = require('./TasksScreen') as typeof import('./TasksScreen')
+  expect(shouldScrollWeekRowToEnd(new Date(2026, 6, 23))).toBe(false)
+  expect(shouldScrollWeekRowToEnd(new Date(2026, 6, 24))).toBe(true)
+  expect(shouldScrollWeekRowToEnd(new Date(2026, 6, 25))).toBe(true)
+  expect(shouldScrollWeekRowToEnd(new Date(2026, 6, 26))).toBe(true)
+  expect(shouldScrollWeekRowToEnd(new Date(2026, 6, 27))).toBe(false)
+})
+
+test('offline task creation can select and submit an executor', async () => {
+  const api = require('../../lib/api')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  ;(api.listUsers as jest.Mock).mockResolvedValue([
+    { id: 'cleaner-2', username: 'alice', role: 'cleaner', display_name: 'Alice' },
+  ])
+  const createOfflineMock = api.createCleaningOfflineTask as jest.Mock
+  createOfflineMock.mockClear()
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-offline', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByText('新增')).toBeTruthy())
+  fireEvent.press(ui.getByText('新增'))
+  fireEvent.press(ui.getByText('线下任务'))
+
+  await waitFor(() => {
+    expect(ui.getByText('执行人')).toBeTruthy()
+    expect(ui.getByText('未分配')).toBeTruthy()
+    expect(ui.getByLabelText('quick-create-assignee')).toBeTruthy()
+    expect(ui.queryByText('紧急度')).toBeNull()
+  })
+
+  fireEvent.changeText(ui.getByPlaceholderText('例如 临时送物 / 联系客人'), '临时送物')
+  fireEvent.press(ui.getByLabelText('quick-create-assignee'))
+  await waitFor(() => {
+    expect(ui.getByText('Alice')).toBeTruthy()
+    expect(ui.getByTestId('quick-create-assignee-options')).toBeTruthy()
+    expect(ui.queryByText('清洁人员')).toBeNull()
+  })
+  fireEvent.press(ui.getByLabelText('quick-create-assignee-cleaner-2'))
+  fireEvent.press(ui.getByText('确认新增'))
+
+  await waitFor(() => {
+    expect(createOfflineMock).toHaveBeenCalledWith('local:test', expect.objectContaining({
+      title: '临时送物',
+      assignee_id: 'cleaner-2',
+    }))
+  })
+
+  mockAuthState.user = previousUser
+  mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+  mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
 })
 
 test('saving order keeps offline tasks in the same cleaning execution sequence', async () => {
@@ -555,7 +635,7 @@ test('tasks screen renders primary server actions from available_actions', async
   snapshot.items[0] = previousTask
 })
 
-test('tasks screen card tap does not bypass server actions for manager roles', async () => {
+test('tasks screen card tap uses the customer-service manager detail for admin roles', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
   const previousTask = { ...snapshot.items[0] }
@@ -600,14 +680,184 @@ test('tasks screen card tap does not bypass server actions for manager roles', a
 
   fireEvent.press(ui.getByLabelText('task-card-w1'))
 
-  expect(navigation.navigate).toHaveBeenCalledWith('TaskDetail', { id: 'w1' })
-  expect(navigation.navigate).not.toHaveBeenCalledWith('ManagerDailyTask', { taskId: 'w1' })
+  expect(navigation.navigate).toHaveBeenCalledWith('ManagerDailyTask', { taskId: 'w1' })
+  expect(navigation.navigate).not.toHaveBeenCalledWith('TaskDetail', { id: 'w1' })
   expect(navigation.navigate).not.toHaveBeenCalledWith('InspectionPanel', { taskId: 'w1' })
 
   snapshot.items[0] = previousTask
   mockAuthState.user = previousUser
   mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
   mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+})
+
+test('customer service cleaning task is collapsed by default and opens the original daily cleaning page', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'cs-1', username: 'customer-service', role: 'customer_service', roles: ['customer_service'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  snapshot.items[0] = {
+    ...snapshot.items[0],
+    available_actions: [
+      {
+        id: 'submit_inspection',
+        label: '检查与补充',
+        placement: 'primary',
+        enabled: true,
+        target: 'InspectionPanel',
+        intent: 'inspection',
+      },
+      {
+        id: 'upload_access_video',
+        label: '标记已完成',
+        placement: 'primary',
+        enabled: true,
+        target: 'InspectionComplete',
+        intent: 'inspection',
+      },
+    ],
+    task_kind: 'cleaning',
+    source_type: 'cleaning_tasks',
+  }
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={navigation as any}
+        route={{ key: 'tasks-customer-service-original-card', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByLabelText('task-card-w1')).toBeTruthy()
+    expect(ui.getByLabelText('task-collapse-w1')).toBeTruthy()
+    expect(ui.queryByText('AuraWiFi')).toBeNull()
+    expect(ui.queryByText('pw-1234')).toBeNull()
+    expect(ui.getByText('展开')).toBeTruthy()
+  })
+  fireEvent.press(ui.getByLabelText('task-collapse-w1'))
+
+  await waitFor(() => {
+    expect(ui.getByText('AuraWiFi')).toBeTruthy()
+    expect(ui.getByText('pw-1234')).toBeTruthy()
+    expect(ui.getByText('标记已退房')).toBeTruthy()
+    expect(ui.getByText('问题反馈')).toBeTruthy()
+    expect(ui.queryByText('检查与补充')).toBeNull()
+    expect(ui.queryByText('标记已完成')).toBeNull()
+  })
+  expect(navigation.navigate).not.toHaveBeenCalled()
+  fireEvent.press(ui.getByLabelText('task-card-w1'))
+
+  await waitFor(() => {
+    expect(navigation.navigate).toHaveBeenCalledWith('ManagerDailyTask', { taskId: 'w1' })
+  })
+  expect(navigation.navigate).not.toHaveBeenCalledWith('TaskDetail', { id: 'w1' })
+
+  snapshot.items[0] = previousTask
+  mockAuthState.user = previousUser
+  mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+  mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+})
+
+test('marking guest checkout changes the action to a gray checked-out state', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const patchWorkTaskItemMock = store.patchWorkTaskItem as jest.Mock
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = mockAuthState.user
+  const previousPatchImplementation = patchWorkTaskItemMock.getMockImplementation()
+  mockAuthState.user = { id: 'cs-checkout', username: 'customer-service', role: 'customer_service', roles: ['customer_service'] }
+  snapshot.items[0] = {
+    ...previousTask,
+    task_type: 'checkout_clean',
+    task_kind: 'cleaning',
+    source_type: 'cleaning_tasks',
+    source_id: 'checkout-source',
+    start_time: '10am',
+    end_time: null,
+    order_id: 'checkout-order',
+    checked_out_at: null,
+    available_actions: [
+      { id: 'mark_guest_checkout', label: '标记已退房', placement: 'primary', enabled: true, target: 'TaskDetail', intent: 'manager' },
+      { id: 'report_issue', label: '问题反馈', placement: 'primary', enabled: true, target: 'FeedbackForm', intent: 'issue' },
+    ],
+  }
+  patchWorkTaskItemMock.mockImplementation(async (id: string, patch: any) => {
+    const task = snapshot.items.find((item: any) => item.id === id)
+    if (task) Object.assign(task, patch)
+  })
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-checkout-state', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByLabelText('task-collapse-w1')).toBeTruthy())
+  expandTask(ui, 'w1')
+  await waitFor(() => expect(ui.getByText('标记已退房')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('task-action-w1-mark_guest_checkout'))
+
+  await waitFor(() => {
+    expect(ui.getByText('取消已退房')).toBeTruthy()
+    expect(flattenTestStyle(ui.getByTestId('task-action-w1-mark_guest_checkout').props.style)).toEqual(expect.objectContaining({ backgroundColor: '#E5E7EB' }))
+    expect(flattenTestStyle(ui.getByText('取消已退房').props.style)).toEqual(expect.objectContaining({ color: '#6B7280' }))
+  })
+
+  snapshot.items[0] = previousTask
+  mockAuthState.user = previousUser
+  if (previousPatchImplementation) patchWorkTaskItemMock.mockImplementation(previousPatchImplementation)
+  else patchWorkTaskItemMock.mockReset()
+})
+
+test.each([
+  ['cleaner', ['cleaner'], false],
+  ['cleaning inspector', ['cleaning_inspector'], false],
+  ['cleaner inspector', ['cleaner_inspector'], false],
+  ['customer service', ['customer_service'], true],
+  ['offline manager', ['offline_manager'], true],
+  ['admin', ['admin'], true],
+])('task cards are collapsed by default for %s', async (_label, roles, isTaskManagerUser) => {
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'role-test', username: 'role-test', role: roles[0], roles }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = isTaskManagerUser
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: `tasks-default-collapsed-${roles[0]}`, name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByLabelText('task-card-w1')).toBeTruthy()
+    expect(ui.getByLabelText('task-collapse-w1')).toBeTruthy()
+    expect(ui.queryByText('AuraWiFi')).toBeNull()
+    expect(ui.queryByText('pw-1234')).toBeNull()
+  })
+
+  snapshotRestoreForRoleTest()
+
+  function snapshotRestoreForRoleTest() {
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
 })
 
 test('inspector fallback card tap passes source id to inspection panel', async () => {
@@ -774,10 +1024,12 @@ test('manager-only user can switch between 全部 and 我的 without being force
   mockRoleState.isTaskManagerUser = false
 })
 
-test('customer service hides day-end overview while admin sees staff progress summary', async () => {
+test('customer service hides day-end overview while admin lazily opens dated staff progress summary', async () => {
   const api = require('../../lib/api')
   const listWorkTasksMock = api.listWorkTasks as jest.Mock
   const listDayEndHandoverMock = api.listDayEndHandover as jest.Mock
+  listWorkTasksMock.mockClear()
+  listDayEndHandoverMock.mockClear()
   listWorkTasksMock.mockResolvedValue([
     {
       id: 'merged-1',
@@ -917,6 +1169,13 @@ test('customer service hides day-end overview while admin sees staff progress su
 
   await waitFor(() => {
     expect(adminUi.getByText('今日工作情况')).toBeTruthy()
+    expect(adminUi.queryByText('清洁A')).toBeNull()
+    expect(listWorkTasksMock).not.toHaveBeenCalled()
+  })
+
+  fireEvent.press(adminUi.getByLabelText('staff-progress-toggle'))
+
+  await waitFor(() => {
     expect(adminUi.getByText('清洁A')).toBeTruthy()
     expect(adminUi.getByText('检查B')).toBeTruthy()
     expect(adminUi.getByText('Simon')).toBeTruthy()
@@ -939,15 +1198,65 @@ test('customer service hides day-end overview while admin sees staff progress su
     expect(rendered.indexOf('Simon')).toBeLessThan(rendered.indexOf('检查B'))
   })
 
-  fireEvent.press(adminUi.getByLabelText('staff-progress-toggle'))
-
-  await waitFor(() => {
-    expect(adminUi.queryByText('清洁A')).toBeNull()
+  expect(listWorkTasksMock).toHaveBeenCalledWith('local:test', {
+    date_from: mockTodayKey,
+    date_to: mockTodayKey,
+    view: 'all',
   })
 
+  fireEvent.press(adminUi.getByText('本月'))
+  fireEvent.press(adminUi.getByText('上个月'))
+  fireEvent.press(adminUi.getByText('15'))
+
+  const priorMonthMid = new Date(mockToday.getFullYear(), mockToday.getMonth() - 1, 15)
+  const priorMonthMidKey = `${priorMonthMid.getFullYear()}-${pad2(priorMonthMid.getMonth() + 1)}-${pad2(priorMonthMid.getDate())}`
+
+  await waitFor(() => {
+    expect(adminUi.getByText(`${priorMonthMidKey} 工作情况`)).toBeTruthy()
+    expect(listWorkTasksMock).toHaveBeenCalledWith('local:test', {
+      date_from: priorMonthMidKey,
+      date_to: priorMonthMidKey,
+      view: 'all',
+    })
+  })
+
+  const todayOverviewCallCount = listWorkTasksMock.mock.calls.filter(([, params]) => (
+    params?.date_from === mockTodayKey && params?.date_to === mockTodayKey && params?.view === 'all'
+  )).length
+  fireEvent.press(adminUi.getByText('今天'))
+
+  await waitFor(() => {
+    expect(adminUi.getByText('今日工作情况')).toBeTruthy()
+    expect(listWorkTasksMock.mock.calls.filter(([, params]) => (
+      params?.date_from === mockTodayKey && params?.date_to === mockTodayKey && params?.view === 'all'
+    ))).toHaveLength(todayOverviewCallCount)
+  })
+
+  adminUi.unmount()
   mockAuthState.user = { id: 'u1', username: 'tester', role: 'cleaner', roles: ['cleaner'] }
   mockRoleState.canSwitchTaskMode = false
   mockRoleState.isTaskManagerUser = false
+})
+
+test('warehouse key latest event uses today, yesterday, then explicit date labels', () => {
+  const { formatWarehouseKeyLatestEvent } = require('./TasksScreen') as typeof import('./TasksScreen')
+  const referenceDate = new Date(2026, 6, 28, 15, 0)
+
+  expect(formatWarehouseKeyLatestEvent({
+    action: 'borrow',
+    actor_name: 'Alice',
+    created_at: new Date(2026, 6, 28, 9, 5).toISOString(),
+  }, referenceDate)).toBe('Alice借出 09:05')
+  expect(formatWarehouseKeyLatestEvent({
+    action: 'borrow',
+    actor_name: 'Bob',
+    created_at: new Date(2026, 6, 27, 19, 45).toISOString(),
+  }, referenceDate)).toBe('昨天 Bob借出 19:45')
+  expect(formatWarehouseKeyLatestEvent({
+    action: 'return',
+    actor_name: 'Cara',
+    created_at: new Date(2026, 6, 26, 8, 6).toISOString(),
+  }, referenceDate)).toBe('2026-07-26 Cara归还 08:06')
 })
 
 test('admin manager view shows MSQ warehouse key card for Southbank work even when not assigned to admin', async () => {

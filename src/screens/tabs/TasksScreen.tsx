@@ -1,13 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, AppState, Image, Linking, Modal, Pressable, RefreshControl, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
+import { Alert, AppState, Image, Linking, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { createCleaningOfflineTask, createManualCleaningTask, listCleaningAppPropertyCodes, reorderMixedWorkTasks } from '../../lib/api'
+import { layoutTokens } from '../../lib/theme'
+import { createCleaningOfflineTask, createManualCleaningTask, listCleaningAppPropertyCodes, listUsers, reorderMixedWorkTasks } from '../../lib/api'
 import { markGuestCheckedOutByOrder, markGuestCheckedOutByTasks } from '../../lib/api'
 import { listMzappAlerts, markMzappAlertRead } from '../../lib/api'
 import { getMyProfile } from '../../lib/api'
@@ -41,6 +43,7 @@ import { canSwitchTaskMode, isTaskManagerUser } from '../../lib/roles'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { resolveKeyRequirementTags } from '../../lib/keyRequirementTags'
 import { normalizeAuMobile } from '../../lib/phone'
+import { isPropertyFollowupTask, propertyFollowupTaskDetail, propertyFollowupTaskTitle } from '../../lib/propertyFollowupTaskDisplay'
 import {
   allRelatedSourceIdsFromTask,
   checkinTimeForDisplay,
@@ -73,6 +76,7 @@ type Period = 'today' | 'week' | 'month'
 type QuickCreateMode = 'checkout' | 'checkin' | 'offline'
 type QuickCreateOfflineTaskType = 'property' | 'company' | 'other'
 type QuickCreatePropertyOption = { id: string; code: string; region?: string | null }
+type QuickCreateUserOption = { id: string; username?: string | null; display_name?: string | null }
 type DayEndOverviewDisplayUser = DayEndOverviewUser & { displayRole: DayEndTargetRole }
 type Props = NativeStackScreenProps<TasksStackParamList, 'TasksList'>
 type TaskCacheHint = { message: string; lastSyncedAt: string | null } | null
@@ -82,6 +86,10 @@ const QUICK_CREATE_OFFLINE_TASK_TYPES: { key: QuickCreateOfflineTaskType; label:
   { key: 'company', label: '公司任务' },
   { key: 'other', label: '其他任务' },
 ]
+
+function quickCreateUserName(user: QuickCreateUserOption) {
+  return String(user.display_name || user.username || user.id || '').trim() || user.id
+}
 
 function pad2(n: number) {
   return String(n).padStart(2, '0')
@@ -130,6 +138,11 @@ function startOfWeekMonday(d: Date) {
   nd.setDate(nd.getDate() + diff)
   nd.setHours(0, 0, 0, 0)
   return nd
+}
+
+export function shouldScrollWeekRowToEnd(date: Date) {
+  const day = date.getDay()
+  return day === 0 || day >= 5
 }
 
 function daysInMonth(d: Date) {
@@ -527,17 +540,27 @@ function warehouseKeyEventText(action: string) {
   return '更新'
 }
 
-function warehouseKeyEventTimeText(value: any, currentDate: string) {
-  const raw = String(value || '').trim()
-  if (!raw) return ''
+export function formatWarehouseKeyLatestEvent(
+  event: Pick<WarehouseKeyStatus['events'][number], 'action' | 'actor_name' | 'created_at'> | null | undefined,
+  referenceDate = new Date(),
+) {
+  const action = warehouseKeyEventText(String(event?.action || ''))
+  const actorName = String(event?.actor_name || '').trim() || '未知'
+  const raw = String(event?.created_at || '').trim()
+  const baseText = `${actorName}${action}`
+  if (!raw) return baseText
   const normalized = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(raw)
     ? raw.replace(' ', 'T')
     : raw
   const d = new Date(normalized)
-  if (Number.isNaN(d.getTime())) return ''
+  if (Number.isNaN(d.getTime())) return baseText
+  const today = ymd(referenceDate)
+  const yesterday = ymd(addDays(referenceDate, -1))
   const date = ymd(d)
   const time = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
-  return date === String(currentDate || '').slice(0, 10) ? time : `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${time}`
+  if (date === today) return `${baseText} ${time}`
+  if (date === yesterday) return `昨天 ${baseText} ${time}`
+  return `${date} ${baseText} ${time}`
 }
 
 function isSouthbankCleaningTask(task: WorkTaskItem) {
@@ -570,11 +593,6 @@ function hasMobileExecutor(task: WorkTaskItem) {
   if (inspection && !cleaning) return !!String((task as any).inspector_id || task.assignee_id || '').trim()
   if (cleaning && !inspection) return !!String((task as any).cleaner_id || task.assignee_id || '').trim()
   return !!String((task as any).cleaner_id || (task as any).inspector_id || task.assignee_id || '').trim()
-}
-
-function isPropertyFollowupTask(task: WorkTaskItem) {
-  const source = String(task.source_type || '').trim()
-  return source === 'property_maintenance' || source === 'property_deep_cleaning' || source === 'property_daily_necessities'
 }
 
 export default function TasksScreen(props: Props) {
@@ -611,7 +629,9 @@ export default function TasksScreen(props: Props) {
   const [dayEndComplete, setDayEndComplete] = useState<boolean | null>(null)
   const [dayEndOverviewUsers, setDayEndOverviewUsers] = useState<DayEndOverviewUser[]>([])
   const [dayEndOverviewLoading, setDayEndOverviewLoading] = useState(false)
-  const [staffProgressCollapsed, setStaffProgressCollapsed] = useState(false)
+  const [staffProgressCollapsed, setStaffProgressCollapsed] = useState(true)
+  const [dayEndOverviewRevision, setDayEndOverviewRevision] = useState(0)
+  const dayEndOverviewByDateRef = useRef<Record<string, DayEndOverviewUser[]>>({})
   const [warehouseKey, setWarehouseKey] = useState<WarehouseKeyStatus | null>(null)
   const [warehouseKeyLoading, setWarehouseKeyLoading] = useState(false)
   const [warehouseKeyBusy, setWarehouseKeyBusy] = useState(false)
@@ -631,8 +651,10 @@ export default function TasksScreen(props: Props) {
   const [quickCreateOfflineTitle, setQuickCreateOfflineTitle] = useState('')
   const [quickCreateOfflineContent, setQuickCreateOfflineContent] = useState('')
   const [quickCreateOfflineTaskType, setQuickCreateOfflineTaskType] = useState<QuickCreateOfflineTaskType>('other')
-  const [quickCreateUrgency, setQuickCreateUrgency] = useState<'low' | 'medium' | 'high' | 'urgent'>('medium')
   const [quickCreatePropertyOptions, setQuickCreatePropertyOptions] = useState<QuickCreatePropertyOption[]>([])
+  const [quickCreateUsers, setQuickCreateUsers] = useState<QuickCreateUserOption[]>([])
+  const [quickCreateAssigneeId, setQuickCreateAssigneeId] = useState<string | null>(null)
+  const [quickCreateAssigneeOpen, setQuickCreateAssigneeOpen] = useState(false)
   const bannerTimerRef = useRef<any>(null)
   const [search, setSearch] = useState('')
   const weekRowRef = useRef<ScrollView>(null)
@@ -777,6 +799,8 @@ export default function TasksScreen(props: Props) {
           bank_account_number: String(remote.bank_account_number || saved?.bank_account_number || ''),
           personal_abn: String(remote.personal_abn || saved?.personal_abn || ''),
           photo_id_url: remote.photo_id_url || saved?.photo_id_url || null,
+          visa_document_url: remote.visa_document_url || saved?.visa_document_url || null,
+          visa_grant_number: String(remote.visa_grant_number || saved?.visa_grant_number || ''),
         }
         await setProfile(user, merged)
       } catch {}
@@ -878,7 +902,11 @@ export default function TasksScreen(props: Props) {
     if (status !== 'signedIn' || !user?.id || !token) return
     const silent = opts?.silent === true
     const preserveError = opts?.preserveError === true
-    if (!silent) setRefreshing(true)
+    if (!silent) {
+      setRefreshing(true)
+      dayEndOverviewByDateRef.current = {}
+      setDayEndOverviewRevision((prev) => prev + 1)
+    }
     try {
       await Promise.all([processKeyUploadQueue(token), processDayEndHandoverQueue(token)])
       await refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
@@ -1101,10 +1129,8 @@ export default function TasksScreen(props: Props) {
   useEffect(() => {
     if (period !== 'today') return
     const d = parseYmd(selectedDate)
-    const dow = d.getDay()
-    const isWeekend = dow === 0 || dow === 6
     const id = setTimeout(() => {
-      if (isWeekend) weekRowRef.current?.scrollToEnd({ animated: false })
+      if (shouldScrollWeekRowToEnd(d)) weekRowRef.current?.scrollToEnd({ animated: false })
       else weekRowRef.current?.scrollTo({ x: 0, y: 0, animated: false })
     }, 0)
     return () => clearTimeout(id)
@@ -1224,7 +1250,9 @@ export default function TasksScreen(props: Props) {
 
       const aIsExecutionTask = isCleaningExecutionTask(a) || isInspectionExecutionTask(a) || isKeyHandoverExecutionTask(a)
       const bIsExecutionTask = isCleaningExecutionTask(b) || isInspectionExecutionTask(b) || isKeyHandoverExecutionTask(b)
-      if (!(aIsExecutionTask && bIsExecutionTask)) {
+      const aIsOfflineTask = String(a.task_kind || '').toLowerCase() === 'offline'
+      const bIsOfflineTask = String(b.task_kind || '').toLowerCase() === 'offline'
+      if (!(aIsExecutionTask && bIsExecutionTask) && !(aIsOfflineTask && bIsOfflineTask)) {
         const ur = urgencyRank(b.urgency) - urgencyRank(a.urgency)
         if (ur) return ur
       }
@@ -1261,7 +1289,8 @@ export default function TasksScreen(props: Props) {
   }, [reorderMode, selectedDate])
 
   const renderTasks = useMemo(() => selectedTasks, [selectedTasks])
-  const dayEndDate = useMemo(() => ymd(new Date()), [])
+  const dayEndDate = selectedDate
+  const staffProgressTitle = dayEndDate === ymd(new Date()) ? '今日工作情况' : `${dayEndDate} 工作情况`
   const currentUserId = String((user as any)?.id || '').trim()
   const showWarehouseKeyCard = useMemo(() => {
     if (period !== 'today') return false
@@ -1469,19 +1498,31 @@ export default function TasksScreen(props: Props) {
     }
   }, [canManagerMode, dayEndDate, dayEndViewerTarget.userId, isCleanerSelf, isInspectorOnlySelf, isInspectorSelf, period, props.navigation, selfDayEndTasks.length, token])
   useEffect(() => {
-    if (!token || !canSeeDayEndOverview || !(canManagerMode && mode === 'manager') || period !== 'today') {
+    if (!token || !canSeeDayEndOverview || !(canManagerMode && mode === 'manager')) {
       setDayEndOverviewUsers([])
+      setDayEndOverviewLoading(false)
+      return
+    }
+    if (staffProgressCollapsed) {
+      setDayEndOverviewLoading(false)
+      return
+    }
+    const cached = dayEndOverviewByDateRef.current[dayEndDate]
+    if (cached) {
+      setDayEndOverviewUsers(cached)
       setDayEndOverviewLoading(false)
       return
     }
     let cancelled = false
     ;(async () => {
+      setDayEndOverviewUsers([])
       setDayEndOverviewLoading(true)
       try {
         const tasks = await listWorkTasks(token, { date_from: dayEndDate, date_to: dayEndDate, view: 'all' })
         const baseUsers = buildDayEndOverviewBaseUsers(tasks.filter((task) => isCleaningExecutionTask(task) || isInspectionExecutionTask(task)))
         if (cancelled) return
         if (!baseUsers.length) {
+          dayEndOverviewByDateRef.current[dayEndDate] = []
           setDayEndOverviewUsers([])
           setDayEndOverviewLoading(false)
           return
@@ -1493,12 +1534,14 @@ export default function TasksScreen(props: Props) {
           return { ...entry, complete }
         }))
         if (!cancelled) {
-          setDayEndOverviewUsers(rows.sort(compareDayEndOverviewUsers))
+          const overviewUsers = rows.sort(compareDayEndOverviewUsers)
+          dayEndOverviewByDateRef.current[dayEndDate] = overviewUsers
+          setDayEndOverviewUsers(overviewUsers)
           setDayEndOverviewLoading(false)
         }
       } catch {
         if (!cancelled) {
-          setDayEndOverviewUsers((prev) => prev.map((entry) => ({ ...entry, complete: null })))
+          setDayEndOverviewUsers([])
           setDayEndOverviewLoading(false)
         }
       }
@@ -1506,7 +1549,7 @@ export default function TasksScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [canManagerMode, canSeeDayEndOverview, dayEndDate, mode, period, token])
+  }, [canManagerMode, canSeeDayEndOverview, dayEndDate, dayEndOverviewRevision, mode, staffProgressCollapsed, token])
   const visibleTasks = useMemo(() => {
     const q = search.trim().toLowerCase()
     // Manager search must stay within the currently selected day, even when the
@@ -1533,7 +1576,9 @@ export default function TasksScreen(props: Props) {
       if (sortDelta) return sortDelta
       const aIsExecutionTask = isCleaningExecutionTask(a) || isInspectionExecutionTask(a) || isKeyHandoverExecutionTask(a)
       const bIsExecutionTask = isCleaningExecutionTask(b) || isInspectionExecutionTask(b) || isKeyHandoverExecutionTask(b)
-      if (!(aIsExecutionTask && bIsExecutionTask)) {
+      const aIsOfflineTask = String(a.task_kind || '').toLowerCase() === 'offline'
+      const bIsOfflineTask = String(b.task_kind || '').toLowerCase() === 'offline'
+      if (!(aIsExecutionTask && bIsExecutionTask) && !(aIsOfflineTask && bIsOfflineTask)) {
         const ur = urgencyRank(b.urgency) - urgencyRank(a.urgency)
         if (ur) return ur
       }
@@ -1678,7 +1723,8 @@ function showBanner(title: string, message: string) {
     setQuickCreateOfflineTitle('')
     setQuickCreateOfflineContent('')
     setQuickCreateOfflineTaskType('other')
-    setQuickCreateUrgency('medium')
+    setQuickCreateAssigneeId(null)
+    setQuickCreateAssigneeOpen(false)
     setQuickCreateOpen(true)
   }
 
@@ -1721,9 +1767,8 @@ function showBanner(title: string, message: string) {
           content: String(quickCreateOfflineContent || '').trim(),
           kind: 'manual',
           status: 'todo',
-          urgency: quickCreateUrgency,
           property_id: propertyOption?.id || null,
-          assignee_id: null,
+          assignee_id: quickCreateAssigneeId,
         })
       } else {
         if (!property) {
@@ -1766,12 +1811,21 @@ function showBanner(title: string, message: string) {
     if (!quickCreateOpen || !token) return
     let cancelled = false
     ;(async () => {
-      try {
-        const rows = await listCleaningAppPropertyCodes(token)
-        if (!cancelled) setQuickCreatePropertyOptions(rows)
-      } catch {
-        if (!cancelled) setQuickCreatePropertyOptions([])
-      }
+      const [propertyRows, userRows] = await Promise.all([
+        listCleaningAppPropertyCodes(token).catch(() => []),
+        listUsers(token).catch(() => []),
+      ])
+      if (cancelled) return
+      setQuickCreatePropertyOptions(propertyRows)
+      const users = (Array.isArray(userRows) ? userRows : [])
+        .map((item) => ({
+          id: String(item?.id || '').trim(),
+          username: item?.username == null ? null : String(item.username),
+          display_name: item?.display_name == null ? null : String(item.display_name),
+        }))
+        .filter((item) => !!item.id)
+        .sort((a, b) => quickCreateUserName(a).localeCompare(quickCreateUserName(b), 'en'))
+      setQuickCreateUsers(users)
     })()
     return () => {
       cancelled = true
@@ -2031,10 +2085,7 @@ function showBanner(title: string, message: string) {
   const warehouseIsHeldByMe = !!currentUserId && !!warehouseHolderId && warehouseHolderId === currentUserId
   const warehouseStatus = warehouseKeyStatusText(String(warehouseKeyRow?.status || 'available'))
   const warehouseLatest = warehouseKeyEvents[0] || null
-  const warehouseLatestTime = warehouseKeyEventTimeText(
-    warehouseLatest?.created_at || warehouseKeyRow?.updated_at,
-    dayEndDate,
-  )
+  const warehouseLatestText = formatWarehouseKeyLatestEvent(warehouseLatest)
   const quickCreatePropertyMatches = useMemo(() => {
     const q = String(quickCreateProperty || '').trim().toLowerCase()
     if (!q) return []
@@ -2043,6 +2094,10 @@ function showBanner(title: string, message: string) {
     })
     return rows.slice(0, 20)
   }, [quickCreateProperty, quickCreatePropertyOptions])
+  const quickCreateAssignee = useMemo(
+    () => quickCreateUsers.find((item) => item.id === quickCreateAssigneeId) || null,
+    [quickCreateAssigneeId, quickCreateUsers],
+  )
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -2228,7 +2283,7 @@ function showBanner(title: string, message: string) {
           </View>
         ) : null}
 
-        {canSeeDayEndOverview && canManagerMode && mode === 'manager' && period === 'today' ? (
+        {canSeeDayEndOverview && canManagerMode && mode === 'manager' ? (
           <View style={styles.staffProgressCard}>
             <Pressable
               accessibilityLabel="staff-progress-toggle"
@@ -2236,7 +2291,7 @@ function showBanner(title: string, message: string) {
               style={({ pressed }) => [styles.staffProgressHeader, pressed ? styles.segmentPressed : null]}
             >
               <View style={styles.staffProgressHeaderMain}>
-                <Text style={styles.staffProgressTitle}>今日工作情况</Text>
+                <Text style={styles.staffProgressTitle}>{staffProgressTitle}</Text>
                 <Text style={styles.staffProgressHint}>查看清洁与检查进度</Text>
               </View>
               <Ionicons
@@ -2249,10 +2304,10 @@ function showBanner(title: string, message: string) {
               <>
                 <View style={styles.staffProgressList}>
                   {dayEndOverviewLoading && !dayEndOverviewUsers.length ? (
-                    <Text style={styles.staffProgressEmpty}>正在加载今天的人员工作情况...</Text>
+                    <Text style={styles.staffProgressEmpty}>正在加载 {dayEndDate} 的人员工作情况...</Text>
                   ) : null}
                   {!dayEndOverviewLoading && !dayEndOverviewDisplayUsers.length ? (
-                    <Text style={styles.staffProgressEmpty}>今天暂无清洁或检查任务。</Text>
+                    <Text style={styles.staffProgressEmpty}>{dayEndDate} 暂无清洁或检查任务。</Text>
                   ) : null}
                   {dayEndOverviewDisplayUsers.map((entry) => {
                     const cleaningLine = entry.displayRole === 'cleaning' ? formatDayEndRoleStats('清洁', entry.stats?.cleaning) : ''
@@ -2397,7 +2452,7 @@ function showBanner(title: string, message: string) {
                 ) : null}
                 {warehouseLatest ? (
                   <Text style={styles.warehouseKeyMeta} numberOfLines={2}>
-                    最近：{warehouseKeyEventText(String(warehouseLatest.action || ''))}{warehouseLatestTime ? ` ${warehouseLatestTime}` : ''} · {String(warehouseLatest.actor_name || '').trim() || '未知'}{warehouseLatest.to_name ? ` → ${warehouseLatest.to_name}` : ''}
+                    {warehouseLatestText}
                   </Text>
                 ) : null}
                 <View style={styles.actionsRow}>
@@ -2566,24 +2621,64 @@ function showBanner(title: string, message: string) {
                       <TextInput value={quickCreateOfflineContent} onChangeText={setQuickCreateOfflineContent} editable={!quickCreateBusy} style={[styles.createInput, styles.createTextArea]} placeholder="补充说明" placeholderTextColor="#9CA3AF" multiline />
                     </View>
                     <View style={styles.createField}>
-                      <Text style={styles.createLabel}>紧急度</Text>
-                      <View style={styles.createModeRow}>
-                        {[
-                          { key: 'low', label: '低' },
-                          { key: 'medium', label: '中' },
-                          { key: 'high', label: '高' },
-                          { key: 'urgent', label: '紧急' },
-                        ].map((item) => (
-                          <Pressable
-                            key={item.key}
-                            disabled={quickCreateBusy}
-                            onPress={() => setQuickCreateUrgency(item.key as any)}
-                            style={({ pressed }) => [styles.createModeBtn, quickCreateUrgency === item.key ? styles.createModeBtnOn : null, pressed ? styles.segmentPressed : null]}
+                      <Text style={styles.createLabel}>执行人</Text>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="quick-create-assignee"
+                        disabled={quickCreateBusy}
+                        onPress={() => setQuickCreateAssigneeOpen((prev) => !prev)}
+                        style={({ pressed }) => [styles.createInput, styles.createSelect, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={[styles.createSelectText, !quickCreateAssignee ? styles.createSelectPlaceholder : null]} numberOfLines={1}>
+                          {quickCreateAssignee ? quickCreateUserName(quickCreateAssignee) : '未分配'}
+                        </Text>
+                        <Ionicons name={quickCreateAssigneeOpen ? 'chevron-up' : 'chevron-down'} size={moderateScale(16)} color="#6B7280" />
+                      </Pressable>
+                      {quickCreateAssigneeOpen ? (
+                        <View testID="quick-create-assignee-options" style={styles.createAssigneeList}>
+                          <ScrollView
+                            style={styles.createAssigneeScroll}
+                            contentContainerStyle={styles.createAssigneeScrollContent}
+                            nestedScrollEnabled
+                            showsVerticalScrollIndicator
+                            keyboardShouldPersistTaps="handled"
                           >
-                            <Text style={[styles.createModeText, quickCreateUrgency === item.key ? styles.createModeTextOn : null]}>{item.label}</Text>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="quick-create-assignee-none"
+                            disabled={quickCreateBusy}
+                            onPress={() => {
+                              setQuickCreateAssigneeId(null)
+                              setQuickCreateAssigneeOpen(false)
+                            }}
+                            style={({ pressed }) => [styles.createAssigneeItem, !quickCreateAssignee ? styles.createAssigneeItemOn : null, pressed ? styles.segmentPressed : null]}
+                          >
+                            <Text style={styles.createAssigneeName}>未分配</Text>
+                            {!quickCreateAssignee ? <Ionicons name="checkmark" size={moderateScale(16)} color="#2563EB" /> : null}
                           </Pressable>
-                        ))}
-                      </View>
+                          {quickCreateUsers.map((item) => {
+                            const selected = item.id === quickCreateAssigneeId
+                            return (
+                              <Pressable
+                                key={item.id}
+                                accessibilityRole="button"
+                                accessibilityLabel={`quick-create-assignee-${item.id}`}
+                                disabled={quickCreateBusy}
+                                onPress={() => {
+                                  setQuickCreateAssigneeId(item.id)
+                                  setQuickCreateAssigneeOpen(false)
+                                }}
+                                style={({ pressed }) => [styles.createAssigneeItem, selected ? styles.createAssigneeItemOn : null, pressed ? styles.segmentPressed : null]}
+                              >
+                                <Text style={styles.createAssigneeName} numberOfLines={1}>{quickCreateUserName(item)}</Text>
+                                {selected ? <Ionicons name="checkmark" size={moderateScale(16)} color="#2563EB" /> : null}
+                              </Pressable>
+                            )
+                          })}
+                          {!quickCreateUsers.length ? <Text style={styles.createAssigneeEmpty}>暂无可选执行人</Text> : null}
+                          </ScrollView>
+                        </View>
+                      ) : null}
                     </View>
                   </>
                 ) : (
@@ -2668,8 +2763,8 @@ function showBanner(title: string, message: string) {
               const newCode = String(turnoverDisplay?.new_code || (task as any).new_code || '').trim()
               const guestSpecialRequest = guestRequestForDisplay(task)
               const guestLuggage = (task as any).guest_luggage || null
-              const urgency = urgencyMeta(task.urgency)
               const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
+              const urgency = isOfflineTask ? null : urgencyMeta(task.urgency)
               const detailPreview = !isOfflineTask && task.source_type !== 'cleaning_tasks' ? stripPhotoLines(task.summary) : ''
               const showSummary = !!detailPreview
               const isCleaningSource = task.source_type === 'cleaning_tasks'
@@ -2711,6 +2806,7 @@ function showBanner(title: string, message: string) {
               const isInspectorUser = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
               const taskPrimaryActions = primaryActionsForTask(task, { roleNames, limit: 2 })
               const renderPrimaryAction = (action: WorkTaskAvailableAction) => {
+                const checkedOutVisual = action.id === 'mark_guest_checkout' && !!checkedOutAt
                 const localDisabled =
                   (action.id === 'upload_key_photo' && keyPhotoState !== 'missing')
                   || (action.id === 'mark_guest_checkout' && (!token || isHistoricalTask || !!checkedOutPendingMap[task.id]))
@@ -2723,14 +2819,15 @@ function showBanner(title: string, message: string) {
                 return (
                   <Pressable
                     key={`${action.id}:${action.target || ''}:${action.label}`}
+                    testID={`task-action-${task.id}-${action.id}`}
                     onPress={() => {
                       if (disabled) return
                       handleTaskActionPress(task, action)
                     }}
                     disabled={disabled}
-                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, disabled ? styles.actionBtnDisabled : null]}
+                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, checkedOutVisual || disabled ? styles.actionBtnDisabled : null]}
                   >
-                    <Text style={[styles.actionText, disabled ? { color: '#6B7280' } : null]}>{label}</Text>
+                    <Text style={[styles.actionText, checkedOutVisual || disabled ? { color: '#6B7280' } : null]}>{label}</Text>
                   </Pressable>
                 )
               }
@@ -2785,8 +2882,11 @@ function showBanner(title: string, message: string) {
               const offlineTitleSuffix = isOfflineTask && offlineTitleRaw && (!code || (!offlineTitleRaw.includes(code) && offlineTitleRaw !== code))
                 ? offlineTitleRaw
                 : ''
+              const followupTitle = isPropertyFollowupTask(task) ? propertyFollowupTaskTitle(task) : ''
               const title2 = isOfflineTask
                 ? [code || '', offlineTitleSuffix].filter(Boolean).join(' ').trim() || offlineTitleRaw || '-'
+                : isPropertyFollowupTask(task) && followupTitle
+                  ? [code || '', followupTitle || task.title || '任务'].filter(Boolean).join(' · ').trim()
                 : `${code || task.title || '-'}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
               const keyRequirementTags = resolveKeyRequirementTags(task, { hasCheckout, hasCheckin, isCheckedOut })
               const checkoutSets = keyRequirementTags.checkoutSets
@@ -2804,7 +2904,9 @@ function showBanner(title: string, message: string) {
                 if (t1 === title2) return null
                 return t1
               })()
-              const standaloneTaskDetail = isOfflineTask ? offlineDetail : (!isCleaningSource ? detailPreview : '')
+              const standaloneTaskDetail = isOfflineTask
+                ? offlineDetail
+                : (!isCleaningSource ? propertyFollowupTaskDetail(task, detailPreview) : '')
               const showStandaloneTaskLayout = !isCleaningSource && (isOfflineTask || isPropertyFollowupTask(task) || !!standaloneTaskDetail)
               const standaloneAssigneeName = String((task as any).assignee_name || (task as any).cleaner_name || (task as any).inspector_name || '').trim()
                 || (String(task.assignee_id || '').trim() ? String(task.assignee_id || '').trim() : '未分配')
@@ -2882,18 +2984,17 @@ function showBanner(title: string, message: string) {
                       })
                       return
                     }
+                    const isCleaningTask0 = isCleaningExecutionTask(task) || isInspectionExecutionTask(task) || isKeyHandoverExecutionTask(task)
+                    if (canTaskManagerView && isCleaningTask0) {
+                      props.navigation.navigate('ManagerDailyTask', { taskId: task.id })
+                      return
+                    }
                     if (Array.isArray((task as any).available_actions)) {
                       props.navigation.navigate('TaskDetail', { id: task.id })
                       return
                     }
-                    const isManager0 = canTaskManagerView
                     const isInspector0 = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
                     const isInspection0 = isInspectionExecutionTask(task)
-                    const isCleaningTask0 = isCleaningExecutionTask(task) || isInspectionExecutionTask(task) || isKeyHandoverExecutionTask(task)
-                    if (isManager0 && isCleaningTask0) {
-                      props.navigation.navigate('ManagerDailyTask', { taskId: task.id })
-                      return
-                    }
                     if (isInspector0 && isInspection0) {
                       const sourceId = String((task as any)?.source_id || '').trim()
                       props.navigation.navigate('InspectionPanel', { taskId: task.id, ...(sourceId ? { sourceId } : {}) })
@@ -2983,7 +3084,7 @@ function showBanner(title: string, message: string) {
                             <Text style={inspectionScopeTagStyles.text}>{inspectionScopeTag}</Text>
                           </View>
                         ) : null}
-                        {urgency ? (
+                        {!isOfflineTask && urgency ? (
                           <View style={[styles.urgencyPill, urgency.pill]}>
                             <Text style={[styles.urgencyText, urgency.textStyle]}>{urgency.text}</Text>
                           </View>
@@ -3536,10 +3637,10 @@ const styles = StyleSheet.create({
   warehouseKeyIcon: { width: 26, height: 26, borderRadius: 13, borderWidth: hairline(), borderColor: '#A7F3D0', backgroundColor: '#D1FAE5', alignItems: 'center', justifyContent: 'center' },
   warehousePhoneRow: { marginTop: 8, minHeight: 34, borderRadius: 12, backgroundColor: '#DCFCE7', paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
   warehousePhoneText: { flex: 1, minWidth: 0, color: '#065F46', fontSize: moderateScale(12), fontWeight: '900' },
-  warehouseCallBtn: { minHeight: 26, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#047857', alignItems: 'center', justifyContent: 'center' },
+  warehouseCallBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 10, backgroundColor: '#047857', alignItems: 'center', justifyContent: 'center' },
   warehouseCallText: { color: '#FFFFFF', fontSize: moderateScale(11), fontWeight: '900' },
   warehouseKeyMeta: { marginTop: 6, color: '#047857', fontSize: moderateScale(12), fontWeight: '800', lineHeight: moderateScale(17) },
-  warehouseRefresh: { alignSelf: 'flex-start', marginTop: 10, minHeight: 30, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#DCFCE7', flexDirection: 'row', alignItems: 'center', gap: 6 },
+  warehouseRefresh: { alignSelf: 'flex-start', marginTop: 10, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 12, backgroundColor: '#DCFCE7', flexDirection: 'row', alignItems: 'center', gap: 6 },
   warehouseRefreshText: { color: '#047857', fontSize: moderateScale(12), fontWeight: '900' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(17, 24, 39, 0.42)', justifyContent: 'center', padding: 18 },
   transferModal: { maxHeight: '78%', backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14 },
@@ -3557,19 +3658,29 @@ const styles = StyleSheet.create({
   createTaskModal: { maxHeight: '86%', backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14 },
   createTaskBody: { marginTop: 12, maxHeight: 520 },
   createModeRow: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  createModeBtn: { flexGrow: 1, minHeight: 34, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  createModeBtn: { flexGrow: 1, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   createModeBtnOn: { backgroundColor: '#DBEAFE', borderWidth: hairline(), borderColor: '#93C5FD' },
   createModeText: { color: '#6B7280', fontSize: moderateScale(12), fontWeight: '900' },
   createModeTextOn: { color: '#1D4ED8' },
   createField: { gap: 6 },
   createLabel: { color: '#4B5563', fontSize: moderateScale(12), fontWeight: '900' },
   createInput: { minHeight: 42, borderRadius: 12, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#E5E7EB', paddingHorizontal: 12, color: '#111827', fontWeight: '800' },
+  createSelect: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  createSelectText: { flex: 1, minWidth: 0, color: '#111827', fontWeight: '800' },
+  createSelectPlaceholder: { color: '#9CA3AF' },
   createTextArea: { minHeight: 82, paddingTop: 10, textAlignVertical: 'top' },
   createHint: { color: '#9CA3AF', fontSize: moderateScale(12), fontWeight: '700', lineHeight: moderateScale(17) },
-  createSubmitBtn: { marginTop: 12, minHeight: 42, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  createSubmitBtn: { marginTop: 12, minHeight: layoutTokens.button.height, borderRadius: layoutTokens.button.radius, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0 },
   propertySuggestList: { marginTop: 2, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' },
-  propertySuggestItem: { minHeight: 36, paddingHorizontal: 12, justifyContent: 'center', borderBottomWidth: hairline(), borderBottomColor: '#F3F4F6' },
+  propertySuggestItem: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, justifyContent: 'center', borderBottomWidth: hairline(), borderBottomColor: '#F3F4F6' },
   propertySuggestText: { color: '#111827', fontSize: moderateScale(13), fontWeight: '800' },
+  createAssigneeList: { height: 190, marginTop: 2, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' },
+  createAssigneeScroll: { flex: 1 },
+  createAssigneeScrollContent: { paddingVertical: 2 },
+  createAssigneeItem: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, borderBottomWidth: hairline(), borderBottomColor: '#F3F4F6' },
+  createAssigneeItemOn: { backgroundColor: '#EFF6FF' },
+  createAssigneeName: { color: '#111827', fontSize: moderateScale(13), fontWeight: '900' },
+  createAssigneeEmpty: { padding: 12, color: '#9CA3AF', fontSize: moderateScale(12), fontWeight: '700' },
   searchWrap: { marginTop: 10, height: 44, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#EEF0F6', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
   searchInput: { flex: 1, minWidth: 0, height: 44, color: '#111827', fontWeight: '800' },
   searchClear: { minHeight: 44, width: 44, alignItems: 'center', justifyContent: 'center' },
@@ -3577,7 +3688,7 @@ const styles = StyleSheet.create({
   segmentWrap: { backgroundColor: '#F2F4F8', borderRadius: 14, padding: 8 },
   segment: { flexDirection: 'row', gap: 8 },
   segmentWrapResponsive: { flexWrap: 'wrap' },
-  segmentItem: { flex: 1, minHeight: moderateScale(44), paddingVertical: 8, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  segmentItem: { flex: 1, minHeight: layoutTokens.button.height, paddingVertical: 0, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   segmentItemResponsive: { flexBasis: 96 },
   segmentItemActive: {
     backgroundColor: '#FFFFFF',
@@ -3650,13 +3761,13 @@ const styles = StyleSheet.create({
   sectionCount: { flexShrink: 1, fontSize: moderateScale(12), fontWeight: '700', color: '#9CA3AF' },
   sectionRight: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1, flexWrap: 'wrap', justifyContent: 'flex-end' },
   viewSegment: { flexDirection: 'row', gap: 6, backgroundColor: '#F2F4F8', borderRadius: 14, padding: 4 },
-  viewSegmentItem: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  viewSegmentItem: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   viewSegmentItemActive: { backgroundColor: '#FFFFFF' },
   viewSegmentText: { fontSize: moderateScale(12), fontWeight: '800', color: '#6B7280' },
   viewSegmentTextActive: { color: '#111827' },
-  addTaskBtn: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 11, backgroundColor: '#2563EB', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  addTaskBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 11, backgroundColor: '#2563EB', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
   addTaskBtnText: { fontSize: moderateScale(12), fontWeight: '900', color: '#FFFFFF' },
-  reorderBtn: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  reorderBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 10, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   reorderBtnDisabled: { backgroundColor: '#E5E7EB' },
   reorderBtnText: { fontSize: moderateScale(12), fontWeight: '900', color: '#111827' },
 
@@ -3667,7 +3778,7 @@ const styles = StyleSheet.create({
   cacheHintText: { color: '#1D4ED8', fontWeight: '800' },
   emptyCard: { marginTop: 10, backgroundColor: '#FFFFFF', borderRadius: 18, padding: 18, borderWidth: hairline(), borderColor: '#EEF0F6' },
   emptyText: { color: '#9CA3AF', fontWeight: '800' },
-  emptyRetryBtn: { marginTop: 12, minHeight: 38, paddingHorizontal: 14, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', alignSelf: 'flex-start' },
+  emptyRetryBtn: { marginTop: 12, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', alignSelf: 'flex-start' },
   emptyRetryText: { color: '#FFFFFF', fontWeight: '900' },
 
   taskCard: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 16, borderWidth: hairline(), borderColor: '#E8EDF5', shadowColor: '#0F172A', shadowOpacity: 0.04, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1 },
@@ -3682,7 +3793,7 @@ const styles = StyleSheet.create({
   taskHeroMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   taskHeroAside: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexShrink: 0, flexWrap: 'nowrap', alignSelf: 'flex-start' },
   taskHeroAsideCompact: { gap: 6 },
-  collapseBtn: { minHeight: 36, minWidth: 72, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 18, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#E5E7EB', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, flexShrink: 0, alignSelf: 'center' },
+  collapseBtn: { minHeight: layoutTokens.button.height, minWidth: 72, paddingHorizontal: 12, paddingVertical: 0, borderRadius: 18, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#E5E7EB', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, flexShrink: 0, alignSelf: 'center' },
   collapseBtnText: { color: '#6B7280', fontSize: moderateScale(12), fontWeight: '800' },
   collapsedGuestRequest: { marginTop: 10, borderRadius: 14, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   collapsedGuestRequestTextWrap: { flex: 1, minWidth: 0 },
@@ -3768,7 +3879,7 @@ const styles = StyleSheet.create({
   detailSplitDividerTeal: { backgroundColor: '#99F6E4' },
   unitTypeText: { flexShrink: 1, color: '#111827', fontSize: moderateScale(13), fontWeight: '600' },
   addrText: { color: '#111827', fontSize: moderateScale(13), fontWeight: '600', lineHeight: moderateScale(19) },
-  copyAffordance: { minHeight: 30, paddingHorizontal: 8, borderRadius: 999, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, flexShrink: 0 },
+  copyAffordance: { minHeight: layoutTokens.button.height, paddingHorizontal: 12, paddingVertical: 0, borderRadius: 999, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, flexShrink: 0 },
   copyAffordanceDone: { borderColor: '#A7F3D0', backgroundColor: '#ECFDF5' },
   copyAffordanceText: { color: '#047857', fontSize: moderateScale(11), fontWeight: '900' },
   wifiLabel: { color: '#0F766E', fontWeight: '700', fontSize: moderateScale(12) },
@@ -3784,7 +3895,7 @@ const styles = StyleSheet.create({
   pwText: { flex: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '700' },
   summary: { marginTop: 10, color: '#374151', fontWeight: '700', lineHeight: 18 },
   actionsRow: { marginTop: 12, flexDirection: 'row', gap: 10, flexWrap: 'wrap', alignItems: 'stretch' },
-  actionBtn: { flex: 1, flexGrow: 1, flexShrink: 1, minWidth: 128, minHeight: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10, paddingVertical: 8 },
+  actionBtn: { flex: 1, flexGrow: 1, flexShrink: 1, minWidth: 128, minHeight: layoutTokens.button.height, borderRadius: layoutTokens.button.radius, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0 },
   actionBtnDisabled: { backgroundColor: '#E5E7EB' },
   actionText: { flexShrink: 1, fontWeight: '900', color: '#FFFFFF', fontSize: 12, lineHeight: 16, textAlign: 'center' },
 })

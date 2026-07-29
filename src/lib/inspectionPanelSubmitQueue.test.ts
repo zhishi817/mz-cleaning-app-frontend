@@ -16,6 +16,7 @@ jest.mock('./inspectionThumbnailCache', () => ({
 
 jest.mock('./localMediaDrafts', () => ({
   deleteDraftMedia: jest.fn(),
+  draftFileExists: jest.fn(() => true),
   draftMimeTypeFrom: jest.fn((_name: string, mimeType: string) => mimeType || 'image/jpeg'),
   persistDraftMedia: jest.fn(({ sourceUri }: { sourceUri: string }) => sourceUri),
 }))
@@ -23,6 +24,7 @@ jest.mock('./localMediaDrafts', () => ({
 function getAsyncStorage() {
   return require('@react-native-async-storage/async-storage') as {
     clear: () => Promise<void>
+    getItem: (key: string) => Promise<string | null>
     setItem: (key: string, value: string) => Promise<void>
   }
 }
@@ -47,9 +49,23 @@ function baseSnapshot(taskId: string) {
       sofa: [],
       bedroom: [],
       kitchen: [],
+      bathroom: [],
     },
     cleaning_issue: [],
     feedback: null,
+  }
+}
+
+function localRoomPhoto(id: string) {
+  return {
+    id,
+    local_uri: `file:///${id}.jpg`,
+    thumbnail_uri: null,
+    uploaded_key: null,
+    uploaded_url: null,
+    name: `${id}.jpg`,
+    mime_type: 'image/jpeg',
+    captured_at: '2026-07-25T00:00:00.000Z',
   }
 }
 
@@ -71,6 +87,71 @@ test('rejects a required-photo snapshot when any room area is missing', async ()
   expect((await queueMod.getInspectionPanelBatch('task-required-photos'))?.status).toBe('draft')
 })
 
+test('requires the new bathroom overall photo before submitting inspection photos', async () => {
+  const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+
+  await queueMod.saveInspectionPanelDraftBatch({
+    task_id: 'task-required-bathroom-photo',
+    cleaning_task_id: 'cleaning-task-required-bathroom-photo',
+    snapshot: {
+      ...baseSnapshot('task-required-bathroom-photo'),
+      room_photo_requirement: 'required',
+      restock_confirmed_sufficient: true,
+      room_photos: {
+        living: [localRoomPhoto('living')],
+        sofa: [localRoomPhoto('sofa')],
+        bedroom: [localRoomPhoto('bedroom')],
+        kitchen: [localRoomPhoto('kitchen')],
+        bathroom: [],
+      },
+    },
+  })
+
+  await expect(queueMod.submitInspectionPanelBatch('task-required-bathroom-photo'))
+    .rejects.toThrow('请拍摄 浴室 检查照片')
+})
+
+test('exposes failed sync steps and retained local media for the inspector status panel', async () => {
+  const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  const item = {
+    submit_id: 'submit-status',
+    task_id: 'task-status',
+    cleaning_task_id: 'cleaning-task-status',
+    property_id: 'property-1',
+    property_code: 'A1201',
+    status: 'partial_failed' as const,
+    created_at: '2026-07-24T00:00:00.000Z',
+    updated_at: '2026-07-24T00:00:00.000Z',
+    snapshot: {
+      ...baseSnapshot('task-status'),
+      room_photo_requirement: 'required' as const,
+      restock_confirmed_sufficient: true,
+      room_photos: {
+        living: [{ id: 'local-1', local_uri: 'file:///local-1.jpg', thumbnail_uri: null, uploaded_key: null, uploaded_url: null, name: 'local-1.jpg', mime_type: 'image/jpeg', captured_at: '2026-07-24T00:00:00.000Z' }],
+        sofa: [],
+        bedroom: [],
+        kitchen: [],
+        bathroom: [],
+      },
+      cleaning_issue: [],
+      restock: [],
+    },
+    steps: {
+      upload_media: { status: 'succeeded' as const, error: null },
+      save_restock_proof: { status: 'succeeded' as const, error: null },
+      save_inspection_photos: { status: 'failed' as const, error: '服务器错误，请稍后重试' },
+      create_feedback_batch: { status: 'pending' as const, error: null },
+      complete_feedback_projects: { status: 'pending' as const, error: null },
+    },
+    last_error: '服务器错误，请稍后重试',
+  }
+
+  expect(queueMod.inspectionPanelFailedStepDetails(item)).toEqual([
+    { key: 'save_inspection_photos', label: '保存检查照片记录', error: '服务器错误，请稍后重试' },
+  ])
+  expect(queueMod.inspectionPanelLocalMediaSummary(item)).toMatchObject({ total: 1, retained: 1, remoteReferenced: 0 })
+})
+
 test('allows missing room photos only after guest arrival skip is explicitly recorded', async () => {
   const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
 
@@ -86,6 +167,61 @@ test('allows missing room photos only after guest arrival skip is explicitly rec
 
   const submitted = await queueMod.submitInspectionPanelBatch('task-guest-arrived')
   expect(submitted?.status).toBe('pending_submit')
+})
+
+test('only allows video after a formal batch has durable local or remote photo references', async () => {
+  const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  const completeSnapshot = {
+    ...baseSnapshot('task-video-gate'),
+    room_photo_requirement: 'required' as const,
+    restock_confirmed_sufficient: true,
+    room_photos: {
+      living: [localRoomPhoto('living')],
+      sofa: [localRoomPhoto('sofa')],
+      bedroom: [localRoomPhoto('bedroom')],
+      kitchen: [localRoomPhoto('kitchen')],
+      bathroom: [localRoomPhoto('bathroom')],
+    },
+  }
+
+  await queueMod.saveInspectionPanelDraftBatch({
+    task_id: 'task-video-gate',
+    cleaning_task_id: 'cleaning-task-video-gate',
+    snapshot: completeSnapshot,
+  })
+  await queueMod.submitInspectionPanelBatch('task-video-gate')
+
+  expect(queueMod.getInspectionPanelVideoReadiness(await queueMod.getInspectionPanelBatch('task-video-gate'))).toMatchObject({
+    ready: true,
+    skipInspectionPhotos: false,
+  })
+
+  const localMedia = require('./localMediaDrafts') as { draftFileExists: jest.Mock }
+  localMedia.draftFileExists.mockReturnValue(false)
+  expect(queueMod.getInspectionPanelVideoReadiness(await queueMod.getInspectionPanelBatch('task-video-gate'))).toMatchObject({
+    ready: false,
+  })
+})
+
+test('guest-arrival-confirmed batch is video-ready without room photos', async () => {
+  const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+
+  await queueMod.saveInspectionPanelDraftBatch({
+    task_id: 'task-video-guest-arrival',
+    cleaning_task_id: 'cleaning-task-video-guest-arrival',
+    snapshot: {
+      ...baseSnapshot('task-video-guest-arrival'),
+      room_photo_requirement: 'guest_arrival_confirmed',
+      restock_confirmed_sufficient: true,
+    },
+  })
+  const submitted = await queueMod.submitInspectionPanelBatch('task-video-guest-arrival')
+
+  expect(queueMod.getInspectionPanelVideoReadiness(submitted)).toEqual({
+    ready: true,
+    reason: null,
+    skipInspectionPhotos: true,
+  })
 })
 
 test('allows carry-forward restock items without proof photos and persists the next-checkout label', async () => {
@@ -200,10 +336,32 @@ test('keeps a submitted batch without cleaning task id and syncs after binding t
   expect(api.saveInspectionPhotos).toHaveBeenCalledWith(
     'token-wait',
     'cleaning-action-target',
-    expect.any(Object),
+    expect.objectContaining({ items: [], guest_arrival_confirmed: true }),
     { skipAuthInvalidation: true },
   )
   expect((await queueMod.getInspectionPanelBatch('task-wait-source'))?.status).toBe('synced')
+})
+
+test('does not emit a queue update when binding the same action target again', async () => {
+  const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+
+  await queueMod.saveInspectionPanelDraftBatch({
+    task_id: 'task-stable-bind',
+    cleaning_task_id: 'cleaning-task-stable-bind',
+    snapshot: baseSnapshot('task-stable-bind'),
+  })
+  const listener = jest.fn()
+  const unsubscribe = queueMod.subscribeInspectionPanelSubmitQueue(listener)
+
+  await queueMod.bindInspectionPanelCleaningTaskId({
+    task_id: 'task-stable-bind',
+    cleaning_task_id: 'cleaning-task-stable-bind',
+    property_id: 'property-1',
+    property_code: 'A1201',
+  })
+
+  expect(listener).not.toHaveBeenCalled()
+  unsubscribe()
 })
 
 test('blocks a legacy pending batch with missing required photos before any API call', async () => {
@@ -245,6 +403,70 @@ test('blocks a legacy pending batch with missing required photos before any API 
   expect(api.uploadCleaningMedia).not.toHaveBeenCalled()
   expect(api.saveRestockProof).not.toHaveBeenCalled()
   expect(api.saveInspectionPhotos).not.toHaveBeenCalled()
+})
+
+test('migrates an oversized legacy submit id and retries only failed business steps', async () => {
+  const api = require('./api') as {
+    saveInspectionPhotos: jest.Mock
+    saveRestockProof: jest.Mock
+    uploadCleaningMedia: jest.Mock
+  }
+  api.saveRestockProof.mockResolvedValue({ ok: true })
+  api.saveInspectionPhotos.mockResolvedValue({ ok: true })
+
+  const oversizedSubmitId = 'x'.repeat(121)
+  await getAsyncStorage().setItem('mzstay.inspection_panel_submit_queue.v1', JSON.stringify([{
+    submit_id: oversizedSubmitId,
+    task_id: 'legacy-task-long-submit-id',
+    cleaning_task_id: 'legacy-cleaning-long-submit-id',
+    status: 'partial_failed',
+    created_at: '2026-07-25T10:00:00.000Z',
+    updated_at: '2026-07-25T10:00:00.000Z',
+    snapshot: {
+      ...baseSnapshot('legacy-task-long-submit-id'),
+      cleaning_task_id: 'legacy-cleaning-long-submit-id',
+      restock_confirmed_sufficient: true,
+    },
+    steps: {
+      upload_media: { status: 'succeeded' },
+      save_restock_proof: { status: 'failed', error: 'String must contain at most 120 character(s)' },
+      save_inspection_photos: { status: 'failed', error: 'String must contain at most 120 character(s)' },
+      create_feedback_batch: { status: 'succeeded', output: {} },
+      complete_feedback_projects: { status: 'succeeded', output: {} },
+    },
+  }]))
+
+  const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  const result = await queueMod.processInspectionPanelSubmitQueue('token-legacy-long-submit-id')
+
+  expect(result).toEqual({ processed: 1, remaining: 0 })
+  expect(api.uploadCleaningMedia).not.toHaveBeenCalled()
+  expect(api.saveRestockProof).toHaveBeenCalledTimes(1)
+  expect(api.saveInspectionPhotos).toHaveBeenCalledTimes(1)
+  const migratedSubmitId = api.saveRestockProof.mock.calls[0][2].submit_id
+  expect(typeof migratedSubmitId).toBe('string')
+  expect(migratedSubmitId.length).toBeLessThanOrEqual(96)
+  expect(migratedSubmitId).not.toBe(oversizedSubmitId)
+  expect(api.saveInspectionPhotos.mock.calls[0][2].submit_id).toBe(migratedSubmitId)
+  expect((await queueMod.getInspectionPanelBatch('legacy-task-long-submit-id'))?.status).toBe('synced')
+
+  const persisted = JSON.parse((await getAsyncStorage().getItem('mzstay.inspection_panel_submit_queue.v1')) || '[]')
+  expect(persisted).toHaveLength(1)
+  expect(persisted[0]).toMatchObject({ status: 'synced', submit_id: migratedSubmitId })
+})
+
+test('generates a bounded submit id even when the task id is long', async () => {
+  const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  const taskId = `task-${'x'.repeat(180)}`
+
+  await queueMod.saveInspectionPanelDraftBatch({
+    task_id: taskId,
+    cleaning_task_id: `cleaning-${taskId}`,
+    snapshot: baseSnapshot(taskId),
+  })
+
+  const batch = await queueMod.getInspectionPanelBatch(taskId)
+  expect(batch?.submit_id.length).toBeLessThanOrEqual(96)
 })
 
 test('persists partial feedback mapping and retries only missing client_item_id items', async () => {
@@ -414,13 +636,15 @@ test('does not re-upload media when restock save retries after upload_media alre
     expect.objectContaining({
       items: [
         expect.objectContaining({
-          proof_url: 'https://private.r2.cloudflarestorage.com/bucket/cleaning/restock-proof.jpg',
+          proof_url: 'cleaning/restock-proof.jpg',
         }),
       ],
     }),
     { skipAuthInvalidation: true },
   )
   expect(failedBatch?.steps.save_restock_proof.status).toBe('failed')
+  expect(api.saveInspectionPhotos).toHaveBeenCalledTimes(1)
+  expect(failedBatch?.steps.save_inspection_photos.status).toBe('succeeded')
   expect(failedBatch?.status).toBe('partial_failed')
 
   const second = await queueMod.processInspectionPanelSubmitQueue('token-2')
@@ -436,7 +660,7 @@ test('does not re-upload media when restock save retries after upload_media alre
     thumbnail_uri: 'file:///cache/restock-proof-thumb.jpg',
     uploaded_key: 'cleaning/restock-proof.jpg',
   })
-  expect(localMedia.deleteDraftMedia).toHaveBeenCalledWith('file:///tmp/proof-1.heic')
+  expect(localMedia.deleteDraftMedia).not.toHaveBeenCalled()
   expect(thumbnailCache.pruneInspectionThumbnailCache)
     .toHaveBeenCalledWith(['file:///cache/restock-proof-thumb.jpg'])
 })
@@ -485,6 +709,7 @@ test('keeps the original file when thumbnail generation fails after sync', async
         sofa: [],
         bedroom: [],
         kitchen: [],
+        bathroom: [],
       },
     },
   })

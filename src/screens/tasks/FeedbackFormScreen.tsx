@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ActivityIndicator, Alert, Dimensions, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Alert, Dimensions, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useIsFocused } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
@@ -15,6 +15,7 @@ import {
 } from '../../lib/inspectionPanelFeedbackDraft'
 import { draftMimeTypeFrom, persistCompressedDraftMedia } from '../../lib/localMediaDrafts'
 import { hairline, moderateScale } from '../../lib/scale'
+import { layoutTokens } from '../../lib/theme'
 import { getJson, remove as removeStorage, setJson } from '../../lib/storage'
 import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
 import {
@@ -35,6 +36,9 @@ import {
 } from '../../lib/api'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import { API_BASE_URL } from '../../config/env'
+import { cleaningMediaReference } from '../../lib/cleaningMedia'
+import CleaningMediaImage from '../../components/CleaningMediaImage'
+import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'FeedbackForm'>
 type Kind = 'maintenance' | 'deep_cleaning' | 'daily_necessities'
@@ -974,7 +978,8 @@ export default function FeedbackFormScreen(props: Props) {
             { uri, name: String(asset?.fileName || uri.split('/').pop() || `feedback-${Date.now()}.jpg`), mimeType: String(asset?.mimeType || 'image/jpeg') },
             { watermark: '1', purpose: 'feedback', property_code: propertyCode, captured_at: capturedAt, watermark_text: buildWatermarkText(capturedAt) },
           )
-          if (up?.url) uploaded.push(up.url)
+          const remoteReference = cleaningMediaReference(up)
+          if (remoteReference) uploaded.push(remoteReference)
         }
         keepCapturing = continuousCamera
       }
@@ -1761,7 +1766,7 @@ export default function FeedbackFormScreen(props: Props) {
                         <Text style={styles.createSectionTitle}>现场照片</Text>
                         <Text style={styles.label}>维修前照片</Text>
                         <UploadButtons onCamera={() => appendMaintenancePhoto(draft.clientId, 'media', 'camera')} onLibrary={() => appendMaintenancePhoto(draft.clientId, 'media', 'library')} />
-                        <PhotoStrip urls={draft.media} onPress={openViewer} onRemove={(photoIndex) => removeMaintenancePhoto(draft.clientId, 'media', photoIndex)} />
+                        <PhotoStrip token={token} urls={draft.media} onPress={openViewer} onRemove={(photoIndex) => removeMaintenancePhoto(draft.clientId, 'media', photoIndex)} />
                       </View>
                       <View style={styles.createSection}>
                         <Text style={styles.createSectionTitle}>完成信息</Text>
@@ -1780,7 +1785,7 @@ export default function FeedbackFormScreen(props: Props) {
                           <View style={styles.completionBlock}>
                             <Text style={styles.label}>维修后照片（必填）</Text>
                             <UploadButtons onCamera={() => appendMaintenancePhoto(draft.clientId, 'completionAfterPhotos', 'camera')} onLibrary={() => appendMaintenancePhoto(draft.clientId, 'completionAfterPhotos', 'library')} />
-                            <PhotoStrip urls={draft.completionAfterPhotos} onPress={openViewer} onRemove={(photoIndex) => removeMaintenancePhoto(draft.clientId, 'completionAfterPhotos', photoIndex)} />
+                            <PhotoStrip token={token} urls={draft.completionAfterPhotos} onPress={openViewer} onRemove={(photoIndex) => removeMaintenancePhoto(draft.clientId, 'completionAfterPhotos', photoIndex)} />
                             <Text style={styles.label}>维修备注（可选）</Text>
                             <TextInput value={draft.completionNote} onChangeText={(v) => updateMaintenanceDraft(draft.clientId, (item) => ({ ...item, completionNote: v }))} style={[styles.input, styles.textarea]} placeholder="例如：已维修完成，可正常使用" placeholderTextColor="#9CA3AF" multiline />
                           </View>
@@ -1816,7 +1821,7 @@ export default function FeedbackFormScreen(props: Props) {
                           <Text style={styles.createSectionTitle}>现场照片</Text>
                           <Text style={styles.label}>深度清洁前照片</Text>
                           <UploadButtons onCamera={() => appendDeepCleaningPhoto(draft.clientId, 'media', 'camera')} onLibrary={() => appendDeepCleaningPhoto(draft.clientId, 'media', 'library')} />
-                          <PhotoStrip urls={draft.media} onPress={openViewer} onRemove={(photoIndex) => removeDeepCleaningPhoto(draft.clientId, 'media', photoIndex)} />
+                          <PhotoStrip token={token} urls={draft.media} onPress={openViewer} onRemove={(photoIndex) => removeDeepCleaningPhoto(draft.clientId, 'media', photoIndex)} />
                         </View>
                         <View style={styles.createSection}>
                           <Text style={styles.createSectionTitle}>完成信息</Text>
@@ -1845,7 +1850,7 @@ export default function FeedbackFormScreen(props: Props) {
                               </Pressable>
                               <Text style={styles.label}>深度清洁后照片（必填）</Text>
                               <UploadButtons onCamera={() => appendDeepCleaningPhoto(draft.clientId, 'completionAfterPhotos', 'camera')} onLibrary={() => appendDeepCleaningPhoto(draft.clientId, 'completionAfterPhotos', 'library')} />
-                              <PhotoStrip urls={draft.completionAfterPhotos} onPress={openViewer} onRemove={(photoIndex) => removeDeepCleaningPhoto(draft.clientId, 'completionAfterPhotos', photoIndex)} />
+                              <PhotoStrip token={token} urls={draft.completionAfterPhotos} onPress={openViewer} onRemove={(photoIndex) => removeDeepCleaningPhoto(draft.clientId, 'completionAfterPhotos', photoIndex)} />
                               <Text style={styles.label}>处理说明（可选）</Text>
                               <TextInput value={draft.completionNote} onChangeText={(v) => updateDeepCleaningDraft(draft.clientId, (item) => ({ ...item, completionNote: v }))} style={[styles.input, styles.textarea]} placeholder="例如：已经深清完成，异味已消除" placeholderTextColor="#9CA3AF" multiline />
                             </View>
@@ -1906,7 +1911,7 @@ export default function FeedbackFormScreen(props: Props) {
                           <Text style={styles.createSectionTitle}>现场照片与备注</Text>
                           <Text style={styles.label}>照片</Text>
                           <UploadButtons onCamera={() => appendDailyPhoto(draft.clientId, 'camera')} onLibrary={() => appendDailyPhoto(draft.clientId, 'library')} />
-                          <PhotoStrip urls={draft.media} onPress={openViewer} onRemove={(photoIndex) => removeDailyDraftPhoto(draft.clientId, photoIndex)} />
+                          <PhotoStrip token={token} urls={draft.media} onPress={openViewer} onRemove={(photoIndex) => removeDailyDraftPhoto(draft.clientId, photoIndex)} />
                           <Text style={styles.label}>备注</Text>
                           <TextInput value={draft.note} onChangeText={(v) => updateDailyDraft(draft.clientId, (item) => ({ ...item, note: v }))} style={[styles.input, styles.textarea]} placeholder="备注或照片至少填一个" placeholderTextColor="#9CA3AF" multiline />
                         </View>
@@ -1968,9 +1973,9 @@ export default function FeedbackFormScreen(props: Props) {
                         <Text style={styles.historySectionCountText}>{pendingHistoryCount}</Text>
                       </View>
                     </View>
-                    <FeedbackGroup title="房源维修" items={pendingGroups.maintenance} emptyText="暂无处理中维修反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
-                    <FeedbackGroup title="深度清洁" items={pendingGroups.deep} emptyText="暂无处理中深清反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
-                    <FeedbackGroup title="日用品反馈" items={pendingGroups.daily} emptyText="暂无处理中日用品反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
+                    <FeedbackGroup token={token} title="房源维修" items={pendingGroups.maintenance} emptyText="暂无处理中维修反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
+                    <FeedbackGroup token={token} title="深度清洁" items={pendingGroups.deep} emptyText="暂无处理中深清反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
+                    <FeedbackGroup token={token} title="日用品反馈" items={pendingGroups.daily} emptyText="暂无处理中日用品反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
                   </View>
 
                   <View style={styles.historySection}>
@@ -1988,7 +1993,7 @@ export default function FeedbackFormScreen(props: Props) {
                         </Pressable>
                       </View>
                     </View>
-                    {resolvedExpanded ? <FeedbackGroup title="完工记录" items={resolved} emptyText="暂无待复核记录" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} /> : null}
+                    {resolvedExpanded ? <FeedbackGroup token={token} title="完工记录" items={resolved} emptyText="暂无待复核记录" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} /> : null}
                   </View>
                 </View>
               ) : null}
@@ -2035,7 +2040,7 @@ export default function FeedbackFormScreen(props: Props) {
                 {detailItem?.kind === 'daily_necessities' && normalizeUrls(detailItem?.media_urls).length ? (
                   <>
                     <Text style={styles.label}>原始反馈照片</Text>
-                    <PhotoStrip urls={normalizeUrls(detailItem?.media_urls)} onPress={openViewer} />
+                    <PhotoStrip token={token} urls={normalizeUrls(detailItem?.media_urls)} onPress={openViewer} />
                   </>
                 ) : null}
 
@@ -2065,13 +2070,13 @@ export default function FeedbackFormScreen(props: Props) {
                       {detailRecord.before_photos.length ? (
                         <>
                           <Text style={styles.photoSectionLabel}>{detailItem.kind === 'deep_cleaning' ? '深度清洁前照片' : '维修前照片'}</Text>
-                          <PhotoStrip urls={detailRecord.before_photos} onPress={openViewer} />
+                          <PhotoStrip token={token} urls={detailRecord.before_photos} onPress={openViewer} />
                         </>
                       ) : null}
                       {detailRecord.after_photos.length ? (
                         <>
                           <Text style={styles.photoSectionLabel}>{detailItem.kind === 'deep_cleaning' ? '深度清洁后照片' : '维修后照片'}</Text>
-                          <PhotoStrip urls={detailRecord.after_photos} onPress={openViewer} />
+                          <PhotoStrip token={token} urls={detailRecord.after_photos} onPress={openViewer} />
                         </>
                       ) : null}
                     </View>
@@ -2171,7 +2176,7 @@ export default function FeedbackFormScreen(props: Props) {
                     onCamera={() => appendProjectPhoto('before_photos', 'camera', { continuousCamera: recordEditFeedback?.kind === 'deep_cleaning' })}
                     onLibrary={() => appendProjectPhoto('before_photos', 'library')}
                   />
-                  <PhotoStrip urls={projectForm.before_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('before_photos', photoIndex)} />
+                  <PhotoStrip token={token} urls={projectForm.before_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('before_photos', photoIndex)} />
                   <Text style={styles.label}>{recordEditFeedback.kind === 'deep_cleaning' ? '处理备注（可选）' : '维修备注（可选）'}</Text>
                   <TextInput value={String(projectForm.note || '')} onChangeText={(v) => setProjectForm((prev) => ({ ...prev, note: v }))} style={[styles.input, styles.textarea]} placeholder="处理说明" placeholderTextColor="#9CA3AF" multiline />
                   <Text style={styles.label}>{recordEditFeedback.kind === 'deep_cleaning' ? '深度清洁后照片（可选）' : '维修后照片（可选）'}</Text>
@@ -2179,7 +2184,7 @@ export default function FeedbackFormScreen(props: Props) {
                     onCamera={() => appendProjectPhoto('after_photos', 'camera', { continuousCamera: recordEditFeedback?.kind === 'deep_cleaning' })}
                     onLibrary={() => appendProjectPhoto('after_photos', 'library')}
                   />
-                  <PhotoStrip urls={projectForm.after_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('after_photos', photoIndex)} />
+                  <PhotoStrip token={token} urls={projectForm.after_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('after_photos', photoIndex)} />
                   </>
                 ) : (
                   <Text style={styles.muted}>记录加载中，请重新打开编辑。</Text>
@@ -2247,13 +2252,13 @@ export default function FeedbackFormScreen(props: Props) {
                         onCamera={() => appendProjectPhoto('before_photos', 'camera', { continuousCamera: actionFeedback?.kind === 'deep_cleaning' })}
                         onLibrary={() => appendProjectPhoto('before_photos', 'library')}
                       />
-                      <PhotoStrip urls={projectForm.before_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('before_photos', photoIndex)} />
+                      <PhotoStrip token={token} urls={projectForm.before_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('before_photos', photoIndex)} />
                       <Text style={styles.label}>后照片（必填）</Text>
                       <UploadButtons
                         onCamera={() => appendProjectPhoto('after_photos', 'camera', { continuousCamera: actionFeedback?.kind === 'deep_cleaning' })}
                         onLibrary={() => appendProjectPhoto('after_photos', 'library')}
                       />
-                      <PhotoStrip urls={projectForm.after_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('after_photos', photoIndex)} />
+                      <PhotoStrip token={token} urls={projectForm.after_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('after_photos', photoIndex)} />
                     </>
                   ) : null}
                   </>
@@ -2318,7 +2323,7 @@ export default function FeedbackFormScreen(props: Props) {
                 <TextInput value={dailyEditQty} onChangeText={(v) => setDailyEditQty(v.replace(/[^\d]/g, ''))} style={styles.input} placeholder="例如：2" placeholderTextColor="#9CA3AF" keyboardType="number-pad" />
                 <Text style={styles.label}>照片</Text>
                 <UploadButtons onCamera={() => appendDailyEditPhoto('camera')} onLibrary={() => appendDailyEditPhoto('library')} />
-                <PhotoStrip urls={dailyEditMedia} onPress={openViewer} onRemove={removeDailyEditPhoto} />
+                <PhotoStrip token={token} urls={dailyEditMedia} onPress={openViewer} onRemove={removeDailyEditPhoto} />
                 <Text style={styles.label}>备注</Text>
                 <TextInput value={dailyEditNote} onChangeText={setDailyEditNote} style={[styles.input, styles.textarea]} placeholder="备注或照片至少填一个" placeholderTextColor="#9CA3AF" multiline />
               </ScrollView>
@@ -2346,7 +2351,7 @@ export default function FeedbackFormScreen(props: Props) {
             >
             {viewerUrls.map((u, idx) => (
                 <View key={`${u}-${idx}`} style={[styles.viewerSlide, { width: screenWidth }]}>
-                <Image source={{ uri: toAbsoluteUrl(u) }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+                <CleaningMediaPreview token={token} reference={u} style={{ width: '100%', height: '100%' }} />
               </View>
             ))}
             </ScrollView>
@@ -2431,14 +2436,14 @@ function StepCard(props: { step: string; title: string; subtitle?: string; highl
   )
 }
 
-function PhotoStrip(props: { urls: string[]; onPress: (urls: string[], index: number) => void; onRemove?: (index: number) => void }) {
+function PhotoStrip(props: { token?: string | null; urls: string[]; onPress: (urls: string[], index: number) => void; onRemove?: (index: number) => void }) {
   if (!props.urls.length) return null
   return (
     <View style={styles.thumbRow}>
       {props.urls.map((u, idx) => (
         <View key={`${u}-${idx}`} style={styles.thumbItemWrap}>
           <Pressable onPress={() => props.onPress(props.urls, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
-            <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.thumb} />
+            <CleaningMediaImage token={props.token} remoteReference={u} style={styles.thumb} />
           </Pressable>
           {props.onRemove ? (
             <Pressable onPress={() => props.onRemove?.(idx)} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
@@ -2452,6 +2457,7 @@ function PhotoStrip(props: { urls: string[]; onPress: (urls: string[], index: nu
 }
 
 function FeedbackGroup(props: {
+  token?: string | null
   title: string
   items: PropertyFeedback[]
   emptyText?: string
@@ -2484,7 +2490,7 @@ function FeedbackGroup(props: {
                 </View>
                 {previewUrl ? (
                   <Pressable onPress={() => props.onPreview(previewUrls, 0)} style={({ pressed }) => [styles.feedbackThumbWrap, pressed ? styles.pressed : null]}>
-                    <Image source={{ uri: previewUrl }} style={styles.feedbackThumb} resizeMode="cover" />
+            <CleaningMediaImage token={props.token} remoteReference={previewUrl} style={styles.feedbackThumb} resizeMode="cover" />
                     {previewUrls.length > 1 ? (
                       <View style={styles.feedbackThumbBadge}>
                         <Text style={styles.feedbackThumbBadgeText}>{previewUrls.length}</Text>
@@ -2571,7 +2577,7 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#1D4ED8' },
   chipTextDisabled: { color: '#64748B' },
   photoRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
-  photoBtn: { backgroundColor: '#EFF6FF', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, borderWidth: hairline(), borderColor: '#BFDBFE' },
+  photoBtn: { minHeight: layoutTokens.button.height, backgroundColor: '#EFF6FF', borderRadius: layoutTokens.button.radius, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderWidth: hairline(), borderColor: '#BFDBFE' },
   photoBtnText: { color: '#1D4ED8', fontWeight: '800' },
   choiceGrid: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   choiceCard: { flex: 1, minWidth: 130, borderRadius: 16, borderWidth: hairline(), borderColor: '#D1D5DB', backgroundColor: '#F8FAFC', paddingHorizontal: 14, paddingVertical: 12 },
@@ -2583,7 +2589,7 @@ const styles = StyleSheet.create({
   createCard: { marginTop: 12, borderRadius: 18, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#DCE4F2', overflow: 'hidden' },
   createCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: hairline(), borderBottomColor: '#E2E8F0', backgroundColor: '#FFFFFF' },
   createCardTitle: { flex: 1, minWidth: 0, fontSize: 16, fontWeight: '900', color: '#111827' },
-  removeBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: '#FEE2E2' },
+  removeBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 999, backgroundColor: '#FEE2E2', alignItems: 'center', justifyContent: 'center' },
   removeBtnText: { color: '#DC2626', fontWeight: '800', fontSize: 12 },
   createSection: { margin: 12, marginTop: 0, padding: 14, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E8EDF5' },
   createSectionTitle: { fontSize: 13, fontWeight: '900', color: '#475569', letterSpacing: 0.3 },
@@ -2607,14 +2613,14 @@ const styles = StyleSheet.create({
   thumbRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
   thumbItemWrap: { position: 'relative' },
   thumbWrap: { borderRadius: 10, overflow: 'hidden' },
-  thumb: { width: 74, height: 74, borderRadius: 10, backgroundColor: '#E5E7EB' },
+  thumb: { width: 96, height: 96, borderRadius: 10, backgroundColor: '#E5E7EB' },
   thumbDeleteBtn: { position: 'absolute', right: 4, top: 4, width: 20, height: 20, borderRadius: 10, backgroundColor: 'rgba(17,24,39,0.76)', alignItems: 'center', justifyContent: 'center' },
   submitWrap: { marginTop: 2, marginBottom: 2 },
   batchActions: { marginTop: 16, gap: 10 },
-  secondaryBtn: { borderRadius: 16, backgroundColor: '#EFF6FF', paddingVertical: 14, alignItems: 'center', borderWidth: hairline(), borderColor: '#BFDBFE' },
+  secondaryBtn: { minHeight: layoutTokens.button.height, borderRadius: 16, backgroundColor: '#EFF6FF', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, alignItems: 'center', justifyContent: 'center', borderWidth: hairline(), borderColor: '#BFDBFE' },
   secondaryBtnText: { color: '#1D4ED8', fontWeight: '900', fontSize: 15 },
   batchSubmitBtn: { marginTop: 2 },
-  submitBtn: { borderRadius: 16, backgroundColor: '#111827', paddingVertical: 15, alignItems: 'center' },
+  submitBtn: { minHeight: layoutTokens.button.height, borderRadius: 16, backgroundColor: '#111827', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, alignItems: 'center', justifyContent: 'center' },
   submitDisabled: { opacity: 0.5 },
   submitText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
   historyCard: { backgroundColor: '#F8FAFC', borderRadius: 18, borderWidth: hairline(), borderColor: '#E2E8F0', padding: 14 },
@@ -2665,7 +2671,7 @@ const styles = StyleSheet.create({
   feedbackMain: { flex: 1, minWidth: 0 },
   feedbackTitle: { fontWeight: '800', color: '#1F2937' },
   feedbackMeta: { marginTop: 6, color: '#64748B', fontWeight: '700', fontSize: 12 },
-  feedbackThumbWrap: { width: 56, height: 56, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', position: 'relative' },
+  feedbackThumbWrap: { width: 96, height: 96, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', position: 'relative' },
   feedbackThumb: { width: '100%', height: '100%', backgroundColor: '#DBEAFE' },
   feedbackThumbBadge: { position: 'absolute', right: 4, bottom: 4, minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4, backgroundColor: 'rgba(15,23,42,0.78)', alignItems: 'center', justifyContent: 'center' },
   feedbackThumbBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
@@ -2684,12 +2690,12 @@ const styles = StyleSheet.create({
   modalActions: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' },
   modalTitle: { flex: 1, minWidth: 0, fontWeight: '900', color: '#111827', fontSize: 16 },
   closeText: { color: '#2563EB', fontWeight: '800' },
-  headerActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE' },
+  headerActionBtn: { minHeight: layoutTokens.button.height, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 999, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE' },
   headerActionText: { color: '#2563EB', fontWeight: '800', fontSize: 12, textAlign: 'center' },
-  headerDangerBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FECACA' },
+  headerDangerBtn: { minHeight: layoutTokens.button.height, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 999, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FECACA' },
   headerDangerText: { color: '#DC2626', fontWeight: '800', fontSize: 12, textAlign: 'center' },
-  iconBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', alignItems: 'center', justifyContent: 'center' },
-  iconBtnDanger: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FECACA', alignItems: 'center', justifyContent: 'center' },
+  iconBtn: { width: layoutTokens.button.iconTouchSize, height: layoutTokens.button.iconTouchSize, borderRadius: layoutTokens.button.iconTouchSize / 2, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', alignItems: 'center', justifyContent: 'center' },
+  iconBtnDanger: { width: layoutTokens.button.iconTouchSize, height: layoutTokens.button.iconTouchSize, borderRadius: layoutTokens.button.iconTouchSize / 2, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FECACA', alignItems: 'center', justifyContent: 'center' },
   detailHeadline: { color: '#111827', fontWeight: '900', fontSize: 16 },
   detailText: { marginTop: 10, color: '#374151', lineHeight: 20 },
   detailMeta: { marginTop: 8, color: '#6B7280', fontSize: 12, fontWeight: '700' },
@@ -2699,9 +2705,9 @@ const styles = StyleSheet.create({
   projectMeta: { marginTop: 6, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   projectText: { marginTop: 6, color: '#374151', lineHeight: 18 },
   inlineBtns: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' },
-  miniBtn: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10, backgroundColor: '#E5E7EB' },
+  miniBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: 12, paddingVertical: 0, borderRadius: 10, backgroundColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   miniBtnText: { color: '#111827', fontWeight: '800', fontSize: 12, textAlign: 'center' },
-  miniBtnPrimary: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10, backgroundColor: '#2563EB' },
+  miniBtnPrimary: { minHeight: layoutTokens.button.height, paddingHorizontal: 12, paddingVertical: 0, borderRadius: 10, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   miniBtnPrimaryText: { color: '#FFFFFF', fontWeight: '800', fontSize: 12, textAlign: 'center' },
   photoSectionLabel: { marginTop: 8, color: '#374151', fontWeight: '800' },
   timeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

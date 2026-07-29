@@ -1,7 +1,9 @@
 import { Directory, File, Paths } from 'expo-file-system'
 import type { InspectionPhotoArea } from './api'
-import { ApiError, isRetryableApiError, uploadCleaningMedia, uploadCleaningVideo, uploadLockboxVideo } from './api'
+import { ApiError, isRetryableApiError, uploadCleaningMedia, uploadCleaningVideo, uploadLockboxVideo, uploadSelfLockboxVideo } from './api'
+import { cleaningMediaReference } from './cleaningMedia'
 import { compressImageForLocalStorage, isCompressibleImageMimeType } from './imageCompression'
+import { draftMimeTypeFrom } from './localMediaDrafts'
 import { isLocalMediaLocked, withLocalMediaLock } from './localMediaLocks'
 import { getJson, setJson } from './storage'
 
@@ -38,6 +40,7 @@ export type InspectionMediaQueueItem = {
     item_id?: string
     property_code?: string
     watermark_text?: string
+    lockbox_submission_mode?: 'inspection' | 'self_complete'
   }
 }
 
@@ -106,8 +109,9 @@ function fileExists(uri: string) {
 async function copyToPrivateDir(sourceUri: string, name: string, mimeType: string, kind: InspectionQueueKind) {
   let preparedUri = sourceUri
   let preparedName = name
-  let preparedMimeType = mimeType
-  const shouldCompress = kind !== 'lockbox_video' && isCompressibleImageMimeType(mimeType)
+  const resolvedMimeType = draftMimeTypeFrom(name, mimeType, sourceUri)
+  let preparedMimeType = resolvedMimeType
+  const shouldCompress = kind !== 'lockbox_video' && isCompressibleImageMimeType(resolvedMimeType)
   if (shouldCompress) {
     preparedUri = await compressImageForLocalStorage(sourceUri, { maxWidth: 1800, quality: 0.72 })
     preparedMimeType = 'image/jpeg'
@@ -308,6 +312,16 @@ async function uploadQueueItem(token: string, item: InspectionMediaQueueItem) {
   return await withLocalMediaLock(localUri, () => uploadCleaningMedia(token, { uri: localUri, name: item.name, mimeType: item.mime_type }, uploadMeta(item) || undefined))
 }
 
+async function saveLockboxVideoBusinessRecord(token: string, item: InspectionMediaQueueItem, uploadedUrl: string) {
+  if (item.meta?.lockbox_submission_mode === 'self_complete') {
+    return await uploadSelfLockboxVideo(token, item.task_id, {
+      media_url: uploadedUrl,
+      captured_at: item.captured_at,
+    })
+  }
+  return await uploadLockboxVideo(token, item.task_id, { media_url: uploadedUrl })
+}
+
 export async function processInspectionMediaQueue(token: string) {
   await pruneExpiredInspectionMediaItems()
   const items = await loadQueue()
@@ -339,7 +353,7 @@ export async function processInspectionMediaQueue(token: string) {
           UPLOAD_OPERATION_TIMEOUT_MS,
           '视频上传超时，已保存在本机，稍后会自动重试',
         )
-      const uploadedUrl = String(up.url || '').trim() || alreadyUploadedUrl
+      const uploadedUrl = cleaningMediaReference(up) || alreadyUploadedUrl
       processed++
       await updateQueueItem(item.id, (current) => ({
         ...current,
@@ -349,18 +363,9 @@ export async function processInspectionMediaQueue(token: string) {
         last_error: null,
       }))
       const persistedUpload = (await loadQueue()).find((current) => current.id === item.id)
-      if (
-        persistedUpload
-        && String(persistedUpload.uploaded_url || '').trim()
-        && persistedUpload.upload_status === 'uploaded'
-        && !persistedUpload.local_file_deleted_at
-      ) {
-        deleteLocalFile(persistedUpload.local_uri)
-        await updateInspectionMediaItem(persistedUpload.id, { local_file_deleted_at: nowIso() })
-      }
       if (item.kind === 'lockbox_video' && uploadedUrl) {
         await withOperationTimeout(
-          uploadLockboxVideo(token, item.task_id, { media_url: uploadedUrl }),
+          saveLockboxVideoBusinessRecord(token, item, uploadedUrl),
           BUSINESS_SAVE_OPERATION_TIMEOUT_MS,
           '视频已上传但保存任务超时，稍后会自动重试',
         )
@@ -373,6 +378,9 @@ export async function processInspectionMediaQueue(token: string) {
           local_file_deleted_at: current.local_file_deleted_at || nowIso(),
           last_error: null,
         }))
+        if (persistedUpload && !persistedUpload.local_file_deleted_at) {
+          deleteLocalFile(persistedUpload.local_uri)
+        }
       }
     } catch (error: any) {
       const message = String(error?.message || '上传失败')

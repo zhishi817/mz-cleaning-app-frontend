@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Image, KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Alert, KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
@@ -7,26 +7,33 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import {
   deleteCleaningConsumablesPhoto,
+  enqueueCleaningConsumablesMediaCleanup,
   getCleaningConsumablesDraft,
   isLocalCleaningConsumablesPhotoUri,
   persistCompressedCleaningConsumablesPhoto,
-  removeCleaningConsumablesDraft,
   setCleaningConsumablesDraft,
   type CleaningConsumablesDraftItem,
   type CleaningConsumablesPhotoMetaMap,
+  type CleaningConsumablesSubmitStatus,
 } from '../../lib/cleaningConsumablesDraft'
-import { dequeueCleaningConsumablesSubmit, enqueueCleaningConsumablesSubmit, isCleaningConsumablesSubmitQueued } from '../../lib/cleaningConsumablesSubmitQueue'
+import {
+  enqueueAndProcessCleaningConsumablesSubmit,
+  subscribeCleaningConsumablesSubmitQueue,
+} from '../../lib/cleaningConsumablesSubmitQueue'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getJson, setJson } from '../../lib/storage'
-import { getWorkTasksSnapshot, patchWorkTaskItem } from '../../lib/workTasksStore'
-import { getCleaningConsumables, isRetryableApiError, submitCleaningConsumables, uploadCleaningMedia, type ChecklistItem } from '../../lib/api'
+import { findWorkTaskItemByAnyId, subscribeWorkTasks } from '../../lib/workTasksStore'
+import { getCleaningConsumables, type ChecklistItem } from '../../lib/api'
+import { consumableRestockStandard } from '../../lib/consumableRestockStandards'
 import { ensureSuppliesCatalogLoaded, retrySuppliesCatalog, useSuppliesCatalogStore } from '../../lib/useSuppliesCatalogStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import AppButton from '../../components/ui/AppButton'
 import AppText from '../../components/ui/AppText'
 import AppTextInput from '../../components/ui/AppTextInput'
 import ResponsiveImageGrid from '../../components/ui/ResponsiveImageGrid'
+import CleaningMediaImage from '../../components/CleaningMediaImage'
+import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 import { layoutTokens } from '../../lib/theme'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'SuppliesForm'>
@@ -95,9 +102,10 @@ function applyExistingToItems(baseMapped: ItemState[], existingItems: any[]) {
     const prev = byId.get(it.id)
     if (!prev) return it
     if (it.id === 'other') return { ...it, note: String(prev.note || '') }
+    const previousStatus = String(prev.status || '').trim()
     return {
       ...it,
-      status: (String(prev.status || '').trim() === 'low' ? 'low' : 'ok') as 'ok' | 'low',
+      status: previousStatus === 'low' || previousStatus === 'ok' ? previousStatus : it.status,
       qty: prev.qty != null ? String(prev.qty) : '1',
       note: String(prev.note || ''),
       photo_urls: normalizePhotoUrls(prev.photo_urls, prev.photo_url),
@@ -124,6 +132,7 @@ export default function SuppliesFormScreen(props: Props) {
   const { t } = useI18n()
   const { token, user } = useAuth()
   const insets = useSafeAreaInsets()
+  const readOnly = props.route.params.readOnly === true
   const [submitting, setSubmitting] = useState(false)
   const [loading, setLoading] = useState(false)
   const [items, setItems] = useState<ItemState[]>([])
@@ -139,22 +148,37 @@ export default function SuppliesFormScreen(props: Props) {
   const [initialRecordItems, setInitialRecordItems] = useState<CachedConsumablesRecord['items']>([])
   const [recordHydrated, setRecordHydrated] = useState(false)
   const [draftPhotoMeta, setDraftPhotoMeta] = useState<CleaningConsumablesPhotoMetaMap>({})
-  const [pendingSubmit, setPendingSubmit] = useState(false)
+  const [draftSubmitStatus, setDraftSubmitStatus] = useState<CleaningConsumablesSubmitStatus>('draft')
   const [showValidationIssue, setShowValidationIssue] = useState(false)
   const [heroExpanded, setHeroExpanded] = useState(true)
+  const [roomConfirmed, setRoomConfirmed] = useState(false)
+  const [, bumpTasksVersion] = useState(0)
   const suppliesCatalog = useSuppliesCatalogStore()
   const formDirtyRef = useRef(false)
   const draftHydratedRef = useRef(false)
   const scrollRef = useRef<ScrollView | null>(null)
   const sectionOffsetsRef = useRef<Record<'checklist' | 'photos', number>>({ checklist: 0, photos: 0 })
+  const pendingSubmit = draftSubmitStatus !== 'draft' && draftSubmitStatus !== 'synced'
 
   useEffect(() => {
     props.navigation.setOptions({ title: hasExistingRecord ? '补品记录' : '补品填报' })
   }, [hasExistingRecord, props.navigation])
 
-  const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
+  useEffect(() => {
+    const unsubscribe = subscribeWorkTasks(() => bumpTasksVersion((value) => value + 1))
+    return () => {
+      unsubscribe()
+    }
+  }, [])
+
+  const task = findWorkTaskItemByAnyId(props.route.params.taskId)
   const cleaningTaskId = useMemo(() => String(task?.source_id || props.route.params.taskId || '').trim(), [props.route.params.taskId, task?.source_id])
   const propertyCode = String(task?.property?.code || task?.title || '').trim()
+
+  useEffect(() => {
+    setRoomConfirmed(false)
+  }, [props.route.params.taskId, readOnly])
+
   const allRequiredScenePhotos = useMemo(
     () => [
       ...SHOWER_DRAIN_PHOTOS,
@@ -197,6 +221,22 @@ export default function SuppliesFormScreen(props: Props) {
     if (String(remoteTvPhotoUrl || '').trim()) count += 1
     return count
   }, [allRequiredScenePhotos, extraPhotoUrls, livingRoomPhotoUrl, remoteTvPhotoUrl])
+  const photoUploadStatus = useMemo(() => {
+    const urls = [
+      livingRoomPhotoUrl,
+      remoteAcPhotoUrl,
+      remoteTvPhotoUrl,
+      ...Object.values(extraPhotoUrls),
+      ...items.flatMap((item) => item.photo_urls || []),
+    ]
+    const normalizedUrls = urls
+      .map((url) => String(url || '').trim())
+      .filter(Boolean)
+    return {
+      totalCount: normalizedUrls.length,
+      pendingCount: normalizedUrls.filter((url) => isLocalCleaningConsumablesPhotoUri(url)).length,
+    }
+  }, [extraPhotoUrls, items, livingRoomPhotoUrl, remoteAcPhotoUrl, remoteTvPhotoUrl])
 
   function markFormDirty() {
     formDirtyRef.current = true
@@ -224,7 +264,9 @@ export default function SuppliesFormScreen(props: Props) {
   }
 
   function removePhotoUri(uri: string) {
-    if (isLocalCleaningConsumablesPhotoUri(uri)) deleteCleaningConsumablesPhoto(uri)
+    if (isLocalCleaningConsumablesPhotoUri(uri) && !deleteCleaningConsumablesPhoto(uri)) {
+      void enqueueCleaningConsumablesMediaCleanup(uri)
+    }
     dropDraftPhotoMeta(uri)
   }
 
@@ -244,32 +286,8 @@ export default function SuppliesFormScreen(props: Props) {
     return persisted.localUri
   }
 
-  async function uploadDraftPhotoIfNeeded(
-    rawUrl: string,
-    fallbackName: string,
-    meta: Record<string, any>,
-    photoMetaMap: CleaningConsumablesPhotoMetaMap,
-  ) {
-    const current = String(rawUrl || '').trim()
-    if (!current) return ''
-    if (!isLocalCleaningConsumablesPhotoUri(current)) return current
-    const photoMeta = photoMetaMap[current]
-    const capturedAt = String(photoMeta?.captured_at || '').trim() || new Date().toISOString()
-    const name = String(photoMeta?.name || '').trim() || fallbackName
-    const mimeType = String(photoMeta?.mime_type || '').trim() || 'image/jpeg'
-    const up = await uploadCleaningMedia(token as string, { uri: current, name, mimeType }, {
-      ...meta,
-      captured_at: capturedAt,
-      watermark: '1',
-      watermark_text: buildWatermarkText(capturedAt),
-      property_code: propertyCode || undefined,
-    })
-    deleteCleaningConsumablesPhoto(current)
-    delete photoMetaMap[current]
-    return String(up.url || '').trim()
-  }
-
   function setItem(idx: number, patch: Partial<ItemState>) {
+    if (readOnly) return
     markFormDirty()
     setItems(prev => prev.map((x, i) => (i === idx ? { ...x, ...patch } : x)))
   }
@@ -286,15 +304,14 @@ export default function SuppliesFormScreen(props: Props) {
     let cancelled = false
     ;(async () => {
       try {
-        const [queued, localDraft, nextCachedRecord] = await Promise.all([
-          cleaningTaskId ? isCleaningConsumablesSubmitQueued(cleaningTaskId) : Promise.resolve(false),
+        const [localDraft, nextCachedRecord] = await Promise.all([
           cleaningTaskId ? getCleaningConsumablesDraft(cleaningTaskId) : Promise.resolve(null),
           cleaningTaskId ? getJson<CachedConsumablesRecord>(suppliesRecordCacheKey(cleaningTaskId)) : Promise.resolve(null),
         ])
         if (cancelled) return
         draftHydratedRef.current = true
         formDirtyRef.current = !!localDraft
-        setPendingSubmit(queued || !!localDraft?.pending_submit)
+        setDraftSubmitStatus(localDraft?.submit_status || (localDraft?.pending_submit ? 'waiting_sync' : 'draft'))
         setInitialRecordItems(Array.isArray(localDraft?.items) ? localDraft.items : Array.isArray(nextCachedRecord?.items) ? nextCachedRecord.items : [])
         setDraftPhotoMeta(localDraft?.photo_meta || {})
         setRecordHydrated(true)
@@ -314,6 +331,31 @@ export default function SuppliesFormScreen(props: Props) {
     return () => {
       cancelled = true
     }
+  }, [allRequiredScenePhotos, cleaningTaskId])
+
+  useEffect(() => {
+    if (!cleaningTaskId) return
+    return subscribeCleaningConsumablesSubmitQueue((changedTaskId) => {
+      if (changedTaskId !== cleaningTaskId) return
+      void getCleaningConsumablesDraft(cleaningTaskId).then((draft) => {
+        if (!draft) {
+          formDirtyRef.current = false
+          setDraftSubmitStatus('synced')
+          return
+        }
+        setDraftSubmitStatus(draft.submit_status)
+        setDraftPhotoMeta(draft.photo_meta || {})
+        if (draft.submit_status !== 'draft' || !formDirtyRef.current) {
+          setItems((current) => applyExistingToItems(current, draft.items || []))
+          setLivingRoomPhotoUrl(String(draft.living_room_photo_url || '').trim() || null)
+          setRemoteAcPhotoUrl(String(draft.remote_ac_photo_url || '').trim() || null)
+          setRemoteTvPhotoUrl(String(draft.remote_tv_photo_url || '').trim() || null)
+          setExtraPhotoUrls((current) => Object.fromEntries(
+            allRequiredScenePhotos.map((item) => [item.id, String(draft.extra_photo_urls?.[item.id] || current[item.id] || '').trim() || null]),
+          ) as Record<string, string | null>)
+        }
+      }).catch(() => {})
+    })
   }, [allRequiredScenePhotos, cleaningTaskId])
 
   useEffect(() => {
@@ -354,7 +396,7 @@ export default function SuppliesFormScreen(props: Props) {
           setLivingRoomPhotoUrl(existingLivingRoomPhotoUrl)
           setExtraPhotoUrls(nextExtraPhotos)
           setDraftPhotoMeta({})
-          setPendingSubmit(false)
+          setDraftSubmitStatus('draft')
           setHasExistingRecord(existingItems.length > 0)
         }
       } catch {}
@@ -371,10 +413,12 @@ export default function SuppliesFormScreen(props: Props) {
     if (!cleaningTaskId) return
     if (!recordHydrated || !draftHydratedRef.current) return
     if (!formDirtyRef.current) return
+    if (draftSubmitStatus !== 'draft' && draftSubmitStatus !== 'ready_to_submit') return
     const draftItems = normalizeDraftItems(items)
     void setCleaningConsumablesDraft(cleaningTaskId, {
       property_code: propertyCode || null,
       pending_submit: pendingSubmit,
+      submit_status: draftSubmitStatus,
       living_room_photo_url: String(livingRoomPhotoUrl || '').trim() || null,
       remote_ac_photo_url: String(remoteAcPhotoUrl || '').trim() || null,
       remote_tv_photo_url: String(remoteTvPhotoUrl || '').trim() || null,
@@ -382,7 +426,7 @@ export default function SuppliesFormScreen(props: Props) {
       items: draftItems,
       photo_meta: draftPhotoMeta,
     })
-  }, [cleaningTaskId, draftPhotoMeta, extraPhotoUrls, items, livingRoomPhotoUrl, pendingSubmit, propertyCode, recordHydrated, remoteAcPhotoUrl, remoteTvPhotoUrl])
+  }, [cleaningTaskId, draftPhotoMeta, draftSubmitStatus, extraPhotoUrls, items, livingRoomPhotoUrl, pendingSubmit, propertyCode, recordHydrated, remoteAcPhotoUrl, remoteTvPhotoUrl])
 
   async function ensureCameraPerm() {
     try {
@@ -394,6 +438,7 @@ export default function SuppliesFormScreen(props: Props) {
   }
 
   async function onTakeStockPhoto(idx: number) {
+    if (readOnly) return
     try {
       markFormDirty()
       setPhotoUploadingIdx(idx)
@@ -407,19 +452,23 @@ export default function SuppliesFormScreen(props: Props) {
     }
   }
 
-  async function onTakeRemotePhoto(kind: 'ac' | 'tv') {
+  async function onTakeRemotePhoto() {
+    if (readOnly) return
     try {
       markFormDirty()
-      const localUri = await capturePersistedPhoto(`remote-${kind}-${Date.now()}.jpg`, `remote-${kind}`)
+      setBatchUploadingGroup('remote')
+      const localUri = await capturePersistedPhoto(`remote-${Date.now()}.jpg`, 'remote')
       if (!localUri) return
-      if (kind === 'ac') setRemoteAcPhotoUrl(localUri)
-      else setRemoteTvPhotoUrl(localUri)
+      setRemoteTvPhotoUrl(localUri)
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
+    } finally {
+      setBatchUploadingGroup(null)
     }
   }
 
   async function onTakeRequiredScenePhoto(photoId: string) {
+    if (readOnly) return
     try {
       markFormDirty()
       const localUri = await capturePersistedPhoto(`${photoId}-${Date.now()}.jpg`, photoId)
@@ -431,22 +480,21 @@ export default function SuppliesFormScreen(props: Props) {
   }
 
   async function onTakeRequiredScenePhotoSequence(group: 'bathroom' | 'kitchen') {
+    if (readOnly) return
     const targets = group === 'bathroom' ? SHOWER_DRAIN_PHOTOS : KITCHEN_REQUIRED_PHOTOS
     const pendingTargets = targets.filter((item) => !String(extraPhotoUrls[item.id] || '').trim())
-    const captureTargets = pendingTargets.length ? pendingTargets : (targets[0] ? [targets[0]] : [])
-    if (!captureTargets.length) return
+    const captureTarget = pendingTargets[0] || targets[0]
+    if (!captureTarget) return
     if (group === 'bathroom') {
-      await onTakeRequiredScenePhoto(captureTargets[0].id)
+      await onTakeRequiredScenePhoto(captureTarget.id)
       return
     }
     try {
       markFormDirty()
       setBatchUploadingGroup(group)
-      for (const target of captureTargets) {
-        const localUri = await capturePersistedPhoto(`${target.id}-${Date.now()}.jpg`, target.id)
-        if (!localUri) break
-        setExtraPhotoUrls(prev => ({ ...prev, [target.id]: localUri }))
-      }
+      const localUri = await capturePersistedPhoto(`${captureTarget.id}-${Date.now()}.jpg`, captureTarget.id)
+      if (!localUri) return
+      setExtraPhotoUrls(prev => ({ ...prev, [captureTarget.id]: localUri }))
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
     } finally {
@@ -455,6 +503,7 @@ export default function SuppliesFormScreen(props: Props) {
   }
 
   async function uploadLivingRoomPhoto() {
+    if (readOnly) return
     try {
       markFormDirty()
       const localUri = await capturePersistedPhoto(`living-room-${Date.now()}.jpg`, 'living-room')
@@ -466,6 +515,7 @@ export default function SuppliesFormScreen(props: Props) {
   }
 
   function removeStockPhoto(idx: number, photoIdx: number) {
+    if (readOnly) return
     markFormDirty()
     setItems((prev) => prev.map((x, i) => {
       if (i !== idx) return x
@@ -479,18 +529,21 @@ export default function SuppliesFormScreen(props: Props) {
   }
 
   function removeLivingRoomPhoto() {
+    if (readOnly) return
     markFormDirty()
     removePhotoUri(String(livingRoomPhotoUrl || ''))
     setLivingRoomPhotoUrl(null)
   }
 
   function removeRequiredScenePhoto(photoId: string) {
+    if (readOnly) return
     markFormDirty()
     removePhotoUri(String(extraPhotoUrls[photoId] || ''))
     setExtraPhotoUrls(prev => ({ ...prev, [photoId]: null }))
   }
 
   function removeRemotePhoto(kind: 'ac' | 'tv') {
+    if (readOnly) return
     markFormDirty()
     if (kind === 'ac') {
       removePhotoUri(String(remoteAcPhotoUrl || ''))
@@ -498,24 +551,6 @@ export default function SuppliesFormScreen(props: Props) {
     } else {
       removePhotoUri(String(remoteTvPhotoUrl || ''))
       setRemoteTvPhotoUrl(null)
-    }
-  }
-
-  async function onTakeRemotePhotoSequence() {
-    try {
-      markFormDirty()
-      setBatchUploadingGroup('remote')
-      const targets: ('tv' | 'ac')[] = ['tv', 'ac']
-      for (const kind of targets) {
-        const localUri = await capturePersistedPhoto(`remote-${kind}-${Date.now()}.jpg`, `remote-${kind}`)
-        if (!localUri) return
-        if (kind === 'tv') setRemoteTvPhotoUrl(localUri)
-        else setRemoteAcPhotoUrl(localUri)
-      }
-    } catch (e: any) {
-      Alert.alert(t('common_error'), String(e?.message || '保存失败'))
-    } finally {
-      setBatchUploadingGroup(null)
     }
   }
 
@@ -613,6 +648,7 @@ export default function SuppliesFormScreen(props: Props) {
     await setCleaningConsumablesDraft(cleaningTaskId, {
       property_code: propertyCode || null,
       pending_submit: true,
+      submit_status: 'ready_to_submit',
       living_room_photo_url: String(nextLivingRoomPhotoUrl || '').trim() || null,
       remote_ac_photo_url: String(nextRemoteAcPhotoUrl || '').trim() || null,
       remote_tv_photo_url: String(nextRemoteTvPhotoUrl || '').trim() || null,
@@ -620,11 +656,10 @@ export default function SuppliesFormScreen(props: Props) {
       items: draftItems,
       photo_meta: nextPhotoMeta,
     })
-    await enqueueCleaningConsumablesSubmit(cleaningTaskId)
-    setPendingSubmit(true)
   }
 
   async function onSubmit() {
+    if (readOnly) return
     if (!token) {
       Alert.alert(t('common_error'), '请先登录')
       return
@@ -641,134 +676,33 @@ export default function SuppliesFormScreen(props: Props) {
     }
     const mirrorChecked = await confirmToiletPaperMirrorChecked()
     if (!mirrorChecked) return
-    const workingItems = items.map((item) => ({ ...item, photo_urls: [...item.photo_urls] }))
-    const workingPhotoMeta: CleaningConsumablesPhotoMetaMap = { ...draftPhotoMeta }
-    let nextLivingRoomPhotoUrl = String(livingRoomPhotoUrl || '').trim()
-    let nextRemoteAcPhotoUrl = String(remoteAcPhotoUrl || '').trim()
-    let nextRemoteTvPhotoUrl = String(remoteTvPhotoUrl || '').trim()
-    const nextExtraPhotoUrls: Record<string, string | null> = { ...extraPhotoUrls }
     try {
       setShowValidationIssue(false)
       setSubmitting(true)
-      for (const item of workingItems) {
-        const nextPhotoUrls: string[] = []
-        for (let photoIdx = 0; photoIdx < item.photo_urls.length; photoIdx += 1) {
-          const uploaded = await uploadDraftPhotoIfNeeded(
-            item.photo_urls[photoIdx] || '',
-            `${item.id}-${photoIdx + 1}.jpg`,
-            { purpose: 'consumable_stock_photo' },
-            workingPhotoMeta,
-          )
-          if (uploaded) nextPhotoUrls.push(uploaded)
-        }
-        item.photo_urls = nextPhotoUrls
-      }
-      nextLivingRoomPhotoUrl = await uploadDraftPhotoIfNeeded(
-        nextLivingRoomPhotoUrl,
-        'living-room.jpg',
-        { purpose: 'consumable_living_room_photo' },
-        workingPhotoMeta,
-      )
-      nextRemoteAcPhotoUrl = await uploadDraftPhotoIfNeeded(
-        nextRemoteAcPhotoUrl,
-        'remote-ac.jpg',
-        { purpose: 'consumable_remote_photo', area: 'ac_remote' },
-        workingPhotoMeta,
-      )
-      nextRemoteTvPhotoUrl = await uploadDraftPhotoIfNeeded(
-        nextRemoteTvPhotoUrl,
-        'remote-tv.jpg',
-        { purpose: 'consumable_remote_photo', area: 'tv_remote' },
-        workingPhotoMeta,
-      )
-      for (const item of allRequiredScenePhotos) {
-        nextExtraPhotoUrls[item.id] = await uploadDraftPhotoIfNeeded(
-          String(nextExtraPhotoUrls[item.id] || '').trim(),
-          `${item.id}.jpg`,
-          { purpose: 'consumable_scene_photo', scene: item.id },
-          workingPhotoMeta,
-        ) || null
-      }
-
-      setItems(workingItems)
-      setLivingRoomPhotoUrl(nextLivingRoomPhotoUrl || null)
-      setRemoteAcPhotoUrl(nextRemoteAcPhotoUrl || null)
-      setRemoteTvPhotoUrl(nextRemoteTvPhotoUrl || null)
-      setExtraPhotoUrls(nextExtraPhotoUrls)
-      setDraftPhotoMeta(workingPhotoMeta)
-
-      const out = workingItems.map(x => ({
-        item_id: x.id,
-        status: x.status as any,
-        qty: x.status === 'low' ? Number(String(x.qty || '').trim()) : undefined,
-        note: x.note.trim() || undefined,
-        photo_url: x.photo_urls[0] || undefined,
-        photo_urls: x.photo_urls.length ? x.photo_urls : undefined,
-      }))
-      if (String(nextRemoteAcPhotoUrl || '').trim()) {
-        out.push({
-          item_id: 'remote_ac',
-          status: 'ok' as any,
-          photo_url: nextRemoteAcPhotoUrl || undefined,
-        } as any)
-      }
-      out.push({
-        item_id: 'remote_tv',
-        status: 'ok' as any,
-        photo_url: nextRemoteTvPhotoUrl || undefined,
-      } as any)
-      for (const item of allRequiredScenePhotos) {
-        const url = String(nextExtraPhotoUrls[item.id] || '').trim()
-        if (!url) continue
-        out.push({
-          item_id: item.id,
-          status: 'ok' as any,
-          photo_url: url,
-        } as any)
-      }
-
-      const updated = await submitCleaningConsumables(token, cleaningTaskId, { living_room_photo_url: String(nextLivingRoomPhotoUrl || '').trim(), items: out })
-      formDirtyRef.current = false
-      setPendingSubmit(false)
-      setDraftPhotoMeta({})
-      await removeCleaningConsumablesDraft(cleaningTaskId)
-      await dequeueCleaningConsumablesSubmit(cleaningTaskId)
-      const nextRecord: CachedConsumablesRecord = { living_room_photo_url: String(nextLivingRoomPhotoUrl || '').trim() || null, items: out as any }
-      setInitialRecordItems(out as any)
-      void setJson(suppliesRecordCacheKey(cleaningTaskId), nextRecord)
-      const nextStatus = String((updated as any)?.status || '').trim()
-      if (task?.id && nextStatus) {
-        await patchWorkTaskItem(String(task.id), { status: nextStatus } as any)
-      }
-      Alert.alert(t('common_ok'), hasExistingRecord ? '补品记录已更新' : '提交成功')
-      props.navigation.goBack()
-    } catch (e: any) {
-      if (isRetryableApiError(e)) {
-        setItems(workingItems)
-        setLivingRoomPhotoUrl(nextLivingRoomPhotoUrl || null)
-        setRemoteAcPhotoUrl(nextRemoteAcPhotoUrl || null)
-        setRemoteTvPhotoUrl(nextRemoteTvPhotoUrl || null)
-        setExtraPhotoUrls(nextExtraPhotoUrls)
-        setDraftPhotoMeta(workingPhotoMeta)
-        await queueCurrentConsumablesSubmit({
-          items: workingItems,
-          livingRoomPhotoUrl: nextLivingRoomPhotoUrl || null,
-          remoteAcPhotoUrl: nextRemoteAcPhotoUrl || null,
-          remoteTvPhotoUrl: nextRemoteTvPhotoUrl || null,
-          extraPhotoUrls: nextExtraPhotoUrls,
-          photoMeta: workingPhotoMeta,
-        })
-        Alert.alert(t('common_ok'), '已离线保存，联网后会自动同步补品填报。')
+      await queueCurrentConsumablesSubmit()
+      setDraftSubmitStatus('ready_to_submit')
+      const result = await enqueueAndProcessCleaningConsumablesSubmit(token, String((user as any)?.username || (user as any)?.email || ''), cleaningTaskId)
+      if (result.succeeded_task_ids.includes(cleaningTaskId)) {
+        formDirtyRef.current = false
+        setDraftSubmitStatus('synced')
+        setDraftPhotoMeta({})
+        Alert.alert(t('common_ok'), hasExistingRecord ? '补品记录已更新' : '提交成功')
         props.navigation.goBack()
         return
       }
+      const currentDraft = await getCleaningConsumablesDraft(cleaningTaskId)
+      const nextStatus = currentDraft?.submit_status || 'waiting_sync'
+      setDraftSubmitStatus(nextStatus)
+      if (nextStatus === 'blocked' || nextStatus === 'failed') {
+        Alert.alert(t('common_error'), currentDraft?.last_error_message || '提交失败，请检查后重试')
+      }
+    } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '提交失败'))
     } finally {
       setSubmitting(false)
     }
   }
 
-  const submitButtonLabel = submitting ? t('common_loading') : (hasExistingRecord ? '保存修改' : '提交')
   const scrollBottomPadding = Math.max(insets.bottom, layoutTokens.spacing.lg) + 28
 
   return (
@@ -793,7 +727,7 @@ export default function SuppliesFormScreen(props: Props) {
                     <View style={styles.heroTextWrap}>
                       <AppText style={styles.title} variant="section">{hasExistingRecord ? '补品记录' : '补品填报'}</AppText>
                       <AppText style={styles.heroHint} variant="body" numberOfLines={3}>
-                        先完成照片，再逐项勾选库存情况。
+                        {readOnly ? '任务已完成，仅可查看补品记录和现场照片。' : '先完成照片，再逐项勾选库存情况。'}
                       </AppText>
                     </View>
                     <Pressable
@@ -847,13 +781,16 @@ export default function SuppliesFormScreen(props: Props) {
                       <Text style={styles.sectionHint}>逐项判断库存是否足够，不足时补数量并拍照。</Text>
                     </View>
                   </View>
+                  {readOnly ? <Text testID="supplies-read-only-banner" style={styles.readOnlyBanner}>只读查看：任务已完成，照片和记录不可修改。</Text> : null}
                   {validationIssue?.section === 'checklist' ? (
                     <View style={styles.inlineErrorCard}>
                       <Text style={styles.inlineErrorTitle}>还有内容没完成</Text>
                       <Text style={styles.inlineErrorText}>{validationIssue.message}</Text>
                     </View>
                   ) : null}
-                  {pendingSubmit ? <Text style={styles.ok}>已离线保存，待联网自动同步。</Text> : null}
+                  {pendingSubmit ? <Text style={styles.ok}>已离线保存，待联网自动同步照片和补品记录。</Text> : null}
+                  {!pendingSubmit && photoUploadStatus.pendingCount > 0 ? <Text style={styles.pendingUploadHint}>{`有 ${photoUploadStatus.pendingCount} 张照片待上传，点击“上传并保存”后上传。`}</Text> : null}
+                  {!pendingSubmit && photoUploadStatus.totalCount > 0 && photoUploadStatus.pendingCount === 0 ? <Text style={styles.ok}>已有照片已上传并同步。</Text> : null}
                   <Text style={styles.muted}>消耗品照片会先保存在本机，提交时自动上传；弱网下可稍后继续。</Text>
                   {catalogCacheHint ? <Text style={styles.muted}>{catalogCacheHint}</Text> : null}
                   {loading && items.length ? <Text style={styles.muted}>正在同步最新补品记录…</Text> : null}
@@ -880,21 +817,24 @@ export default function SuppliesFormScreen(props: Props) {
                       const idx = items.findIndex((x) => x.id === it.id)
                       return (
                         <View key={it.id} style={[styles.itemRowCard, validationIssue?.section === 'checklist' && validationIssue.itemId === it.id ? styles.validationItemCard : null]}>
-                          <View style={styles.itemRowHead}>
-                            <View style={styles.itemNameWrap}>
-                              <Text style={styles.itemRowLabel}>{it.label}</Text>
-                              {it.status === 'ok' ? <Text style={styles.itemStatusHintOk}>已确认足够</Text> : null}
+                            <View style={styles.itemRowHead}>
+                              <View style={styles.itemNameWrap}>
+                                <Text style={styles.itemRowLabel}>{it.label}</Text>
+                                {consumableRestockStandard(it.id, it.label) ? <Text style={styles.itemStandard}>{`补充标准：${consumableRestockStandard(it.id, it.label)}`}</Text> : null}
+                                {it.status === 'ok' ? <Text style={styles.itemStatusHintOk}>已确认足够</Text> : null}
                               {it.status === 'low' ? <Text style={styles.itemStatusHintLow}>已标记不足</Text> : null}
                             </View>
                             <View style={styles.itemToggleGroup}>
                               <Pressable
                                 onPress={() => setItem(idx, { status: 'ok', photo_urls: [] })}
+                                disabled={readOnly}
                                 style={({ pressed }) => [styles.inlineChip, it.status === 'ok' ? styles.inlineChipOkActive : null, pressed ? styles.pressed : null]}
                               >
                                 <Text style={[styles.inlineChipText, it.status === 'ok' ? styles.inlineChipTextActive : null]}>足够</Text>
                               </Pressable>
                               <Pressable
                                 onPress={() => setItem(idx, { status: 'low' })}
+                                disabled={readOnly}
                                 style={({ pressed }) => [styles.inlineChip, it.status === 'low' ? styles.inlineChipLowActive : null, pressed ? styles.pressed : null]}
                               >
                                 <Text style={[styles.inlineChipText, it.status === 'low' ? styles.inlineChipTextActive : null]}>不足</Text>
@@ -908,21 +848,26 @@ export default function SuppliesFormScreen(props: Props) {
                                 <AppTextInput
                                   value={it.qty}
                                   onChangeText={(v) => setItem(idx, { qty: v.replace(/[^\d]/g, '').slice(0, 6) })}
+                                  editable={!readOnly}
                                   style={[styles.input, styles.qty]}
                                   placeholder="缺多少"
                                   keyboardType="number-pad"
                                 />
-                                <AppButton
-                                  label={photoUploadingIdx === idx ? t('common_loading') : it.photo_urls.length ? `继续拍照 (${it.photo_urls.length})` : '拍照库存'}
-                                  onPress={() => onTakeStockPhoto(idx)}
-                                  disabled={photoUploadingIdx === idx}
-                                  style={[styles.inlinePhotoBtn, photoUploadingIdx === idx ? styles.photoBtnDisabled : null]}
-                                  tone="secondary"
-                                />
+                                {!readOnly ? (
+                                  <AppButton
+                                    label={it.photo_urls.length ? `继续拍照 (${it.photo_urls.length})` : '拍照库存'}
+                                    onPress={() => onTakeStockPhoto(idx)}
+                                    disabled={photoUploadingIdx === idx}
+                                    loading={photoUploadingIdx === idx}
+                                    style={[styles.inlinePhotoBtn, photoUploadingIdx === idx ? styles.photoBtnDisabled : null]}
+                                    tone="secondary"
+                                  />
+                                ) : null}
                               </View>
                               {it.photo_urls.length ? (
                                 <ResponsiveImageGrid
                                   items={it.photo_urls}
+                                  fixedItemWidth={96}
                                   keyExtractor={(photoUrl, photoIdx) => `${photoUrl}-${photoIdx}`}
                                   renderItem={(photoUrl, photoIdx) => (
                                     <View style={styles.thumbMiniWrap}>
@@ -933,9 +878,14 @@ export default function SuppliesFormScreen(props: Props) {
                                         }}
                                         style={({ pressed }) => [styles.thumbMiniPress, pressed ? styles.pressed : null]}
                                       >
-                                        <Image source={{ uri: photoUrl }} style={styles.thumbMini} />
+                                        <CleaningMediaImage
+                                          token={token}
+                                          localUri={String(photoUrl).startsWith('file://') ? photoUrl : null}
+                                          remoteReference={photoUrl}
+                                          style={styles.thumbMini}
+                                        />
                                       </Pressable>
-                                      <Pressable onPress={() => removeStockPhoto(idx, photoIdx)} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
+                                      <Pressable onPress={() => removeStockPhoto(idx, photoIdx)} disabled={readOnly} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
                                         <Ionicons name="trash-outline" size={moderateScale(12)} color="#FFFFFF" />
                                       </Pressable>
                                     </View>
@@ -945,6 +895,7 @@ export default function SuppliesFormScreen(props: Props) {
                               <AppTextInput
                                 value={it.note}
                                 onChangeText={(v) => setItem(idx, { note: v })}
+                                editable={!readOnly}
                                 style={[styles.input, styles.note]}
                                 placeholder="备注（可选）"
                                 multiline
@@ -993,13 +944,15 @@ export default function SuppliesFormScreen(props: Props) {
                   <View style={[styles.photoChecklistGroup, validationIssue?.photoGroup === 'living_room' ? styles.validationPhotoGroup : null]}>
                     <View style={styles.groupHead}>
                       <Text style={styles.groupTitle}>客厅照片</Text>
-                      <Pressable
-                        onPress={() => uploadLivingRoomPhoto()}
-                        disabled={submitting || batchUploadingGroup !== null}
-                        style={({ pressed }) => [styles.primaryPhotoBtnSmall, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
-                      >
-                        <Text style={styles.primaryPhotoBtnText}>{livingRoomPhotoUrl ? '重拍' : '拍照'}</Text>
-                      </Pressable>
+                      {!readOnly ? (
+                        <Pressable
+                          onPress={() => uploadLivingRoomPhoto()}
+                          disabled={submitting || batchUploadingGroup !== null}
+                          style={({ pressed }) => [styles.primaryPhotoBtnSmall, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
+                        >
+                          <Text style={styles.primaryPhotoBtnText}>{livingRoomPhotoUrl ? '重拍' : '拍照'}</Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                     <View style={styles.photoChecklistRow}>
                       <View style={styles.photoChecklistTextWrap}>
@@ -1018,9 +971,14 @@ export default function SuppliesFormScreen(props: Props) {
                             }}
                             style={({ pressed }) => [styles.thumbMiniPress, pressed ? styles.pressed : null]}
                           >
-                            <Image source={{ uri: livingRoomPhotoUrl }} style={styles.thumbMini} />
+                            <CleaningMediaImage
+                              token={token}
+                              localUri={String(livingRoomPhotoUrl).startsWith('file://') ? livingRoomPhotoUrl : null}
+                              remoteReference={livingRoomPhotoUrl}
+                              style={styles.thumbMini}
+                            />
                           </Pressable>
-                          <Pressable onPress={removeLivingRoomPhoto} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
+                          <Pressable onPress={removeLivingRoomPhoto} disabled={readOnly} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
                             <Ionicons name="trash-outline" size={moderateScale(12)} color="#FFFFFF" />
                           </Pressable>
                         </View>
@@ -1031,13 +989,15 @@ export default function SuppliesFormScreen(props: Props) {
                   <View style={[styles.photoChecklistGroup, validationIssue?.photoGroup === 'bathroom' ? styles.validationPhotoGroup : null]}>
                     <View style={styles.groupHead}>
                       <Text style={styles.groupTitle}>浴室检查</Text>
-                      <Pressable
-                        onPress={() => onTakeRequiredScenePhotoSequence('bathroom')}
-                        disabled={submitting || batchUploadingGroup !== null || SHOWER_DRAIN_PHOTOS.every((item) => String(extraPhotoUrls[item.id] || '').trim())}
-                        style={({ pressed }) => [styles.primaryPhotoBtnSmall, submitting || batchUploadingGroup !== null || SHOWER_DRAIN_PHOTOS.every((item) => String(extraPhotoUrls[item.id] || '').trim()) ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
-                      >
-                        <Text style={styles.primaryPhotoBtnText}>{batchUploadingGroup === 'bathroom' ? '拍照中…' : '拍照'}</Text>
-                      </Pressable>
+                      {!readOnly ? (
+                        <Pressable
+                          onPress={() => onTakeRequiredScenePhotoSequence('bathroom')}
+                          disabled={submitting || batchUploadingGroup !== null || SHOWER_DRAIN_PHOTOS.every((item) => String(extraPhotoUrls[item.id] || '').trim())}
+                          style={({ pressed }) => [styles.primaryPhotoBtnSmall, submitting || batchUploadingGroup !== null || SHOWER_DRAIN_PHOTOS.every((item) => String(extraPhotoUrls[item.id] || '').trim()) ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
+                        >
+                          <Text style={styles.primaryPhotoBtnText}>{batchUploadingGroup === 'bathroom' ? '拍照中…' : '拍照'}</Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                     <View style={styles.photoChecklistEntry}>
                       <View style={styles.photoChecklistRow}>
@@ -1050,6 +1010,7 @@ export default function SuppliesFormScreen(props: Props) {
                     </View>
                     <ResponsiveImageGrid
                       items={SHOWER_DRAIN_PHOTOS}
+                      fixedItemWidth={96}
                       keyExtractor={(item) => `drain-${item.id}`}
                       renderItem={(item) => {
                         const url = extraPhotoUrls[item.id]
@@ -1063,9 +1024,14 @@ export default function SuppliesFormScreen(props: Props) {
                               }}
                               style={({ pressed }) => [styles.thumbMiniPress, pressed ? styles.pressed : null]}
                             >
-                              <Image source={{ uri: url }} style={styles.thumbMini} />
+                              <CleaningMediaImage
+                                token={token}
+                                localUri={String(url).startsWith('file://') ? url : null}
+                                remoteReference={url}
+                                style={styles.thumbMini}
+                              />
                             </Pressable>
-                            <Pressable onPress={() => removeRequiredScenePhoto(item.id)} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
+                            <Pressable onPress={() => removeRequiredScenePhoto(item.id)} disabled={readOnly} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
                               <Ionicons name="trash-outline" size={moderateScale(12)} color="#FFFFFF" />
                             </Pressable>
                           </View>
@@ -1077,13 +1043,16 @@ export default function SuppliesFormScreen(props: Props) {
                   <View style={[styles.photoChecklistGroup, validationIssue?.photoGroup === 'kitchen' ? styles.validationPhotoGroup : null]}>
                     <View style={styles.groupHead}>
                       <Text style={styles.groupTitle}>厨房检查</Text>
-                      <Pressable
-                        onPress={() => onTakeRequiredScenePhotoSequence('kitchen')}
-                        disabled={submitting || batchUploadingGroup !== null}
-                        style={({ pressed }) => [styles.primaryPhotoBtnSmall, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
-                      >
-                        <Text style={styles.primaryPhotoBtnText}>{batchUploadingGroup === 'kitchen' ? '拍照中…' : '拍照'}</Text>
-                      </Pressable>
+                      {!readOnly ? (
+                        <Pressable
+                          testID="supplies-kitchen-photo"
+                          onPress={() => onTakeRequiredScenePhotoSequence('kitchen')}
+                          disabled={submitting || batchUploadingGroup !== null}
+                          style={({ pressed }) => [styles.primaryPhotoBtnSmall, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
+                        >
+                          <Text testID="supplies-kitchen-photo-label" style={styles.primaryPhotoBtnText}>{batchUploadingGroup === 'kitchen' ? '拍照中…' : '拍照'}</Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                     {KITCHEN_REQUIRED_PHOTOS.map((item) => (
                       <View key={item.id} style={styles.photoChecklistEntry}>
@@ -1097,7 +1066,7 @@ export default function SuppliesFormScreen(props: Props) {
                               <Text style={styles.doneTag}>已拍</Text>
                               <Pressable
                                 onPress={() => onTakeRequiredScenePhoto(item.id)}
-                                disabled={submitting || batchUploadingGroup !== null}
+                                disabled={readOnly || submitting || batchUploadingGroup !== null}
                                 style={({ pressed }) => [styles.photoBtn, styles.photoChecklistBtn, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
                               >
                                 <Text style={styles.photoBtnText}>重拍</Text>
@@ -1111,6 +1080,7 @@ export default function SuppliesFormScreen(props: Props) {
                     ))}
                     <ResponsiveImageGrid
                       items={KITCHEN_REQUIRED_PHOTOS}
+                      fixedItemWidth={96}
                       keyExtractor={(item) => `kitchen-${item.id}`}
                       renderItem={(item) => {
                         const url = extraPhotoUrls[item.id]
@@ -1124,9 +1094,14 @@ export default function SuppliesFormScreen(props: Props) {
                               }}
                               style={({ pressed }) => [styles.thumbMiniPress, pressed ? styles.pressed : null]}
                             >
-                              <Image source={{ uri: url }} style={styles.thumbMini} />
+                            <CleaningMediaImage
+                              token={token}
+                              localUri={String(url).startsWith('file://') ? url : null}
+                              remoteReference={url}
+                              style={styles.thumbMini}
+                            />
                             </Pressable>
-                            <Pressable onPress={() => removeRequiredScenePhoto(item.id)} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
+                            <Pressable onPress={() => removeRequiredScenePhoto(item.id)} disabled={readOnly} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
                               <Ionicons name="trash-outline" size={moderateScale(12)} color="#FFFFFF" />
                             </Pressable>
                           </View>
@@ -1138,13 +1113,15 @@ export default function SuppliesFormScreen(props: Props) {
                   <View style={[styles.photoChecklistGroup, validationIssue?.photoGroup === 'vacuum' ? styles.validationPhotoGroup : null]}>
                     <View style={styles.groupHead}>
                       <Text style={styles.groupTitle}>吸尘器使用后</Text>
-                      <Pressable
-                        onPress={() => onTakeRequiredScenePhoto('vacuum_used_photo')}
-                        disabled={submitting || batchUploadingGroup !== null}
-                        style={({ pressed }) => [styles.primaryPhotoBtnSmall, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
-                      >
-                        <Text style={styles.primaryPhotoBtnText}>拍照</Text>
-                      </Pressable>
+                      {!readOnly ? (
+                        <Pressable
+                          onPress={() => onTakeRequiredScenePhoto('vacuum_used_photo')}
+                          disabled={submitting || batchUploadingGroup !== null}
+                          style={({ pressed }) => [styles.primaryPhotoBtnSmall, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
+                        >
+                          <Text style={styles.primaryPhotoBtnText}>拍照</Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                     <View style={styles.photoChecklistEntry}>
                       <View style={styles.photoChecklistRow}>
@@ -1157,7 +1134,7 @@ export default function SuppliesFormScreen(props: Props) {
                             <Text style={styles.doneTag}>已拍</Text>
                             <Pressable
                               onPress={() => onTakeRequiredScenePhoto('vacuum_used_photo')}
-                              disabled={submitting || batchUploadingGroup !== null}
+                              disabled={readOnly || submitting || batchUploadingGroup !== null}
                               style={({ pressed }) => [styles.photoBtn, styles.photoChecklistBtn, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
                             >
                               <Text style={styles.photoBtnText}>重拍</Text>
@@ -1178,9 +1155,14 @@ export default function SuppliesFormScreen(props: Props) {
                             }}
                             style={({ pressed }) => [styles.thumbMiniPress, pressed ? styles.pressed : null]}
                           >
-                            <Image source={{ uri: String(extraPhotoUrls.vacuum_used_photo) }} style={styles.thumbMini} />
+                              <CleaningMediaImage
+                                token={token}
+                                localUri={String(extraPhotoUrls.vacuum_used_photo).startsWith('file://') ? String(extraPhotoUrls.vacuum_used_photo) : null}
+                                remoteReference={String(extraPhotoUrls.vacuum_used_photo)}
+                                style={styles.thumbMini}
+                              />
                           </Pressable>
-                          <Pressable onPress={() => removeRequiredScenePhoto('vacuum_used_photo')} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
+                              <Pressable onPress={() => removeRequiredScenePhoto('vacuum_used_photo')} disabled={readOnly} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
                             <Ionicons name="trash-outline" size={moderateScale(12)} color="#FFFFFF" />
                           </Pressable>
                         </View>
@@ -1192,49 +1174,30 @@ export default function SuppliesFormScreen(props: Props) {
 
                   <View style={[styles.photoChecklistGroup, validationIssue?.photoGroup === 'remote_tv' ? styles.validationPhotoGroup : null]}>
                     <View style={styles.groupHead}>
-                      <Text style={styles.groupTitle}>遥控器拍照</Text>
-                      <Pressable
-                        onPress={onTakeRemotePhotoSequence}
-                        disabled={submitting || batchUploadingGroup !== null}
-                        style={({ pressed }) => [styles.primaryPhotoBtnSmall, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
-                      >
-                        <Text style={styles.primaryPhotoBtnText}>{batchUploadingGroup === 'remote' ? '拍照中…' : '拍照'}</Text>
-                      </Pressable>
+                      <Text style={styles.groupTitle}>电视与空调遥控器拍照</Text>
+                      {!readOnly ? (
+                        <Pressable
+                          testID="supplies-remote-photo"
+                          onPress={onTakeRemotePhoto}
+                          disabled={submitting || batchUploadingGroup !== null}
+                          style={({ pressed }) => [styles.primaryPhotoBtnSmall, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
+                        >
+                          <Text style={styles.primaryPhotoBtnText}>{batchUploadingGroup === 'remote' ? '拍照中…' : '拍照'}</Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                     <View style={styles.photoChecklistEntry}>
                       <View style={styles.photoChecklistRow}>
                         <View style={styles.photoChecklistTextWrap}>
-                          <Text style={styles.photoChecklistLabel}>电视遥控器</Text>
-                          <Text style={styles.photoChecklistHint}>电视遥控器要拍。</Text>
+                          <Text style={styles.photoChecklistLabel}>电视与空调遥控器</Text>
+                          <Text style={styles.photoChecklistHint}>电视遥控器必须拍到；空调遥控器嵌在墙上时可不拍。</Text>
                         </View>
                         {remoteTvPhotoUrl ? (
                           <>
                             <Text style={styles.doneTag}>已拍</Text>
                             <Pressable
-                              onPress={() => onTakeRemotePhoto('tv')}
-                              disabled={submitting || batchUploadingGroup !== null}
-                              style={({ pressed }) => [styles.photoBtn, styles.photoChecklistBtn, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
-                            >
-                              <Text style={styles.photoBtnText}>重拍</Text>
-                            </Pressable>
-                          </>
-                        ) : (
-                          <Text style={styles.pendingTag}>待拍</Text>
-                        )}
-                      </View>
-                    </View>
-                    <View style={styles.photoChecklistEntry}>
-                      <View style={styles.photoChecklistRow}>
-                        <View style={styles.photoChecklistTextWrap}>
-                          <Text style={styles.photoChecklistLabel}>空调遥控器</Text>
-                          <Text style={styles.photoChecklistHint}>嵌在墙上的可不拍。</Text>
-                        </View>
-                        {remoteAcPhotoUrl ? (
-                          <>
-                            <Text style={styles.doneTag}>已拍</Text>
-                            <Pressable
-                              onPress={() => onTakeRemotePhoto('ac')}
-                              disabled={submitting || batchUploadingGroup !== null}
+                              onPress={onTakeRemotePhoto}
+                              disabled={readOnly || submitting || batchUploadingGroup !== null}
                               style={({ pressed }) => [styles.photoBtn, styles.photoChecklistBtn, submitting || batchUploadingGroup !== null ? styles.photoBtnDisabled : null, pressed ? styles.pressed : null]}
                             >
                               <Text style={styles.photoBtnText}>重拍</Text>
@@ -1247,9 +1210,9 @@ export default function SuppliesFormScreen(props: Props) {
                     </View>
                     <ResponsiveImageGrid
                       items={[
-                        { id: 'tv', label: '电视遥控器', url: remoteTvPhotoUrl },
-                        { id: 'ac', label: '空调遥控器', url: remoteAcPhotoUrl },
+                        { id: remoteTvPhotoUrl ? 'tv' : 'ac', label: '电视与空调遥控器', url: remoteTvPhotoUrl || remoteAcPhotoUrl },
                       ]}
+                      fixedItemWidth={96}
                       keyExtractor={(item) => item.id}
                       renderItem={(item) => (
                         item.url ? (
@@ -1261,9 +1224,14 @@ export default function SuppliesFormScreen(props: Props) {
                               }}
                               style={({ pressed }) => [styles.thumbMiniPress, pressed ? styles.pressed : null]}
                             >
-                              <Image source={{ uri: item.url }} style={styles.thumbMini} />
+                              <CleaningMediaImage
+                                token={token}
+                                localUri={String(item.url).startsWith('file://') ? item.url : null}
+                                remoteReference={item.url}
+                                style={styles.thumbMini}
+                              />
                             </Pressable>
-                            <Pressable onPress={() => removeRemotePhoto(item.id as 'tv' | 'ac')} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
+                            <Pressable onPress={() => removeRemotePhoto(item.id as 'tv' | 'ac')} disabled={readOnly} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
                               <Ionicons name="trash-outline" size={moderateScale(12)} color="#FFFFFF" />
                             </Pressable>
                           </View>
@@ -1274,15 +1242,25 @@ export default function SuppliesFormScreen(props: Props) {
                 </View>
               </View>
 
-              <View style={styles.submitInlineWrap}>
-                <AppButton
-                  label={submitButtonLabel}
-                  onPress={onSubmit}
-                  disabled={submitting}
-                  fullWidth
-                  style={submitting ? styles.submitDisabled : null}
-                />
-              </View>
+              {!readOnly ? (
+                <View style={styles.submitInlineWrap}>
+                  <AppButton
+                    testID="supplies-submit"
+                    label={pendingSubmit
+                      ? '重试上传'
+                      : photoUploadStatus.pendingCount > 0
+                        ? '上传并保存'
+                        : hasExistingRecord
+                          ? '保存修改'
+                          : '提交'}
+                    onPress={onSubmit}
+                    disabled={submitting}
+                    loading={submitting}
+                    fullWidth
+                    style={submitting ? styles.submitDisabled : null}
+                  />
+                </View>
+              ) : null}
             </>
           )}
         </ScrollView>
@@ -1308,11 +1286,29 @@ export default function SuppliesFormScreen(props: Props) {
             <Text style={styles.viewerCloseText}>点击任意位置关闭</Text>
           </View>
           {viewerUrl ? (
-            <View style={{ flex: 1 }} pointerEvents="none">
-              <Image source={{ uri: viewerUrl }} style={styles.viewerImg} resizeMode="contain" />
-            </View>
+            <CleaningMediaPreview token={token} reference={viewerUrl} style={styles.viewerImg} />
           ) : null}
         </Pressable>
+      </Modal>
+
+      <Modal
+        visible={!!task && !readOnly && !roomConfirmed}
+        transparent
+        animationType="fade"
+        onRequestClose={() => props.navigation.goBack()}
+      >
+        <View testID="supplies-room-confirmation" style={styles.roomConfirmMask}>
+          <View style={styles.roomConfirmCard}>
+            <Text style={styles.roomConfirmTitle}>确认当前任务房号</Text>
+            <Text style={styles.roomConfirmMessage}>请确认后再填写补品消耗，避免填错房源。</Text>
+            <Text testID="supplies-room-confirmation-code" style={styles.roomConfirmCode}>{propertyCode || '房号未加载'}</Text>
+            {!propertyCode ? <Text style={styles.roomConfirmWarning}>房号尚未加载，请返回任务列表后重试。</Text> : null}
+            <View style={styles.roomConfirmActions}>
+              <AppButton label="返回任务" onPress={() => props.navigation.goBack()} tone="secondary" style={styles.roomConfirmButton} />
+              <AppButton label="房号正确，继续" onPress={() => setRoomConfirmed(true)} disabled={!propertyCode} style={styles.roomConfirmButton} />
+            </View>
+          </View>
+        </View>
       </Modal>
     </View>
   )
@@ -1364,6 +1360,7 @@ const styles = StyleSheet.create({
   itemRowHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
   itemNameWrap: { flex: 1, minWidth: 0 },
   itemRowLabel: { color: '#111827', fontWeight: '900', fontSize: 15 },
+  itemStandard: { marginTop: 3, color: '#475569', fontSize: 12, fontWeight: '700', lineHeight: 17 },
   itemStatusHintOk: { marginTop: 2, color: '#0F9F6E', fontSize: 12, fontWeight: '700' },
   itemStatusHintLow: { marginTop: 2, color: '#B45309', fontSize: 12, fontWeight: '700' },
   itemToggleGroup: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' },
@@ -1377,43 +1374,53 @@ const styles = StyleSheet.create({
   row: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   lowStockInlineRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   qty: { flex: 1 },
-  inlineChip: { minWidth: 72, minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  inlineChip: { minWidth: 72, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 999, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   inlineChipOkActive: { backgroundColor: '#14B87A', borderColor: '#14B87A' },
   inlineChipLowActive: { backgroundColor: '#F59E0B', borderColor: '#F59E0B' },
   inlineChipText: { color: '#374151', fontWeight: '900', fontSize: 13 },
   inlineChipTextActive: { color: '#FFFFFF' },
   lowDetailBox: { marginTop: 10, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E8EDF5', padding: 10 },
   note: { height: 64, paddingTop: 10, textAlignVertical: 'top', marginTop: 8 },
-  photoBtn: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  photoBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 10, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   inlinePhotoBtn: { minWidth: 96 },
-  primaryPhotoBtn: { flex: 1, minWidth: 128, minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: '#2563EB', borderWidth: hairline(), borderColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
-  primaryPhotoBtnSmall: { minWidth: 96, minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: '#2563EB', borderWidth: hairline(), borderColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  primaryPhotoBtn: { flex: 1, minWidth: 128, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 10, backgroundColor: '#2563EB', borderWidth: hairline(), borderColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  primaryPhotoBtnSmall: { minWidth: 96, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 10, backgroundColor: '#2563EB', borderWidth: hairline(), borderColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   primaryPhotoBtnText: { fontWeight: '900', color: '#FFFFFF', textAlign: 'center' },
   photoBtnDisabled: { backgroundColor: '#E5E7EB' },
   photoBtnText: { fontWeight: '900', color: '#111827', textAlign: 'center' },
   photoPreview: { marginTop: 8, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6' },
-  photo: { width: '100%', height: moderateScale(160), backgroundColor: '#F3F4F6' },
+  photo: { width: 96, height: 96, backgroundColor: '#F3F4F6' },
   inlineErrorCard: { borderRadius: 14, backgroundColor: '#FFF7ED', borderWidth: hairline(), borderColor: '#FCD34D', padding: 12, gap: 8 },
+  readOnlyBanner: { marginTop: 8, color: '#15803D', backgroundColor: '#F0FDF4', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, fontWeight: '900' },
   inlineErrorTitle: { color: '#9A3412', fontWeight: '900' },
   inlineErrorText: { color: '#B45309', fontWeight: '700', lineHeight: 18 },
-  inlineRetryBtn: { alignSelf: 'flex-start', minHeight: 34, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#EA580C', alignItems: 'center', justifyContent: 'center' },
+  inlineRetryBtn: { alignSelf: 'flex-start', minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 10, backgroundColor: '#EA580C', alignItems: 'center', justifyContent: 'center' },
   inlineRetryText: { color: '#FFFFFF', fontWeight: '900' },
   thumbRow: { marginTop: 2, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  thumbMiniWrap: { width: '100%', aspectRatio: 1, borderRadius: 10, overflow: 'hidden', borderWidth: hairline(), borderColor: '#D9E7FF', backgroundColor: '#F3F4F6' },
+  thumbMiniWrap: { width: 96, height: 96, borderRadius: 10, overflow: 'hidden', borderWidth: hairline(), borderColor: '#D9E7FF', backgroundColor: '#F3F4F6' },
   thumbMiniPress: { width: '100%', height: '100%' },
   thumbMini: { width: '100%', height: '100%' },
-  thumbMiniEmpty: { width: '100%', aspectRatio: 1, borderRadius: 10, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F8FAFC', alignItems: 'center', justifyContent: 'center', padding: 6 },
+  thumbMiniEmpty: { width: 96, height: 96, borderRadius: 10, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F8FAFC', alignItems: 'center', justifyContent: 'center', padding: 6 },
   thumbMiniEmptyText: { fontSize: 10, lineHeight: 12, color: '#98A2B3', fontWeight: '700', textAlign: 'center' },
   thumbDeleteBtn: { position: 'absolute', right: 4, top: 4, width: 18, height: 18, borderRadius: 9, backgroundColor: 'rgba(17,24,39,0.76)', alignItems: 'center', justifyContent: 'center' },
   submitInlineWrap: { marginTop: 4, paddingTop: 4 },
-  submitBtn: { marginTop: 12, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  submitBtn: { marginTop: 12, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: layoutTokens.button.radius, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   submitDisabled: { backgroundColor: '#93C5FD' },
   submitText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15, textAlign: 'center' },
   ok: { marginTop: 8, color: '#16A34A', fontWeight: '900' },
+  pendingUploadHint: { marginTop: 8, color: '#B45309', fontWeight: '900' },
   muted: { color: '#6B7280', fontWeight: '700' },
   pressed: { opacity: 0.92 },
   viewerMask: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)' },
   viewerTopRow: { position: 'absolute', top: 0, left: 0, right: 0, height: 54, paddingHorizontal: 12, justifyContent: 'center', zIndex: 2 },
   viewerCloseText: { color: '#FFFFFF', fontWeight: '900' },
   viewerImg: { flex: 1 },
+  roomConfirmMask: { flex: 1, padding: 20, justifyContent: 'center', backgroundColor: 'rgba(15, 23, 42, 0.56)' },
+  roomConfirmCard: { borderRadius: 18, backgroundColor: '#FFFFFF', padding: 18, gap: 10 },
+  roomConfirmTitle: { color: '#111827', fontSize: 18, fontWeight: '900' },
+  roomConfirmMessage: { color: '#475467', fontWeight: '700', lineHeight: 20 },
+  roomConfirmCode: { borderRadius: 12, backgroundColor: '#EFF6FF', color: '#1D4ED8', fontSize: 20, fontWeight: '900', paddingHorizontal: 12, paddingVertical: 10 },
+  roomConfirmWarning: { color: '#B45309', fontWeight: '800', lineHeight: 18 },
+  roomConfirmActions: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  roomConfirmButton: { flex: 1 },
 })

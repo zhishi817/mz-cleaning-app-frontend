@@ -1,4 +1,4 @@
-import { ApiError, createPropertyFeedbackBatch, completePropertyFeedbackProject, isRetryableApiError, saveInspectionPhotos, saveRestockProof, uploadCleaningMedia, type InspectionPhotoArea } from './api'
+import { ApiError, createPropertyFeedbackBatch, completePropertyFeedbackProject, saveInspectionPhotos, saveRestockProof, uploadCleaningMedia, type InspectionPhotoArea } from './api'
 import { normalizeCleaningObjectKey } from './cleaningMedia'
 import { clearInspectionPanelFeedbackDraft, type InspectionPanelDeepCleaningDraft, type InspectionPanelFeedbackDraftState } from './inspectionPanelFeedbackDraft'
 import { clearInspectionPanelDraft } from './inspectionPanelDraft'
@@ -7,7 +7,7 @@ import {
   inspectionThumbnailExists,
   pruneInspectionThumbnailCache,
 } from './inspectionThumbnailCache'
-import { deleteDraftMedia, draftMimeTypeFrom, persistDraftMedia } from './localMediaDrafts'
+import { draftFileExists, draftMimeTypeFrom, persistDraftMedia } from './localMediaDrafts'
 import { withLocalMediaLock } from './localMediaLocks'
 import { getJson, setJson } from './storage'
 
@@ -45,7 +45,7 @@ export type InspectionPanelBatchRestockItem = {
   origin: 'task' | 'manual'
 }
 
-export type InspectionPanelRoomPhotoArea = 'living' | 'sofa' | 'bedroom' | 'kitchen'
+export type InspectionPanelRoomPhotoArea = 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'bathroom'
 export type InspectionPanelRoomPhotoRequirement = 'required' | 'password_only' | 'guest_arrival_confirmed'
 
 export type InspectionPanelBatchSnapshot = {
@@ -98,6 +98,7 @@ export type InspectionPanelSubmitQueueItem = {
 }
 
 const STORAGE_KEY = 'mzstay.inspection_panel_submit_queue.v1'
+const MAX_SUBMIT_ID_LENGTH = 96
 const listeners = new Set<() => void>()
 let processing = false
 
@@ -121,21 +122,26 @@ function makeId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
 }
 
+function makeSubmitId() {
+  return makeId('inspection_batch')
+}
+
+function normalizeSubmitId(value: any) {
+  const submitId = cleanText(value)
+  return submitId.length <= MAX_SUBMIT_ID_LENGTH ? submitId : makeSubmitId()
+}
+
 function baseStepState(): InspectionPanelSubmitStepState {
   return { status: 'pending', started_at: null, finished_at: null, error: null, output: null }
 }
 
 function baseRoomPhotos() {
-  return { living: [], sofa: [], bedroom: [], kitchen: [] } as Record<InspectionPanelRoomPhotoArea, InspectionPanelBatchMedia[]>
+  return { living: [], sofa: [], bedroom: [], kitchen: [], bathroom: [] } as Record<InspectionPanelRoomPhotoArea, InspectionPanelBatchMedia[]>
 }
 
 function isUploadedReference(value: any) {
   const reference = cleanText(value)
   return !!normalizeCleaningObjectKey(reference) || /^https?:\/\//i.test(reference)
-}
-
-function isNetworkishError(error: unknown) {
-  return isRetryableApiError(error) || String((error as any)?.message || '').toLowerCase().includes('network request failed')
 }
 
 function normalizeMedia(item: any): InspectionPanelBatchMedia | null {
@@ -228,6 +234,7 @@ export function findInspectionPanelValidationIssue(snapshot: InspectionPanelBatc
       sofa: '沙发',
       bedroom: '卧室',
       kitchen: '厨房',
+      bathroom: '浴室',
     }
     for (const area of Object.keys(labels) as InspectionPanelRoomPhotoArea[]) {
       if (!(snapshot.room_photos[area] || []).length) {
@@ -242,13 +249,66 @@ export function validateInspectionPanelSnapshot(snapshot: InspectionPanelBatchSn
   return findInspectionPanelValidationIssue(snapshot)?.message || null
 }
 
+export type InspectionPanelVideoReadiness = {
+  ready: boolean
+  reason: string | null
+  skipInspectionPhotos: boolean
+}
+
+function hasDurableBatchMedia(media: InspectionPanelBatchMedia) {
+  const localUri = cleanText(media.local_uri)
+  if (localUri && draftFileExists(localUri)) return true
+  return !!cleanText(media.uploaded_key) || !!cleanText(media.uploaded_url)
+}
+
+export function getInspectionPanelVideoReadiness(item: InspectionPanelSubmitQueueItem | null | undefined): InspectionPanelVideoReadiness {
+  const snapshot = item?.snapshot || null
+  const skipInspectionPhotos = snapshot?.room_photo_requirement === 'guest_arrival_confirmed'
+  if (!item || item.status === 'draft') {
+    return {
+      ready: false,
+      reason: '请先提交本页检查与补充，确保照片已保存到本机。',
+      skipInspectionPhotos,
+    }
+  }
+  if (!snapshot) {
+    return {
+      ready: false,
+      reason: '检查与补充批次内容不可用，请返回检查页重新保存。',
+      skipInspectionPhotos,
+    }
+  }
+  const validationIssue = findInspectionPanelValidationIssue(snapshot)
+  if (validationIssue) {
+    return {
+      ready: false,
+      reason: validationIssue.message,
+      skipInspectionPhotos,
+    }
+  }
+  const media = [
+    ...Object.values(snapshot.room_photos).flat(),
+    ...snapshot.restock.flatMap((entry) => entry.proof_media),
+    ...snapshot.cleaning_issue,
+  ]
+  if (media.some((entry) => !hasDurableBatchMedia(entry))) {
+    return {
+      ready: false,
+      reason: '部分检查或补充照片未成功保存到本机，请返回检查页重拍后再拍视频。',
+      skipInspectionPhotos,
+    }
+  }
+  return { ready: true, reason: null, skipInspectionPhotos }
+}
+
 function normalizeQueueItem(raw: any): InspectionPanelSubmitQueueItem | null {
   if (!raw || typeof raw !== 'object') return null
-  const submitId = cleanText(raw.submit_id)
+  const rawSubmitId = cleanText(raw.submit_id)
   const taskId = cleanText(raw.task_id)
   const cleaningTaskId = cleanText(raw.cleaning_task_id)
   const snapshot = normalizeSnapshot(raw.snapshot)
-  if (!submitId || !taskId || !snapshot) return null
+  if (!rawSubmitId || !taskId || !snapshot) return null
+  const submitId = normalizeSubmitId(rawSubmitId)
   const status = cleanText(raw.status)
   const steps = {
     upload_media: raw?.steps?.upload_media || baseStepState(),
@@ -277,8 +337,19 @@ function normalizeQueueItem(raw: any): InspectionPanelSubmitQueueItem | null {
 }
 
 async function loadQueue() {
-  const raw = await getJson<InspectionPanelSubmitQueueItem[]>(STORAGE_KEY)
-  return Array.isArray(raw) ? raw.map(normalizeQueueItem).filter(Boolean) as InspectionPanelSubmitQueueItem[] : []
+  const raw = await getJson<any[]>(STORAGE_KEY)
+  if (!Array.isArray(raw)) return []
+  let migrated = false
+  const items = raw.map((rawItem) => {
+    const item = normalizeQueueItem(rawItem)
+    if (item && cleanText(rawItem?.submit_id) !== item.submit_id) migrated = true
+    return item
+  }).filter(Boolean) as InspectionPanelSubmitQueueItem[]
+  if (migrated) {
+    await setJson(STORAGE_KEY, items)
+    emit()
+  }
+  return items
 }
 
 async function saveQueue(items: InspectionPanelSubmitQueueItem[]) {
@@ -291,14 +362,22 @@ async function updateQueueItem(taskId: string, updater: (item: InspectionPanelSu
   const idx = items.findIndex((item) => item.task_id === cleanText(taskId))
   const current = idx >= 0 ? items[idx] : null
   const next = updater(current)
+  let changed = false
   if (!next) {
-    if (idx >= 0) items.splice(idx, 1)
+    if (idx >= 0) {
+      items.splice(idx, 1)
+      changed = true
+    }
   } else if (idx >= 0) {
-    items[idx] = next
+    if (next !== current) {
+      items[idx] = next
+      changed = true
+    }
   } else {
     items.push(next)
+    changed = true
   }
-  await saveQueue(items)
+  if (changed) await saveQueue(items)
   return next
 }
 
@@ -344,9 +423,62 @@ function collectBatchMedia(snapshot: InspectionPanelBatchSnapshot) {
   return list
 }
 
+export type InspectionPanelSubmitStepKey = keyof InspectionPanelSubmitQueueItem['steps']
+
+export const INSPECTION_PANEL_STEP_LABELS: Record<InspectionPanelSubmitStepKey, string> = {
+  upload_media: '上传照片',
+  save_restock_proof: '保存补品照片记录',
+  save_inspection_photos: '保存检查照片记录',
+  create_feedback_batch: '创建问题反馈批次',
+  complete_feedback_projects: '完成问题反馈项目',
+}
+
+export type InspectionPanelFailedStepDetail = {
+  key: InspectionPanelSubmitStepKey
+  label: string
+  error: string
+}
+
+export function inspectionPanelFailedStepDetails(item: InspectionPanelSubmitQueueItem | null | undefined): InspectionPanelFailedStepDetail[] {
+  if (!item) return []
+  return (Object.entries(item.steps) as [InspectionPanelSubmitStepKey, InspectionPanelSubmitStepState][])
+    .filter(([, step]) => step.status === 'failed')
+    .map(([key, step]) => ({
+      key,
+      label: INSPECTION_PANEL_STEP_LABELS[key],
+      error: cleanText(step.error) || '未提供具体错误',
+    }))
+}
+
+export type InspectionPanelLocalMediaSummary = {
+  total: number
+  retained: number
+  remoteReferenced: number
+}
+
+export function inspectionPanelLocalMediaSummary(item: InspectionPanelSubmitQueueItem | null | undefined): InspectionPanelLocalMediaSummary | null {
+  if (!item) return null
+  const uniqueMedia = new Map<string, InspectionPanelBatchMedia>()
+  for (const entry of collectBatchMedia(item.snapshot)) {
+    const key = cleanText(entry.media.id) || entry.key
+    if (!uniqueMedia.has(key)) uniqueMedia.set(key, entry.media)
+  }
+  const media = [...uniqueMedia.values()]
+  if (!media.length) return null
+  return {
+    total: media.length,
+    retained: media.filter((entry) => !!cleanText(entry.local_uri) || !!cleanText(entry.thumbnail_uri)).length,
+    remoteReferenced: media.filter((entry) => !!cleanText(entry.uploaded_key) || !!cleanText(entry.uploaded_url)).length,
+  }
+}
+
 function uploadedUrlFor(item: InspectionPanelSubmitQueueItem, key: string, fallback?: string | null) {
   const output = item.steps.upload_media.output || {}
-  const uploaded = cleanText(output[key]?.remote_url) || cleanText(fallback) || cleanText(output[key]?.remote_key)
+  const uploaded = normalizeCleaningObjectKey(output[key]?.remote_key)
+    || normalizeCleaningObjectKey(fallback)
+    || normalizeCleaningObjectKey(output[key]?.remote_url)
+    || cleanText(fallback)
+    || cleanText(output[key]?.remote_url)
   return uploaded || null
 }
 
@@ -471,7 +603,12 @@ function buildInspectionPayloadFromBatch(item: InspectionPanelSubmitQueueItem) {
     if (!remoteUrl) continue
     items.push({ area: 'unclean', url: remoteUrl, note: cleanText(media.note) || null, captured_at: media.captured_at })
   }
-  return { items }
+  return {
+    items,
+    ...(item.snapshot.room_photo_requirement === 'guest_arrival_confirmed' && !items.length
+      ? { guest_arrival_confirmed: true }
+      : {}),
+  }
 }
 
 function feedbackRemoteUrls(item: InspectionPanelSubmitQueueItem, urls: string[]) {
@@ -534,6 +671,27 @@ async function markWaitingForTaskInfo(taskId: string) {
     updated_at: nowIso(),
     last_error: '已保存到本机，等待任务信息刷新后自动同步。',
   } : current)
+}
+
+async function processIndependentStep(
+  taskId: string,
+  step: keyof InspectionPanelSubmitQueueItem['steps'],
+  handler: () => Promise<void>,
+) {
+  try {
+    await handler()
+    return true
+  } catch (error: any) {
+    const message = cleanText(error?.message) || '同步失败'
+    await markStep(
+      taskId,
+      step,
+      { status: 'failed', finished_at: nowIso(), error: message },
+      'partial_failed',
+      message,
+    )
+    return false
+  }
 }
 
 function resetFailedStep(step: InspectionPanelSubmitStepState) {
@@ -599,7 +757,10 @@ async function cleanupRemoteBackedBatchFiles(taskId: string) {
     snapshot: finalized.snapshot,
   } : item)
   if (!next) return
-  for (const uri of finalized.originalUris) deleteDraftMedia(uri)
+  // Keep the private original until delayed local-media housekeeping. The
+  // page may still be rendering the file:// URI while the authenticated R2
+  // proxy is unavailable on Android; deleting it here leaves only a remote
+  // reference that can render as a black image.
   pruneInspectionThumbnailCache(finalized.thumbnailUris)
 }
 
@@ -777,7 +938,7 @@ export async function saveInspectionPanelDraftBatch(params: {
     if (current && current.status !== 'draft') return current
     const snapshot = normalizeSnapshot(params.snapshot)
     if (!snapshot) return current
-    const submitId = current?.submit_id || makeId(`inspection_batch_${taskId}`)
+    const submitId = normalizeSubmitId(current?.submit_id) || makeSubmitId()
     return {
       submit_id: submitId,
       task_id: taskId,
@@ -923,13 +1084,23 @@ export async function processInspectionPanelSubmitQueue(token: string) {
         }
         const validationError = validateInspectionPanelSnapshot(item.snapshot)
         if (validationError) throw new ApiError(validationError, 0, 'INVALID_INSPECTION_PANEL_SNAPSHOT', false)
-        await processUploadMediaStep(token, item.task_id)
-        await processRestockStep(token, item.task_id)
-        await processInspectionStep(token, item.task_id)
-        await processFeedbackCreateStep(token, item.task_id)
-        await processFeedbackCompleteStep(token, item.task_id)
+        await processIndependentStep(item.task_id, 'upload_media', () => processUploadMediaStep(token, item.task_id))
+        await processIndependentStep(item.task_id, 'save_restock_proof', () => processRestockStep(token, item.task_id))
+        await processIndependentStep(item.task_id, 'save_inspection_photos', () => processInspectionStep(token, item.task_id))
+        await processIndependentStep(item.task_id, 'create_feedback_batch', () => processFeedbackCreateStep(token, item.task_id))
+        await processIndependentStep(item.task_id, 'complete_feedback_projects', () => processFeedbackCompleteStep(token, item.task_id))
         const current = await getInspectionPanelBatch(item.task_id)
         if (!current) continue
+        const allStepsSucceeded = Object.values(current.steps).every((step) => step.status === 'succeeded')
+        if (!allStepsSucceeded) {
+          const anySucceeded = Object.values(current.steps).some((step) => step.status === 'succeeded')
+          await updateQueueItem(item.task_id, (existing) => existing ? {
+            ...existing,
+            status: anySucceeded ? 'partial_failed' : 'failed',
+            updated_at: nowIso(),
+          } : existing)
+          continue
+        }
         const finalized = await prepareSyncedSnapshot(current.snapshot)
         const next = await updateQueueItem(item.task_id, (current) => {
           if (!current) return null
@@ -942,7 +1113,9 @@ export async function processInspectionPanelSubmitQueue(token: string) {
           }
         })
         if (next) {
-          for (const uri of finalized.originalUris) deleteDraftMedia(uri)
+          // Do not delete the local original at business-save time. The
+          // authenticated image proxy may still be unavailable, and the
+          // existing orphan-media housekeeping can remove this copy later.
           pruneInspectionThumbnailCache(finalized.thumbnailUris)
           await clearInspectionPanelDraft(next.task_id)
           await clearInspectionPanelFeedbackDraft(next.task_id)
@@ -963,7 +1136,6 @@ export async function processInspectionPanelSubmitQueue(token: string) {
             last_error: stepError,
           } : existing)
         }
-        if (isNetworkishError(error) || error instanceof ApiError) break
       }
     }
     return { processed, remaining: (await loadQueue()).filter((item) => item.status !== 'draft' && item.status !== 'synced').length }

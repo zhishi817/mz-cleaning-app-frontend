@@ -23,6 +23,22 @@ test('builds an authenticated proxy image source for a cleaning object key', () 
   })
 })
 
+test('adds a separate server-side image variant for thumbnails and previews', () => {
+  expect(buildCleaningMediaImageSource('token-1', 'cleaning/photo-1.jpg', 'thumbnail')).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fphoto-1.jpg&variant=thumbnail',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+  expect(buildCleaningMediaImageSource('token-1', 'cleaning/photo-1.jpg', 'preview')).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fphoto-1.jpg&variant=preview',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+})
+
+test('does not send mzapp media through the cleaning-only proxy', () => {
+  const url = 'https://media.r2.dev/mzapp/photo-1.jpg'
+  expect(buildCleaningMediaImageSource('token-1', url)).toEqual({ uri: url })
+})
+
 test('keeps local media direct and rejects unsafe cleaning keys', () => {
   expect(buildCleaningMediaImageSource('token-1', 'file:///tmp/photo.jpg')).toEqual({
     uri: 'file:///tmp/photo.jpg',

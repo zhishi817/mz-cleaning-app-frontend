@@ -10,6 +10,8 @@ export type Profile = {
   bank_account_number: string
   personal_abn: string
   photo_id_url: string | null
+  visa_document_url: string | null
+  visa_grant_number: string
   owner_id?: string
   owner_username?: string
 }
@@ -24,7 +26,18 @@ export async function getProfile(owner: { id?: string | null; username?: string 
   if (!id) return null
   const key = storageKey(id)
   const v2 = await getJson<Profile>(key)
-  if (v2) return v2
+  if (v2) {
+    const normalized: Profile = {
+      ...v2,
+      photo_id_url: v2.photo_id_url || null,
+      visa_document_url: v2.visa_document_url || null,
+      visa_grant_number: v2.visa_grant_number || '',
+    }
+    if (normalized.visa_document_url !== v2.visa_document_url || normalized.visa_grant_number !== v2.visa_grant_number) {
+      await setJson(key, normalized)
+    }
+    return normalized
+  }
   const legacy = await getJson<any>(LEGACY_STORAGE_KEY)
   if (!legacy) return null
   const legacyName = String(legacy.name || legacy.display_name || '').trim()
@@ -40,6 +53,8 @@ export async function getProfile(owner: { id?: string | null; username?: string 
       bank_account_number: legacy.bank_account_number || '',
       personal_abn: legacy.personal_abn || '',
       photo_id_url: legacy.photo_id_url || null,
+      visa_document_url: legacy.visa_document_url || null,
+      visa_grant_number: legacy.visa_grant_number || '',
       owner_id: id,
       owner_username: u,
     }
@@ -72,5 +87,7 @@ export function defaultProfileFromUser(user: { username: string; role: string } 
     bank_account_number: '',
     personal_abn: '',
     photo_id_url: null,
+    visa_document_url: null,
+    visa_grant_number: '',
   }
 }

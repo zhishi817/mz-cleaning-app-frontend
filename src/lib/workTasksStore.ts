@@ -314,7 +314,7 @@ function matchTaskIds(task: WorkTaskItem, ids: string[]) {
   return ids.some((id) => candidates.has(id))
 }
 
-function isSafePatchEvent(event: WorkTaskStreamEvent) {
+export function isSafePatchEvent(event: WorkTaskStreamEvent) {
   const eventType = String(event.event_type || '').trim()
   const scope = String(event.change_scope || '').trim()
   if (!['TASK_UPDATED', 'TASK_COMPLETED', 'TASK_DETAIL_ASSET_CHANGED'].includes(eventType)) return false
@@ -335,7 +335,7 @@ function getPatchValue(patch: Record<string, any>, key: string) {
   return cursor
 }
 
-function mergePatchIntoTask(task: WorkTaskItem, event: WorkTaskStreamEvent) {
+export function mergePatchIntoTask(task: WorkTaskItem, event: WorkTaskStreamEvent) {
   const payload = event.payload && typeof event.payload === 'object' ? event.payload : {}
   const patch = payload.patch && typeof payload.patch === 'object' ? payload.patch : {}
   const changedFields = Array.isArray(event.changed_fields) ? event.changed_fields.map((x) => String(x || '').trim()).filter(Boolean) : []
@@ -379,14 +379,17 @@ function mergePatchIntoTask(task: WorkTaskItem, event: WorkTaskStreamEvent) {
   return next
 }
 
-function projectCleaningStatusForTask(task: WorkTaskItem, value: any) {
+export function projectCleaningStatusForTask(task: WorkTaskItem, value: any) {
   const raw = String(value || '').trim().toLowerCase()
   if (!raw) return value
   if (String(task.source_type || '').trim().toLowerCase() !== 'cleaning_tasks') return value
   const kind = String(task.task_kind || '').trim().toLowerCase()
   if (kind === 'inspection') {
     if (raw === 'keys_hung') return 'keys_hung'
-    if (raw === 'inspected' || raw === 'done' || raw === 'completed' || raw === 'ready') return 'done'
+    if (raw === 'inspected') {
+      return String((task as any).inspection_scope || '').trim().toLowerCase() === 'password_only' ? 'done' : 'to_hang_keys'
+    }
+    if (raw === 'done' || raw === 'completed' || raw === 'ready') return 'done'
     if (raw === 'cleaned' || raw === 'restock_pending' || raw === 'restocked') return 'to_inspect'
     if (raw === 'in_progress' || String((task as any).key_photo_url || '').trim()) return 'in_progress'
     if (raw === 'assigned' || String((task as any).inspector_id || '').trim()) return 'assigned'
@@ -717,6 +720,44 @@ function mapRemoteTask(t: WorkTask): WorkTaskItem {
   }
 }
 
+function workTaskIdentityValues(task: Partial<WorkTaskItem> | WorkTask) {
+  return [
+    (task as any)?.id,
+    (task as any)?.task_id,
+    (task as any)?.source_id,
+    ...((Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : [])),
+    ...((Array.isArray((task as any)?.active_source_ids) ? (task as any).active_source_ids : [])),
+    ...((Array.isArray((task as any)?.superseded_source_ids) ? (task as any).superseded_source_ids : [])),
+    ...((Array.isArray((task as any)?.all_related_source_ids) ? (task as any).all_related_source_ids : [])),
+    ...((Array.isArray((task as any)?.cleaning_task_ids) ? (task as any).cleaning_task_ids : [])),
+    ...((Array.isArray((task as any)?.inspection_task_ids) ? (task as any).inspection_task_ids : [])),
+    ...((Array.isArray((task as any)?.execution_task_ids) ? (task as any).execution_task_ids : [])),
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+}
+
+export function mergeRemoteWorkTaskItems(remote: WorkTaskItem[], previous: WorkTaskItem[]) {
+  const previousByIdentity = new Map<string, WorkTaskItem>()
+  for (const item of Array.isArray(previous) ? previous : []) {
+    const checkedOutAt = String((item as any)?.checked_out_at || '').trim()
+    if (!checkedOutAt) continue
+    for (const identity of workTaskIdentityValues(item)) {
+      if (!previousByIdentity.has(identity)) previousByIdentity.set(identity, item)
+    }
+  }
+
+  return (Array.isArray(remote) ? remote : []).map((item) => {
+    if (String((item as any)?.source_type || '').trim() !== 'cleaning_tasks') return item
+    if (Object.prototype.hasOwnProperty.call(item, 'checked_out_at')) return item
+    const previousItem = workTaskIdentityValues(item)
+      .map((identity) => previousByIdentity.get(identity))
+      .find(Boolean)
+    const checkedOutAt = String((previousItem as any)?.checked_out_at || '').trim()
+    return checkedOutAt ? { ...item, checked_out_at: checkedOutAt } : item
+  })
+}
+
 export async function refreshWorkTasksFromServer(params: {
   token: string
   userId: string
@@ -731,7 +772,8 @@ export async function refreshWorkTasksFromServer(params: {
   const run = (async () => {
     await initWorkTasksStore({ bucketKey })
     const remote = await listWorkTasks(params.token, { date_from: params.date_from, date_to: params.date_to, view: params.view })
-    const items = remote.map(mapRemoteTask).filter((t) => t.date !== 'unknown')
+    const mappedRemote = remote.map(mapRemoteTask).filter((t) => t.date !== 'unknown')
+    const items = mergeRemoteWorkTaskItems(mappedRemote, state.items)
 
     const now = new Date().toISOString()
     clearBucketDirty(bucketKey)

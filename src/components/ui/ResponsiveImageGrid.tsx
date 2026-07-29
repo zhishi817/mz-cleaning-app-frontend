@@ -5,6 +5,7 @@ import { layoutTokens } from '../../lib/theme'
 
 type Props<T> = {
   gap?: number
+  fixedItemWidth?: number
   items: readonly T[]
   keyExtractor: (item: T, index: number) => string
   renderItem: (item: T, index: number, itemWidth: number) => React.ReactNode
@@ -12,6 +13,7 @@ type Props<T> = {
 
 export default function ResponsiveImageGrid<T>({
   gap = layoutTokens.spacing.sm,
+  fixedItemWidth,
   items,
   keyExtractor,
   renderItem,
@@ -23,12 +25,13 @@ export default function ResponsiveImageGrid<T>({
     if (nextWidth !== containerWidth) setContainerWidth(nextWidth)
   }
 
-  const { columns, itemWidth } = useMemo(() => {
+  const { columns, itemWidth: responsiveItemWidth } = useMemo(() => {
     const columns = resolveResponsiveImageColumns(containerWidth || layoutTokens.breakpoints.compactPhone)
     const totalGap = gap * Math.max(0, columns - 1)
     const itemWidth = containerWidth > 0 ? Math.floor((containerWidth - totalGap) / columns) : 0
     return { columns, itemWidth }
   }, [containerWidth, gap])
+  const itemWidth = fixedItemWidth && fixedItemWidth > 0 ? fixedItemWidth : responsiveItemWidth
 
   return (
     <View onLayout={onLayout} style={{ width: '100%', flexDirection: 'row', flexWrap: 'wrap', gap }}>

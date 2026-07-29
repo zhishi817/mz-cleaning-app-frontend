@@ -1,4 +1,5 @@
 import { startCleaningTask, uploadCleaningMedia } from './api'
+import { cleaningMediaReference } from './cleaningMedia'
 import { deleteDraftMedia, draftMimeTypeFrom, persistCompressedDraftMedia } from './localMediaDrafts'
 import { withLocalMediaLock } from './localMediaLocks'
 import { getJson, setJson } from './storage'
@@ -254,11 +255,12 @@ export async function processKeyUploadQueue(token: string) {
               captured_at: item.captured_at || '',
             },
           ))
+          const remoteReference = cleaningMediaReference(up)
           await updateQueueItem(item.cleaning_task_id, (current) => current ? {
             ...current,
             status: 'syncing',
             updated_at: nowIso(),
-            uploaded_url: cleanText(up.url) || null,
+            uploaded_url: remoteReference || null,
             last_error: null,
             steps: {
               ...current.steps,
@@ -267,12 +269,14 @@ export async function processKeyUploadQueue(token: string) {
                 started_at: current.steps.upload_media.started_at || nowIso(),
                 finished_at: nowIso(),
                 error: null,
-                output: { remote_url: cleanText(up.url) || null },
+                output: { remote_url: remoteReference || null },
               },
             },
           } : current)
-          const persisted = await getKeyUploadQueueItem(item.cleaning_task_id)
-          if (cleanText(persisted?.uploaded_url) && persisted?.steps.upload_media.status === 'succeeded') deleteDraftMedia(persisted.local_uri)
+          // Keep the private copy until the task detail has refreshed to the
+          // remote key. Android may still be rendering this file:// URI when
+          // the upload step completes; the existing 24-hour orphan-media
+          // housekeeping will remove it after the remote reference is known.
         }
 
         const current = await getKeyUploadQueueItem(item.cleaning_task_id)
@@ -281,7 +285,7 @@ export async function processKeyUploadQueue(token: string) {
         if (current?.steps.start_cleaning_task.status !== 'succeeded') {
           await markStep(item.cleaning_task_id, 'start_cleaning_task', { status: 'syncing', started_at: nowIso(), error: null }, 'syncing', null)
           await startCleaningTask(token, item.cleaning_task_id, { media_url: remoteUrl, captured_at: item.captured_at || undefined })
-          const finalItem = await updateQueueItem(item.cleaning_task_id, (existing) => existing ? {
+          await updateQueueItem(item.cleaning_task_id, (existing) => existing ? {
             ...existing,
             status: 'synced',
             updated_at: nowIso(),
@@ -297,7 +301,6 @@ export async function processKeyUploadQueue(token: string) {
               },
             },
           } : existing)
-          if (finalItem) deleteDraftMedia(finalItem.local_uri)
           await removeQueueItem(item.cleaning_task_id)
         }
         processed += 1

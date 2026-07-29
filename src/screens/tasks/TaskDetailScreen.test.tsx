@@ -1,5 +1,5 @@
 import React from 'react'
-import { Alert } from 'react-native'
+import { Alert, StyleSheet } from 'react-native'
 import { fireEvent, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 
@@ -68,6 +68,7 @@ jest.mock('../../lib/api', () => {
   return {
     ...actual,
     uploadCleaningMedia: jest.fn(async () => ({ url: 'http://example.com/k.jpg' })),
+    getWorkTaskFormPhotos: jest.fn(async () => ({ items: [] })),
     markWorkTask: jest.fn(async () => ({ ok: true })),
     startCleaningTask: jest.fn(async () => ({ ok: true })),
   }
@@ -92,6 +93,7 @@ jest.mock('../../lib/keyUploadQueue', () => ({
 
 beforeEach(() => {
   mockKeyQueueItem = null
+  require('../../lib/api').getWorkTaskFormPhotos.mockClear()
 })
 
 test('uploading key photo updates task status to cleaning', async () => {
@@ -111,6 +113,9 @@ test('uploading key photo updates task status to cleaning', async () => {
 
   await waitFor(() => {
     expect((Alert.alert as any).mock.calls.length).toBeGreaterThan(0)
+  })
+  await waitFor(() => {
+    expect(require('../../lib/workTasksStore').refreshWorkTasksFromServer).toHaveBeenCalled()
   })
 })
 
@@ -151,6 +156,46 @@ test('task detail can resolve cleaning task id from notice route', async () => {
   })
 })
 
+test('task detail does not load the supplies photo endpoint', async () => {
+  const api = require('../../lib/api')
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-no-form-photos', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText(/upload key|上传钥匙/i)).toBeTruthy()
+  })
+  expect(api.getWorkTaskFormPhotos).not.toHaveBeenCalled()
+  expect(ui.queryByText('补品填报 / 房间照片')).toBeNull()
+  expect(ui.queryByText('照片加载中...')).toBeNull()
+})
+
+test('cleaning task with empty server actions does not fall back to generic mark flow', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousActions = snapshot.items[0].available_actions
+  snapshot.items[0].available_actions = []
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-empty-cleaning-actions', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText('当前任务暂无可用操作，请刷新任务后重试。')).toBeTruthy()
+    expect(ui.queryByText('拍照上传')).toBeNull()
+    expect(ui.queryByText('标记完成')).toBeNull()
+  })
+
+  snapshot.items[0].available_actions = previousActions
+})
+
 test('task detail hides weak-network key sync error text while keeping pending state', async () => {
   mockKeyQueueItem = {
     cleaning_task_id: 'ct1',
@@ -170,6 +215,224 @@ test('task detail hides weak-network key sync error text while keeping pending s
   })
 
   expect(ui.queryByText('Network request failed')).toBeNull()
+})
+
+test('key recorded and supplies actions use compact equal-width buttons', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = mockAuthState.user
+  mockAuthState.user = { id: 'inspector-1', username: 'inspector', role: 'cleaning_inspector', roles: ['cleaning_inspector'] }
+  snapshot.items[0] = {
+    ...previousTask,
+    key_photo_url: 'https://example.com/key.jpg',
+    lockbox_video_url: 'https://example.com/lockbox.mp4',
+    available_actions: [
+      { id: 'upload_key_photo', label: '上传钥匙', placement: 'primary', enabled: false, disabled_reason: 'already_recorded', target: 'TaskDetail', intent: 'cleaning' },
+      { id: 'fill_supplies', label: '补品填报', placement: 'primary', enabled: true, target: 'SuppliesForm', intent: 'cleaning' },
+      { id: 'report_issue', label: '房源问题反馈', placement: 'more', enabled: true, target: 'FeedbackForm', intent: 'issue' },
+    ],
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-key-actions', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByText('钥匙已记录')).toBeTruthy()
+      expect(ui.queryByText('已记录')).toBeNull()
+      expect(ui.getByText('补品填报')).toBeTruthy()
+      expect(ui.getByText('房源问题反馈')).toBeTruthy()
+    })
+
+    const keyPhotoStyle = StyleSheet.flatten(ui.getByTestId('task-detail-key-photo').props.style)
+    const videoStyle = StyleSheet.flatten(ui.getByTestId('task-detail-lockbox-video').props.style)
+    expect(keyPhotoStyle).toEqual(expect.objectContaining({ width: '100%', height: videoStyle.height }))
+
+    expect(ui.getByTestId('task-detail-action-w1-upload_key_photo').props.style).toEqual(expect.arrayContaining([
+      expect.objectContaining({ flex: 1, flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 }),
+      expect.objectContaining({ minHeight: 44, paddingVertical: 0 }),
+    ]))
+    expect(ui.getByTestId('task-detail-action-w1-fill_supplies').props.style).toEqual(expect.arrayContaining([
+      expect.objectContaining({ flex: 1, flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 }),
+      expect.objectContaining({ minHeight: 44, paddingVertical: 0 }),
+    ]))
+    expect(ui.getByTestId('task-detail-action-w1-report_issue').props.style).toEqual(expect.arrayContaining([expect.objectContaining({ width: '100%', flexBasis: '100%' })]))
+  } finally {
+    snapshot.items[0] = previousTask
+    mockAuthState.user = previousUser
+  }
+})
+
+test('ordinary cleaner cannot see lockbox video in task detail', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = mockAuthState.user
+  mockAuthState.user = { id: 'cleaner-1', username: 'cleaner', role: 'cleaner', roles: ['cleaner'] }
+  snapshot.items[0] = {
+    ...previousTask,
+    source_type: 'cleaning_tasks',
+    task_kind: 'cleaning',
+    lockbox_video_url: 'https://example.com/lockbox.mp4',
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-cleaner-lockbox', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.queryByText('执行人上传的视频')).toBeNull()
+      expect(ui.queryByTestId('task-detail-lockbox-video')).toBeNull()
+    })
+  } finally {
+    snapshot.items[0] = previousTask
+    mockAuthState.user = previousUser
+  }
+})
+
+test('completed supplies action is gray, uses one label, and opens read-only photo view', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() }
+  snapshot.items[0] = {
+    ...previousTask,
+    status: 'completed',
+    available_actions: [
+      { id: 'fill_supplies', label: '补品记录', placement: 'primary', enabled: false, disabled_reason: 'task_completed', target: 'SuppliesForm', intent: 'cleaning' },
+      { id: 'report_issue', label: '房源问题反馈', placement: 'more', enabled: true, target: 'FeedbackForm', intent: 'issue' },
+    ],
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={navigation as any} route={{ key: 'k-completed-supplies', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByText('补品已记录')).toBeTruthy()
+      expect(ui.queryByTestId('task-detail-supplies-status')).toBeNull()
+      expect(ui.queryByText('任务已完成')).toBeNull()
+    })
+    expect(ui.getByTestId('task-detail-action-w1-fill_supplies').props.style).toEqual(expect.arrayContaining([expect.objectContaining({ backgroundColor: '#E5E7EB' })]))
+
+    fireEvent.press(ui.getByTestId('task-detail-action-w1-fill_supplies'))
+    expect(navigation.navigate).toHaveBeenCalledWith('SuppliesForm', { taskId: 'w1', readOnly: true })
+  } finally {
+    snapshot.items[0] = previousTask
+  }
+})
+
+test('deleted key photo remains re-uploadable after cleaning submission', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  snapshot.items[0] = {
+    ...previousTask,
+    status: 'done',
+    key_photo_url: null,
+    available_actions: [
+      { id: 'upload_key_photo', label: '上传钥匙', placement: 'primary', enabled: true, target: 'TaskDetail', intent: 'cleaning' },
+      { id: 'fill_supplies', label: '补品记录', placement: 'primary', enabled: false, disabled_reason: 'task_completed', target: 'SuppliesForm', intent: 'cleaning' },
+    ],
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-deleted-key', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByText('上传钥匙')).toBeTruthy()
+      expect(ui.getByTestId('task-detail-action-w1-upload_key_photo').props.disabled).not.toBe(true)
+    })
+  } finally {
+    snapshot.items[0] = previousTask
+  }
+})
+
+test('completed task action uses one gray label without disabled reason text', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  snapshot.items[0] = {
+    ...previousTask,
+    task_kind: 'execution',
+    status: 'completed',
+    available_actions: [
+      { id: 'upload_access_video', label: '上传视频并完成', placement: 'primary', enabled: false, disabled_reason: 'task_completed', target: 'InspectionComplete', intent: 'site_action' },
+    ],
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-completed-action', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByText('任务已完成')).toBeTruthy()
+      expect(ui.queryByText('上传视频并完成')).toBeNull()
+    })
+    expect(ui.getByTestId('task-detail-action-w1-upload_access_video').props.style).toEqual(expect.arrayContaining([expect.objectContaining({ backgroundColor: '#E5E7EB' })]))
+  } finally {
+    snapshot.items[0] = previousTask
+  }
+})
+
+test('completed inspection keeps one completion button and opens read-only inspection photos', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() }
+  snapshot.items[0] = {
+    ...previousTask,
+    task_kind: 'inspection',
+    task_type: 'checkout_clean',
+    inspection_scope: 'inspect_and_hang',
+    status: 'keys_hung',
+    available_actions: [
+      { id: 'submit_inspection', label: '检查与补充', placement: 'primary', enabled: false, disabled_reason: 'task_completed', read_only: true, target: 'InspectionPanel', intent: 'inspection', source_id: 'ct-inspection' },
+      { id: 'upload_access_video', label: '挂钥匙并完成', placement: 'primary', enabled: false, disabled_reason: 'task_completed', target: 'InspectionComplete', intent: 'site_action', source_id: 'ct-inspection' },
+    ],
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={navigation as any} route={{ key: 'k-completed-inspection', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByText('查看检查照片')).toBeTruthy()
+      expect(ui.getByText('任务已完成')).toBeTruthy()
+      expect(ui.queryByText('检查与补充')).toBeNull()
+    })
+
+    fireEvent.press(ui.getByTestId('task-detail-action-w1-submit_inspection'))
+    expect(navigation.navigate).toHaveBeenCalledWith('InspectionPanel', { taskId: 'w1', sourceId: 'ct-inspection', readOnly: true })
+  } finally {
+    snapshot.items[0] = previousTask
+  }
 })
 
 test('stayover cleaning task hides key upload and shows stayover label', async () => {
@@ -258,6 +521,45 @@ test('password-only inspection task shows explicit execution scope', async () =>
   snapshot.items[0].inspection_mode = undefined
   snapshot.items[0].start_time = '10am'
   snapshot.items[0].end_time = '3pm'
+})
+
+test('customer service password-only task hides checkout and shows executor video', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = mockAuthState.user
+  mockAuthState.user = { id: 'cs-1', username: 'customer-service', role: 'customer_service', roles: ['customer_service'] }
+  snapshot.items[0] = {
+    ...previousTask,
+    task_kind: 'inspection',
+    task_type: 'checkin_clean',
+    inspection_scope: 'password_only',
+    inspection_mode: 'same_day',
+    status: 'keys_hung',
+    start_time: null,
+    end_time: '3pm',
+    order_id: 'order-checkin-only',
+    lockbox_video_url: 'https://example.test/executor-password-video.mp4',
+    available_actions: [
+      { id: 'report_issue', label: '问题反馈', placement: 'primary', enabled: true, target: 'FeedbackForm', intent: 'issue' },
+    ],
+  }
+
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-cs-password-only', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.queryByText('标记已退房')).toBeNull()
+    expect(ui.getByText('问题反馈')).toBeTruthy()
+    expect(ui.getByText('执行人上传的视频')).toBeTruthy()
+  })
+
+  snapshot.items[0] = previousTask
+  mockAuthState.user = previousUser
 })
 
 test('key handover execution task shows user-facing password-only label and video action', async () => {
@@ -603,6 +905,12 @@ test('offline task can be marked done without uploading photos first', async () 
 
   await waitFor(() => {
     expect(ui.getByText('照片可选，可直接提交，也可补充拍照留档')).toBeTruthy()
+    expect(ui.getByTestId('offline-task-photo-camera')).toBeTruthy()
+    expect(ui.getByTestId('offline-task-photo-library')).toBeTruthy()
+    expect(ui.getByTestId('offline-task-mark-camera')).toBeTruthy()
+    expect(ui.getByTestId('offline-task-mark-library')).toBeTruthy()
+    expect(ui.getByTestId('offline-task-complete')).toBeTruthy()
+    expect(ui.getByTestId('offline-task-not-complete')).toBeTruthy()
   })
 
   fireEvent.press(ui.getByText('标记完成'))
@@ -629,33 +937,82 @@ test('offline task can be marked done without uploading photos first', async () 
   snapshot.items[0].summary = null
 })
 
-test('ordinary cleaner cannot see lockbox video in task detail', async () => {
+test('customer service can edit an offline task and save its executor', async () => {
+  jest.spyOn(Alert, 'alert').mockImplementation(() => {})
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
   const previousTask = { ...snapshot.items[0] }
   const previousUser = mockAuthState.user
-  mockAuthState.user = { id: 'cleaner-1', username: 'cleaner', role: 'cleaner', roles: ['cleaner'] }
+  const api = require('../../lib/api')
+  mockAuthState.user = {
+    id: 'cs-1',
+    username: 'customer-service',
+    role: 'customer_service',
+    roles: ['customer_service'],
+  }
   snapshot.items[0] = {
     ...previousTask,
-    source_type: 'cleaning_tasks',
-    task_kind: 'cleaning',
-    lockbox_video_url: 'https://example.com/lockbox.mp4',
+    task_kind: 'offline',
+    source_type: 'cleaning_offline_tasks',
+    source_id: 'offline-1',
+    title: '送暖气',
+    summary: '联系客人确认送达',
+    scheduled_date: '2026-07-23',
+    date: '2026-07-23',
+    property_id: 'p1',
+    assignee_id: null,
+    status: 'todo',
+    urgency: 'medium',
   }
+  const updateMock = jest.spyOn(api, 'updateCleaningOfflineTask').mockResolvedValue({
+    id: 'offline-1',
+    date: '2026-07-24',
+    title: '送暖气（已确认）',
+    content: '已和客人确认时间',
+    property_id: 'p1',
+    assignee_id: 'cleaner-2',
+    status: 'assigned',
+  })
+  jest.spyOn(api, 'listUsers').mockResolvedValue([
+    { id: 'cleaner-2', username: 'zhi-f', display_name: 'zhi-f', role: 'cleaner' },
+  ])
+  jest.spyOn(api, 'listCleaningAppPropertyCodes').mockResolvedValue([
+    { id: 'p1', code: 'WSP3709B', region: 'CBD' },
+  ])
+
   const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-offline-edit', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+    </I18nProvider>,
+  )
 
-  try {
-    const ui = render(
-      <I18nProvider>
-        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-cleaner-lockbox', name: 'TaskDetail', params: { id: 'w1' } } as any} />
-      </I18nProvider>,
+  await waitFor(() => expect(ui.getByTestId('offline-edit-button')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('offline-edit-button'))
+  await waitFor(() => expect(ui.getByDisplayValue('送暖气')).toBeTruthy())
+  fireEvent.changeText(ui.getByDisplayValue('送暖气'), '送暖气（已确认）')
+  fireEvent.changeText(ui.getByLabelText('offline-edit-date'), '2026-07-24')
+  expect(ui.queryByText('紧急度')).toBeNull()
+  fireEvent.press(ui.getByLabelText('offline-edit-assignee'))
+  await waitFor(() => expect(ui.getByText('zhi-f')).toBeTruthy())
+  fireEvent.press(ui.getByLabelText('offline-edit-assignee-cleaner-2'))
+  fireEvent.press(ui.getByTestId('offline-edit-save'))
+
+  await waitFor(() => {
+    expect(updateMock).toHaveBeenCalledWith(
+      't1',
+      'offline-1',
+      expect.objectContaining({
+        date: '2026-07-24',
+        title: '送暖气（已确认）',
+        assignee_id: 'cleaner-2',
+      }),
     )
+  })
 
-    await waitFor(() => {
-      expect(ui.queryByText('执行人上传的视频')).toBeNull()
-      expect(ui.queryByTestId('task-detail-lockbox-video')).toBeNull()
-    })
-  } finally {
-    snapshot.items[0] = previousTask
-    mockAuthState.user = previousUser
-  }
+  updateMock.mockRestore()
+  ;(api.listUsers as jest.Mock).mockRestore()
+  ;(api.listCleaningAppPropertyCodes as jest.Mock).mockRestore()
+  snapshot.items[0] = previousTask
+  mockAuthState.user = previousUser
 })

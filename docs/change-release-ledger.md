@@ -1,5 +1,111 @@
 # Change Release Ledger
 
+## CRL-20260729-002 — 已选跨仓库发布单元的移动端映射
+
+- **Status:** ready
+- **Updated:** 2026-07-29 Australia/Melbourne
+- **Request:** 用户选择推送已本地提交的 CRL-20260725-023、CRL-20260725-002，以及根仓库台账标记 ready 的 31 个单元到 `Dev`；后续明确纳入 CRL-20260724-002、CRL-20260724-003、CRL-20260729-009、CRL-20260724-010、CRL-20260725-004、CRL-20260725-005、CRL-20260725-010、CRL-20260725-011、CRL-20260725-012、CRL-20260725-016、CRL-20260725-017、CRL-20260725-021、CRL-20260724-012。
+- **Outcome:** 本记录只将所选 CRL 的移动端文件显式映射到独立仓库台账，以便在保留并发改动和暂存内容的情况下进行候选提交审计；本次补入任务表单照片读取、浴室检查照片、检查后待挂钥匙、短幂等 ID、媒体预览变体、任务内容展示、小缩略图网格和退房状态优先级依赖。业务规则、完整跨层说明和测试映射以根仓库 `docs/change-release-ledger.md` 为准。
+
+### Files / Areas
+
+- `package.json` — selected button-contract scripts hunk only; version and local quality-baseline hunk excluded.
+- `src/components/CleaningMediaImage.tsx` — selected authenticated cleaning-media rendering.
+- `src/components/CleaningMediaPreview.test.tsx` — selected media preview contract tests.
+- `src/components/CleaningMediaPreview.tsx` — selected media preview error/retry UX.
+- `src/components/GuestLuggageCard.tsx` — selected button contract migration.
+- `src/components/ui/AppButton.test.tsx` — selected button contract tests.
+- `src/components/ui/AppButton.tsx` — selected shared button contract.
+- `src/components/ui/AppIconButton.test.tsx` — selected icon button tests.
+- `src/components/ui/AppIconButton.tsx` — selected shared icon button contract.
+- `src/components/ui/ResponsiveImageGrid.test.tsx` — selected fixed-thumbnail-width tests.
+- `src/components/ui/ResponsiveImageGrid.tsx` — selected fixed-thumbnail-width grid behavior.
+- `src/lib/api.ts` — selected media and task API behavior.
+- `src/lib/inspectionPanelDraft.ts` — selected bathroom inspection-draft compatibility.
+- `src/lib/cleaningConsumablesDraft.ts` — selected consumables draft behavior.
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — selected queue tests.
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — selected queue behavior.
+- `src/lib/cleaningMediaCache.test.ts` — selected authenticated media cache tests.
+- `src/lib/cleaningMediaCache.ts` — selected authenticated media cache.
+- `src/lib/cleaningMedia.test.ts` — selected image-variant URL tests.
+- `src/lib/cleaningMedia.ts` — selected authenticated media image variants.
+- `src/lib/consumableRestockStandards.test.ts` — selected standards tests.
+- `src/lib/consumableRestockStandards.ts` — selected consumable standards.
+- `src/lib/dayEndHandoverQueue.ts` — selected handover queue behavior.
+- `src/lib/i18n.tsx` — selected UI copy.
+- `src/lib/imageCompression.test.ts` — selected image conversion tests.
+- `src/lib/imageCompression.ts` — selected image conversion behavior.
+- `src/lib/inspectionMediaQueue.test.ts` — selected inspection queue tests.
+- `src/lib/inspectionMediaQueue.ts` — selected inspection queue behavior.
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — selected inspection submit tests.
+- `src/lib/inspectionPanelSubmitQueue.ts` — selected inspection submit behavior.
+- `src/lib/keyUploadQueue.test.ts` — selected key-upload tests.
+- `src/lib/keyUploadQueue.ts` — selected key-upload behavior.
+- `src/lib/localMediaDrafts.ts` — selected local media draft helper when present in the release base.
+- `src/lib/managerDailyTaskPhotos.ts` — selected manager media behavior.
+- `src/lib/profileStore.test.ts` — selected profile persistence tests.
+- `src/lib/profileStore.ts` — selected profile persistence behavior.
+- `src/lib/propertyFollowupTaskDisplay.test.ts` — selected property follow-up display tests.
+- `src/lib/propertyFollowupTaskDisplay.ts` — selected property follow-up display behavior.
+- `src/lib/taskVisualTheme.test.ts` — selected task-status priority tests.
+- `src/lib/taskVisualTheme.ts` — selected task-status priority behavior.
+- `src/lib/theme.ts` — selected button token contract.
+- `src/lib/taskFormPhotos.test.ts` — selected task-form photo aggregation tests.
+- `src/lib/taskFormPhotos.ts` — selected task-form photo aggregation and deduplication.
+- `src/lib/workTaskActions.test.ts` — selected action tests.
+- `src/lib/workTaskActions.ts` — selected action behavior.
+- `src/lib/workTasksStore.test.ts` — selected task store tests.
+- `src/lib/workTasksStore.ts` — selected task store behavior.
+- `src/navigation/RootNavigator.tsx` — selected navigation behavior.
+- `src/screens/LoginScreen.tsx` — selected button contract migration.
+- `src/screens/contacts/ContactDetailScreen.tsx` — selected contact action contract.
+- `src/screens/me/AccountScreen.tsx` — selected button contract migration when present in the release base.
+- `src/screens/me/ProfileEditScreen.test.tsx` — selected profile tests.
+- `src/screens/me/ProfileEditScreen.tsx` — selected profile behavior.
+- `src/screens/notices/InfoCenterDetailScreen.tsx` — selected information detail UI.
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — selected manager task-entry regression test.
+- `src/screens/notices/NoticeDetailScreen.tsx` — selected notice detail UI.
+- `src/screens/tabs/MeScreen.test.tsx` — selected profile tab tests.
+- `src/screens/tabs/MeScreen.tsx` — selected profile tab UI.
+- `src/screens/tabs/NoticesScreen.tsx` — selected notice tab UI.
+- `src/screens/tabs/TasksScreen.test.tsx` — selected task tab tests.
+- `src/screens/tabs/TasksScreen.tsx` — selected task tab behavior.
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — selected self-completion tests.
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — selected self-completion behavior.
+- `src/screens/tasks/DayEndBackupKeysScreen.tsx` — selected day-end action UI.
+- `src/screens/tasks/FeedbackFormScreen.tsx` — selected feedback behavior.
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — selected inspection completion tests.
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — selected inspection completion behavior.
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — selected inspection panel tests.
+- `src/screens/tasks/InspectionPanelScreen.tsx` — selected inspection panel behavior.
+- `src/screens/tasks/ManagerDailyTaskScreen.test.ts` — selected manager-detail tests.
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — selected manager-detail behavior.
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — selected supplies tests.
+- `src/screens/tasks/SuppliesFormScreen.tsx` — selected supplies behavior.
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — selected task-detail tests.
+- `src/screens/tasks/TaskDetailScreen.tsx` — selected task-detail behavior.
+- `docs/change-release-ledger.md` — this release mapping.
+
+### Impact / Dependencies
+
+- API / database / migration: none introduced by this mapping.
+- Dependencies: selected root CRL IDs are the canonical behavior records; the root button audit script is included with CRL-20260727-002. CRL-20260724-010, CRL-20260725-010, CRL-20260725-011 and CRL-20260725-012 provide the form-photo and bathroom/inspection-state contract required by FR-004; CRL-20260725-021 provides short submit-id generation and the shared backend length limit. CRL-20260724-012, CRL-20260725-004, CRL-20260725-005, CRL-20260725-016 and CRL-20260725-017 supply the required display helpers and their regression tests.
+- Excluded: `.env.example`, mobile version/EAS/lockfile/CI/AGENTS changes, local quality-baseline scripts, and every file outside the selected CRL mapping.
+
+### Validation
+
+- Root `npm run check:full` — passed after the selected P1 media authorization correction; Web lint retains existing warnings only.
+- Root ledger audit — passed: 57 changed files / 57 recorded files.
+- Root feature registry audit — passed: 8 FRs / 90 test mappings.
+- Root button audit — passed: no suspicious hard-coded dimensions.
+- Candidate commit must run this mobile repository's ledger audit from a clean selected-worktree view before push.
+
+### Risks / Release Notes
+
+- Candidate assembly must use an alternate Git index: this worktree has unrelated staged and unstaged changes that must remain untouched.
+- Device/EAS/native verification and any production API/data write are not part of this release.
+- Sensitive-information review: no `.env`, token, credential, database URL, cookie, private key, local cache, or sensitive log is selected.
+
 ## CRL-20260725-023 — 普通清洁员隐藏挂钥匙视频
 
 - **Status:** ready

@@ -92,7 +92,7 @@ test('issue notice detail shows property code and photos', async () => {
   })
 })
 
-test('notice task entry does not bypass disabled server action for privileged roles', async () => {
+test('notice task entry uses the manager detail for admin cleaning tasks', async () => {
   jest.spyOn(Alert, 'alert').mockImplementation(() => {})
   mockWorkTask = {
     id: 'w-disabled',
@@ -151,11 +151,10 @@ test('notice task entry does not bypass disabled server action for privileged ro
   fireEvent.press(ui.getByText('查看任务'))
 
   await waitFor(() => {
-    expect(Alert.alert).toHaveBeenCalledWith('暂不可操作', '你已不再是执行人')
-    expect(navigation.navigate).toHaveBeenCalledWith('TaskDetail', { id: 'w-disabled' })
+    expect(navigation.navigate).toHaveBeenCalledWith('ManagerDailyTask', { taskId: 'w-disabled' })
   })
-  expect(navigation.navigate).not.toHaveBeenCalledWith('InspectionPanel', { taskId: 'w-disabled' })
-  expect(navigation.navigate).not.toHaveBeenCalledWith('InspectionComplete', expect.anything())
+  expect(Alert.alert).not.toHaveBeenCalledWith('暂不可操作', '你已不再是执行人')
+  expect(navigation.navigate).not.toHaveBeenCalledWith('TaskDetail', { id: 'w-disabled' })
 
   mockWorkTask = null
 })
