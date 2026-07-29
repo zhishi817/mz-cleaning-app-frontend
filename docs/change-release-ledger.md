@@ -25,13 +25,13 @@
 - Passed: `npm test -- --runInBand --no-cache src/screens/tabs/TasksScreen.test.tsx src/screens/tasks/InspectionPanelScreen.test.tsx` — 2 suites / 34 tests.
 - Passed: `npm run check:fast`; `npm run check:full`; `npm run check:ci` — Fast includes Ledger/typecheck/lint/button/contract tests; Full and CI each completed 50 suites / 242 tests. Lint remains 0 errors / 111 pre-existing warnings.
 - Passed: mobile Ledger audit (3 changed / 3 recorded), root `python3 scripts/audit_feature_regression_registry.py` (8 FRs / 90 mappings), and `git diff --check`.
-- Passed: independent read-only review — GO; no P0/P1/P2 after FR scope correction. No PR, merge, deployment, or production validation.
+- Passed: independent read-only review — GO; no P0/P1/P2 after FR scope correction. GitHub PR #7 (`codex/governance-ledger-mobile-20260729` → `Dev`) is open and unmerged; `Mobile quality` run #8 passed its Ledger-range audit and non-interactive quality gate.
 
 ### Risks / Release Notes
 
 - The 10-second ceiling is a test-runner allowance, not a retry or product behavior change; a real assertion failure still fails.
 - Sensitive-information review: no secrets, production data, API calls, or deployment configuration.
-- Git state: pushed to `origin/codex/governance-ledger-mobile-20260729` at `1cd4784e8c7f7a243586c836059371cbe6f17c43`; no PR merge, deployment, or force push.
+- Git state: pushed to `origin/codex/governance-ledger-mobile-20260729` at `eb8c853fd785f153d799185584524825a18a0a17`; GitHub PR #7 to `Dev` is open and unmerged. No deployment or force push.
 
 ## CRL-20260730-002 — 稳定检查问题照片追加重试测试
 
@@ -58,13 +58,13 @@
 - Passed: `npm test -- --runInBand --no-cache src/screens/tabs/TasksScreen.test.tsx src/screens/tasks/InspectionPanelScreen.test.tsx` — 2 suites / 34 tests.
 - Passed: `npm run check:fast`; `npm run check:full`; `npm run check:ci` — Fast includes Ledger/typecheck/lint/button/contract tests; Full and CI each completed 50 suites / 242 tests. Lint remains 0 errors / 111 pre-existing warnings.
 - Passed: mobile Ledger audit (3 changed / 3 recorded), root `python3 scripts/audit_feature_regression_registry.py` (8 FRs / 90 mappings), and `git diff --check`.
-- Passed: independent read-only review — GO; no P0/P1/P2 after FR scope correction. No PR, merge, deployment, or production validation.
+- Passed: independent read-only review — GO; no P0/P1/P2 after FR scope correction. GitHub PR #7 (`codex/governance-ledger-mobile-20260729` → `Dev`) is open and unmerged; `Mobile quality` run #8 passed its Ledger-range audit and non-interactive quality gate.
 
 ### Risks / Release Notes
 
 - The 5-second wait and 10-second ceiling preserve the exact retry/no-duplicate-upload invariant; they do not add retries, alter API calls, or suppress assertion failures.
 - Sensitive-information review: no secrets, production data, API calls, or deployment configuration.
-- Git state: pushed to `origin/codex/governance-ledger-mobile-20260729` at `1cd4784e8c7f7a243586c836059371cbe6f17c43`; no PR merge, deployment, or force push.
+- Git state: pushed to `origin/codex/governance-ledger-mobile-20260729` at `eb8c853fd785f153d799185584524825a18a0a17`; GitHub PR #7 to `Dev` is open and unmerged. No deployment or force push.
 
 ## CRL-20260729-004 — 移动端 PR 精确范围 Ledger 审计
 
