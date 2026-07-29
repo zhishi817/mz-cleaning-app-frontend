@@ -12,7 +12,7 @@
 
 ## CRL-20260729-001 — 移动端质量防护独立基线
 
-- **Status:** ready
+- **Status:** committed
 - **Updated:** 2026-07-29 Australia/Melbourne
 - **Request:** 固化独立移动端仓库的 Agent 规则、CI、质量入口、按钮审计和台账审计，使干净 clone/worktree 不依赖父仓库未提交文件。
 - **Outcome:** 移动端拥有自己的 `AGENTS.md`、Node 版本、GitHub Actions 质量 workflow、`check:ci`、按钮审计和 Ledger 审计；干净候选 worktree 可独立执行完整质量命令。跨仓库功能仍需引用根仓库 FR/CRL 并等待后续精确组合验证。
@@ -53,7 +53,7 @@
 - Audit scope: 通过 `check:buttons --strict` 只证明不存在未登记的新可疑按钮尺寸；它不证明 22 条当前历史例外都满足 44pt 触控契约。每条例外都保留在脚本中作为精确债务记录；扫描不再命中的 35 条陈旧例外已删除，后续迁移或真机验证后才能继续删除。
 - Sensitive-information review: 本单元不读取、不记录或提交 `.env`、token、cookie、密码、数据库 URL、私钥、设备日志或本地缓存。
 - Rollback: 回退本单元列出的治理文件及对应 package scripts hunk；无需回退应用逻辑或数据。
-- **Git state:** isolated `codex/phase1-mobile-quality-baseline` candidate, reviewed and ready for local commit, unpushed.
+- **Git state:** isolated `codex/phase1-mobile-quality-baseline` local commit `db2f12ac1dbed98750b5f748e5ff298a3af9bffd`, unpushed; a new clean worktree at this commit passed `npm run check:ci` with 0 changed files / 0 ledger files.
 
 ## CRL-20260729-002 — 已选跨仓库发布单元的移动端映射
 
