@@ -2,7 +2,7 @@
 
 ## CRL-20260729-002 — 已选跨仓库发布单元的移动端映射
 
-- **Status:** ready
+- **Status:** pushed
 - **Updated:** 2026-07-29 Australia/Melbourne
 - **Request:** 用户选择推送已本地提交的 CRL-20260725-023、CRL-20260725-002，以及根仓库台账标记 ready 的 31 个单元到 `Dev`；后续明确纳入 CRL-20260724-002、CRL-20260724-003、CRL-20260729-009、CRL-20260724-010、CRL-20260725-004、CRL-20260725-005、CRL-20260725-010、CRL-20260725-011、CRL-20260725-012、CRL-20260725-016、CRL-20260725-017、CRL-20260725-021、CRL-20260724-012。
 - **Outcome:** 本记录只将所选 CRL 的移动端文件显式映射到独立仓库台账，以便在保留并发改动和暂存内容的情况下进行候选提交审计；本次补入任务表单照片读取、浴室检查照片、检查后待挂钥匙、短幂等 ID、媒体预览变体、任务内容展示、小缩略图网格和退房状态优先级依赖。业务规则、完整跨层说明和测试映射以根仓库 `docs/change-release-ledger.md` 为准。
@@ -105,6 +105,7 @@
 - Candidate assembly must use an alternate Git index: this worktree has unrelated staged and unstaged changes that must remain untouched.
 - Device/EAS/native verification and any production API/data write are not part of this release.
 - Sensitive-information review: no `.env`, token, credential, database URL, cookie, private key, local cache, or sensitive log is selected.
+- **Git state:** `8c658e7` (`Release selected mobile CRL updates`) was pushed to `origin/Dev` on 2026-07-29 after the isolated candidate passed typecheck, lint, button audit and 50 Jest suites / 242 tests. The root repository release remains a separate remote-credential follow-up.
 
 ## CRL-20260725-023 — 普通清洁员隐藏挂钥匙视频
 
