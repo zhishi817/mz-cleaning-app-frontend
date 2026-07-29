@@ -12,7 +12,7 @@
 
 ## CRL-20260729-003 — 移动端质量命令层级
 
-- **Status:** committed
+- **Status:** pushed
 - **Updated:** 2026-07-29 Australia/Melbourne
 - **Request:** Phase 2：建立移动端 `check:fast`、`check:full`、`check:ci`、`check:release` 的稳定语义，并与根仓库质量命令兼容。
 - **Outcome:** 移动端 Fast 运行 Ledger、typecheck、lint、严格按钮审计和三项高价值 action/store/status Jest；Full 直接继承 Fast 后执行全量 Jest；CI 非交互调用 Full；Release 复用 Full，不擅自执行 EAS、真机、migration 或生产 smoke。
@@ -41,9 +41,10 @@
 
 - Risk: Fast Jest 只覆盖 action/store/status 的高价值纯客户端规则，不代替全量 Jest、真机、模拟器、EAS/native、相机/弱网或通知点击验证。
 - Release order: 先推送本条 CRL-20260729-003，再推送根 CRL-20260729-011；两者不可拆分，避免根 CI checkout 到尚无新 Fast 命令的移动端 `Dev`。
+- Remote rollout: 本条移动端候选已先以非 force 快进从 `a946150c8760a86eef2cd362109eac653680d4c7` 推送至 `33915d050aab68f10d684cfe657c7a7474806d2c`，确认本地与 `origin/Dev` 为 ahead 0 / behind 0；根仓库 CRL-20260729-011 随后从 `90c6e553da816f43e7843f0e4fb6592a84911fd3` 非 force 快进至 `edd8056f0abc0fa5ce70ca575e6f73d40ae1be4c`，同样已确认 ahead 0 / behind 0。
 - Sensitive-information review: no secrets, `.env` values, tokens, cookies, passwords, database URLs, private keys, production data, or sensitive logs are added.
 - Dependency audit note: fresh `npm ci` reported 30 existing audit advisories; no dependency, lockfile or audit-fix change was made.
-- Git state: code commit `5622c800939ea2164aab9ee73a7b4bfeee3f871d` on isolated `codex/phase2-mobile-quality-command-layers`; this documentation receipt is uncommitted and unpushed.
+- Git state: code commit `5622c800939ea2164aab9ee73a7b4bfeee3f871d` and its initial documentation receipt `33915d050aab68f10d684cfe657c7a7474806d2c` are pushed to `origin/Dev` from isolated `codex/phase2-mobile-quality-command-layers`; this final remote-status receipt is documentation-only and awaits its own reviewed push.
 
 ## CRL-20260729-001 — 移动端质量防护独立基线
 
