@@ -33,7 +33,7 @@
 - 缺失或不可解析的 base/head 故意失败，不会降级为 `Changed files: 0`。
 - Rename 要求同时记录旧路径和新路径；删除文件也必须在 Ledger 中出现。
 - Sensitive-information review: no secrets, `.env` values, tokens, cookies, passwords, database URLs, private keys, production data, or sensitive logs are added.
-- Git state: isolated branch `codex/governance-ledger-mobile-20260729`; not staged, committed, pushed, merged, or deployed.
+- Git state: governance-only commit `e3cad7b144adf499adef16fe9e7a23779c3d4f49` is pushed to `origin/codex/governance-ledger-mobile-20260729`; it is not merged into `Dev`/`main` and nothing is deployed.
 
 +## CRL-20260729-001 — 移动端质量防护独立基线
 45:## CRL-20260725-023 — 普通清洁员隐藏挂钥匙视频
