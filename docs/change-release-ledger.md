@@ -1,5 +1,38 @@
 # Change Release Ledger
 
+## CRL-20260729-008 — MZStay 1.0.25 production metadata and internal APK profile
+
+- **Status:** ready
+- **Updated:** 2026-07-30 Australia/Melbourne
+- **Request:** 发布 1.0.25 的移动端版本元数据，以及用于 USB/内部安装的 production APK 构建 profile。
+- **Outcome:** iOS build number 和 Android version code 同步为 25；保留现有 store production profile，新增不会提交到 Google Play 的 `production-apk` profile。
+
+### Files / Areas
+
+- `app.json` — modified: `version`、iOS `buildNumber` 和 Android `versionCode` 同步为 1.0.25/25。
+- `eas.json` — modified: 增加正式环境、internal distribution 的 APK profile。
+- `package.json` — modified: 包版本同步为 1.0.25。
+- `package-lock.json` — modified: 根包版本元数据同步。
+- `docs/change-release-ledger.md` — modified: 记录本独立移动端发布单元。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies: none.
+- Config / environment: 新 profile 使用既有 production API 环境，只产出内部 APK；不改变 store AAB 行为。
+- Related units: 根 `CRL-20260729-008`；此前已推送的 `8c658e7` 包含本次选择的业务源码，本单元不重新发布业务代码。
+
+### Validation
+
+- Passed: ledger audit (5 changed / 5 recorded)、ledger-range tests (5)、typecheck、button audit、Fast Jest (3 suites / 13 tests)、full Jest (50 suites / 242 tests) and `git diff --check`.
+- Passed: lint with 0 errors and 111 existing warnings; independent read-only release review returned GO with no P0/P1/P2 finding.
+- Existing EAS IPA/AAB/APK 仅作为历史构建证据；本次不触发新构建。
+
+### Risks / Release Notes
+
+- 不自动提交 App Store Connect 或 Google Play；不执行 EAS、设备或生产接口操作。当前未安装 `expo-updates`，所以 profile 的 `channel: production` 不启用运行时 OTA 更新。
+- Sensitive-information review: no `.env` values, token, credential, database URL, private key, sensitive log, or cache is included.
+- Git state: selected candidate, uncommitted and unpushed.
+
 ## CRL-20260730-001 — 稳定任务页异步 UI 回归测试
 
 - **Status:** pushed
