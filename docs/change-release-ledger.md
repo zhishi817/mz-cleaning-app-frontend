@@ -1,5 +1,34 @@
 # Change Release Ledger
 
+## CRL-20260730-003 — Phase 3 mobile Dev 分支保护临时验收
+
+- **Status:** in-progress
+- **Updated:** 2026-07-30 Australia/Melbourne
+- **Request:** 在最终的 0-approval 规则下，以临时 PR 验证 mobile `Dev`：失败的必需检查阻止合并；恢复为绿色后无需独立批准即可满足门禁。
+- **Outcome:** 此临时单元先将 `check:ci` 改为确定失败，以证明真实 `quality` 检查阻断；恢复提交会还原原命令，只保留非业务标记和本台账记录。PR 完成验收后关闭并删除分支，绝不合并。
+
+### Files / Areas
+
+- `package.json` — 临时使 `check:ci` 失败，随后在同一 PR 恢复为 `npm run check:full`。
+- `docs/phase3-acceptance-mobile-20260730.md` — 仅保留验收差异的非业务标记，随临时分支删除。
+- `docs/change-release-ledger.md` — 记录此临时治理验收。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies / business logic: none.
+- Required GitHub context: `quality`; policy requires a pull request, up-to-date base, resolved conversations, and no approval.
+
+### Validation
+
+- Pending remote evidence: first PR head must make `quality` fail and GitHub must show merge blocked; a subsequent restore must make the same check green and the PR mergeable without approval.
+- Local before push: exact diff inspected and `git diff --check` passed.
+
+### Risks / Release Notes
+
+- This branch intentionally contains a one-commit check failure and must never be merged or deployed.
+- Sensitive-information review: no secrets, credentials, environment values, production data, or deployment configuration are involved.
+- Git state: temporary `codex/acceptance-mobile-phase3-final-20260730`, based on `origin/Dev` `164b162cf63e5324d659dce00980e46e40e1c3f0`; scheduled for closure/deletion after acceptance.
+
 ## CRL-20260730-001 — 稳定任务页异步 UI 回归测试
 
 - **Status:** pushed
