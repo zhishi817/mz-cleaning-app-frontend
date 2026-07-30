@@ -16,7 +16,7 @@
     "test:fast": "jest --runInBand --no-cache src/lib/workTaskActions.test.ts src/lib/workTasksStore.test.ts src/lib/taskVisualTheme.test.ts",
     "check:fast": "npm run test:ledger-range-audit && npm run check:ledger && npm run typecheck && npm run lint && npm run check:buttons && npm run test:fast",
     "check:full": "npm run check:fast && npm test -- --runInBand",
-    "check:ci": "node -e \"process.exit(1)\"",
+    "check:ci": "npm run check:full",
     "check:release": "npm run check:full"
   },
   "dependencies": {

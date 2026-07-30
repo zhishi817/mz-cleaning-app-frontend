@@ -20,7 +20,8 @@
 
 ### Validation
 
-- Pending remote evidence: first PR head must make `quality` fail and GitHub must show merge blocked; a subsequent restore must make the same check green and the PR mergeable without approval.
+- Passed negative remote evidence: mobile PR #8 head `501405bd08aa38276929dcdab8ca5e6e4cedb260` made `quality` fail in GitHub Actions run `30507044397`; GitHub returned `mergeable_state: blocked`.
+- Pending recovery remote evidence: this commit restores the original command; the same check must turn green and the PR become mergeable without approval.
 - Local before push: exact diff inspected and `git diff --check` passed.
 
 ### Risks / Release Notes
