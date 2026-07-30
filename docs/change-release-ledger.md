@@ -2,7 +2,7 @@
 
 ## CRL-20260730-003 — Phase 3 mobile Dev 分支保护临时验收
 
-- **Status:** ready
+- **Status:** pushed
 - **Updated:** 2026-07-30 Australia/Melbourne
 - **Request:** 在最终的 0-approval 规则下，以临时 PR 验证 mobile `Dev`：失败的必需检查阻止合并；恢复为绿色后无需独立批准即可满足门禁。
 - **Outcome:** 此临时单元先将 `check:ci` 改为确定失败，以证明真实 `quality` 检查阻断；恢复提交会还原原命令，只保留非业务标记和本台账记录。PR 完成验收后关闭并删除分支，绝不合并。
@@ -28,7 +28,7 @@
 
 - This branch intentionally contains a one-commit check failure and must never be merged or deployed.
 - Sensitive-information review: no secrets, credentials, environment values, production data, or deployment configuration are involved.
-- Git state: temporary `codex/acceptance-mobile-phase3-final-20260730`, based on `origin/Dev` `164b162cf63e5324d659dce00980e46e40e1c3f0`; final documentation evidence pending push, then the PR and branch will be closed/deleted without merge.
+- Git state: this temporary receipt is pushed on `codex/acceptance-mobile-phase3-final-20260730`, based on `origin/Dev` `164b162cf63e5324d659dce00980e46e40e1c3f0`; after its required PR check completes, the PR and branch will be closed/deleted without merge.
 
 ## CRL-20260730-001 — 稳定任务页异步 UI 回归测试
 
