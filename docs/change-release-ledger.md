@@ -1,5 +1,41 @@
 # Change Release Ledger
 
+## CRL-20260731-008 — 管理端清洁照片多图展示与重试
+
+- **Status:** ready
+- **Updated:** 2026-07-31 Australia/Melbourne
+- **ID allocation:** 2026-07-31 Australia/Melbourne — 从 `CRL-20260731-001` 重编号为 `CRL-20260731-008`，与根仓库媒体单元保持配对；范围、验证与发布状态不变。
+- **Request:** 管理端清洁任务只显示第一张照片，其余照片灰色或不可见。
+- **Outcome:** 管理端按全部客厅照片引用展示，而非只读历史单值字段；每张任务/补品照片使用现有受控预览组件，加载失败时可在当前页重试，且不暴露存储错误细节。
+
+### Files / Areas
+
+- `src/lib/api.ts` — modified: 接收清洁补品接口返回的多张客厅照片。
+- `src/lib/managerDailyTaskPhotos.ts` — modified: 归并新旧客厅照片字段并稳定去重。
+- `src/lib/managerDailyTaskPhotos.test.ts` — added: 覆盖多图、新旧兼容和去重。
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — modified: 展示所有客厅照片，并给照片块接入现有失败反馈及重试。
+- `docs/change-release-ledger.md` — modified: 记录本移动端独立发布单元。
+
+### Impact / Dependencies
+
+- API: 依赖根仓库 `CRL-20260731-008` 的多图读取和受控照片代理。
+- Database / migration / dependencies: none.
+- Related unit: root repository `CRL-20260731-008`。
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/lib/managerDailyTaskPhotos.test.ts src/screens/tasks/ManagerDailyTaskScreen.test.ts` — passed: 2 suites / 6 tests.
+- `npm run check:full` — passed: ledger audit, typecheck, button audit, lint 0 errors / 111 existing warnings, and full Jest 51 suites / 243 tests.
+- `git diff --check` and `python3 scripts/audit_change_release_ledger.py` — passed: 5 changed files / 5 recorded files.
+- Independent review — paired root CRL-20260731-008 inventory-manager route-entry P1 was corrected and second independent read-only review returned GO with no P0/P1. Non-blocking P2: this mobile candidate has helper-level multi-photo coverage, while screen-level grid/retry rendering remains partial.
+
+### Risks / Release Notes
+
+- Risk: 源存储对象已缺失时，客户端只能显示可重试的失败状态；对象恢复仍由独立的生产恢复单元处理。
+- Rollback: 恢复单图展示和原有图片组件。
+- Sensitive-information review: no secrets, tokens, credentials, database URLs, or production media references are recorded.
+- Git state: isolated worktree, approved for exact stage, commit, and paired root/mobile push; no deployment or production action.
+
 ## CRL-20260730-001 — 稳定任务页异步 UI 回归测试
 
 - **Status:** pushed

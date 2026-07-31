@@ -679,6 +679,7 @@ export type WorkTask = {
   inspector_name?: string | null
   key_photo_url?: string | null
   lockbox_video_url?: string | null
+  living_room_photo_urls?: string[] | null
   living_room_photo_url?: string | null
   completion_photos_ok?: boolean
   stayed_nights?: number | null
@@ -2190,6 +2191,7 @@ export async function submitCleaningConsumables(
   taskId: string,
   params: {
     living_room_photo_url?: string | null
+    living_room_photo_urls?: string[]
     items: Array<{ item_id: string; status: 'ok' | 'low'; qty?: number; note?: string; photo_url?: string; photo_urls?: string[] }>
     submit_id?: string
   },
@@ -2235,6 +2237,7 @@ export async function getCleaningConsumables(
   const res = lastRes as Response
   if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
+    living_room_photo_urls?: string[]
     living_room_photo_url?: string | null
     items: Array<{ id: string; item_id: string; qty: number; need_restock: boolean; note?: string | null; status?: string | null; photo_url?: string | null; photo_urls?: string[]; item_label?: string | null; created_at?: string | null }>
   }
