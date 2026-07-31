@@ -1,5 +1,68 @@
 # Change Release Ledger
 
+## CRL-20260731-007 — 检查照片上传进度不重载草稿
+
+- **Status:** ready
+- **Updated:** 2026-07-31 Australia/Melbourne
+- **Request:** 修复检查与补充页逐张上传时反复重读整份草稿、导致页面跳动的问题。
+- **Outcome:** 队列事件只更新批次状态和错误展示；完整草稿只在初始加载或显式重试读取，并忽略过期请求回写。
+
+### Files / Areas
+
+- `src/screens/tasks/InspectionPanelScreen.tsx` — modified: 进度刷新与草稿加载解耦，增加异步读取版本保护。
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — modified: 覆盖队列进度不重读草稿且同步状态仍刷新。
+- `docs/change-release-ledger.md` — modified: 记录移动端独立发布单元。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies: none.
+- Related unit: root repository CRL-20260731-007; CRL-20260731-008 is explicitly excluded.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/screens/tasks/InspectionPanelScreen.test.tsx` — passed: 1 suite / 13 tests, including queue progress no-reload and same-task source change controlled reload.
+- `npm run typecheck` and `npm run lint` — passed; lint 0 errors / 111 existing warnings.
+- `npm run check:full` — passed: ledger range audit, typecheck, button audit, 50 suites / 245 tests.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 3 changed files / 3 recorded files; `git diff --check` passed.
+- Independent review — initial NO-GO found stale validation ledger and missing non-queue refresh coverage; evidence and controlled reload coverage were added. Second independent read-only review: GO, no P0/P1/P2.
+
+### Risks / Release Notes
+
+- 不改变上传顺序、幂等处理、媒体保留或服务端接口；真实设备滚动体验仍待业务验收。
+- Git state: isolated worktree; approved for exact stage, commit, and push; no deployment or production action.
+
+## CRL-20260731-005 — 纯入住检查不再错误要求清洁提交
+
+- **Status:** ready
+- **Updated:** 2026-07-31 Australia/Melbourne
+- **Request:** 修复纯入住检查被旧 `cleaning_submission_ready=false` 本地阻止的问题。
+- **Outcome:** 移动端不再自行推导该前置，只服从服务端 `submit_inspection` action 的禁用原因；服务端允许的纯入住检查可继续提交。
+
+### Files / Areas
+
+- `src/screens/tasks/InspectionPanelScreen.tsx` — modified: 删除旧字段的本地阻断，只读取服务端 action。
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — modified: 覆盖纯入住检查的旧 false 字段不阻断提交。
+- `docs/change-release-ledger.md` — modified: 记录移动端独立发布单元。
+
+### Impact / Dependencies
+
+- API: 依赖根仓库 CRL-20260731-005 的 `/mzapp/work-tasks` action 与前置投影。
+- Database / migration / dependencies: none.
+- Related unit: root repository CRL-20260731-005; CRL-20260731-008 is explicitly excluded.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/screens/tasks/InspectionPanelScreen.test.tsx` — passed: 1 suite / 13 tests, including server-enabled pure checkin submission despite the old false field.
+- `npm run typecheck` and `npm run lint` — passed; lint 0 errors / 111 existing warnings.
+- `npm run check:full` — passed: ledger range audit, typecheck, button audit, 50 suites / 245 tests.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 3 changed files / 3 recorded files; `git diff --check` passed.
+- Independent review — initial NO-GO found stale validation ledger and missing non-queue refresh coverage; evidence and controlled reload coverage were added. Second independent read-only review: GO, no P0/P1/P2.
+
+### Risks / Release Notes
+
+- 本次仅取消不适用的清洁前置；本次检查照片、客人到达豁免和挂钥匙/密码视频门槛仍由后端 action 保护。
+- Git state: isolated worktree; approved for exact stage, commit, and push; no deployment or production action.
+
 ## CRL-20260730-001 — 稳定任务页异步 UI 回归测试
 
 - **Status:** pushed

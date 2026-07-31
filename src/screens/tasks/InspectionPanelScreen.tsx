@@ -198,6 +198,14 @@ function batchStatusHint(status: InspectionPanelBatchStatus | null, lastError?: 
   return '拍照和填写阶段只保存在本机，点击提交后会保存为待同步批次。'
 }
 
+function shouldRefreshBatchPresentation(
+  current: InspectionPanelSubmitQueueItem | null,
+  next: InspectionPanelSubmitQueueItem | null,
+) {
+  if (!current || !next) return current !== next
+  return current.status !== next.status || cleanText(current.last_error) !== cleanText(next.last_error)
+}
+
 function feedbackSummary(draft: InspectionPanelFeedbackDraftState | null) {
   if (!draft) return '未暂存房源问题反馈'
   const maintenance = draft.maintenanceDrafts?.length || 0
@@ -363,6 +371,7 @@ export default function InspectionPanelScreen(props: Props) {
   const [showValidationIssue, setShowValidationIssue] = useState(false)
   const draftHydratedRef = useRef(false)
   const draftPersistChainRef = useRef<Promise<void>>(Promise.resolve())
+  const localStateLoadVersionRef = useRef(0)
   const scrollRef = useRef<ScrollView | null>(null)
   const sectionOffsetsRef = useRef<Record<'restock' | 'photos', number>>({ restock: 0, photos: 0 })
   const [expanded, setExpanded] = useState({
@@ -382,6 +391,7 @@ export default function InspectionPanelScreen(props: Props) {
   useEffect(() => {
     draftHydratedRef.current = false
     draftPersistChainRef.current = Promise.resolve()
+    localStateLoadVersionRef.current += 1
   }, [props.route.params.taskId])
 
   useEffect(() => {
@@ -429,10 +439,8 @@ export default function InspectionPanelScreen(props: Props) {
   const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
   const inspectionSubmitAction = (Array.isArray((task as any)?.available_actions) ? (task as any).available_actions : [])
     .find((action: any) => String(action?.id || '') === 'submit_inspection')
-  const cleaningSubmissionBlocked = !isPasswordOnlyInspection && (
-    (task && typeof (task as any).cleaning_submission_ready === 'boolean' && (task as any).cleaning_submission_ready === false)
-    || String(inspectionSubmitAction?.disabled_reason || '') === 'cleaning_submission_required'
-  )
+  const cleaningSubmissionBlocked = !isPasswordOnlyInspection
+    && String(inspectionSubmitAction?.disabled_reason || '') === 'cleaning_submission_required'
   const roomPhotoRequirement: InspectionPanelRoomPhotoRequirement = isPasswordOnlyInspection
     ? 'password_only'
     : guestArrivalPhotoSkipEligible && guestArrivalPhotoSkipConfirmed
@@ -478,6 +486,7 @@ export default function InspectionPanelScreen(props: Props) {
 
   const loadLocalState = useCallback(async (options?: { showSpinner?: boolean; forceDraftReload?: boolean }) => {
     if (!task) return
+    const loadVersion = ++localStateLoadVersionRef.current
     const showSpinner = options?.showSpinner !== false
     const forceDraftReload = options?.forceDraftReload === true
     if (showSpinner) setLoading(true)
@@ -504,6 +513,7 @@ export default function InspectionPanelScreen(props: Props) {
           ? getInspectionPhotos(token, cleaningTaskId).then((result) => result?.items || []).catch(() => [])
           : Promise.resolve([]),
       ])
+      if (localStateLoadVersionRef.current !== loadVersion) return
       const consumablesResponses = consumableResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])
       const consumableLoadFailed = consumableSourceIds.length > 0 && (!token || consumableResults.some((result) => result.status === 'rejected'))
       const remoteRestockItems = buildRestockFromConsumables(consumablesResponses)
@@ -549,26 +559,35 @@ export default function InspectionPanelScreen(props: Props) {
       setCleaningIssue(remotePhotoState?.total ? remotePhotoState.cleaningIssue : [...(draft?.cleaning_issue || [])])
       draftHydratedRef.current = true
     } finally {
-      setRestockLoading(false)
-      if (showSpinner) setLoading(false)
+      if (localStateLoadVersionRef.current === loadVersion) {
+        setRestockLoading(false)
+        if (showSpinner) setLoading(false)
+      }
     }
   }, [cleaningTaskId, commitRoomPhotos, consumableSourceIdsKey, initialRestockItems, propertyCode, propertyId, readOnly, task, token])
 
+  const loadLocalStateRef = useRef(loadLocalState)
   useEffect(() => {
-    void loadLocalState({ showSpinner: true })
+    loadLocalStateRef.current = loadLocalState
   }, [loadLocalState])
 
   useEffect(() => {
-    if (!task) return
+    if (!task?.id) return
+    void loadLocalStateRef.current({ showSpinner: true })
+  }, [cleaningTaskId, consumableSourceIdsKey, propertyCode, propertyId, readOnly, task?.id, token])
+
+  useEffect(() => {
+    const taskId = task?.id
+    if (!taskId) return
     const unsubscribe = subscribeInspectionPanelSubmitQueue(() => {
-      void getInspectionPanelBatch(task.id).then((batch) => {
-        setBatchItem(batch)
-        if (!batch || batch.status === 'draft') return
-        void loadLocalState({ showSpinner: false })
-      })
+      void getInspectionPanelBatch(taskId)
+        .then((batch) => {
+          setBatchItem((current) => shouldRefreshBatchPresentation(current, batch) ? batch : current)
+        })
+        .catch(() => null)
     })
     return unsubscribe
-  }, [loadLocalState, task])
+  }, [task?.id])
 
   useEffect(() => {
     if (!restockPickerOpen || !token) return

@@ -1,5 +1,5 @@
 import React from 'react'
-import { fireEvent, render, waitFor } from '@testing-library/react-native'
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 
 const mockSnapshot = {
@@ -20,6 +20,8 @@ const mockSuppliesCatalogItems = [
   { id: 'manual-other', label: '其他补充用品', kind: 'consumable' },
   { id: 'manual-next', label: '下次补充用品', kind: 'consumable' },
 ]
+
+let inspectionQueueListener: (() => void) | null = null
 
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
@@ -54,7 +56,12 @@ jest.mock('../../lib/inspectionPanelSubmitQueue', () => ({
   processInspectionPanelSubmitQueue: jest.fn(async () => null),
   saveInspectionPanelDraftBatch: jest.fn(async () => null),
   submitInspectionPanelBatch: jest.fn(async () => null),
-  subscribeInspectionPanelSubmitQueue: jest.fn(() => () => {}),
+  subscribeInspectionPanelSubmitQueue: jest.fn((listener: () => void) => {
+    inspectionQueueListener = listener
+    return () => {
+      inspectionQueueListener = null
+    }
+  }),
   validateInspectionPanelSnapshot: jest.fn(() => null),
 }))
 jest.mock('../../lib/cleaningInspection', () => ({
@@ -422,3 +429,97 @@ test('进入检查与补充先确认房号，成功同步后仅可从相册追�
     expect(ui.queryByTestId('inspection-post-submit-issue-submit')).toBeNull()
   }, { timeout: 5_000 })
 }, 10_000)
+
+test('纯入住检查不因旧 cleaning_submission_ready=false 在本地被阻止', async () => {
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  const previousReady = (mockSnapshot.items[0] as any).cleaning_submission_ready
+  const previousTaskType = (mockSnapshot.items[0] as any).task_type
+  const previousInspectionScope = (mockSnapshot.items[0] as any).inspection_scope
+  ;(mockSnapshot.items[0] as any).cleaning_submission_ready = false
+  ;(mockSnapshot.items[0] as any).task_type = 'checkin_clean'
+  ;(mockSnapshot.items[0] as any).inspection_scope = 'inspect_and_hang'
+  queue.getInspectionPanelBatch.mockReset().mockResolvedValue(null)
+  queue.submitInspectionPanelBatch.mockReset().mockResolvedValue({
+    task_id: 'w-inspection',
+    status: 'pending_submit',
+    snapshot: { room_photo_requirement: 'required' },
+  })
+  try {
+    const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+    const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
+    const ui = render(
+      <I18nProvider>
+        <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-checkin', name: 'InspectionPanel', params: { taskId: 'w-inspection' } }} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(ui.getByTestId('inspection-room-confirmation')).toBeTruthy())
+    fireEvent.press(ui.getByText('房号正确，继续'))
+    await waitFor(() => expect(ui.queryByTestId('inspection-room-confirmation')).toBeNull())
+    fireEvent.press(ui.getByText('提交本页检查与补充'))
+    await waitFor(() => expect(queue.submitInspectionPanelBatch).toHaveBeenCalledWith('w-inspection'))
+    ui.unmount()
+  } finally {
+    if (previousReady === undefined) delete (mockSnapshot.items[0] as any).cleaning_submission_ready
+    else (mockSnapshot.items[0] as any).cleaning_submission_ready = previousReady
+    if (previousTaskType === undefined) delete (mockSnapshot.items[0] as any).task_type
+    else (mockSnapshot.items[0] as any).task_type = previousTaskType
+    if (previousInspectionScope === undefined) delete (mockSnapshot.items[0] as any).inspection_scope
+    else (mockSnapshot.items[0] as any).inspection_scope = previousInspectionScope
+  }
+})
+
+test('检查照片队列进度只刷新状态，不重新读取整份草稿', async () => {
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  const draft = require('../../lib/inspectionPanelDraft')
+  queue.getInspectionPanelBatch.mockReset().mockResolvedValue(null)
+  draft.getInspectionPanelDraft.mockClear().mockResolvedValue(null)
+  inspectionQueueListener = null
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
+  const ui = render(
+    <I18nProvider>
+      <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-queue-progress', name: 'InspectionPanel', params: { taskId: 'w-inspection' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(inspectionQueueListener).toEqual(expect.any(Function)))
+  await waitFor(() => expect(draft.getInspectionPanelDraft).toHaveBeenCalled())
+  const initialDraftReads = draft.getInspectionPanelDraft.mock.calls.length
+  queue.getInspectionPanelBatch.mockResolvedValueOnce({
+    task_id: 'w-inspection',
+    status: 'syncing',
+    last_error: null,
+    snapshot: { room_photo_requirement: 'required' },
+  })
+  await act(async () => {
+    inspectionQueueListener?.()
+  })
+  await waitFor(() => expect(ui.getByText('当前状态：同步中')).toBeTruthy())
+  expect(draft.getInspectionPanelDraft.mock.calls.length).toBe(initialDraftReads)
+  ui.unmount()
+})
+
+test('同一检查任务的来源任务变化时会受控重读草稿', async () => {
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  const draft = require('../../lib/inspectionPanelDraft')
+  queue.getInspectionPanelBatch.mockReset().mockResolvedValue(null)
+  draft.getInspectionPanelDraft.mockClear().mockResolvedValue(null)
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
+  const ui = render(
+    <I18nProvider>
+      <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-source-refresh', name: 'InspectionPanel', params: { taskId: 'w-inspection', sourceId: 'cleaning-1' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(draft.getInspectionPanelDraft).toHaveBeenCalled())
+  const initialDraftReads = draft.getInspectionPanelDraft.mock.calls.length
+  ui.rerender(
+    <I18nProvider>
+      <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-source-refresh', name: 'InspectionPanel', params: { taskId: 'w-inspection', sourceId: 'cleaning-2' } }} />
+    </I18nProvider>,
+  )
+  await waitFor(() => expect(draft.getInspectionPanelDraft.mock.calls.length).toBeGreaterThan(initialDraftReads))
+  ui.unmount()
+})
