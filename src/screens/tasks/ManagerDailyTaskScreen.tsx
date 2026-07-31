@@ -30,6 +30,7 @@ import {
   completionPhotoTaskIdsFromTask,
   inspectionPhotoTaskIdsFromTask,
   mergeManagerCompletionPhotoItems,
+  mergeManagerLivingRoomPhotoUrls,
   managerDailyTaskPhotoLoadIssue,
   type ManagerDailyTaskPhotoLoadIssue,
   type ManagerDailyTaskPhotoSource,
@@ -37,7 +38,6 @@ import {
 import { executionTaskIdsForRole } from '../../lib/turnoverDisplay'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
-import CleaningMediaImage from '../../components/CleaningMediaImage'
 import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'ManagerDailyTask'>
@@ -416,7 +416,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
 
         if (!consumablesResult.issues.length) {
           const consumablesResps = consumablesResult.responses
-          setLivingRoomPhotoUrls(uniqueTextList(consumablesResps.flatMap((resp) => normalizeUrlList((resp as any)?.living_room_photo_url))))
+          setLivingRoomPhotoUrls(mergeManagerLivingRoomPhotoUrls(consumablesResps))
           setConsumableItems(mergeConsumableRows(consumablesResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))))
         }
 
@@ -720,7 +720,6 @@ export default function ManagerDailyTaskScreen(props: Props) {
     cleanerItems: completionItems.filter((x) => x.area === a),
     inspectorItems: inspectionItems.filter((x) => x.area === a),
   }))
-  const livingRoomPhotoUrl = livingRoomPhotoUrls[0] || null
   const remoteTvRow = consumableItems.find((x) => x.item_id === 'remote_tv') || null
   const remoteAcRow = consumableItems.find((x) => x.item_id === 'remote_ac') || null
   const remoteTvPhotoUrl = normalizeUrlList(remoteTvRow?.photo_urls, remoteTvRow?.photo_url)[0] || null
@@ -950,7 +949,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
           <View style={styles.luggagePhotos}>
             {luggagePhotoUrls.map((url, index) => (
               <View key={`${url}-${index}`} style={styles.luggagePhotoItem}>
-                <CleaningMediaImage token={token} remoteReference={url} style={styles.luggagePhoto} />
+                <CleaningMediaPreview token={token} reference={url} style={styles.luggagePhoto} />
                 {canEditLuggage ? (
                   <Pressable
                     onPress={() => setLuggagePhotoUrls((prev) => prev.filter((_, itemIndex) => itemIndex !== index))}
@@ -1023,7 +1022,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
               }}
               style={({ pressed }) => [styles.mediaThumbWrap, pressed ? styles.pressed : null]}
             >
-              <CleaningMediaImage token={token} remoteReference={(task as any)?.key_photo_url} style={styles.mediaThumb} resizeMode="contain" />
+              <CleaningMediaPreview token={token} reference={(task as any)?.key_photo_url} style={styles.mediaThumb} resizeMode="contain" />
               <Text style={styles.mediaLabel}>钥匙照片</Text>
             </Pressable>
           ) : null}
@@ -1052,7 +1051,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                     }}
                     style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                   >
-                    <CleaningMediaImage token={token} remoteReference={x.url} style={styles.gridImg} />
+                    <CleaningMediaPreview token={token} reference={x.url} style={styles.gridImg} />
                   </Pressable>
                 ))}
               </View>
@@ -1068,16 +1067,21 @@ export default function ManagerDailyTaskScreen(props: Props) {
           <View style={styles.mediaStack}>
             <View style={styles.mediaSection}>
               <Text style={styles.columnTitle}>客厅照片</Text>
-              {livingRoomPhotoUrl ? (
-                <Pressable
-                  onPress={() => {
-                    setViewerUrl(livingRoomPhotoUrl)
-                    setViewerOpen(true)
-                  }}
-                  style={({ pressed }) => [styles.fullWidthMediaCard, pressed ? styles.pressed : null]}
-                >
-                    <CleaningMediaImage token={token} remoteReference={livingRoomPhotoUrl} style={styles.fullWidthImg} />
-                </Pressable>
+              {livingRoomPhotoUrls.length ? (
+                <View style={styles.grid}>
+                  {livingRoomPhotoUrls.map((url, idx) => (
+                    <Pressable
+                      key={`${url}-${idx}`}
+                      onPress={() => {
+                        setViewerUrl(url)
+                        setViewerOpen(true)
+                      }}
+                      style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
+                    >
+                      <CleaningMediaPreview token={token} reference={url} style={styles.gridImg} />
+                    </Pressable>
+                  ))}
+                </View>
               ) : (
                 <Text style={styles.mutedSmall}>{photoEmptyText('consumables')}</Text>
               )}
@@ -1094,7 +1098,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <CleaningMediaImage token={token} remoteReference={remoteTvPhotoUrl} style={styles.gridImg} />
+                      <CleaningMediaPreview token={token} reference={remoteTvPhotoUrl} style={styles.gridImg} />
                       <Text style={styles.mediaLabel}>电视遥控器</Text>
                     </Pressable>
                   ) : null}
@@ -1106,7 +1110,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <CleaningMediaImage token={token} remoteReference={remoteAcPhotoUrl} style={styles.gridImg} />
+                      <CleaningMediaPreview token={token} reference={remoteAcPhotoUrl} style={styles.gridImg} />
                       <Text style={styles.mediaLabel}>空调遥控器</Text>
                     </Pressable>
                   ) : null}
@@ -1132,7 +1136,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                   }}
                   style={({ pressed }) => [styles.gridItem, styles.completionPhotoItem, pressed ? styles.pressed : null]}
                 >
-                  <CleaningMediaImage token={token} remoteReference={url} style={styles.gridImg} />
+                  <CleaningMediaPreview token={token} reference={url} style={styles.gridImg} />
                   <Text style={styles.photoGalleryLabel} numberOfLines={2}>{g.label}</Text>
                 </Pressable>
               )))}
@@ -1159,7 +1163,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                  <CleaningMediaImage token={token} remoteReference={x.url} style={styles.gridImg} />
+                  <CleaningMediaPreview token={token} reference={x.url} style={styles.gridImg} />
                     </Pressable>
                   ))}
                 </View>
@@ -1193,7 +1197,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                               }}
                               style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                             >
-                              <CleaningMediaImage token={token} remoteReference={photoUrl} style={styles.gridImg} />
+                              <CleaningMediaPreview token={token} reference={photoUrl} style={styles.gridImg} />
                             </Pressable>
                           ))}
                         </View>
@@ -1214,7 +1218,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                               }}
                               style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                             >
-                              <CleaningMediaImage token={token} remoteReference={photoUrl} style={styles.gridImg} />
+                              <CleaningMediaPreview token={token} reference={photoUrl} style={styles.gridImg} />
                             </Pressable>
                           ))}
                         </View>

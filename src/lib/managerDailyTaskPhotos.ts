@@ -80,6 +80,23 @@ export type ManagerCompletionPhotoItem = {
   note?: string | null
 }
 
+export function mergeManagerLivingRoomPhotoUrls(responses: (any | null | undefined)[]) {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const response of responses) {
+    const values = Array.isArray(response?.living_room_photo_urls)
+      ? response.living_room_photo_urls
+      : [response?.living_room_photo_url]
+    for (const value of values) {
+      const url = String(value || '').trim()
+      if (!url || seen.has(url)) continue
+      seen.add(url)
+      out.push(url)
+    }
+  }
+  return out
+}
+
 export function mergeManagerCompletionPhotoItems(responses: (any | null | undefined)[]): ManagerCompletionPhotoItem[] {
   const seen = new Set<string>()
   return responses
