@@ -96,9 +96,11 @@ beforeEach(() => {
   require('../../lib/api').getWorkTaskFormPhotos.mockClear()
 })
 
-test('uploading key photo updates task status to cleaning', async () => {
+test('uploading key photo queues sync and refreshes the task projection', async () => {
   jest.spyOn(Alert, 'alert').mockImplementation(() => {})
   const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+  const keyQueue = require('../../lib/keyUploadQueue')
+  const workTasksStore = require('../../lib/workTasksStore')
 
   const ui = render(
     <I18nProvider>
@@ -109,13 +111,17 @@ test('uploading key photo updates task status to cleaning', async () => {
   await waitFor(() => {
     expect(ui.getByText(/upload key|上传钥匙/i)).toBeTruthy()
   })
+  keyQueue.enqueueKeyUpload.mockClear()
+  keyQueue.processKeyUploadQueue.mockClear()
+  workTasksStore.refreshWorkTasksFromServer.mockClear()
   fireEvent.press(ui.getByText(/upload key|上传钥匙/i))
 
   await waitFor(() => {
-    expect((Alert.alert as any).mock.calls.length).toBeGreaterThan(0)
-  })
-  await waitFor(() => {
-    expect(require('../../lib/workTasksStore').refreshWorkTasksFromServer).toHaveBeenCalled()
+    expect(keyQueue.enqueueKeyUpload).toHaveBeenCalledWith(expect.objectContaining({ cleaning_task_id: 'ct1', source_uri: 'file:///tmp/k.jpg' }))
+    expect(keyQueue.processKeyUploadQueue).toHaveBeenCalledWith('t1')
+    expect(workTasksStore.refreshWorkTasksFromServer).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 't1', userId: 'u1', view: 'mine' }),
+    )
   })
 })
 
