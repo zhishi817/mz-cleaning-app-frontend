@@ -1,5 +1,65 @@
 # Change Release Ledger
 
+## CRL-20260805-005 — 钥匙照片同步回归测试稳定性修复
+
+- **Status:** candidate
+- **Updated:** 2026-08-05 Australia/Melbourne
+- **Request:** 修复 root PR 的 Fast/Full Regression 在检出 mobile `Dev` 后，`TaskDetailScreen` 钥匙照片测试偶发超过 Jest 默认 5 秒而失败的问题。
+- **Outcome:** 测试直接验证上传按钮触发的入队、队列同步和任务投影刷新，不再轮询仅用于用户反馈的弹窗调用；生产端钥匙照片上传、离线队列和任务状态逻辑均不改动。
+
+### Implementation
+
+- **Previous behavior:** 用例在首屏异步加载后依次等待按钮、任意弹窗和任务刷新；弹窗不是该行为的核心证据，多个轮询在 CI 资源紧张时使测试接近默认超时。
+- **New behavior:** 在按钮已显示后清除首屏加载的 mock 调用，再在同一受控等待中断言本次操作已入队、启动同步，并使用当前登录人与范围刷新任务投影。
+- **Key decisions:** 不扩大 Jest 全局/测试超时；不改变 `TaskDetailScreen`、相机权限、上传队列或业务状态，仅提高测试的确定性与断言质量。
+
+### Files / Areas
+
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — 将钥匙照片测试绑定到实际异步副作用，并消除与业务无关的 Alert 轮询。
+- `docs/change-release-ledger.md` — 记录本移动端 CI 测试修复。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies: none.
+- Consumer: root `Dev` 的 Fast/Full Regression 检出 mobile `Dev` 后运行此测试；此修复须先经 mobile PR 合入 `Dev`，root #286 才能从该失败根因恢复。
+
+### Validation
+
+- Pre-change reproduction: 本地完整测试文件通过但耗时 4.839 秒，首个用例耗时 3.2 秒，距离 Jest 单例默认 5 秒上限过近；CI 已记录同一用例实际超时。
+- `npm test -- --runInBand src/screens/tasks/TaskDetailScreen.test.tsx` — passed: 1 suite / 26 tests in 1.751 seconds; repaired test 425 ms.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors / 111 existing warnings.
+- `npm run check:buttons` — passed: no suspicious hard-coded dimensions; 22 documented legacy exceptions remain.
+- `npm run test:fast` — passed: 3 suites / 13 tests.
+- `npm test -- --runInBand` — passed: 51 suites / 243 tests in 15.013 seconds.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 2 changed paths / 2 recorded paths.
+- `git diff --check` — passed.
+
+### Release Attempts
+
+#### RA-20260805-mobile-ci-key-upload-01
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260805-005`
+- Intended action: `commit`
+- Branch: `codex/ci-mobile-key-upload-test-20260805`
+- Base: `origin/Dev@f9a927d1231a7302db989ad90b7aed1cbebb5683`; fetched and read back on 2026-08-05 Australia/Melbourne.
+- Candidate patch SHA-256: `d359b444d73a9473ffd86ec64402384b102478100f4ec6b31a3a97c416791ffb` (staged implementation diff excluding `docs/change-release-ledger.md`).
+- Commit SHA: pending; candidate content commit will be recorded after the approved commit.
+- Dependencies: none. Root `CRL-20260805-005` consumes this fix only after this independent mobile candidate is merged to `Dev`.
+- Required validation: PASS — targeted 26 tests, typecheck, lint 0 errors / 111 existing warnings, button audit, fast tests 13/13, and full Jest 51 suites / 243 tests all passed.
+- Shared-hunk review: PASS — the test file and ledger entry are exclusive to this CI repair.
+- Generated-file review: not applicable — no generated files selected.
+- Technical state: `verified`
+- User authorization: `selected-for-commit`; evidence: user explicitly instructed execution of this two-repository repair on 2026-08-05 Australia/Melbourne.
+- Independent review: GO for commit — independent read-only recheck confirmed the exact two staged paths, candidate fingerprint, Release Attempt metadata and no P0/P1 finding.
+- Action conclusion: `GO` for commit only; no push, PR merge, deployment, or production action is authorized.
+
+### Risks / Release Notes
+
+- 测试仍会在入队、同步或任务刷新任一环节缺失时失败；此变更不掩盖真实产品错误。
+- Sensitive-information review: no secrets, `.env` values, tokens, credentials, database URLs, sensitive logs or local caches are included.
+
 ## CRL-20260731-008 — 管理端清洁照片多图展示与重试
 
 - **Status:** ready
