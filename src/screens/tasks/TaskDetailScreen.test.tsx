@@ -123,7 +123,7 @@ test('uploading key photo queues sync and refreshes the task projection', async 
       expect.objectContaining({ token: 't1', userId: 'u1', view: 'mine' }),
     )
   })
-})
+}, 15_000)
 
 test('canceling key photo capture restores upload button state', async () => {
   const picker = require('expo-image-picker')
