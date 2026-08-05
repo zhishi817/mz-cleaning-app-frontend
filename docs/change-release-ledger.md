@@ -1,5 +1,66 @@
 # Change Release Ledger
 
+## CRL-20260805-006 — 钥匙照片异步测试并行 CI 时限
+
+- **Status:** candidate
+- **Updated:** 2026-08-05 Australia/Melbourne
+- **Request:** 修复 GitHub 并行完整 Jest 中，钥匙照片入队、同步和任务刷新测试超过默认 5 秒而超时的问题。
+- **Outcome:** 仅该异步 UI 测试拥有明确的 15 秒执行上限；它仍必须验证入队、同步和任务投影刷新，生产上传、离线队列、任务状态及全局 Jest 超时均不变。
+
+### Implementation
+
+- **Previous behavior:** 同一测试在串行本地验证通过，但 CI 并行运行 51 个测试套件时可能超过 Jest 默认 5 秒，导致 Full Regression 失败。
+- **New behavior:** 用例使用 15 秒的局部时限，以容纳 CI worker 调度；断言和 `waitFor` 行为不变，超时以外的任何业务行为失败仍会失败。
+- **Key decisions:** 不改产品代码、不增加重试、不修改 Jest 全局配置；只针对已从 CI 日志确认的单个异步 UI 用例。
+
+### Files / Areas
+
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — 为钥匙照片队列/刷新测试设置局部 15 秒上限。
+- `docs/change-release-ledger.md` — 记录本移动端 CI 稳定性修复。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies: none.
+- Downstream CI consumer: root PR #286 consumes this test only after this mobile candidate is merged to `Dev`; this is not a source-code or package dependency.
+- Related unit: root `CRL-20260805-006` independently eliminates Fast Regression's Python-cache false positive.
+
+### Validation
+
+- CI evidence before edit: Root Quality Gate run #67 checked out `mobile Dev@a6e4fbe` and failed only this test at Jest's default 5-second ceiling; 50 suites / 242 tests passed.
+- `npm test -- src/screens/tasks/TaskDetailScreen.test.tsx` — passed in normal Jest worker mode: 1 suite / 26 tests; protected case completed in 3.347 seconds.
+- `npm test` — passed in normal parallel Jest mode: 51 suites / 243 tests in 7.439 seconds. Jest emitted its pre-existing worker graceful-exit warning after success; no test failed.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors / 111 existing warnings.
+- `npm run check:ci` — passed: ledger-range audit, ledger audit, typecheck, lint, button audit, fast tests and serial full Jest; 51 suites / 243 tests.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 2 changed paths / 2 recorded paths.
+- `git diff --check` — passed.
+
+### Release Attempts
+
+#### RA-20260805-mobile-key-timeout-01
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260805-006`
+- Intended action: `commit`
+- Branch: `codex/ci-mobile-timeout-20260805`
+- Base: `origin/Dev@a6e4fbed79f2071a31faaeee04fd845e8320ee5a`; fetched and read back on 2026-08-05 Australia/Melbourne.
+- Candidate patch SHA-256: `4a562d8d645b9a64d5a73fb6a751c17b70c452e3308bdd4784fcb6fcfc8c0471` (staged implementation diff excluding `docs/change-release-ledger.md`).
+- Commit SHA: `c2d4e5401bd77db4aec3c71b11e137353fda15f4`; candidate content commit for this exact implementation range.
+- Dependencies: none; root PR #286 is a downstream CI consumer after a future merge to mobile `Dev`, not a prerequisite for this candidate.
+- Required validation: PASS — normal-worker targeted Jest, normal parallel full Jest 51/243, typecheck, lint 0 errors, local ledger audit and whitespace check.
+- Shared-hunk review: PASS — the test-file timeout and ledger entry are exclusive to this CI repair.
+- Generated-file review: not applicable — no generated files selected.
+- Technical state: `committed`
+- User authorization: `selected-for-commit`; evidence: user explicitly specified the single-test 15-second ceiling on 2026-08-05 Australia/Melbourne.
+- Independent review: GO for commit — independent read-only review verified the exact staged test/ledger scope, fingerprint, `check:ci` evidence and no P0/P1/P2 finding.
+- Action conclusion: `GO` for commit completed; no push, PR merge, deployment or production action is authorized.
+
+### Risks / Release Notes
+
+- 15 秒是测试执行上限，不是产品重试或用户可见等待时间；测试仍验证同一三项真实副作用。
+- Feature regression registry: unchanged — no product workflow, permission, status transition or user-visible behavior is altered.
+- Sensitive-information review: no secrets, `.env` values, tokens, credentials, database URLs, sensitive logs or local caches are selected.
+
 ## CRL-20260805-005 — 钥匙照片同步回归测试稳定性修复
 
 - **Status:** candidate
