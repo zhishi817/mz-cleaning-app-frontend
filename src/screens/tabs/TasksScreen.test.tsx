@@ -703,6 +703,15 @@ test('customer service cleaning task is collapsed by default and opens the origi
     ...snapshot.items[0],
     available_actions: [
       {
+        id: 'mark_guest_checkout',
+        label: '标记已退房',
+        placement: 'primary',
+        enabled: true,
+        target: 'TaskDetail',
+        intent: 'manager',
+        source_id: 'checkout-source',
+      },
+      {
         id: 'submit_inspection',
         label: '检查与补充',
         placement: 'primary',
@@ -720,6 +729,8 @@ test('customer service cleaning task is collapsed by default and opens the origi
       },
     ],
     task_kind: 'cleaning',
+    task_type: 'turnover',
+    order_id_checkout: 'checkout-source',
     source_type: 'cleaning_tasks',
   }
   const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
@@ -812,6 +823,62 @@ test('marking guest checkout changes the action to a gray checked-out state', as
     expect(ui.getByText('取消已退房')).toBeTruthy()
     expect(flattenTestStyle(ui.getByTestId('task-action-w1-mark_guest_checkout').props.style)).toEqual(expect.objectContaining({ backgroundColor: '#E5E7EB' }))
     expect(flattenTestStyle(ui.getByText('取消已退房').props.style)).toEqual(expect.objectContaining({ color: '#6B7280' }))
+  })
+
+  snapshot.items[0] = previousTask
+  mockAuthState.user = previousUser
+  if (previousPatchImplementation) patchWorkTaskItemMock.mockImplementation(previousPatchImplementation)
+  else patchWorkTaskItemMock.mockReset()
+})
+
+test('customer-service merged task card submits the guest-checkout action source ID instead of its top-level source', async () => {
+  const store = require('../../lib/workTasksStore')
+  const api = require('../../lib/api')
+  const snapshot = store.getWorkTasksSnapshot()
+  const patchWorkTaskItemMock = store.patchWorkTaskItem as jest.Mock
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = mockAuthState.user
+  const previousPatchImplementation = patchWorkTaskItemMock.getMockImplementation()
+  const markGuestCheckedOutByTasksMock = api.markGuestCheckedOutByTasks as jest.Mock
+  mockAuthState.user = { id: 'cs-checkout-source', username: 'customer-service', role: 'customer_service', roles: ['customer_service'] }
+  snapshot.items[0] = {
+    ...previousTask,
+    task_type: 'turnover',
+    task_kind: 'cleaning',
+    source_type: 'cleaning_tasks',
+    source_id: 'checkin-source',
+    order_id_checkout: 'checkout-order',
+    checked_out_at: null,
+    available_actions: [
+      { id: 'mark_guest_checkout', label: '标记已退房', placement: 'primary', enabled: true, target: 'TaskDetail', intent: 'manager', source_id: 'checkout-source' },
+    ],
+  }
+  patchWorkTaskItemMock.mockImplementation(async (id: string, patch: any) => {
+    const task = snapshot.items.find((item: any) => item.id === id)
+    if (task) Object.assign(task, patch)
+  })
+  markGuestCheckedOutByTasksMock.mockClear()
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-merged-checkout-source', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByLabelText('task-collapse-w1')).toBeTruthy())
+  expandTask(ui, 'w1')
+  await waitFor(() => expect(ui.getByTestId('task-action-w1-mark_guest_checkout')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('task-action-w1-mark_guest_checkout'))
+
+  await waitFor(() => {
+    expect(markGuestCheckedOutByTasksMock).toHaveBeenCalledWith('local:test', {
+      task_ids: ['checkout-source'],
+      action: 'set',
+    })
   })
 
   snapshot.items[0] = previousTask

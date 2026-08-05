@@ -53,3 +53,35 @@ test('客服、admin 和线下经理的旧任务详情入口保持管理动作�
   expect(availableActionsForTask(task, { roleNames: ['admin'] }).map((action) => action.id)).toEqual(expected)
   expect(availableActionsForTask(task, { roleNames: ['offline_manager'] }).map((action) => action.id)).toEqual(expected)
 })
+
+test('客服合并卡只继承服务端确认的退房 action source ID', () => {
+  const task: any = {
+    id: 'merged-turnover',
+    source_type: 'cleaning_tasks',
+    source_id: 'checkin-source',
+    task_kind: 'cleaning',
+    task_type: 'turnover',
+    order_id_checkout: 'checkout-order',
+    status: 'assigned',
+    available_actions: [
+      { id: 'mark_guest_checkout', label: '标记已退房', placement: 'primary', enabled: true, target: 'TaskDetail', intent: 'manager', source_id: 'checkout-source' },
+    ],
+  }
+
+  expect(availableActionsForTask(task, { roleNames: ['customer_service'] }).find((action) => action.id === 'mark_guest_checkout')).toEqual(expect.objectContaining({
+    source_id: 'checkout-source',
+  }))
+  expect(availableActionsForTask({ ...task, available_actions: [] }, { roleNames: ['customer_service'] }).map((action) => action.id)).toEqual(['report_issue'])
+})
+
+test('入住检查不会显示退房动作，旧服务端缓存动作同样会被隐藏', () => {
+  const checkinTask: any = { id: 'checkin', source_type: 'cleaning_tasks', task_kind: 'inspection', task_type: 'checkin_clean', order_id: 'checkin-order', status: 'assigned' }
+  for (const roleNames of [['customer_service'], ['admin'], ['offline_manager']]) {
+    expect(availableActionsForTask(checkinTask, { roleNames }).map((action) => action.id)).toEqual(['report_issue'])
+  }
+  const cached = availableActionsForTask({ ...checkinTask, available_actions: [
+    { id: 'submit_inspection', label: '入住检查', placement: 'primary', enabled: true, target: 'InspectionPanel', intent: 'inspection' },
+    { id: 'mark_guest_checkout', label: '标记已退房', placement: 'primary', enabled: true, target: 'TaskDetail', intent: 'manager' },
+  ] }, { roleNames: ['admin'] })
+  expect(cached.map((action) => action.id)).toEqual(['submit_inspection'])
+})

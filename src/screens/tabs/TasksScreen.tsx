@@ -169,7 +169,9 @@ function isInspectorOnlyRole(roleNames: string[]) {
   return rs.includes('cleaning_inspector') && !rs.includes('cleaner') && !rs.includes('cleaner_inspector')
 }
 
-function checkoutTaskIdsFromTask(task: WorkTaskItem | null) {
+function checkoutTaskIdsFromTask(task: WorkTaskItem | null, action?: WorkTaskAvailableAction | null) {
+  const actionSourceId = String(action?.source_id || '').trim()
+  if (actionSourceId) return [actionSourceId]
   if (!task || !isCleaningExecutionTask(task)) return []
   return executionTaskIdsForRole(task, 'cleaning')
 }
@@ -1661,14 +1663,14 @@ function showBanner(title: string, message: string) {
     bannerTimerRef.current = setTimeout(() => setBanner(null), 4000)
   }
 
-  async function toggleGuestCheckedOut(task: WorkTaskItem) {
+  async function toggleGuestCheckedOut(task: WorkTaskItem, action?: WorkTaskAvailableAction) {
     if (!token || !user?.id) return
     const taskDate = String(task.scheduled_date || (task as any).date || '')
     if (isBeforeToday(taskDate)) return
     const checkedOutAt = String((task as any).checked_out_at || '').trim()
     const nextCheckedOutAt = checkedOutAt ? null : new Date().toISOString()
     try {
-      const taskIds = checkoutTaskIdsFromTask(task)
+      const taskIds = checkoutTaskIdsFromTask(task, action)
       setCheckedOutPendingMap((prev) => ({ ...prev, [task.id]: true }))
       await patchWorkTaskItem(String(task.id), { checked_out_at: nextCheckedOutAt } as any)
       if (taskIds.length) {
@@ -1693,7 +1695,7 @@ function showBanner(title: string, message: string) {
 
   function handleTaskActionPress(task: WorkTaskItem, action: WorkTaskAvailableAction) {
     if (!action.enabled) return
-    if (action.id === 'mark_guest_checkout') return void toggleGuestCheckedOut(task)
+    if (action.id === 'mark_guest_checkout') return void toggleGuestCheckedOut(task, action)
     const route = navigationForWorkTaskAction(task, action)
     if (route) props.navigation.navigate(route.screen as any, route.params as any)
   }
@@ -2985,7 +2987,7 @@ function showBanner(title: string, message: string) {
                       return
                     }
                     const isCleaningTask0 = isCleaningExecutionTask(task) || isInspectionExecutionTask(task) || isKeyHandoverExecutionTask(task)
-                    if (canTaskManagerView && isCleaningTask0) {
+                    if (view === 'all' && canTaskManagerView && isCleaningTask0) {
                       props.navigation.navigate('ManagerDailyTask', { taskId: task.id })
                       return
                     }

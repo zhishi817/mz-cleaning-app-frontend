@@ -80,10 +80,11 @@ const ROOM_AREAS: { key: InspectionPanelRoomPhotoArea; label: string; hint: stri
   { key: 'bedroom', label: '卧室', hint: '重点拍地毯情况', max: 8 },
   { key: 'kitchen', label: '厨房', hint: '建议拍整体', max: 2 },
   { key: 'bathroom', label: '浴室', hint: '需要拍浴室整体', max: 3 },
+  { key: 'balcony', label: '阳台', hint: '有阳台时拍摄（可选）', max: 3 },
 ]
 
 function baseRoomPhotos(): RoomPhotoMap {
-  return { living: [], sofa: [], bedroom: [], kitchen: [], bathroom: [] }
+  return { living: [], sofa: [], bedroom: [], kitchen: [], bathroom: [], balcony: [] }
 }
 
 function buildRemoteInspectionPhotoState(items: any[]) {
@@ -157,6 +158,7 @@ function cloneRoomPhotos(roomPhotos: RoomPhotoMap): RoomPhotoMap {
     bedroom: [...(roomPhotos.bedroom || [])],
     kitchen: [...(roomPhotos.kitchen || [])],
     bathroom: [...(roomPhotos.bathroom || [])],
+    balcony: [...(roomPhotos.balcony || [])],
   }
 }
 
@@ -516,7 +518,7 @@ export default function InspectionPanelScreen(props: Props) {
         setRestock(sourceSnapshot.restock.map(cloneRestockItem))
         setRestockConfirmedSufficient(!!sourceSnapshot.restock_confirmed_sufficient)
         setGuestArrivalPhotoSkipConfirmed(sourceSnapshot.room_photo_requirement === 'guest_arrival_confirmed')
-        commitRoomPhotos(remotePhotoState?.total ? remotePhotoState.roomPhotos : cloneRoomPhotos(sourceSnapshot.room_photos || baseRoomPhotos()))
+        commitRoomPhotos(remotePhotoState?.total ? remotePhotoState.roomPhotos : cloneRoomPhotos({ ...baseRoomPhotos(), ...(sourceSnapshot.room_photos || {}) }))
         setCleaningIssue(remotePhotoState?.total ? remotePhotoState.cleaningIssue : [...(sourceSnapshot.cleaning_issue || [])])
         draftHydratedRef.current = true
         return
@@ -545,7 +547,7 @@ export default function InspectionPanelScreen(props: Props) {
       )
       setRestockConfirmedSufficient(!!draft?.restock_confirmed_sufficient && !remoteRestockItems.length)
       setGuestArrivalPhotoSkipConfirmed(draft?.room_photo_requirement === 'guest_arrival_confirmed')
-      commitRoomPhotos(remotePhotoState?.total ? remotePhotoState.roomPhotos : cloneRoomPhotos(draft?.room_photos || baseRoomPhotos()))
+      commitRoomPhotos(remotePhotoState?.total ? remotePhotoState.roomPhotos : cloneRoomPhotos({ ...baseRoomPhotos(), ...(draft?.room_photos || {}) }))
       setCleaningIssue(remotePhotoState?.total ? remotePhotoState.cleaningIssue : [...(draft?.cleaning_issue || [])])
       draftHydratedRef.current = true
     } finally {

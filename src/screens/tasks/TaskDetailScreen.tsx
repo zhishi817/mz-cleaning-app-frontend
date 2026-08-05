@@ -187,8 +187,10 @@ function isCleaningWorkSubmitted(status0: any) {
   return ['cleaned', 'restock_pending', 'restocked', 'to_inspect', 'to_hang_keys', 'keys_hung', 'done', 'completed', 'ready'].includes(s)
 }
 
-function checkoutTaskIdsFromTask(task: WorkTaskItem | null) {
+function checkoutTaskIdsFromTask(task: WorkTaskItem | null, action?: WorkTaskAvailableAction) {
   if (!task || task.source_type !== 'cleaning_tasks') return []
+  const actionSourceId = String(action?.source_id || '').trim()
+  if (actionSourceId) return [actionSourceId]
   return executionTaskIdsForRole(task, 'cleaning')
 }
 
@@ -629,7 +631,7 @@ export default function TaskDetailScreen(props: Props) {
     }
   }
 
-  async function onToggleGuestCheckedOut() {
+  async function onToggleGuestCheckedOut(action?: WorkTaskAvailableAction) {
     if (!task) return
     if (!token) return
     const currentCheckedOutAt = String((task as any).checked_out_at || '').trim()
@@ -638,7 +640,7 @@ export default function TaskDetailScreen(props: Props) {
     const nextCheckedOutAt = currentCheckedOutAt ? null : new Date().toISOString()
     try {
       setCheckedOutPending(true)
-      const taskIds = checkoutTaskIdsFromTask(task)
+      const taskIds = checkoutTaskIdsFromTask(task, action)
       await patchWorkTaskItem(String(task.id), { checked_out_at: nextCheckedOutAt } as any)
       if (taskIds.length) {
         await markGuestCheckedOutByTasks(token, { task_ids: taskIds, action: currentCheckedOutAt ? 'unset' : 'set' })
@@ -895,7 +897,7 @@ export default function TaskDetailScreen(props: Props) {
         return
       }
       if (action.id === 'upload_key_photo') return void onUploadKey()
-      if (action.id === 'mark_guest_checkout') return void onToggleGuestCheckedOut()
+      if (action.id === 'mark_guest_checkout') return void onToggleGuestCheckedOut(action)
       const route = navigationForWorkTaskAction(task, action)
       if (route) props.navigation.navigate(route.screen as any, route.params as any)
     }
