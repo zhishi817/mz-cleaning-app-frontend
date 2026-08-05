@@ -59,7 +59,7 @@
 - Required validation: PASS; remediation and complete `npm run check:ci` passed (51 suites, 245 tests); lint has existing warnings but no errors.
 - Shared-hunk review: PASS; all staged files are covered by the selected mobile CRLs, including the shared ledger.
 - Generated-file review: PASS; no generated output is staged.
-- Technical state: verified
+- Technical state: committed
 - User authorization: selected-for-commit; evidence: 2026-08-05 instruction “我要全部提交 推送到Dev分支”.
 - Independent review: GO; evidence: 2026-08-06 independent read-only review found no P0/P1/P2; GO for commit only.
 - Action conclusion: GO; blockers: none for the commit action.
@@ -74,12 +74,12 @@
 - Branch: `codex/release-20260805-all-mobile`
 - Base: `origin/Dev@606e2c8911f7e25e28a88759898cc34626d669ab`; fetched at `2026-08-05 20:41:52 +1000`
 - Candidate patch SHA-256: `b814bf269eec292043cf0d5c53c32c63771616c94f4f1f8a9f8e58dab9668112` (excluding `docs/change-release-ledger.md`)
-- Commit SHA: not committed; audit head is emitted by the release report.
+- Commit SHA: `98f01b4c756a1f0cb79d7c89907251e5ddc9ba1f`; candidate content commit.
 - Dependencies: paired root RA-20260805-002 covers root `CRL-20260805-009`, `CRL-20260805-010`, and `CRL-20260805-013`; no dependency SHA exists yet.
 - Required validation: PASS; complete `npm run check:ci` passed after remediation (51 suites, 246 tests); lint has existing warnings but no errors.
 - Shared-hunk review: PASS; `TasksScreen` hunks are owned by selected CRL-002 and CRL-003, and all staged files are within selected CRLs.
 - Generated-file review: PASS; no generated output is staged.
-- Technical state: verified
+- Technical state: committed
 - User authorization: selected-for-commit; evidence: 2026-08-05 instruction “我要全部提交 推送到Dev分支”.
 - Independent review: GO; evidence: 2026-08-06 independent read-only review found no P0/P1/P2; GO for commit only.
 - Action conclusion: GO; blockers: none for the commit action.
@@ -144,7 +144,7 @@
 - Required validation: PASS; remediation and complete `npm run check:ci` passed (51 suites, 245 tests); lint has existing warnings but no errors.
 - Shared-hunk review: PASS; all staged files are covered by the selected mobile CRLs, including the shared ledger.
 - Generated-file review: PASS; no generated output is staged.
-- Technical state: verified
+- Technical state: committed
 - User authorization: selected-for-commit; evidence: 2026-08-05 instruction “我要全部提交 推送到Dev分支”.
 - Independent review: GO; evidence: 2026-08-06 independent read-only review found no P0/P1/P2; GO for commit only.
 - Action conclusion: GO; blockers: none for the commit action.
@@ -159,7 +159,7 @@
 - Branch: `codex/release-20260805-all-mobile`
 - Base: `origin/Dev@606e2c8911f7e25e28a88759898cc34626d669ab`; fetched at `2026-08-05 20:41:52 +1000`
 - Candidate patch SHA-256: `b814bf269eec292043cf0d5c53c32c63771616c94f4f1f8a9f8e58dab9668112` (excluding `docs/change-release-ledger.md`)
-- Commit SHA: not committed; audit head is emitted by the release report.
+- Commit SHA: `98f01b4c756a1f0cb79d7c89907251e5ddc9ba1f`; candidate content commit.
 - Dependencies: paired root RA-20260805-002 covers root `CRL-20260805-009`, `CRL-20260805-010`, and `CRL-20260805-013`; no dependency SHA exists yet.
 - Required validation: PASS; complete `npm run check:ci` passed after remediation (51 suites, 246 tests); lint has existing warnings but no errors.
 - Shared-hunk review: PASS; `TasksScreen` hunks are owned by selected CRL-002 and CRL-003, and all staged files are within selected CRLs.
@@ -246,7 +246,7 @@
 - Branch: `codex/release-20260805-all-mobile`
 - Base: `origin/Dev@606e2c8911f7e25e28a88759898cc34626d669ab`; fetched at `2026-08-05 20:41:52 +1000`
 - Candidate patch SHA-256: `b814bf269eec292043cf0d5c53c32c63771616c94f4f1f8a9f8e58dab9668112` (excluding `docs/change-release-ledger.md`)
-- Commit SHA: not committed; audit head is emitted by the release report.
+- Commit SHA: `98f01b4c756a1f0cb79d7c89907251e5ddc9ba1f`; candidate content commit.
 - Dependencies: paired root RA-20260805-002 covers root `CRL-20260805-009`, `CRL-20260805-010`, and `CRL-20260805-013`; no dependency SHA exists yet.
 - Required validation: PASS; complete `npm run check:ci` passed after remediation (51 suites, 246 tests); lint has existing warnings but no errors.
 - Shared-hunk review: PASS; `TasksScreen` hunks are owned by selected CRL-002 and CRL-003, and all staged files are within selected CRLs.
