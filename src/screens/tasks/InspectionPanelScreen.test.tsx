@@ -130,6 +130,8 @@ test('检查人员可打开检查与补充页面并看到四个核心步骤', as
     expect(ui.getByText('建议拍沙发表面')).toBeTruthy()
     expect(ui.getByText('浴室')).toBeTruthy()
     expect(ui.getByText('需要拍浴室整体')).toBeTruthy()
+    expect(ui.getByText('阳台')).toBeTruthy()
+    expect(ui.getByText('有阳台时拍摄（可选）')).toBeTruthy()
     expect(ui.getByText('5. 标记已完成')).toBeTruthy()
     expect(ui.getByTestId('inspection-sync-status-card')).toBeTruthy()
   })

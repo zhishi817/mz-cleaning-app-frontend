@@ -1,5 +1,265 @@
 # Change Release Ledger
 
+## CRL-20260805-003 — 入住检查退房动作类型保护（mobile）
+
+- **Status:** ready
+- **Updated:** 2026-08-05 Australia/Melbourne
+- **Request:** 入住检查不得显示“标记已退房”。
+- **Outcome:** 客户端隐藏不匹配的旧缓存退房动作；合并卡只在有真实退房来源时保留该动作并提交来源 ID。
+
+### Files / Areas
+
+- `src/lib/workTaskActions.ts` — action display filter.
+- `src/screens/tasks/TaskDetailScreen.tsx` — source-ID routing.
+- `src/lib/workTaskActions.test.ts` — 入住检查与缓存 action regression.
+- `src/screens/tabs/TasksScreen.tsx` — 合并卡退房动作来源 ID routing.
+- `src/screens/tabs/TasksScreen.test.tsx` — 客服合并卡退房来源 regression.
+- `docs/change-release-ledger.md` — 记录本单元。
+
+### Impact / Dependencies
+
+- Related units: root `CRL-20260805-013`.
+
+### Validation
+
+- Passed: `npm run check:ci` (51 suites, 246 tests), `workTaskActions.test.ts`, `TasksScreen.test.tsx`, `audit_change_release_ledger.py`, and `git diff --check`. Existing lint warnings contain no errors.
+
+### Release Attempts
+
+#### RA-20260805-001
+
+- Repository: mobile
+- Selected CRLs: `CRL-20260805-001`, `CRL-20260805-002`, `CRL-20260805-003`
+- Intended action: commit
+- Branch: `codex/release-20260805-all-mobile`
+- Base: `origin/Dev@606e2c8911f7e25e28a88759898cc34626d669ab`; fetched at `2026-08-05 20:41:52 +1000`
+- Candidate patch SHA-256: `4c4ed26d113c7dcb7f0c16229914c8241c983dbfb0372402cf307c2e14c18d94` (excluding `docs/change-release-ledger.md`)
+- Commit SHA: not committed; audit head is emitted by the release report.
+- Dependencies: root `CRL-20260805-009`, `CRL-20260805-010`, and `CRL-20260805-013` are selected in the paired independent root candidate; no dependency SHA exists yet.
+- Required validation: PASS; mobile `check:ci`, ledger coverage, and whitespace checks passed; lint had existing warnings but no errors.
+- Shared-hunk review: PASS; all staged files are covered by the selected mobile CRLs, including the shared ledger.
+- Generated-file review: PASS; no build artifacts or local caches are staged.
+- Technical state: candidate
+- User authorization: selected-for-commit; evidence: 2026-08-05 instruction “我要全部提交 推送到Dev分支”.
+- Independent review: NOT VERIFIED; evidence: pending read-only release review.
+- Action conclusion: NOT VERIFIED; blockers: independent review has not yet issued a commit verdict.
+
+- 2026-08-06 update: independent review of RA-20260805-001 was NO-GO because the list action discarded the merged checkout `source_id`; the ID now flows through the action handler and is covered by a regression test in RA-20260805-002.
+
+#### RA-20260805-002
+
+- Repository: mobile
+- Selected CRLs: `CRL-20260805-001`, `CRL-20260805-002`, `CRL-20260805-003`
+- Intended action: commit
+- Branch: `codex/release-20260805-all-mobile`
+- Base: `origin/Dev@606e2c8911f7e25e28a88759898cc34626d669ab`; fetched at `2026-08-05 20:41:52 +1000`
+- Candidate patch SHA-256: `73fe603fbb1b79883fd443a808b0812a693855fdce383098801b36a270171ee1` (excluding `docs/change-release-ledger.md`)
+- Commit SHA: not committed; audit head is emitted by the release report.
+- Dependencies: paired root RA-20260805-002 covers root `CRL-20260805-009`, `CRL-20260805-010`, and `CRL-20260805-013`; no dependency SHA exists yet.
+- Required validation: PASS; remediation and complete `npm run check:ci` passed (51 suites, 245 tests); lint has existing warnings but no errors.
+- Shared-hunk review: PASS; all staged files are covered by the selected mobile CRLs, including the shared ledger.
+- Generated-file review: PASS; no generated output is staged.
+- Technical state: verified
+- User authorization: selected-for-commit; evidence: 2026-08-05 instruction “我要全部提交 推送到Dev分支”.
+- Independent review: GO; evidence: 2026-08-06 independent read-only review found no P0/P1/P2; GO for commit only.
+- Action conclusion: GO; blockers: none for the commit action.
+
+- 2026-08-06 update: independent review of RA-20260805-002 was NO-GO because the customer-service compatibility action discarded a valid merged-card checkout `source_id`; it now retains only the server-confirmed source and is covered by a customer-service request regression in RA-20260805-003.
+
+#### RA-20260805-003
+
+- Repository: mobile
+- Selected CRLs: `CRL-20260805-001`, `CRL-20260805-002`, `CRL-20260805-003`
+- Intended action: commit
+- Branch: `codex/release-20260805-all-mobile`
+- Base: `origin/Dev@606e2c8911f7e25e28a88759898cc34626d669ab`; fetched at `2026-08-05 20:41:52 +1000`
+- Candidate patch SHA-256: `b814bf269eec292043cf0d5c53c32c63771616c94f4f1f8a9f8e58dab9668112` (excluding `docs/change-release-ledger.md`)
+- Commit SHA: not committed; audit head is emitted by the release report.
+- Dependencies: paired root RA-20260805-002 covers root `CRL-20260805-009`, `CRL-20260805-010`, and `CRL-20260805-013`; no dependency SHA exists yet.
+- Required validation: PASS; complete `npm run check:ci` passed after remediation (51 suites, 246 tests); lint has existing warnings but no errors.
+- Shared-hunk review: PASS; `TasksScreen` hunks are owned by selected CRL-002 and CRL-003, and all staged files are within selected CRLs.
+- Generated-file review: PASS; no generated output is staged.
+- Technical state: verified
+- User authorization: selected-for-commit; evidence: 2026-08-05 instruction “我要全部提交 推送到Dev分支”.
+- Independent review: GO; evidence: 2026-08-06 independent read-only review found no P0/P1/P2; GO for commit only.
+- Action conclusion: GO; blockers: none for the commit action.
+
+### Risks / Release Notes
+
+- Physical device and weak-network verification remain separate. No secrets or production data included.
+
+## CRL-20260805-002 — “全部”管理与“我的”执行入口分流（mobile）
+
+- **Status:** ready
+- **Updated:** 2026-08-05 Australia/Melbourne
+- **Request:** “全部”进入管理详情，“我的”进入执行详情。
+- **Outcome:** 管理详情跳转仅在 `view === 'all'` 使用；“我的”保持既有任务执行导航。
+
+### Files / Areas
+
+- `src/screens/tabs/TasksScreen.tsx` — view-specific navigation gate.
+- `src/screens/tabs/TasksScreen.test.tsx` — view-specific navigation regression.
+- `docs/change-release-ledger.md` — 记录本单元。
+
+### Impact / Dependencies
+
+- Related units: root `CRL-20260805-010`.
+
+### Validation
+
+- Passed: `npm run check:ci` (51 suites, 244 tests), `TasksScreen.test.tsx`, `audit_change_release_ledger.py`, and `git diff --check`. Existing lint warnings contain no errors.
+
+### Release Attempts
+
+#### RA-20260805-001
+
+- Repository: mobile
+- Selected CRLs: `CRL-20260805-001`, `CRL-20260805-002`, `CRL-20260805-003`
+- Intended action: commit
+- Branch: `codex/release-20260805-all-mobile`
+- Base: `origin/Dev@606e2c8911f7e25e28a88759898cc34626d669ab`; fetched at `2026-08-05 20:41:52 +1000`
+- Candidate patch SHA-256: `4c4ed26d113c7dcb7f0c16229914c8241c983dbfb0372402cf307c2e14c18d94` (excluding `docs/change-release-ledger.md`)
+- Commit SHA: not committed; audit head is emitted by the release report.
+- Dependencies: root `CRL-20260805-009`, `CRL-20260805-010`, and `CRL-20260805-013` are selected in the paired independent root candidate; no dependency SHA exists yet.
+- Required validation: PASS; mobile `check:ci`, ledger coverage, and whitespace checks passed; lint had existing warnings but no errors.
+- Shared-hunk review: PASS; all staged files are covered by the selected mobile CRLs, including the shared ledger.
+- Generated-file review: PASS; no build artifacts or local caches are staged.
+- Technical state: candidate
+- User authorization: selected-for-commit; evidence: 2026-08-05 instruction “我要全部提交 推送到Dev分支”.
+- Independent review: NOT VERIFIED; evidence: pending read-only release review.
+- Action conclusion: NOT VERIFIED; blockers: independent review has not yet issued a commit verdict.
+
+- 2026-08-06 update: independent review of RA-20260805-001 was NO-GO because the list action discarded the merged checkout `source_id`; the ID now flows through the action handler and is covered by a regression test in RA-20260805-002.
+
+#### RA-20260805-002
+
+- Repository: mobile
+- Selected CRLs: `CRL-20260805-001`, `CRL-20260805-002`, `CRL-20260805-003`
+- Intended action: commit
+- Branch: `codex/release-20260805-all-mobile`
+- Base: `origin/Dev@606e2c8911f7e25e28a88759898cc34626d669ab`; fetched at `2026-08-05 20:41:52 +1000`
+- Candidate patch SHA-256: `73fe603fbb1b79883fd443a808b0812a693855fdce383098801b36a270171ee1` (excluding `docs/change-release-ledger.md`)
+- Commit SHA: not committed; audit head is emitted by the release report.
+- Dependencies: paired root RA-20260805-002 covers root `CRL-20260805-009`, `CRL-20260805-010`, and `CRL-20260805-013`; no dependency SHA exists yet.
+- Required validation: PASS; remediation and complete `npm run check:ci` passed (51 suites, 245 tests); lint has existing warnings but no errors.
+- Shared-hunk review: PASS; all staged files are covered by the selected mobile CRLs, including the shared ledger.
+- Generated-file review: PASS; no generated output is staged.
+- Technical state: verified
+- User authorization: selected-for-commit; evidence: 2026-08-05 instruction “我要全部提交 推送到Dev分支”.
+- Independent review: GO; evidence: 2026-08-06 independent read-only review found no P0/P1/P2; GO for commit only.
+- Action conclusion: GO; blockers: none for the commit action.
+
+- 2026-08-06 update: independent review of RA-20260805-002 was NO-GO because the customer-service compatibility action discarded a valid merged-card checkout `source_id`; it now retains only the server-confirmed source and is covered by a customer-service request regression in RA-20260805-003.
+
+#### RA-20260805-003
+
+- Repository: mobile
+- Selected CRLs: `CRL-20260805-001`, `CRL-20260805-002`, `CRL-20260805-003`
+- Intended action: commit
+- Branch: `codex/release-20260805-all-mobile`
+- Base: `origin/Dev@606e2c8911f7e25e28a88759898cc34626d669ab`; fetched at `2026-08-05 20:41:52 +1000`
+- Candidate patch SHA-256: `b814bf269eec292043cf0d5c53c32c63771616c94f4f1f8a9f8e58dab9668112` (excluding `docs/change-release-ledger.md`)
+- Commit SHA: not committed; audit head is emitted by the release report.
+- Dependencies: paired root RA-20260805-002 covers root `CRL-20260805-009`, `CRL-20260805-010`, and `CRL-20260805-013`; no dependency SHA exists yet.
+- Required validation: PASS; complete `npm run check:ci` passed after remediation (51 suites, 246 tests); lint has existing warnings but no errors.
+- Shared-hunk review: PASS; `TasksScreen` hunks are owned by selected CRL-002 and CRL-003, and all staged files are within selected CRLs.
+- Generated-file review: PASS; no generated output is staged.
+- Technical state: candidate
+- User authorization: selected-for-commit; evidence: 2026-08-05 instruction “我要全部提交 推送到Dev分支”.
+- Independent review: NOT VERIFIED; evidence: remediation requires a new read-only review.
+- Action conclusion: NOT VERIFIED; blockers: independent review has not yet issued a commit verdict.
+
+### Risks / Release Notes
+
+- No backend or production-data change.
+
+## CRL-20260805-001 — 检查与补充新增可选阳台照片（mobile）
+
+- **Status:** ready
+- **Updated:** 2026-08-05 Australia/Melbourne
+- **Request:** 检查面板新增可选阳台照片，最多三张，不能阻止没有阳台的任务提交。
+- **Outcome:** 阳台进入既有照片草稿、上传队列和同步回看；验证仍只要求原五个必拍区域。
+
+### Files / Areas
+
+- `src/screens/tasks/InspectionPanelScreen.tsx` — optional balcony card and state cloning.
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — optional balcony card rendering regression.
+- `src/lib/inspectionPanelDraft.ts` — persisted draft support.
+- `src/lib/inspectionPanelSubmitQueue.ts` — queue snapshot/media support and optional validation boundary.
+- `docs/change-release-ledger.md` — 记录本单元。
+
+### Impact / Dependencies
+
+- Related units: root `CRL-20260805-009`.
+
+### Validation
+
+- Passed: `npm run check:ci` (51 suites, 244 tests), `InspectionPanelScreen.test.tsx`, `inspectionPanelSubmitQueue.test.ts`, `audit_change_release_ledger.py`, and `git diff --check`. Existing lint warnings contain no errors.
+
+### Release Attempts
+
+#### RA-20260805-001
+
+- Repository: mobile
+- Selected CRLs: `CRL-20260805-001`, `CRL-20260805-002`, `CRL-20260805-003`
+- Intended action: commit
+- Branch: `codex/release-20260805-all-mobile`
+- Base: `origin/Dev@606e2c8911f7e25e28a88759898cc34626d669ab`; fetched at `2026-08-05 20:41:52 +1000`
+- Candidate patch SHA-256: `4c4ed26d113c7dcb7f0c16229914c8241c983dbfb0372402cf307c2e14c18d94` (excluding `docs/change-release-ledger.md`)
+- Commit SHA: not committed; audit head is emitted by the release report.
+- Dependencies: root `CRL-20260805-009`, `CRL-20260805-010`, and `CRL-20260805-013` are selected in the paired independent root candidate; no dependency SHA exists yet.
+- Required validation: PASS; mobile `check:ci`, ledger coverage, and whitespace checks passed; lint had existing warnings but no errors.
+- Shared-hunk review: PASS; all staged files are covered by the selected mobile CRLs, including the shared ledger.
+- Generated-file review: PASS; no build artifacts or local caches are staged.
+- Technical state: candidate
+- User authorization: selected-for-commit; evidence: 2026-08-05 instruction “我要全部提交 推送到Dev分支”.
+- Independent review: NOT VERIFIED; evidence: pending read-only release review.
+- Action conclusion: NOT VERIFIED; blockers: independent review has not yet issued a commit verdict.
+
+- 2026-08-06 update: independent review of RA-20260805-001 was NO-GO because the list action discarded the merged checkout `source_id`; the ID now flows through the action handler and is covered by a regression test in RA-20260805-002.
+
+#### RA-20260805-002
+
+- Repository: mobile
+- Selected CRLs: `CRL-20260805-001`, `CRL-20260805-002`, `CRL-20260805-003`
+- Intended action: commit
+- Branch: `codex/release-20260805-all-mobile`
+- Base: `origin/Dev@606e2c8911f7e25e28a88759898cc34626d669ab`; fetched at `2026-08-05 20:41:52 +1000`
+- Candidate patch SHA-256: `73fe603fbb1b79883fd443a808b0812a693855fdce383098801b36a270171ee1` (excluding `docs/change-release-ledger.md`)
+- Commit SHA: not committed; audit head is emitted by the release report.
+- Dependencies: paired root RA-20260805-002 covers root `CRL-20260805-009`, `CRL-20260805-010`, and `CRL-20260805-013`; no dependency SHA exists yet.
+- Required validation: PASS; remediation and complete `npm run check:ci` passed (51 suites, 245 tests); lint has existing warnings but no errors.
+- Shared-hunk review: PASS; all staged files are covered by the selected mobile CRLs, including the shared ledger.
+- Generated-file review: PASS; no generated output is staged.
+- Technical state: candidate
+- User authorization: selected-for-commit; evidence: 2026-08-05 instruction “我要全部提交 推送到Dev分支”.
+- Independent review: NOT VERIFIED; evidence: remediation requires a new read-only review.
+- Action conclusion: NOT VERIFIED; blockers: independent review has not yet issued a commit verdict.
+
+- 2026-08-06 update: independent review of RA-20260805-002 was NO-GO because the customer-service compatibility action discarded a valid merged-card checkout `source_id`; it now retains only the server-confirmed source and is covered by a customer-service request regression in RA-20260805-003.
+
+#### RA-20260805-003
+
+- Repository: mobile
+- Selected CRLs: `CRL-20260805-001`, `CRL-20260805-002`, `CRL-20260805-003`
+- Intended action: commit
+- Branch: `codex/release-20260805-all-mobile`
+- Base: `origin/Dev@606e2c8911f7e25e28a88759898cc34626d669ab`; fetched at `2026-08-05 20:41:52 +1000`
+- Candidate patch SHA-256: `b814bf269eec292043cf0d5c53c32c63771616c94f4f1f8a9f8e58dab9668112` (excluding `docs/change-release-ledger.md`)
+- Commit SHA: not committed; audit head is emitted by the release report.
+- Dependencies: paired root RA-20260805-002 covers root `CRL-20260805-009`, `CRL-20260805-010`, and `CRL-20260805-013`; no dependency SHA exists yet.
+- Required validation: PASS; complete `npm run check:ci` passed after remediation (51 suites, 246 tests); lint has existing warnings but no errors.
+- Shared-hunk review: PASS; `TasksScreen` hunks are owned by selected CRL-002 and CRL-003, and all staged files are within selected CRLs.
+- Generated-file review: PASS; no generated output is staged.
+- Technical state: candidate
+- User authorization: selected-for-commit; evidence: 2026-08-05 instruction “我要全部提交 推送到Dev分支”.
+- Independent review: NOT VERIFIED; evidence: remediation requires a new read-only review.
+- Action conclusion: NOT VERIFIED; blockers: independent review has not yet issued a commit verdict.
+
+### Risks / Release Notes
+
+- No property attribute is inferred; inspectors choose whether a balcony photo exists. No secrets or production data included.
+
 ## CRL-20260805-006 — 钥匙照片异步测试并行 CI 时限
 
 - **Status:** candidate

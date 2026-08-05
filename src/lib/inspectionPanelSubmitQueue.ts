@@ -45,7 +45,9 @@ export type InspectionPanelBatchRestockItem = {
   origin: 'task' | 'manual'
 }
 
-export type InspectionPanelRoomPhotoArea = 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'bathroom'
+export type InspectionPanelRoomPhotoArea = 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'bathroom' | 'balcony'
+export type InspectionPanelRoomPhotoMap = Record<Exclude<InspectionPanelRoomPhotoArea, 'balcony'>, InspectionPanelBatchMedia[]>
+  & Partial<Record<'balcony', InspectionPanelBatchMedia[]>>
 export type InspectionPanelRoomPhotoRequirement = 'required' | 'password_only' | 'guest_arrival_confirmed'
 
 export type InspectionPanelBatchSnapshot = {
@@ -57,7 +59,7 @@ export type InspectionPanelBatchSnapshot = {
   room_photo_requirement: InspectionPanelRoomPhotoRequirement
   restock_confirmed_sufficient: boolean
   restock: InspectionPanelBatchRestockItem[]
-  room_photos: Record<InspectionPanelRoomPhotoArea, InspectionPanelBatchMedia[]>
+  room_photos: InspectionPanelRoomPhotoMap
   cleaning_issue: InspectionPanelBatchMedia[]
   feedback: InspectionPanelFeedbackDraftState | null
 }
@@ -136,7 +138,7 @@ function baseStepState(): InspectionPanelSubmitStepState {
 }
 
 function baseRoomPhotos() {
-  return { living: [], sofa: [], bedroom: [], kitchen: [], bathroom: [] } as Record<InspectionPanelRoomPhotoArea, InspectionPanelBatchMedia[]>
+  return { living: [], sofa: [], bedroom: [], kitchen: [], bathroom: [], balcony: [] } as Record<InspectionPanelRoomPhotoArea, InspectionPanelBatchMedia[]>
 }
 
 function isUploadedReference(value: any) {
@@ -235,8 +237,10 @@ export function findInspectionPanelValidationIssue(snapshot: InspectionPanelBatc
       bedroom: '卧室',
       kitchen: '厨房',
       bathroom: '浴室',
+      balcony: '阳台',
     }
-    for (const area of Object.keys(labels) as InspectionPanelRoomPhotoArea[]) {
+    const requiredAreas: InspectionPanelRoomPhotoArea[] = ['living', 'sofa', 'bedroom', 'kitchen', 'bathroom']
+    for (const area of requiredAreas) {
       if (!(snapshot.room_photos[area] || []).length) {
         return { section: 'photos', room_area: area, message: `请拍摄 ${labels[area]} 检查照片` }
       }

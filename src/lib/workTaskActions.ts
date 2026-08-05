@@ -48,6 +48,17 @@ function hasServerActions(task: WorkTaskItem | null | undefined) {
   return Array.isArray((task as any)?.available_actions)
 }
 
+function isGuestCheckoutTask(task: any) {
+  const taskType = lower(task?.task_type || task?.type)
+  return taskType === 'checkout_clean' || (taskType === 'turnover' && !!cleanText(task?.order_id_checkout))
+}
+
+function canRenderServerAction(task: WorkTaskItem, action: WorkTaskAvailableAction) {
+  if (action.id !== 'mark_guest_checkout') return true
+  const taskType = lower((task as any).task_type || (task as any).type)
+  return taskType === 'checkout_clean' || (taskType === 'turnover' && !!cleanText((task as any).order_id_checkout) && !!cleanText((action as any).source_id))
+}
+
 function legacyAction(params: Omit<WorkTaskAvailableAction, 'enabled'> & { enabled?: boolean }) {
   return { enabled: params.enabled !== false, ...params } as WorkTaskAvailableAction
 }
@@ -64,22 +75,33 @@ export function availableActionsForTask(task: WorkTaskItem | null | undefined, o
   // admin/offline-manager roles use server actions whenever they are present.
   if (isCleaningSource && isCustomerService) {
     const isPasswordOnly = isPasswordOnlyInspectionTask(task as any)
-    const isCheckoutTask = lower((task as any).task_type) === 'checkout_clean' || !!cleanText((task as any).start_time)
     const actions: WorkTaskAvailableAction[] = []
-    if (!isPasswordOnly && (isCheckoutTask || cleanText((task as any).order_id_checkout) || cleanText((task as any).order_id))) {
-      actions.push(legacyAction({ id: 'mark_guest_checkout', label: cleanText((task as any).checked_out_at) ? '取消已退房' : '标记已退房', placement: 'primary', target: 'TaskDetail', intent: 'manager' }))
+    const serverCheckoutAction = hasServerActions(task)
+      ? (((task as any).available_actions || []) as WorkTaskAvailableAction[]).find((action) => action?.id === 'mark_guest_checkout' && canRenderServerAction(task, action))
+      : null
+    const topLevelCheckout = lower((task as any).task_type || (task as any).type) === 'checkout_clean'
+    const checkoutSourceId = cleanText(serverCheckoutAction?.source_id)
+    if (!isPasswordOnly && isGuestCheckoutTask(task) && (checkoutSourceId || topLevelCheckout)) {
+      actions.push(legacyAction({
+        id: 'mark_guest_checkout',
+        label: cleanText((task as any).checked_out_at) ? '取消已退房' : '标记已退房',
+        placement: 'primary',
+        target: 'TaskDetail',
+        intent: 'manager',
+        ...(checkoutSourceId ? { source_id: checkoutSourceId } : {}),
+      }))
     }
     actions.push(legacyAction({ id: 'report_issue', label: '问题反馈', placement: 'primary', target: 'FeedbackForm', intent: 'issue' }))
     return actions
   }
 
-  if (hasServerActions(task)) return (((task as any).available_actions || []) as WorkTaskAvailableAction[]).filter(Boolean)
+  if (hasServerActions(task)) return (((task as any).available_actions || []) as WorkTaskAvailableAction[])
+    .filter((action): action is WorkTaskAvailableAction => !!action && canRenderServerAction(task, action))
 
   if (isCleaningSource && isManager) {
     const isPasswordOnly = isPasswordOnlyInspectionTask(task as any)
-    const isCheckoutTask = lower((task as any).task_type) === 'checkout_clean' || !!cleanText((task as any).start_time)
     const actions: WorkTaskAvailableAction[] = []
-    if (!isPasswordOnly && (isCheckoutTask || cleanText((task as any).order_id_checkout) || cleanText((task as any).order_id))) {
+    if (!isPasswordOnly && isGuestCheckoutTask(task)) {
       actions.push(legacyAction({ id: 'mark_guest_checkout', label: cleanText((task as any).checked_out_at) ? '取消已退房' : '标记已退房', placement: 'primary', target: 'TaskDetail', intent: 'manager' }))
     }
     actions.push(legacyAction({ id: 'report_issue', label: '问题反馈', placement: 'primary', target: 'FeedbackForm', intent: 'issue' }))
