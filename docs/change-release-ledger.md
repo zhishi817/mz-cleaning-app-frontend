@@ -45,15 +45,15 @@
 - Branch: `codex/ci-mobile-timeout-20260805`
 - Base: `origin/Dev@a6e4fbed79f2071a31faaeee04fd845e8320ee5a`; fetched and read back on 2026-08-05 Australia/Melbourne.
 - Candidate patch SHA-256: `4a562d8d645b9a64d5a73fb6a751c17b70c452e3308bdd4784fcb6fcfc8c0471` (staged implementation diff excluding `docs/change-release-ledger.md`).
-- Commit SHA: pending.
+- Commit SHA: `c2d4e5401bd77db4aec3c71b11e137353fda15f4`; candidate content commit for this exact implementation range.
 - Dependencies: none; root PR #286 is a downstream CI consumer after a future merge to mobile `Dev`, not a prerequisite for this candidate.
 - Required validation: PASS — normal-worker targeted Jest, normal parallel full Jest 51/243, typecheck, lint 0 errors, local ledger audit and whitespace check.
 - Shared-hunk review: PASS — the test-file timeout and ledger entry are exclusive to this CI repair.
 - Generated-file review: not applicable — no generated files selected.
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: user explicitly specified the single-test 15-second ceiling on 2026-08-05 Australia/Melbourne.
 - Independent review: GO for commit — independent read-only review verified the exact staged test/ledger scope, fingerprint, `check:ci` evidence and no P0/P1/P2 finding.
-- Action conclusion: `GO` for commit only; no push, PR merge, deployment or production action is authorized.
+- Action conclusion: `GO` for commit completed; no push, PR merge, deployment or production action is authorized.
 
 ### Risks / Release Notes
 
