@@ -45,15 +45,15 @@
 - Branch: `codex/ci-mobile-key-upload-test-20260805`
 - Base: `origin/Dev@f9a927d1231a7302db989ad90b7aed1cbebb5683`; fetched and read back on 2026-08-05 Australia/Melbourne.
 - Candidate patch SHA-256: `d359b444d73a9473ffd86ec64402384b102478100f4ec6b31a3a97c416791ffb` (staged implementation diff excluding `docs/change-release-ledger.md`).
-- Commit SHA: pending; candidate content commit will be recorded after the approved commit.
+- Commit SHA: `ba31af7`; candidate content commit for this exact implementation range.
 - Dependencies: none. Root `CRL-20260805-005` consumes this fix only after this independent mobile candidate is merged to `Dev`.
 - Required validation: PASS — targeted 26 tests, typecheck, lint 0 errors / 111 existing warnings, button audit, fast tests 13/13, and full Jest 51 suites / 243 tests all passed.
 - Shared-hunk review: PASS — the test file and ledger entry are exclusive to this CI repair.
 - Generated-file review: not applicable — no generated files selected.
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: user explicitly instructed execution of this two-repository repair on 2026-08-05 Australia/Melbourne.
 - Independent review: GO for commit — independent read-only recheck confirmed the exact two staged paths, candidate fingerprint, Release Attempt metadata and no P0/P1 finding.
-- Action conclusion: `GO` for commit only; no push, PR merge, deployment, or production action is authorized.
+- Action conclusion: `GO` for commit completed; no push, PR merge, deployment, or production action is authorized.
 
 ### Risks / Release Notes
 
