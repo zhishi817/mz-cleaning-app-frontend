@@ -1,5 +1,162 @@
 # Change Release Ledger
 
+## CRL-20260807-002 — CI 台账测试无缓存执行（mobile）
+
+- **Status:** committed
+- **Updated:** 2026-08-07 Australia/Melbourne
+- **Request:** 修复 PR #15 合并前 CI 的非交互质量门失败。
+- **Outcome:** 台账审计单测不再在工作树生成 Python 字节码缓存，后续台账覆盖检查不会把该测试产物误判为未登记改动。
+
+### Implementation
+
+- Previous behavior: `test:ledger-range-audit` 会写入 `scripts/__pycache__/`；紧随其后的 `check:ledger` 将该未跟踪文件报告为未覆盖，`npm run check:ci` 失败。
+- New behavior: 测试进程以 `PYTHONDONTWRITEBYTECODE=1` 执行，不产生 `.pyc` 文件；实际源文件和台账路径仍由原有审计覆盖。
+- Key decisions: 仅调整测试命令的进程环境，不修改审计规则、业务逻辑或 GitHub 工作流。
+
+### Files / Areas
+
+- `package.json` — 修改 `test:ledger-range-audit`，禁止本测试写入 Python 字节码缓存。
+- `docs/change-release-ledger.md` — 记录此独立 CI 质量门修复。
+
+### Impact / Dependencies
+
+- API: none.
+- Database / migration: none.
+- Config / environment: 仅质量命令子进程环境变量；不影响 Expo 运行时。
+- Dependencies: none.
+- Related units: `CRL-20260807-001`（PR 范围审计兼容）。
+
+### Validation
+
+- `npm run check:ci` — passed: ledger range-audit tests 11/11; working-tree ledger coverage 2/2; TypeScript passed; ESLint 0 errors/111 pre-existing warnings; button contract passed; Jest 51 suites/246 tests passed.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 2 changed paths, 2 recorded paths.
+- `git diff --check` — passed.
+
+### Release Attempt
+
+#### RA-20260807-mobile-pr15-ci-02
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260731-001`, `CRL-20260803-003`, `CRL-20260807-001`, `CRL-20260807-002`.
+- Intended action: `push`.
+- Branch: `codex/release-blockers-20260807-mobile` (PR #15 to `Dev`).
+- Base: `origin/Dev@817b803a88177a8d43b4e02965fffde59e852789`; fetched at 2026-08-07 18:11 AEST.
+- Candidate patch SHA-256: `be559e7b25dfcdb4054e37f146f3219fddbed2ab914b68f60cd554c19e801a0c` from the exact `origin/Dev...candidate` content excluding the ledger.
+- Commit SHA: `c01d7543cc385d02fe4cb18daa95ed398148fc18`; candidate content commit. The exact audit head is emitted separately by the report command.
+- Dependencies: `CRL-20260807-001` must travel with this fix because the quality gate runs its auditor immediately before the coverage audit; previous PR #15 units remain in the same exact range.
+- Required validation: PASS; evidence: `npm run check:ci` passed locally (auditor 11/11, TypeScript, ESLint 0 errors, button contract, Jest 51/246, ledger coverage).
+- Shared-hunk review: PASS; `package.json` is shared with selected `CRL-20260731-001` and only the test command hunk changed; the selected ledger records are contiguous but independently attributed.
+- Generated-file review: PASS; the generated `.pyc` was removed and no generated output, dependency directory, secret, local environment file or cache is selected.
+- Technical state: committed.
+- User authorization: approved-for-push; evidence: user confirmed the exact mobile PR #15 range ending at `cee2674a59707b0fce400c71f60f96c2854f19fd` on 2026-08-07, limited to pushing this branch; merge, EAS build, TestFlight and OTA publication remain unauthorized.
+- Independent review: GO; evidence: 2026-08-07 independent read-only pre-push review accepted `origin/Dev@817b803a88177a8d43b4e02965fffde59e852789...fdb38aaca30760f3a959be5a539edc09366df5e2`, matching `be559e7b…` fingerprint, all 8 selected paths, authorization receipt, shared-hunk, generated-file and sensitive-information checks for push only.
+- Action conclusion: GO; blockers: none for pushing this branch. Merge, EAS build, TestFlight and OTA publication remain outside the authorized action.
+
+### Risks / Release Notes
+
+- Risk: 仅防止测试副产物污染工作树；不会掩盖实际未登记的源文件改动。
+- Rollback: 恢复该 npm script 的原命令。
+- Sensitive-information review: no sensitive files or values involved.
+- Git state: candidate content committed at `c01d7543cc385d02fe4cb18daa95ed398148fc18`; push authorized for the exact PR #15 range, pending independent review and final range report.
+
+## CRL-20260807-001 — 移动端 PR 台账范围审计兼容（mobile）
+
+- **Status:** ready
+- **Updated:** 2026-08-07 Australia/Melbourne
+- **Request:** PR #15 的 “Audit pull request Ledger range” 失败，参数 `--base`、`--head` 被错误要求必须使用 Release Attempt 模式。
+- **Outcome:** `--base` 与 `--head` 在非 Release Attempt 模式下执行只读 `base...head` 台账覆盖与空白检查；`--repo`、`--crl` 仍只允许 Release Attempt 模式，避免弱化精确发布审计。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — 新增 PR 范围覆盖审计入口，并保留 Release Attempt 参数边界。
+- `scripts/tests/test_audit_change_release_ledger.py` — 覆盖已记录范围通过及未记录路径失败。
+- `docs/change-release-ledger.md` — 记录本次 CI 修复。
+
+### Validation / Risks
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed: 11 tests.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/audit_change_release_ledger.py --base 817b803a88177a8d43b4e02965fffde59e852789 --head HEAD` — passed: 8 changed / 8 recorded, coverage pass.
+- `git diff --check` — passed.
+- 此修复只恢复 PR 的路径覆盖审计；它不替代 `--release-report` 的授权、候选 hash、敏感信息或 Release Attempt 审计。
+
+### Release Attempt
+
+#### RA-20260807-mobile-pr15-ci-01
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260731-001`, `CRL-20260803-003`, `CRL-20260807-001`.
+- Intended action: `push`.
+- Branch: `codex/release-blockers-20260807-mobile`.
+- Base: `origin/Dev@817b803a88177a8d43b4e02965fffde59e852789`; fetched at 2026-08-07 Australia/Melbourne.
+- Candidate patch SHA-256: `d2687376f3b3255fe03d62b63942eced62878b68b7a8bef0b4180af51eb3f923` from the exact staged `origin/Dev...candidate` content excluding the ledger.
+- Commit SHA: `7d370ce079fb10f40fc262d2df1bdda9791f6528`; candidate content commit, with the exact audit head emitted separately by the release report.
+- Dependencies: prior pushed PR content `ec578d219aea20a8fdc64c7569aa97208fff22a0`, local push-receipt commit `26f6da7cec982fdd3dcca0eb4b5c0867db356a3c`, and this CI compatibility unit travel together on PR #15.
+- Required validation: PASS; evidence: 11 auditor regression tests, current PR-range invocation syntax, working-tree ledger coverage, and whitespace check pass. The exact committed PR range will be rerun after the content commit.
+- Shared-hunk review: PASS; `scripts/audit_change_release_ledger.py` and its test deliberately update the earlier `CRL-20260803-003` Release Attempt auditor, which is selected in this same PR scope.
+- Generated-file review: PASS; no generated output, dependency directory, secret, local environment file or cache is selected.
+- Technical state: `committed`.
+- User authorization: `approved-for-push`; evidence: user confirmed `codex/release-blockers-20260807-mobile@334893b6f0defd4495c68adf6c0d35a073d354da` on 2026-08-07. No merge, EAS build, TestFlight or OTA publication is authorized.
+- Independent review: GO; evidence: 2026-08-07 independent read-only review accepted full PR scope, hash `d2687376f3b3255fe03d62b63942eced62878b68b7a8bef0b4180af51eb3f923`, CI semantics, and sensitive/generated-file review for commit only.
+- Action conclusion: NOT VERIFIED for push until the authorization receipt is committed and the exact range audit is rerun.
+
+## CRL-20260731-001 — MZStay 外部 TestFlight OTA 原生基线（mobile）
+
+- **Status:** candidate
+- **Updated:** 2026-08-07 Australia/Melbourne
+- **Outcome:** 增加 `expo-updates`、`fingerprint` runtime、启动时检查更新，以及 `preview` / `testflight` / `production` channel。外部 TestFlight 用户只有安装新的 iOS 原生基线后才能接收兼容 OTA。
+
+### Files / Areas
+
+- `app.json` — Update URL、fingerprint runtime 与 iOS/Android 基线版本。
+- `eas.json` — preview、testflight、production channel 绑定。
+- `package.json` — Expo SDK 兼容的 `expo-updates` 依赖。
+- `package-lock.json` — `expo-updates` 的锁定解析。
+- `docs/eas-update-release-runbook.md` — 基线构建、外部 TestFlight 验证、OTA 与回滚边界。
+- `docs/change-release-ledger.md` — 本次候选记录。
+
+### Validation / Risks
+
+- Expo public-config 断言、`npm run typecheck`、`npm test -- --runInBand`（51 suites / 246 tests）和 `npx expo export --platform ios` 均通过；导出仅写入仓库外临时目录。
+- EAS iOS build、TestFlight 上传/外部测试、OTA 发布和设备验证均未执行。旧 TestFlight 包不会因此获得 OTA 能力。
+
+## CRL-20260803-003 — 移动端精确 Release Attempt 重建（mobile）
+
+- **Status:** candidate
+- **Updated:** 2026-08-07 Australia/Melbourne
+- **Outcome:** 不再从混合工作区推断发布范围；此干净候选以最新 `origin/Dev` 为 base，并新增可读、只读的 exact base...head Release Attempt 审计器与回归测试。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — 覆盖审计之外的精确 Release Attempt 报告、范围、hash、敏感信息与字段契约检查。
+- `scripts/tests/test_audit_change_release_ledger.py` — 审计器的成功、字段缺失、范围和敏感风险回归测试。
+- `docs/change-release-ledger.md` — 本次候选与精确 Release Attempt 记录。
+
+### Validation / Risks
+
+- `python3 scripts/tests/test_audit_change_release_ledger.py`（9 tests）及 `python3 -m py_compile ...` 均通过。
+- 提交前只能验证审计器可解析候选元数据；提交后才可使用实际 `base...head` 检查该精确范围。
+
+### Release Attempt
+
+#### RA-20260807-mobile-blockers-01
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260731-001`, `CRL-20260803-003`.
+- Intended action: `push`.
+- Branch: `codex/release-blockers-20260807-mobile`.
+- Base: `origin/Dev@817b803a88177a8d43b4e02965fffde59e852789`; fetched at 2026-08-07 Australia/Melbourne.
+- Candidate patch SHA-256: `d9d2629fddb8b909cf9bae0dcb7d804ae785e8ae0078d8a9fefe69b1a649705b` from the exact staged non-ledger candidate content.
+- Commit SHA: `ec578d219aea20a8fdc64c7569aa97208fff22a0`; candidate content commit, with the exact audit head emitted separately by the release report.
+- Required validation: PASS; evidence: ledger audit 8/8、Expo public-config assertions、`git diff --cached --check`、`npm run typecheck`、`npm test -- --runInBand`（51 suites / 246 tests）、`npx expo export --platform ios`、auditor 9 tests 及 Python compile 均通过；导出只落在仓库外临时目录。
+- Dependencies: OTA configuration/runbook、exact Release Attempt auditor and its test plus this ledger; no current `CRL-20260806-001` feedback-capability code is present or claimed.
+- Shared-hunk review: PASS — the manifest, lockfile and EAS configuration are deliberately one OTA-baseline unit; no hunk is borrowed from the rejected 59-file candidate.
+- Generated-file review: PASS — no generated output, cache, dependency directory, secret or local environment file is staged; the successful export directory is outside the repository.
+- User authorization: `approved-for-push`; evidence: the user replied “推送” on 2026-08-07 after `codex/release-blockers-20260807-mobile` and candidate content commit `ec578d219aea20a8fdc64c7569aa97208fff22a0` were presented. EAS, TestFlight, OTA and production actions remain separately unauthorized.
+- Independent review: GO; evidence: 2026-08-07 independent read-only review accepted exact hash `d9d2629fddb8b909cf9bae0dcb7d804ae785e8ae0078d8a9fefe69b1a649705b`, all 8 staged paths, validation evidence, and sensitive/generated-file review for commit only.
+- Technical state: `pushed`.
+- Remote push: `origin/codex/release-blockers-20260807-mobile@1eaf3757f0b62f1009e22dd8e9c778316ae1b0a6`, confirmed by `git ls-remote` on 2026-08-07 Australia/Melbourne.
+- Action conclusion: GO for push (completed); not merged to `Dev`, built by EAS, installed through TestFlight, deployed, or published as OTA.
+
 ## CRL-20260805-003 — 入住检查退房动作类型保护（mobile）
 
 - **Status:** ready

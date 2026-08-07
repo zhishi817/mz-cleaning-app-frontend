@@ -1,6 +1,6 @@
 {
   "name": "mzstay_app",
-  "version": "1.0.23",
+  "version": "1.0.25",
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
@@ -8,7 +8,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "eslint .",
-    "test:ledger-range-audit": "python3 scripts/tests/test_audit_change_release_ledger.py",
+    "test:ledger-range-audit": "PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py",
     "check:ledger": "python3 scripts/audit_change_release_ledger.py",
     "check:buttons": "python3 scripts/audit_button_contract.py --strict",
     "test": "jest",
@@ -36,6 +36,7 @@
     "expo-notifications": "^0.31.5",
     "expo-secure-store": "~15.0.2",
     "expo-status-bar": "~3.0.9",
+    "expo-updates": "~29.0.19",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
