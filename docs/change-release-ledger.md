@@ -26,7 +26,7 @@
 
 - Repository: `mobile`.
 - Selected CRLs: `CRL-20260731-001`, `CRL-20260803-003`, `CRL-20260807-001`.
-- Intended action: `commit`.
+- Intended action: `push`.
 - Branch: `codex/release-blockers-20260807-mobile`.
 - Base: `origin/Dev@817b803a88177a8d43b4e02965fffde59e852789`; fetched at 2026-08-07 Australia/Melbourne.
 - Candidate patch SHA-256: `d2687376f3b3255fe03d62b63942eced62878b68b7a8bef0b4180af51eb3f923` from the exact staged `origin/Dev...candidate` content excluding the ledger.
@@ -36,9 +36,9 @@
 - Shared-hunk review: PASS; `scripts/audit_change_release_ledger.py` and its test deliberately update the earlier `CRL-20260803-003` Release Attempt auditor, which is selected in this same PR scope.
 - Generated-file review: PASS; no generated output, dependency directory, secret, local environment file or cache is selected.
 - Technical state: `committed`.
-- User authorization: `selected-for-commit`; evidence: user confirmed this CI-fix CRL on 2026-08-07. Push requires a fresh exact commit authorization.
+- User authorization: `approved-for-push`; evidence: user confirmed `codex/release-blockers-20260807-mobile@334893b6f0defd4495c68adf6c0d35a073d354da` on 2026-08-07. No merge, EAS build, TestFlight or OTA publication is authorized.
 - Independent review: GO; evidence: 2026-08-07 independent read-only review accepted full PR scope, hash `d2687376f3b3255fe03d62b63942eced62878b68b7a8bef0b4180af51eb3f923`, CI semantics, and sensitive/generated-file review for commit only.
-- Action conclusion: GO for commit (completed); push requires fresh authorization after the exact new commit SHA is presented.
+- Action conclusion: NOT VERIFIED for push until the authorization receipt is committed and the exact range audit is rerun.
 
 ## CRL-20260731-001 — MZStay 外部 TestFlight OTA 原生基线（mobile）
 
