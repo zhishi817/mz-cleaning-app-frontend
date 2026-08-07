@@ -2,7 +2,7 @@
 
 ## CRL-20260807-002 — CI 台账测试无缓存执行（mobile）
 
-- **Status:** ready
+- **Status:** committed
 - **Updated:** 2026-08-07 Australia/Melbourne
 - **Request:** 修复 PR #15 合并前 CI 的非交互质量门失败。
 - **Outcome:** 台账审计单测不再在工作树生成 Python 字节码缓存，后续台账覆盖检查不会把该测试产物误判为未登记改动。
@@ -42,12 +42,12 @@
 - Branch: `codex/release-blockers-20260807-mobile` (PR #15 to `Dev`).
 - Base: `origin/Dev@817b803a88177a8d43b4e02965fffde59e852789`; fetched at 2026-08-07 18:11 AEST.
 - Candidate patch SHA-256: `be559e7b25dfcdb4054e37f146f3219fddbed2ab914b68f60cd554c19e801a0c` from the exact `origin/Dev...candidate` content excluding the ledger.
-- Commit SHA: not committed; audit head is emitted by the report command after commit.
+- Commit SHA: `c01d754cfd7f99f71e9e96508ae17f7785cfa038`; candidate content commit. The exact audit head is emitted separately by the report command.
 - Dependencies: `CRL-20260807-001` must travel with this fix because the quality gate runs its auditor immediately before the coverage audit; previous PR #15 units remain in the same exact range.
 - Required validation: PASS; evidence: `npm run check:ci` passed locally (auditor 11/11, TypeScript, ESLint 0 errors, button contract, Jest 51/246, ledger coverage).
 - Shared-hunk review: PASS; `package.json` is shared with selected `CRL-20260731-001` and only the test command hunk changed; the selected ledger records are contiguous but independently attributed.
 - Generated-file review: PASS; the generated `.pyc` was removed and no generated output, dependency directory, secret, local environment file or cache is selected.
-- Technical state: verified.
+- Technical state: committed.
 - User authorization: selected-for-commit; evidence: user requested resolution of PR #15 merge failure and confirmed continuation on 2026-08-07. Push authorization must be renewed after a new commit SHA exists.
 - Independent review: GO; evidence: 2026-08-07 independent read-only review verified the complete `origin/Dev...candidate` range, staged scope, matching `be559e7b…` fingerprint, validation, sensitive-information review and generated-file review for commit only.
 - Action conclusion: GO; blockers: none for commit. Push requires a new exact commit SHA, range report and explicit renewed authorization.
@@ -57,7 +57,7 @@
 - Risk: 仅防止测试副产物污染工作树；不会掩盖实际未登记的源文件改动。
 - Rollback: 恢复该 npm script 的原命令。
 - Sensitive-information review: no sensitive files or values involved.
-- Git state: uncommitted.
+- Git state: candidate content committed at `c01d754cfd7f99f71e9e96508ae17f7785cfa038`; push not authorized for this new commit SHA.
 
 ## CRL-20260807-001 — 移动端 PR 台账范围审计兼容（mobile）
 
