@@ -1,5 +1,64 @@
 # Change Release Ledger
 
+## CRL-20260807-002 — CI 台账测试无缓存执行（mobile）
+
+- **Status:** ready
+- **Updated:** 2026-08-07 Australia/Melbourne
+- **Request:** 修复 PR #15 合并前 CI 的非交互质量门失败。
+- **Outcome:** 台账审计单测不再在工作树生成 Python 字节码缓存，后续台账覆盖检查不会把该测试产物误判为未登记改动。
+
+### Implementation
+
+- Previous behavior: `test:ledger-range-audit` 会写入 `scripts/__pycache__/`；紧随其后的 `check:ledger` 将该未跟踪文件报告为未覆盖，`npm run check:ci` 失败。
+- New behavior: 测试进程以 `PYTHONDONTWRITEBYTECODE=1` 执行，不产生 `.pyc` 文件；实际源文件和台账路径仍由原有审计覆盖。
+- Key decisions: 仅调整测试命令的进程环境，不修改审计规则、业务逻辑或 GitHub 工作流。
+
+### Files / Areas
+
+- `package.json` — 修改 `test:ledger-range-audit`，禁止本测试写入 Python 字节码缓存。
+- `docs/change-release-ledger.md` — 记录此独立 CI 质量门修复。
+
+### Impact / Dependencies
+
+- API: none.
+- Database / migration: none.
+- Config / environment: 仅质量命令子进程环境变量；不影响 Expo 运行时。
+- Dependencies: none.
+- Related units: `CRL-20260807-001`（PR 范围审计兼容）。
+
+### Validation
+
+- `npm run check:ci` — passed: ledger range-audit tests 11/11; working-tree ledger coverage 2/2; TypeScript passed; ESLint 0 errors/111 pre-existing warnings; button contract passed; Jest 51 suites/246 tests passed.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 2 changed paths, 2 recorded paths.
+- `git diff --check` — passed.
+
+### Release Attempt
+
+#### RA-20260807-mobile-pr15-ci-02
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260731-001`, `CRL-20260803-003`, `CRL-20260807-001`, `CRL-20260807-002`.
+- Intended action: `commit`.
+- Branch: `codex/release-blockers-20260807-mobile` (PR #15 to `Dev`).
+- Base: `origin/Dev@817b803a88177a8d43b4e02965fffde59e852789`; fetched at 2026-08-07 18:11 AEST.
+- Candidate patch SHA-256: `be559e7b25dfcdb4054e37f146f3219fddbed2ab914b68f60cd554c19e801a0c` from the exact `origin/Dev...candidate` content excluding the ledger.
+- Commit SHA: not committed; audit head is emitted by the report command after commit.
+- Dependencies: `CRL-20260807-001` must travel with this fix because the quality gate runs its auditor immediately before the coverage audit; previous PR #15 units remain in the same exact range.
+- Required validation: PASS; evidence: `npm run check:ci` passed locally (auditor 11/11, TypeScript, ESLint 0 errors, button contract, Jest 51/246, ledger coverage).
+- Shared-hunk review: PASS; `package.json` is shared with selected `CRL-20260731-001` and only the test command hunk changed; the selected ledger records are contiguous but independently attributed.
+- Generated-file review: PASS; the generated `.pyc` was removed and no generated output, dependency directory, secret, local environment file or cache is selected.
+- Technical state: verified.
+- User authorization: selected-for-commit; evidence: user requested resolution of PR #15 merge failure and confirmed continuation on 2026-08-07. Push authorization must be renewed after a new commit SHA exists.
+- Independent review: GO; evidence: 2026-08-07 independent read-only review verified the complete `origin/Dev...candidate` range, staged scope, matching `be559e7b…` fingerprint, validation, sensitive-information review and generated-file review for commit only.
+- Action conclusion: GO; blockers: none for commit. Push requires a new exact commit SHA, range report and explicit renewed authorization.
+
+### Risks / Release Notes
+
+- Risk: 仅防止测试副产物污染工作树；不会掩盖实际未登记的源文件改动。
+- Rollback: 恢复该 npm script 的原命令。
+- Sensitive-information review: no sensitive files or values involved.
+- Git state: uncommitted.
+
 ## CRL-20260807-001 — 移动端 PR 台账范围审计兼容（mobile）
 
 - **Status:** ready

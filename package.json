@@ -8,7 +8,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "eslint .",
-    "test:ledger-range-audit": "python3 scripts/tests/test_audit_change_release_ledger.py",
+    "test:ledger-range-audit": "PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py",
     "check:ledger": "python3 scripts/audit_change_release_ledger.py",
     "check:buttons": "python3 scripts/audit_button_contract.py --strict",
     "test": "jest",
