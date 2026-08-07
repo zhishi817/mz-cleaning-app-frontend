@@ -42,7 +42,7 @@
 - Branch: `codex/release-blockers-20260807-mobile` (PR #15 to `Dev`).
 - Base: `origin/Dev@817b803a88177a8d43b4e02965fffde59e852789`; fetched at 2026-08-07 18:11 AEST.
 - Candidate patch SHA-256: `be559e7b25dfcdb4054e37f146f3219fddbed2ab914b68f60cd554c19e801a0c` from the exact `origin/Dev...candidate` content excluding the ledger.
-- Commit SHA: `c01d754cfd7f99f71e9e96508ae17f7785cfa038`; candidate content commit. The exact audit head is emitted separately by the report command.
+- Commit SHA: `c01d7543cc385d02fe4cb18daa95ed398148fc18`; candidate content commit. The exact audit head is emitted separately by the report command.
 - Dependencies: `CRL-20260807-001` must travel with this fix because the quality gate runs its auditor immediately before the coverage audit; previous PR #15 units remain in the same exact range.
 - Required validation: PASS; evidence: `npm run check:ci` passed locally (auditor 11/11, TypeScript, ESLint 0 errors, button contract, Jest 51/246, ledger coverage).
 - Shared-hunk review: PASS; `package.json` is shared with selected `CRL-20260731-001` and only the test command hunk changed; the selected ledger records are contiguous but independently attributed.
@@ -57,7 +57,7 @@
 - Risk: 仅防止测试副产物污染工作树；不会掩盖实际未登记的源文件改动。
 - Rollback: 恢复该 npm script 的原命令。
 - Sensitive-information review: no sensitive files or values involved.
-- Git state: candidate content committed at `c01d754cfd7f99f71e9e96508ae17f7785cfa038`; push not authorized for this new commit SHA.
+- Git state: candidate content committed at `c01d7543cc385d02fe4cb18daa95ed398148fc18`; push not authorized for this new commit SHA.
 
 ## CRL-20260807-001 — 移动端 PR 台账范围审计兼容（mobile）
 
