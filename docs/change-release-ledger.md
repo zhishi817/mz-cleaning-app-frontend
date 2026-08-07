@@ -54,8 +54,9 @@
 - Generated-file review: PASS — no generated output, cache, dependency directory, secret or local environment file is staged; the successful export directory is outside the repository.
 - User authorization: `approved-for-push`; evidence: the user replied “推送” on 2026-08-07 after `codex/release-blockers-20260807-mobile` and candidate content commit `ec578d219aea20a8fdc64c7569aa97208fff22a0` were presented. EAS, TestFlight, OTA and production actions remain separately unauthorized.
 - Independent review: GO; evidence: 2026-08-07 independent read-only review accepted exact hash `d9d2629fddb8b909cf9bae0dcb7d804ae785e8ae0078d8a9fefe69b1a649705b`, all 8 staged paths, validation evidence, and sensitive/generated-file review for commit only.
-- Technical state: `committed`.
-- Action conclusion: NOT VERIFIED for push until the updated exact committed-range audit and independent review complete; EAS, TestFlight, OTA and production actions remain separately unauthorized.
+- Technical state: `pushed`.
+- Remote push: `origin/codex/release-blockers-20260807-mobile@1eaf3757f0b62f1009e22dd8e9c778316ae1b0a6`, confirmed by `git ls-remote` on 2026-08-07 Australia/Melbourne.
+- Action conclusion: GO for push (completed); not merged to `Dev`, built by EAS, installed through TestFlight, deployed, or published as OTA.
 
 ## CRL-20260805-003 — 入住检查退房动作类型保护（mobile）
 
