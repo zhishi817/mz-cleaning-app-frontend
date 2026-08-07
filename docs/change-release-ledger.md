@@ -30,15 +30,15 @@
 - Branch: `codex/release-blockers-20260807-mobile`.
 - Base: `origin/Dev@817b803a88177a8d43b4e02965fffde59e852789`; fetched at 2026-08-07 Australia/Melbourne.
 - Candidate patch SHA-256: `d2687376f3b3255fe03d62b63942eced62878b68b7a8bef0b4180af51eb3f923` from the exact staged `origin/Dev...candidate` content excluding the ledger.
-- Commit SHA: not created; audit head is emitted separately by the release report.
+- Commit SHA: `7d370ce079fb10f40fc262d2df1bdda9791f6528`; candidate content commit, with the exact audit head emitted separately by the release report.
 - Dependencies: prior pushed PR content `ec578d219aea20a8fdc64c7569aa97208fff22a0`, local push-receipt commit `26f6da7cec982fdd3dcca0eb4b5c0867db356a3c`, and this CI compatibility unit travel together on PR #15.
 - Required validation: PASS; evidence: 11 auditor regression tests, current PR-range invocation syntax, working-tree ledger coverage, and whitespace check pass. The exact committed PR range will be rerun after the content commit.
 - Shared-hunk review: PASS; `scripts/audit_change_release_ledger.py` and its test deliberately update the earlier `CRL-20260803-003` Release Attempt auditor, which is selected in this same PR scope.
 - Generated-file review: PASS; no generated output, dependency directory, secret, local environment file or cache is selected.
-- Technical state: `candidate`.
+- Technical state: `committed`.
 - User authorization: `selected-for-commit`; evidence: user confirmed this CI-fix CRL on 2026-08-07. Push requires a fresh exact commit authorization.
 - Independent review: GO; evidence: 2026-08-07 independent read-only review accepted full PR scope, hash `d2687376f3b3255fe03d62b63942eced62878b68b7a8bef0b4180af51eb3f923`, CI semantics, and sensitive/generated-file review for commit only.
-- Action conclusion: GO for commit; push requires fresh authorization after the exact new commit SHA is recorded.
+- Action conclusion: GO for commit (completed); push requires fresh authorization after the exact new commit SHA is presented.
 
 ## CRL-20260731-001 — MZStay 外部 TestFlight OTA 原生基线（mobile）
 
