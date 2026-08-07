@@ -38,7 +38,7 @@
 
 - Repository: `mobile`.
 - Selected CRLs: `CRL-20260731-001`, `CRL-20260803-003`, `CRL-20260807-001`, `CRL-20260807-002`.
-- Intended action: `commit`.
+- Intended action: `push`.
 - Branch: `codex/release-blockers-20260807-mobile` (PR #15 to `Dev`).
 - Base: `origin/Dev@817b803a88177a8d43b4e02965fffde59e852789`; fetched at 2026-08-07 18:11 AEST.
 - Candidate patch SHA-256: `be559e7b25dfcdb4054e37f146f3219fddbed2ab914b68f60cd554c19e801a0c` from the exact `origin/Dev...candidate` content excluding the ledger.
@@ -48,16 +48,16 @@
 - Shared-hunk review: PASS; `package.json` is shared with selected `CRL-20260731-001` and only the test command hunk changed; the selected ledger records are contiguous but independently attributed.
 - Generated-file review: PASS; the generated `.pyc` was removed and no generated output, dependency directory, secret, local environment file or cache is selected.
 - Technical state: committed.
-- User authorization: selected-for-commit; evidence: user requested resolution of PR #15 merge failure and confirmed continuation on 2026-08-07. Push authorization must be renewed after a new commit SHA exists.
-- Independent review: GO; evidence: 2026-08-07 independent read-only review verified the complete `origin/Dev...candidate` range, staged scope, matching `be559e7b…` fingerprint, validation, sensitive-information review and generated-file review for commit only.
-- Action conclusion: GO; blockers: none for commit. Push requires a new exact commit SHA, range report and explicit renewed authorization.
+- User authorization: approved-for-push; evidence: user confirmed the exact mobile PR #15 range ending at `cee2674a59707b0fce400c71f60f96c2854f19fd` on 2026-08-07, limited to pushing this branch; merge, EAS build, TestFlight and OTA publication remain unauthorized.
+- Independent review: NOT VERIFIED; a push-specific independent review of the authorization receipt and exact range is pending.
+- Action conclusion: NOT VERIFIED; blockers: push-specific independent review and final exact range report pending.
 
 ### Risks / Release Notes
 
 - Risk: 仅防止测试副产物污染工作树；不会掩盖实际未登记的源文件改动。
 - Rollback: 恢复该 npm script 的原命令。
 - Sensitive-information review: no sensitive files or values involved.
-- Git state: candidate content committed at `c01d7543cc385d02fe4cb18daa95ed398148fc18`; push not authorized for this new commit SHA.
+- Git state: candidate content committed at `c01d7543cc385d02fe4cb18daa95ed398148fc18`; push authorized for the exact PR #15 range, pending independent review and final range report.
 
 ## CRL-20260807-001 — 移动端 PR 台账范围审计兼容（mobile）
 
