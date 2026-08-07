@@ -47,15 +47,15 @@
 - Branch: `codex/release-blockers-20260807-mobile`.
 - Base: `origin/Dev@817b803a88177a8d43b4e02965fffde59e852789`; fetched at 2026-08-07 Australia/Melbourne.
 - Candidate patch SHA-256: `d9d2629fddb8b909cf9bae0dcb7d804ae785e8ae0078d8a9fefe69b1a649705b` from the exact staged non-ledger candidate content.
-- Commit SHA: not created; staged candidate is cleanly based on the recorded base.
+- Commit SHA: `ec578d219aea20a8fdc64c7569aa97208fff22a0`; candidate content commit, with the exact audit head emitted separately by the release report.
 - Required validation: PASS; evidence: ledger audit 8/8、Expo public-config assertions、`git diff --cached --check`、`npm run typecheck`、`npm test -- --runInBand`（51 suites / 246 tests）、`npx expo export --platform ios`、auditor 9 tests 及 Python compile 均通过；导出只落在仓库外临时目录。
 - Dependencies: OTA configuration/runbook、exact Release Attempt auditor and its test plus this ledger; no current `CRL-20260806-001` feedback-capability code is present or claimed.
 - Shared-hunk review: PASS — the manifest, lockfile and EAS configuration are deliberately one OTA-baseline unit; no hunk is borrowed from the rejected 59-file candidate.
 - Generated-file review: PASS — no generated output, cache, dependency directory, secret or local environment file is staged; the successful export directory is outside the repository.
 - User authorization: `selected-for-commit` — the user asked to resolve the blockers and previously selected this OTA unit; push, EAS, TestFlight, OTA and production actions remain separately unauthorized.
 - Independent review: GO; evidence: 2026-08-07 independent read-only review accepted exact hash `d9d2629fddb8b909cf9bae0dcb7d804ae785e8ae0078d8a9fefe69b1a649705b`, all 8 staged paths, validation evidence, and sensitive/generated-file review for commit only.
-- Technical state: `candidate`.
-- Action conclusion: GO for commit; exact selected scope is approved for local commit only. Push, EAS, TestFlight, OTA and production actions remain separately unauthorized.
+- Technical state: `committed`.
+- Action conclusion: GO for commit (completed); push, EAS, TestFlight, OTA and production actions remain separately unauthorized.
 
 ## CRL-20260805-003 — 入住检查退房动作类型保护（mobile）
 
