@@ -1,5 +1,127 @@
 # Change Release Ledger
 
+## CRL-20260809-002 — 新建可复现的 TestFlight iOS OTA 基线（mobile）
+
+- **Status:** ready
+- **Updated:** 2026-08-09 01:07 AEST
+- **Request:** 用户授权基于当前已合并的 `Dev` 新建 iOS 外部 TestFlight 原生基线包，使维修任务修复可由精确源码交付，并为后续 OTA 建立可验证的 runtime。
+- **Outcome:** iOS 应用版本设置为 1.0.26、build number 设置为 27；该原生构建将从当前候选源码生成新的 fingerprint，并直接包含已合并的维修照片预览、提交状态和完成/未完成等宽按钮修复。
+
+### Implementation
+
+- Previous behavior: 当前 `Dev` 无法复现已安装 TestFlight build 26 的历史 fingerprint，不能向该二进制安全发布 OTA。
+- New behavior: 创建一个来自精确候选提交的 iOS TestFlight build 27；以后仅向这个新 fingerprint 发布兼容 OTA。新基线二进制本身包含当前已合并的 JS 修复，不另外发布无意义的同代码 OTA。
+- Key decisions: 仅递增 iOS build number；Android `versionCode` 保持 25，因为本次不发布 Android。保留 `runtimeVersion.policy: fingerprint`，不手工指定或覆盖 runtime，不改业务代码、权限、依赖或后端。
+
+### Files / Areas
+
+- `app.json` — modified: iOS TestFlight 基线版本 1.0.26/build 27。
+- `docs/change-release-ledger.md` — modified: 记录原生基线与后续 OTA 的审计证据。
+
+### Impact / Dependencies
+
+- API: none.
+- Database / migration: none.
+- Config / environment: iOS native release metadata changes intentionally require a new EAS build; production API environment remains from the existing `testflight` profile.
+- Dependencies: none; no package manifest or native module change.
+- Related units: `CRL-20260809-001` documents why the existing binary cannot receive this OTA; merged `CRL-20260808-001`, `CRL-20260808-002`, and `CRL-20260808-006` are included in the base. Root service changes remain separately merged but not yet deployed.
+
+### Validation
+
+- iOS fingerprint — passed: local pre-build fingerprint is `d1323f38006e6b8d651efc4d07b24dd5c263880f`; the new native build must publish this exact runtime, so comparison to obsolete build 26 is intentionally not required.
+- `npm run check:ci` — passed: ledger auditor 11/11; working-tree coverage 2/2; TypeScript passed; ESLint 0 errors / 113 existing warnings; strict button audit passed; 53 Jest suites / 256 tests passed.
+- `npx expo export --platform ios --output-dir <temporary directory>` — passed: Metro bundled 1,574 modules and wrote output outside the repository.
+- EAS iOS build — authorized, not run yet.
+- App Store Connect/TestFlight submission and external-device acceptance — not authorized or run yet.
+
+### Release Attempt
+
+#### RA-20260809-mobile-testflight-baseline-01
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260809-001`, `CRL-20260809-002`.
+- Intended action: `commit`.
+- Branch: `codex/mobile-testflight-runtime-20260809`.
+- Base: `origin/Dev@43427b10d60bbf5a226081155c1377218cec69cd`; fetched at 2026-08-09 00:45 AEST.
+- Candidate patch SHA-256: `cd3841884ddc89a4f85ebb5809959ee92c0abc07e9c5b0afce90d1f8403a5607` from the staged `app.json` diff excluding `docs/change-release-ledger.md`.
+- Commit SHA: not committed.
+- Dependencies: merged mobile maintenance content `77b05e5f9334f31850b390f834d3a0c5946ff737`; EAS iOS build is authorized only after a reviewed merged source candidate exists.
+- Required validation: PASS; full CI, iOS export, fingerprint generation and ledger coverage passed.
+- Shared-hunk review: PASS; `app.json` has no selected/unselected shared hunk, and both ledger records are selected release-attempt evidence.
+- Generated-file review: PASS; `node_modules` is ignored verification-only material and the export output is outside the repository; neither is in the candidate.
+- Technical state: verified.
+- User authorization: selected-for-commit; evidence: user authorized the new iOS TestFlight native baseline on 2026-08-09. Push, merge and App Store Connect submission remain commit-SHA-bound actions.
+- Independent review: GO for commit — 2026-08-09 independent read-only review accepted the exact staged fingerprint `cd3841884ddc89a4f85ebb5809959ee92c0abc07e9c5b0afce90d1f8403a5607`, complete two-file scope, validation and sensitive/generated-file review.
+- Action conclusion: GO for commit; blockers: commit-bound push authorization is still required before any push or merge.
+
+### Risks / Release Notes
+
+- Risk: EAS build success is not App Store Connect submission, external TestFlight availability, OTA publication, backend deployment, or device acceptance proof.
+- Rollback: abandon the cloud build before submission; revert this two-field metadata change in a subsequent reviewed release if the build must be withdrawn.
+- Sensitive-information review: no secrets, `.env` contents, tokens, credentials, private keys, device logs, production data, or signed URLs are included.
+- Git state: uncommitted candidate on the temporary release branch.
+
+## CRL-20260809-001 — 诊断 TestFlight OTA runtime 基线不匹配（mobile）
+
+- **Status:** blocked
+- **Updated:** 2026-08-09 00:52 AEST
+- **Request:** 在已合并的维修任务移动端修复上发布外部 TestFlight OTA；先修复当前 `Dev` 与已安装 TestFlight 基线的 runtime 不匹配。
+- **Outcome:** 已确认当前 `Dev` 无法可靠地复现已安装 TestFlight 二进制的 runtime；未发布不可接收的 OTA，也未保留任何业务或版本配置改动。
+
+### Implementation
+
+- Previous behavior: `Dev` 记录为 1.0.25/iOS build 25，生成的 iOS fingerprint 为 `d749479f96ec94dd91a4c58eade8239f96f4e51b`，与 TestFlight 1.0.26/26 的 `e5f4cc520509f2b64df725bf8eef5a9a42dc0e8a` 不匹配，OTA 无可接收设备。
+- Attempted behavior: 曾在干净候选中临时恢复为 1.0.26/iOS build 26；新 fingerprint 为 `fb584acb02cb88354c1f8d5822d6eac5177affba`，仍不匹配，已在提交前撤回。
+- Key decisions: 不改变 runtime policy、原生依赖、权限、插件、Android 配置、API 或后端；不以手工覆盖 runtime 方式绕过兼容性保护，也不发布无人可接收的 OTA。
+
+### Files / Areas
+
+- `app.json` — investigated: 临时的 version/buildNumber 恢复在 fingerprint 校验失败后已撤回，未保留改动。
+- `docs/change-release-ledger.md` — modified: 记录这一独立的 OTA 兼容性阻断与证据。
+
+### Impact / Dependencies
+
+- API: none.
+- Database / migration: none.
+- Config / environment: no retained configuration change; `runtimeVersion.policy` 保持 `fingerprint`。
+- Dependencies: none; 复用与 `package-lock.json` 哈希一致的本地依赖树仅作 fingerprint 验证。
+- Related units: `CRL-20260808-001`, `CRL-20260808-002`, `CRL-20260808-006`; root 已合并的配套维修服务端修复仍需单独部署才构成完整端到端生产验证。
+
+### Validation
+
+- iOS fingerprint parity — failed: current `Dev` is `d749479f96ec94dd91a4c58eade8239f96f4e51b`; temporary 1.0.26/26 metadata restoration was `fb584acb02cb88354c1f8d5822d6eac5177affba`; neither matches the installed TestFlight build `e5f4cc520509f2b64df725bf8eef5a9a42dc0e8a`.
+- EAS build-source provenance — failed to reproduce: the EAS-reported commit `614dbd11545895488fc001138d30e2c63d970748` is an ancestor but its committed `package.json` lacks `expo-updates`; this is evidence that the finished binary was built from a non-identical source snapshot. The exact additional fingerprint input cannot be reconstructed safely from the committed history.
+- `npm run check:ci` — not run: runtime parity gate blocked the candidate before a releasable source change existed.
+- `npx expo export --platform ios` — not accepted as evidence: an earlier clean-worktree attempt lacked physical `node_modules` and Metro could not resolve `react-native-gesture-handler`; that is an environment setup failure, not a source verdict.
+- EAS/TestFlight device validation — not run; no OTA was published.
+
+### Release Attempt
+
+#### RA-20260809-mobile-testflight-runtime-01
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260809-001`.
+- Intended action: `commit`.
+- Branch: `codex/mobile-testflight-runtime-20260809`.
+- Base: `origin/Dev@43427b10d60bbf5a226081155c1377218cec69cd`; fetched at 2026-08-09 00:45 AEST.
+- Candidate patch SHA-256: not created; no retained source candidate.
+- Commit SHA: not committed.
+- Dependencies: TestFlight iOS build 1.0.26/26 with fingerprint `e5f4cc520509f2b64df725bf8eef5a9a42dc0e8a`; merged mobile maintenance content `77b05e5f9334f31850b390f834d3a0c5946ff737` is already contained in the base.
+- Required validation: FAIL; fingerprint parity is absent.
+- Shared-hunk review: not applicable; `app.json` has no selected/unselected shared hunk.
+- Generated-file review: PASS; no generated output, dependency link, environment file, secret, or cache is retained.
+- Technical state: candidate.
+- User authorization: selected-for-commit; evidence: user confirmed the minimal metadata repair, merge to `Dev`, and TestFlight OTA on 2026-08-09; push/merge confirmation remains commit-SHA-bound.
+- Independent review: not run.
+- Action conclusion: BLOCKED; this historical OTA attempt is closed because build 26 cannot be reproduced from `Dev`; the separately authorized replacement baseline is tracked by `CRL-20260809-002`.
+
+### Risks / Release Notes
+
+- Risk: a manual runtime override could target a binary whose native/config source is not proven compatible; it is intentionally not used.
+- Rollback: no source change remains; keep the `testflight` channel unchanged.
+- Sensitive-information review: no secrets, `.env` contents, tokens, credentials, private keys, device logs, production data, or signed URLs are recorded.
+- Git state: only this blocked ledger record is uncommitted on the temporary release branch; no app/business configuration change remains.
+
 ## CRL-20260808-001 — 维修完工照片本地预览与安全关联（mobile）
 
 - **Status:** candidate; selected-for-commit.
