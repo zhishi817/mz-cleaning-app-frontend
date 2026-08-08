@@ -10,6 +10,17 @@
 - **Validation:** `npm run typecheck` and the four targeted Jest suites passed.
 - **Risk / dependency:** depends on root CRL-20260808-001/007 and the authenticated media proxy; a pre-existing unassociated remote object without a local draft remains intentionally unavailable.
 
+### Files / Areas
+
+- `src/lib/maintenanceCompletionPhotoDraft.ts`
+- `src/lib/maintenanceCompletionPhotoDraft.test.ts`
+- `src/lib/localMediaDrafts.ts`
+- `src/lib/api.ts`
+- `src/components/CleaningMediaImage.tsx`
+- `src/components/CleaningMediaPreview.tsx`
+- `src/screens/tasks/TaskDetailScreen.tsx`
+- `docs/change-release-ledger.md`
+
 ## CRL-20260808-002 — 维修提交后的状态收口与完成/未完成按钮等宽（mobile）
 
 - **Status:** candidate; selected-for-commit.
@@ -17,6 +28,17 @@
 - **Files / Areas:** `src/screens/tasks/TaskDetailScreen.tsx`, `src/screens/tasks/TaskDetailScreen.test.tsx`, `src/lib/workTasksStore.ts`, `src/lib/workTasksStore.test.ts`, `src/lib/taskVisualTheme.ts`, `src/lib/taskVisualTheme.test.ts`, `src/screens/tabs/TasksScreen.tsx`, `scripts/audit_button_contract.py`.
 - **Validation:** `npm run check:ci` passed: ledger audit, typecheck, lint (0 errors / 113 warnings), strict button-contract audit and 53 Jest suites / 256 tests; targeted suite includes the maintenance equal-width control test.
 - **Risk / dependency:** depends on root CRL-20260808-002 returning authoritative `status` and `available_actions`; no client-side permission inference or state-machine rewrite.
+
+### Files / Areas
+
+- `src/screens/tasks/TaskDetailScreen.tsx`
+- `src/screens/tasks/TaskDetailScreen.test.tsx`
+- `src/lib/workTasksStore.ts`
+- `src/lib/workTasksStore.test.ts`
+- `src/lib/taskVisualTheme.ts`
+- `src/lib/taskVisualTheme.test.ts`
+- `src/screens/tabs/TasksScreen.tsx`
+- `scripts/audit_button_contract.py`
 
 ## CRL-20260808-006 — 历史网页维修照片的认证代理展示（mobile）
 
@@ -28,23 +50,32 @@
 
 ### Files / Areas
 
-- `src/lib/maintenanceCompletionPhotoDraft.ts` — 本地维修完工照片草稿。
-- `src/lib/maintenanceCompletionPhotoDraft.test.ts` — 本地草稿生命周期回归。
-- `src/screens/tasks/TaskDetailScreen.test.tsx` — 维修完成/未完成等宽动作回归。
-- `src/screens/tasks/FeedbackFormScreen.test.tsx` — 维修反馈完工照片携带来源任务认证上下文。
+- `src/lib/cleaningMedia.ts`
+- `src/lib/cleaningMedia.test.ts`
+- `src/lib/api.ts`
+- `src/components/CleaningMediaImage.tsx`
+- `src/components/CleaningMediaPreview.tsx`
+- `src/screens/tasks/FeedbackFormScreen.tsx`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx`
 
 ### Release Attempt
 
 #### RA-20260808-mobile-maintenance-01
 
-- Repository: mobile; branch: `codex/release-maintenance-20260808-mobile`; intended action: commit.
+- Repository: mobile
+- Intended action: commit
+- Branch: `codex/release-maintenance-20260808-mobile`
 - Selected CRLs: `CRL-20260808-001`, `CRL-20260808-002`, `CRL-20260808-006`.
-- Base: `origin/Dev@2aef8d392ce0208d412e74bd6034667dcb94e1b9`; fetched 2026-08-08 23:04:22 AEST.
+- Base: `origin/Dev@2aef8d392ce0208d412e74bd6034667dcb94e1b9`; fetched at 2026-08-08 23:04:22 AEST.
 - Candidate patch SHA-256: `65af759982ea71da466c1fe4302802b97188b6acbf2ce3efb4883c69f3a06235`, from the staged candidate excluding `docs/change-release-ledger.md`.
-- Candidate content commit: `77b05e5f9334f31850b390f834d3a0c5946ff737`. Dependencies: root RA-20260808-root-maintenance-01 for CRL-20260808-001/002/006.
-- Validation: `npm run check:ci` passed (ledger audit, typecheck, lint 0 errors / 113 warnings, strict button audit, and 53 Jest suites / 256 tests); six targeted suites / 52 tests also passed. Root-side paired media/workflow contracts passed separately.
-- Shared-hunk / generated / secret review: all staged paths are attributed above; no dependency link, cache, environment file, token, private media value or build output is selected.
-- Technical state: committed. User authorization: selected-for-commit (user confirmation on 2026-08-08). Independent review: GO for commit only on 2026-08-08 for exact fingerprint `65af759982ea71da466c1fe4302802b97188b6acbf2ce3efb4883c69f3a06235`, after full `npm run check:ci` and removal of the initial scope collisions. Action conclusion: GO for commit completed; push remains unauthorized.
+- Commit SHA: `77b05e5f9334f31850b390f834d3a0c5946ff737` (candidate content commit)
+- Dependencies: root RA-20260808-root-maintenance-01 for CRL-20260808-001/002/006.
+- Required validation: PASS — `npm run check:ci` passed (ledger audit, typecheck, lint 0 errors / 113 warnings, strict button audit, 53 Jest suites / 256 tests); six targeted suites / 52 tests also passed.
+- Shared-hunk review: PASS — the two shared test files are hunk-verified maintenance assertions; all changed source paths belong to selected CRLs.
+- Generated-file review: PASS — no dependency link, cache, environment file, token, private media value or build output is selected.
+- Independent review: GO — commit-only review accepted exact fingerprint `65af759982ea71da466c1fe4302802b97188b6acbf2ce3efb4883c69f3a06235` after removal of scope collisions and full CI.
+- User authorization: selected-for-commit — user confirmation on 2026-08-08.
+- Technical state: committed
 
 ## CRL-20260807-002 — CI 台账测试无缓存执行（mobile）
 
