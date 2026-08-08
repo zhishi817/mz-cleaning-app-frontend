@@ -44,22 +44,40 @@
 - Branch: `codex/mobile-testflight-runtime-20260809`.
 - Base: `origin/Dev@43427b10d60bbf5a226081155c1377218cec69cd`; fetched at 2026-08-09 00:45 AEST.
 - Candidate patch SHA-256: `cd3841884ddc89a4f85ebb5809959ee92c0abc07e9c5b0afce90d1f8403a5607` from the staged `app.json` diff excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed.
+- Commit SHA: `1a096698978a61f707e84fa705d1dad972ba5563` (candidate content commit).
 - Dependencies: merged mobile maintenance content `77b05e5f9334f31850b390f834d3a0c5946ff737`; EAS iOS build is authorized only after a reviewed merged source candidate exists.
 - Required validation: PASS; full CI, iOS export, fingerprint generation and ledger coverage passed.
 - Shared-hunk review: PASS; `app.json` has no selected/unselected shared hunk, and both ledger records are selected release-attempt evidence.
 - Generated-file review: PASS; `node_modules` is ignored verification-only material and the export output is outside the repository; neither is in the candidate.
-- Technical state: verified.
+- Technical state: committed.
 - User authorization: selected-for-commit; evidence: user authorized the new iOS TestFlight native baseline on 2026-08-09. Push, merge and App Store Connect submission remain commit-SHA-bound actions.
 - Independent review: GO for commit — 2026-08-09 independent read-only review accepted the exact staged fingerprint `cd3841884ddc89a4f85ebb5809959ee92c0abc07e9c5b0afce90d1f8403a5607`, complete two-file scope, validation and sensitive/generated-file review.
 - Action conclusion: GO for commit; blockers: commit-bound push authorization is still required before any push or merge.
+
+#### RA-20260809-mobile-testflight-baseline-02
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260809-001`, `CRL-20260809-002`.
+- Intended action: `push`.
+- Branch: `codex/mobile-testflight-runtime-20260809`.
+- Base: `origin/Dev@43427b10d60bbf5a226081155c1377218cec69cd`; fetched at 2026-08-09 00:45 AEST.
+- Candidate patch SHA-256: `cd3841884ddc89a4f85ebb5809959ee92c0abc07e9c5b0afce90d1f8403a5607`.
+- Commit SHA: `1a096698978a61f707e84fa705d1dad972ba5563` (candidate content commit).
+- Dependencies: merged mobile maintenance content `77b05e5f9334f31850b390f834d3a0c5946ff737`.
+- Required validation: PASS; evidence is retained in RA-20260809-mobile-testflight-baseline-01.
+- Shared-hunk review: PASS; evidence is retained in RA-20260809-mobile-testflight-baseline-01.
+- Generated-file review: PASS; evidence is retained in RA-20260809-mobile-testflight-baseline-01.
+- Technical state: committed.
+- User authorization: not-selected; a push authorization must name this exact commit, branch and repository.
+- Independent review: not run for push.
+- Action conclusion: NOT VERIFIED; blockers: push authorization and exact committed-range review pending.
 
 ### Risks / Release Notes
 
 - Risk: EAS build success is not App Store Connect submission, external TestFlight availability, OTA publication, backend deployment, or device acceptance proof.
 - Rollback: abandon the cloud build before submission; revert this two-field metadata change in a subsequent reviewed release if the build must be withdrawn.
 - Sensitive-information review: no secrets, `.env` contents, tokens, credentials, private keys, device logs, production data, or signed URLs are included.
-- Git state: uncommitted candidate on the temporary release branch.
+- Git state: candidate content committed at `1a096698978a61f707e84fa705d1dad972ba5563`; a ledger-only commit receipt is pending, with no push or merge performed.
 
 ## CRL-20260809-001 — 诊断 TestFlight OTA runtime 基线不匹配（mobile）
 
