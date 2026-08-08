@@ -78,11 +78,33 @@ function baseStatusMeta(status: string) {
   return { text: '待处理', tone: 'pending' as const }
 }
 
-export function getTaskStatusMeta(task: WorkTaskItem, roleNames: string[]) {
+function isMaintenanceSource(source: string) {
+  return source === 'property_maintenance' || source === 'external_maintenance_orders'
+}
+
+/**
+ * `pending_review` is the server-side lifecycle state after an executor submits
+ * a maintenance result. The assignee has completed their work, while anyone
+ * else reviewing the task still needs the explicit review-pending signal.
+ */
+function isMaintenancePendingReview(task: WorkTaskItem, status: string, source: string) {
+  if (!isMaintenanceSource(source)) return false
+  const workflowStatus = String(task.maintenance_workflow?.status || '').trim().toLowerCase()
+  return workflowStatus === 'pending_review' || status === 'pending_review'
+}
+
+export function getTaskStatusMeta(task: WorkTaskItem, roleNames: string[], viewerUserId?: string | null) {
   const s = getEffectiveTaskStatus(task)
   const meta = baseStatusMeta(s)
   const source = String(task.source_type || '').trim().toLowerCase()
   const kind = String(task.task_kind || '').trim().toLowerCase()
+
+  if (isMaintenancePendingReview(task, s, source)) {
+    const assigneeId = String(task.assignee_id || '').trim()
+    const viewerId = String(viewerUserId || '').trim()
+    if (assigneeId && viewerId && assigneeId === viewerId) return { text: '已完成', tone: 'success' as const }
+    return { text: '待审核', tone: 'pending' as const }
+  }
 
   if (source === 'cleaning_tasks' && kind === 'inspection') {
     const checkedOutAt = String((task as any).checked_out_at || '').trim()

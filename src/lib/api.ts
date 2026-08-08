@@ -663,6 +663,11 @@ export type WorkTask = {
   completion_photo_urls?: string[] | null
   completion_note?: string | null
   completion_reason?: string | null
+  maintenance_workflow?: {
+    domain: 'internal' | 'external'
+    status: 'pending_assignment' | 'assigned' | 'in_progress' | 'pending_review' | 'closed' | 'cancelled' | string
+    available_actions: string[]
+  } | null
   keys_required?: number | null
   keys_required_checkout?: number | null
   keys_required_checkin?: number | null
@@ -1037,6 +1042,7 @@ export type PropertyFeedback = {
   resolved_at?: string | null
   completed_at?: string | null
   review_status?: 'pending' | 'approved' | 'rejected' | null
+  completion_photo_urls?: string[] | null
   repair_photo_urls?: string[] | null
   repair_notes?: string | null
   project_items?: PropertyFeedbackProject[] | null
@@ -2674,10 +2680,11 @@ export async function uploadMzappMedia(
   token: string,
   file: { uri: string; name: string; mimeType: string },
   meta?: Record<string, string | undefined | null>,
+  options?: { skipImageCompression?: boolean },
 ) {
   const urls = buildUrlCandidates('mzapp/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const preparedFile = await prepareImageUpload(file)
+  const preparedFile = options?.skipImageCompression ? file : await prepareImageUpload(file)
   const form = new FormData()
   if (meta) {
     for (const [k, v] of Object.entries(meta)) {
@@ -2700,7 +2707,8 @@ export async function uploadMzappMedia(
   const data = (await parseJsonOrThrow(res)) as any
   const u = String(data?.url || '').trim()
   if (!u) throw new Error('上传成功但未返回 url')
-  return { url: u }
+  const key = String(data?.key || '').trim()
+  return { url: u, key: key || undefined }
 }
 
 export async function getMzappExpenseBootstrap(token: string) {
@@ -3001,6 +3009,48 @@ export async function markWorkTask(
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as any
+}
+
+export type MaintenanceExecutorWorkflowAction = 'executor_complete' | 'executor_unfinished'
+
+export async function submitMaintenanceExecutorAction(
+  token: string,
+  params: {
+    domain: 'internal' | 'external'
+    recordId: string
+    action: MaintenanceExecutorWorkflowAction
+    completionPhotoUrls?: string[]
+    completionNote?: string | null
+    reason?: string | null
+    operationId: string
+  },
+) {
+  const recordId = String(params.recordId || '').trim()
+  if (!recordId) throw new Error('缺少维修记录ID')
+  const urls = buildUrlCandidates(`maintenance/workflow/${params.domain}/${encodeURIComponent(recordId)}/${params.action}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  const body = {
+    completion_photo_urls: Array.isArray(params.completionPhotoUrls) ? params.completionPhotoUrls : [],
+    completion_note: String(params.completionNote || '').trim() || null,
+    reason: String(params.reason || '').trim() || null,
+    operation_id: String(params.operationId || '').trim(),
+  }
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as {
+    ok: true
+    status: string
+    available_actions: string[]
+  }
 }
 
 export async function updateWorkTaskPhotos(

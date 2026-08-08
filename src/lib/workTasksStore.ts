@@ -135,6 +135,8 @@ let lastStreamActivityAt = 0
 let fullSyncPromise: Promise<void> | null = null
 let fullSyncQueued = false
 const refreshWorkTasksInFlight = new Map<string, Promise<void>>()
+let localPatchRevision = 0
+const localPatchRevisionsByBucket = new Map<string, Map<string, number>>()
 
 function emit() {
   for (const cb of listeners) cb()
@@ -657,6 +659,7 @@ export async function patchWorkTaskItem(id0: string, patch: Partial<WorkTaskItem
   const next = { ...prev, ...patch }
   const items = state.items.slice()
   items[idx] = next
+  recordLocalTaskPatch(state.bucketKey, next.id)
   state = { ...state, items, updatedAt: new Date().toISOString() }
   await persist()
   emit()
@@ -674,7 +677,9 @@ export async function patchWorkTaskItems(patches0: Array<{ id: string; patch: Pa
     const patch = patchById.get(String(task.id || '').trim())
     if (!patch) return task
     changed = true
-    return { ...task, ...patch }
+    const next = { ...task, ...patch }
+    recordLocalTaskPatch(state.bucketKey, next.id)
+    return next
   })
   if (!changed) return
   state = { ...state, items, updatedAt: new Date().toISOString() }
@@ -737,17 +742,52 @@ function workTaskIdentityValues(task: Partial<WorkTaskItem> | WorkTask) {
     .filter(Boolean)
 }
 
-export function mergeRemoteWorkTaskItems(remote: WorkTaskItem[], previous: WorkTaskItem[]) {
+function recordLocalTaskPatch(bucketKey: string | null, taskId0: string) {
+  const bucket = String(bucketKey || '').trim()
+  const taskId = String(taskId0 || '').trim()
+  if (!bucket || !taskId) return
+  const revisions = localPatchRevisionsByBucket.get(bucket) || new Map<string, number>()
+  revisions.set(taskId, ++localPatchRevision)
+  localPatchRevisionsByBucket.set(bucket, revisions)
+}
+
+function taskIdsPatchedAfter(bucketKey: string, revision: number) {
+  const revisions = localPatchRevisionsByBucket.get(bucketKey)
+  if (!revisions) return new Set<string>()
+  return new Set(Array.from(revisions.entries())
+    .filter(([, patchedRevision]) => patchedRevision > revision)
+    .map(([taskId]) => taskId))
+}
+
+function clearPatchedTaskIdsThrough(bucketKey: string, revision: number) {
+  const revisions = localPatchRevisionsByBucket.get(bucketKey)
+  if (!revisions) return
+  for (const [taskId, patchedRevision] of revisions.entries()) {
+    if (patchedRevision <= revision) revisions.delete(taskId)
+  }
+  if (!revisions.size) localPatchRevisionsByBucket.delete(bucketKey)
+}
+
+export function mergeRemoteWorkTaskItems(
+  remote: WorkTaskItem[],
+  previous: WorkTaskItem[],
+  options?: { retainLocalTaskIds?: Iterable<string> },
+) {
   const previousByIdentity = new Map<string, WorkTaskItem>()
+  const previousItemsByIdentity = new Map<string, WorkTaskItem>()
   for (const item of Array.isArray(previous) ? previous : []) {
-    const checkedOutAt = String((item as any)?.checked_out_at || '').trim()
-    if (!checkedOutAt) continue
     for (const identity of workTaskIdentityValues(item)) {
-      if (!previousByIdentity.has(identity)) previousByIdentity.set(identity, item)
+      if (!previousItemsByIdentity.has(identity)) previousItemsByIdentity.set(identity, item)
+      if (String((item as any)?.checked_out_at || '').trim() && !previousByIdentity.has(identity)) previousByIdentity.set(identity, item)
     }
   }
 
+  const retainLocalTaskIds = new Set(Array.from(options?.retainLocalTaskIds || []).map((id) => String(id || '').trim()).filter(Boolean))
   return (Array.isArray(remote) ? remote : []).map((item) => {
+    const locallyPatchedItem = workTaskIdentityValues(item)
+      .map((identity) => retainLocalTaskIds.has(identity) ? previousItemsByIdentity.get(identity) : null)
+      .find(Boolean)
+    if (locallyPatchedItem) return locallyPatchedItem
     if (String((item as any)?.source_type || '').trim() !== 'cleaning_tasks') return item
     if (Object.prototype.hasOwnProperty.call(item, 'checked_out_at')) return item
     const previousItem = workTaskIdentityValues(item)
@@ -771,9 +811,12 @@ export async function refreshWorkTasksFromServer(params: {
 
   const run = (async () => {
     await initWorkTasksStore({ bucketKey })
+    const refreshStartPatchRevision = localPatchRevision
     const remote = await listWorkTasks(params.token, { date_from: params.date_from, date_to: params.date_to, view: params.view })
     const mappedRemote = remote.map(mapRemoteTask).filter((t) => t.date !== 'unknown')
-    const items = mergeRemoteWorkTaskItems(mappedRemote, state.items)
+    const locallyPatchedTaskIds = taskIdsPatchedAfter(bucketKey, refreshStartPatchRevision)
+    const items = mergeRemoteWorkTaskItems(mappedRemote, state.items, { retainLocalTaskIds: locallyPatchedTaskIds })
+    clearPatchedTaskIdsThrough(bucketKey, refreshStartPatchRevision)
 
     const now = new Date().toISOString()
     clearBucketDirty(bucketKey)
@@ -794,4 +837,26 @@ export async function refreshWorkTasksFromServer(params: {
   } finally {
     if (refreshWorkTasksInFlight.get(bucketKey) === run) refreshWorkTasksInFlight.delete(bucketKey)
   }
+}
+
+// An executor receipt is authoritative, but a task-list request may have been
+// sent before that receipt returned. Let that stale request settle under the
+// local-patch guard, then refresh the same active bucket once for canonical
+// server data. Do not switch a task detail into its fallback date bucket.
+export async function reconcileActiveWorkTasksAfterLocalPatch() {
+  const params = activeRealtimeParams ? { ...activeRealtimeParams } : null
+  if (!params) return false
+  const bucketKey = makeWorkTasksBucketKey(params)
+  if (state.bucketKey !== bucketKey) return false
+  const inFlight = refreshWorkTasksInFlight.get(bucketKey)
+  if (inFlight) {
+    try {
+      await inFlight
+    } catch {
+      // The next refresh still gives the receipt a chance to reconcile.
+    }
+  }
+  if (!sameRealtimeParams(activeRealtimeParams, params) || state.bucketKey !== bucketKey) return false
+  await refreshWorkTasksFromServer(params)
+  return true
 }

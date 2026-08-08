@@ -1,5 +1,82 @@
 # Change Release Ledger
 
+## CRL-20260808-001 — 维修完工照片本地预览与安全关联（mobile）
+
+- **Status:** candidate; selected-for-commit.
+- **Outcome:** 完工照片先持久化为按“任务 + 执行人”归属的本地草稿并立即预览；只有专用动作已保存远端引用且任务回读确认关联后才清理本地文件。
+- **Files / Areas:** `src/lib/maintenanceCompletionPhotoDraft.ts`, `src/lib/maintenanceCompletionPhotoDraft.test.ts`, `src/lib/localMediaDrafts.ts`, `src/lib/api.ts`, `src/components/CleaningMediaImage.tsx`, `src/components/CleaningMediaPreview.tsx`, `src/screens/tasks/TaskDetailScreen.tsx`.
+- `src/lib/maintenanceCompletionPhotoDraft.ts` — 本地草稿归属、状态与安全清理。
+- `src/lib/maintenanceCompletionPhotoDraft.test.ts` — 本地草稿恢复和清理回归。
+- **Validation:** `npm run typecheck` and the four targeted Jest suites passed.
+- **Risk / dependency:** depends on root CRL-20260808-001/007 and the authenticated media proxy; a pre-existing unassociated remote object without a local draft remains intentionally unavailable.
+
+### Files / Areas
+
+- `src/lib/maintenanceCompletionPhotoDraft.ts`
+- `src/lib/maintenanceCompletionPhotoDraft.test.ts`
+- `src/lib/localMediaDrafts.ts`
+- `src/lib/api.ts`
+- `src/components/CleaningMediaImage.tsx`
+- `src/components/CleaningMediaPreview.tsx`
+- `src/screens/tasks/TaskDetailScreen.tsx`
+- `docs/change-release-ledger.md`
+
+## CRL-20260808-002 — 维修提交后的状态收口与完成/未完成按钮等宽（mobile）
+
+- **Status:** candidate; selected-for-commit.
+- **Outcome:** 专用回执把当前任务缓存收口为 `pending_review` 并清除执行动作；受派执行人显示“已完成”、其他角色显示“待审核”；完成/未完成两个按钮在宽屏等宽、窄屏满宽。
+- **Files / Areas:** `src/screens/tasks/TaskDetailScreen.tsx`, `src/screens/tasks/TaskDetailScreen.test.tsx`, `src/lib/workTasksStore.ts`, `src/lib/workTasksStore.test.ts`, `src/lib/taskVisualTheme.ts`, `src/lib/taskVisualTheme.test.ts`, `src/screens/tabs/TasksScreen.tsx`, `scripts/audit_button_contract.py`.
+- **Validation:** `npm run check:ci` passed: ledger audit, typecheck, lint (0 errors / 113 warnings), strict button-contract audit and 53 Jest suites / 256 tests; targeted suite includes the maintenance equal-width control test.
+- **Risk / dependency:** depends on root CRL-20260808-002 returning authoritative `status` and `available_actions`; no client-side permission inference or state-machine rewrite.
+
+### Files / Areas
+
+- `src/screens/tasks/TaskDetailScreen.tsx`
+- `src/screens/tasks/TaskDetailScreen.test.tsx`
+- `src/lib/workTasksStore.ts`
+- `src/lib/workTasksStore.test.ts`
+- `src/lib/taskVisualTheme.ts`
+- `src/lib/taskVisualTheme.test.ts`
+- `src/screens/tabs/TasksScreen.tsx`
+- `scripts/audit_button_contract.py`
+
+## CRL-20260808-006 — 历史网页维修照片的认证代理展示（mobile）
+
+- **Status:** candidate; selected-for-commit.
+- **Outcome:** 历史 `completion_photo_urls` 纳入反馈详情的后照片；`maintenance/` 引用、缩略图和大图都携带当前任务上下文经认证代理读取，不提供浏览器直链。
+- **Files / Areas:** `src/lib/cleaningMedia.ts`, `src/lib/cleaningMedia.test.ts`, `src/lib/api.ts`, `src/components/CleaningMediaImage.tsx`, `src/components/CleaningMediaPreview.tsx`, `src/screens/tasks/FeedbackFormScreen.tsx`, `src/screens/tasks/FeedbackFormScreen.test.tsx`.
+- **Validation:** targeted private-media tests, typecheck, strict button audit and `npm run check:ci` passed.
+- **Risk / dependency:** must ship with root CRL-20260808-006; device and deployed authenticated proxy validation remain outstanding.
+
+### Files / Areas
+
+- `src/lib/cleaningMedia.ts`
+- `src/lib/cleaningMedia.test.ts`
+- `src/lib/api.ts`
+- `src/components/CleaningMediaImage.tsx`
+- `src/components/CleaningMediaPreview.tsx`
+- `src/screens/tasks/FeedbackFormScreen.tsx`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx`
+
+### Release Attempt
+
+#### RA-20260808-mobile-maintenance-01
+
+- Repository: mobile
+- Intended action: commit
+- Branch: `codex/release-maintenance-20260808-mobile`
+- Selected CRLs: `CRL-20260808-001`, `CRL-20260808-002`, `CRL-20260808-006`.
+- Base: `origin/Dev@2aef8d392ce0208d412e74bd6034667dcb94e1b9`; fetched at 2026-08-08 23:04:22 AEST.
+- Candidate patch SHA-256: `65af759982ea71da466c1fe4302802b97188b6acbf2ce3efb4883c69f3a06235`, from the staged candidate excluding `docs/change-release-ledger.md`.
+- Commit SHA: `77b05e5f9334f31850b390f834d3a0c5946ff737` (candidate content commit)
+- Dependencies: root RA-20260808-root-maintenance-01 for CRL-20260808-001/002/006.
+- Required validation: PASS — `npm run check:ci` passed (ledger audit, typecheck, lint 0 errors / 113 warnings, strict button audit, 53 Jest suites / 256 tests); six targeted suites / 52 tests also passed.
+- Shared-hunk review: PASS — the two shared test files are hunk-verified maintenance assertions; all changed source paths belong to selected CRLs.
+- Generated-file review: PASS — no dependency link, cache, environment file, token, private media value or build output is selected.
+- Independent review: GO — commit-only review accepted exact fingerprint `65af759982ea71da466c1fe4302802b97188b6acbf2ce3efb4883c69f3a06235` after removal of scope collisions and full CI.
+- User authorization: selected-for-commit — user confirmation on 2026-08-08.
+- Technical state: committed
+
 ## CRL-20260807-002 — CI 台账测试无缓存执行（mobile）
 
 - **Status:** committed
