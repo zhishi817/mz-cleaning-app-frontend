@@ -68,9 +68,9 @@
 - Shared-hunk review: PASS; evidence is retained in RA-20260809-mobile-testflight-baseline-01.
 - Generated-file review: PASS; evidence is retained in RA-20260809-mobile-testflight-baseline-01.
 - Technical state: committed.
-- User authorization: not-selected; a push authorization must name this exact commit, branch and repository.
-- Independent review: not run for push.
-- Action conclusion: NOT VERIFIED; blockers: push authorization and exact committed-range review pending.
+- User authorization: approved-for-push; evidence: user confirmed the independent `mobile` repository, branch `codex/mobile-testflight-runtime-20260809`, candidate content commit `1a096698978a61f707e84fa705d1dad972ba5563`, and audited receipt head `e4ba249a9ec568abde498c0926f3eef5ed40dbcc` on 2026-08-09. The following ledger-only receipt does not alter the selected base, branch, CRLs, or non-ledger candidate patch.
+- Independent review: GO for push technical review — 2026-08-09 independent read-only review accepted `origin/Dev@43427b10d60bbf5a226081155c1377218cec69cd...e4ba249a9ec568abde498c0926f3eef5ed40dbcc`, the candidate content commit and exact non-ledger fingerprint.
+- Action conclusion: GO for push; blockers: none for this exact candidate. PR merge, EAS build, App Store Connect submission, backend deployment, OTA and device acceptance remain separate actions.
 
 ### Risks / Release Notes
 
