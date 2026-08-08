@@ -6,13 +6,16 @@ import { cacheCleaningMediaImage } from '../lib/cleaningMediaCache'
 type Props = {
   token?: string | null
   reference?: string | null
+  localUri?: string | null
   thumbnailReference?: string | null
+  accessTaskId?: string | null
+  accessWorkTaskId?: string | null
   style?: StyleProp<ViewStyle>
   resizeMode?: ImageProps['resizeMode']
   testID?: string
 }
 
-export default function CleaningMediaPreview({ token, reference, thumbnailReference, style, resizeMode = 'contain', testID }: Props) {
+export default function CleaningMediaPreview({ token, reference, localUri, thumbnailReference, accessTaskId, accessWorkTaskId, style, resizeMode = 'contain', testID }: Props) {
   const [previewLoaded, setPreviewLoaded] = useState(false)
   const [previewFailed, setPreviewFailed] = useState(false)
   const [thumbnailFailed, setThumbnailFailed] = useState(false)
@@ -23,8 +26,8 @@ export default function CleaningMediaPreview({ token, reference, thumbnailRefere
   const [previewCacheSettled, setPreviewCacheSettled] = useState(false)
   const [thumbnailNativeFailed, setThumbnailNativeFailed] = useState(false)
   const [previewNativeFailed, setPreviewNativeFailed] = useState(false)
-  const thumbnailSource = useMemo(() => buildCleaningMediaImageSource(token, thumbnailReference || reference, 'thumbnail'), [reference, thumbnailReference, token])
-  const previewSource = useMemo(() => buildCleaningMediaImageSource(token, reference, 'preview'), [reference, token])
+  const thumbnailSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || thumbnailReference || reference, 'thumbnail', { accessTaskId, accessWorkTaskId }), [accessTaskId, accessWorkTaskId, localUri, reference, thumbnailReference, token])
+  const previewSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || reference, 'preview', { accessTaskId, accessWorkTaskId }), [accessTaskId, accessWorkTaskId, localUri, reference, token])
 
   useEffect(() => {
     setPreviewLoaded(false)
@@ -37,7 +40,7 @@ export default function CleaningMediaPreview({ token, reference, thumbnailRefere
     setPreviewCacheSettled(false)
     setThumbnailNativeFailed(false)
     setPreviewNativeFailed(false)
-  }, [reference, thumbnailReference, token])
+  }, [accessTaskId, accessWorkTaskId, localUri, reference, thumbnailReference, token])
 
   useEffect(() => {
     let active = true
@@ -77,7 +80,7 @@ export default function CleaningMediaPreview({ token, reference, thumbnailRefere
     if (previewCacheSettled && previewNativeFailed && !cachedPreviewUri) setPreviewFailed(true)
   }, [cachedPreviewUri, previewCacheSettled, previewNativeFailed])
 
-  if (!reference) return <View style={[styles.container, style]} />
+  if (!reference && !localUri) return <View style={[styles.container, style]} />
 
   return (
     <View style={[styles.container, style]}>

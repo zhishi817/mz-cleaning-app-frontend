@@ -81,11 +81,16 @@ export async function persistCompressedDraftMedia(params: {
   name: string
   mimeType: string
   kind?: 'photo' | 'video'
+  maxWidth?: number
+  quality?: number
 }) {
   const mimeType = draftMimeTypeFrom(params.name, params.mimeType, params.sourceUri)
   const shouldCompress = params.kind !== 'video' && isCompressibleImageMimeType(mimeType)
   const sourceUri = shouldCompress
-    ? await compressImageForLocalStorage(params.sourceUri, { maxWidth: 1800, quality: 0.72 })
+    ? await compressImageForLocalStorage(params.sourceUri, {
+        maxWidth: params.maxWidth ?? 1800,
+        quality: params.quality ?? 0.72,
+      })
     : params.sourceUri
   const finalMimeType = shouldCompress ? 'image/jpeg' : mimeType
   const finalName = shouldCompress ? `${cleanText(params.prefix) || 'photo'}-${Date.now()}.jpg` : params.name

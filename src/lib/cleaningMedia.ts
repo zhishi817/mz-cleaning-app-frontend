@@ -15,26 +15,39 @@ export function normalizeCleaningObjectKey(value: any) {
   return key
 }
 
+function normalizePrivateFeedbackObjectKey(value: any) {
+  const key = cleanText(value).replace(/^\/+/, '')
+  if (normalizeCleaningObjectKey(key)) return key
+  if (!key.startsWith('mzapp/') && !key.startsWith('maintenance/')) return ''
+  if (key.includes('..') || key.includes('\\') || /[?#]/.test(key)) return ''
+  return key
+}
+
 export function cleaningMediaReference(upload: { key?: string | null; url?: string | null }) {
   return normalizeCleaningObjectKey(upload?.key) || cleanText(upload?.url)
 }
 
 export type CleaningMediaImageVariant = 'original' | 'thumbnail' | 'preview'
 
-function cleaningMediaProxyUrl(reference: string, variant: CleaningMediaImageVariant = 'original') {
+function cleaningMediaProxyUrl(reference: string, variant: CleaningMediaImageVariant = 'original', accessTaskId?: string | null, accessWorkTaskId?: string | null) {
   const base = normalizeBase(API_BASE_URL)
   const apiRoot = base.replace(/\/auth\/?$/g, '')
   if (!apiRoot) return ''
-  const key = normalizeCleaningObjectKey(reference)
+  const key = normalizePrivateFeedbackObjectKey(reference)
   const query = key ? `key=${encodeURIComponent(key)}` : `url=${encodeURIComponent(reference)}`
   const variantQuery = variant === 'original' ? '' : `&variant=${variant}`
-  return `${apiRoot}/cleaning-app/media/image?${query}${variantQuery}`
+  const taskId = cleanText(accessTaskId)
+  const taskQuery = taskId ? `&source_task_id=${encodeURIComponent(taskId)}` : ''
+  const workTaskId = cleanText(accessWorkTaskId)
+  const workTaskQuery = workTaskId ? `&work_task_id=${encodeURIComponent(workTaskId)}` : ''
+  return `${apiRoot}/cleaning-app/media/image?${query}${variantQuery}${taskQuery}${workTaskQuery}`
 }
 
 function isLegacyPrivateR2Url(value: string) {
   if (!/^https?:\/\//i.test(value)) return false
   try {
-    return new URL(value).pathname.includes('/cleaning/')
+    const pathname = new URL(value).pathname
+    return pathname.includes('/cleaning/') || pathname.includes('/mzapp/') || pathname.includes('/maintenance/')
   } catch {
     return false
   }
@@ -44,13 +57,14 @@ export function buildCleaningMediaImageSource(
   token: string | null | undefined,
   rawReference: any,
   variant: CleaningMediaImageVariant = 'original',
+  options?: { accessTaskId?: string | null; accessWorkTaskId?: string | null },
 ) {
   const reference = cleanText(rawReference)
   if (!reference) return { uri: '' }
-  const key = normalizeCleaningObjectKey(reference)
+  const key = normalizePrivateFeedbackObjectKey(reference)
   if (key || isLegacyPrivateR2Url(reference)) {
     return {
-      uri: cleaningMediaProxyUrl(key || reference, variant),
+      uri: cleaningMediaProxyUrl(key || reference, variant, options?.accessTaskId, options?.accessWorkTaskId),
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     }
   }

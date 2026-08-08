@@ -79,3 +79,16 @@ test('merged inspection task shows pending inspection after cleaning is complete
   )
   expect(meta).toEqual({ text: '待检查', tone: 'pending' })
 })
+
+test('maintenance executor sees completed after submitting while management sees pending review', () => {
+  const task = makeTask({
+    task_kind: 'maintenance',
+    source_type: 'property_maintenance',
+    assignee_id: 'executor-1',
+    status: 'pending_review',
+    maintenance_workflow: { domain: 'internal', status: 'pending_review', available_actions: [] },
+  })
+
+  expect(getTaskStatusMeta(task, ['cleaner'], 'executor-1')).toEqual({ text: '已完成', tone: 'success' })
+  expect(getTaskStatusMeta(task, ['admin'], 'manager-1')).toEqual({ text: '待审核', tone: 'pending' })
+})

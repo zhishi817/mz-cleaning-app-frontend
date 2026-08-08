@@ -1,4 +1,4 @@
-import { isSafePatchEvent, mergePatchIntoTask, mergeRemoteWorkTaskItems, projectCleaningStatusForTask, type WorkTaskItem } from './workTasksStore'
+import { getWorkTasksSnapshot, initWorkTasksStore, isSafePatchEvent, makeWorkTasksBucketKey, mergePatchIntoTask, mergeRemoteWorkTaskItems, patchWorkTaskItem, projectCleaningStatusForTask, refreshWorkTasksFromServer, type WorkTaskItem } from './workTasksStore'
 
 jest.mock('react-native-sse', () => jest.fn())
 jest.mock('../config/env', () => ({ API_BASE_URL: 'https://api.example.com/api' }))
@@ -37,6 +37,66 @@ test('accepts an explicit server null and never copies a marker to an unrelated 
 
   expect(mergeRemoteWorkTaskItems(explicitClear, previous)[0]?.checked_out_at).toBeNull()
   expect(Object.prototype.hasOwnProperty.call(mergeRemoteWorkTaskItems(unrelated, previous)[0], 'checked_out_at')).toBe(false)
+})
+
+test('keeps a maintenance receipt when a task-list response started before that receipt returns', () => {
+  const receiptTask = makeTask({
+    id: 'property_maintenance:m1',
+    task_kind: 'maintenance',
+    source_type: 'property_maintenance',
+    source_id: 'm1',
+    status: 'pending_review',
+    maintenance_workflow: { status: 'pending_review', available_actions: [] },
+  } as any)
+  const staleRemote = makeTask({
+    id: 'property_maintenance:m1',
+    task_kind: 'maintenance',
+    source_type: 'property_maintenance',
+    source_id: 'm1',
+    status: 'assigned',
+    maintenance_workflow: { status: 'assigned', available_actions: ['executor_complete', 'executor_unfinished'] },
+  } as any)
+
+  expect(mergeRemoteWorkTaskItems([staleRemote], [receiptTask], { retainLocalTaskIds: ['property_maintenance:m1'] })[0]).toEqual(receiptTask)
+})
+
+test('does not let an in-flight stale list response overwrite a maintenance receipt', async () => {
+  const store = require('./storage')
+  const api = require('./api')
+  const userId = 'receipt-race-user'
+  const bucketKey = makeWorkTasksBucketKey({ userId, date_from: '2026-08-08', date_to: '2026-08-08', view: 'mine' })
+  const assignedTask = makeTask({
+    id: 'property_maintenance:m-race',
+    task_kind: 'maintenance',
+    source_type: 'property_maintenance',
+    source_id: 'm-race',
+    scheduled_date: '2026-08-08',
+    date: '2026-08-08',
+    status: 'assigned',
+    maintenance_workflow: { status: 'assigned', available_actions: ['executor_complete', 'executor_unfinished'] },
+  } as any)
+  let resolveRemote: (items: WorkTaskItem[]) => void = () => {}
+  const staleResponse = new Promise<WorkTaskItem[]>((resolve) => {
+    resolveRemote = resolve
+  })
+  store.getJson.mockResolvedValueOnce({ items: [assignedTask] })
+  api.listWorkTasks.mockReturnValueOnce(staleResponse)
+  await initWorkTasksStore({ bucketKey })
+
+  const refresh = refreshWorkTasksFromServer({ token: 't1', userId, date_from: '2026-08-08', date_to: '2026-08-08', view: 'mine' })
+  await Promise.resolve()
+  await patchWorkTaskItem('property_maintenance:m-race', {
+    status: 'pending_review',
+    maintenance_workflow: { status: 'pending_review', available_actions: [] },
+  } as any)
+  resolveRemote([assignedTask])
+  await refresh
+
+  expect(getWorkTasksSnapshot().items[0]).toMatchObject({
+    id: 'property_maintenance:m-race',
+    status: 'pending_review',
+    maintenance_workflow: { status: 'pending_review', available_actions: [] },
+  })
 })
 
 test('keeps a non-password inspection task pending key video after the realtime inspected event', () => {

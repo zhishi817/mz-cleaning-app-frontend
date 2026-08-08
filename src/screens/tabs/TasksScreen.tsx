@@ -2747,7 +2747,7 @@ function showBanner(title: string, message: string) {
           <View style={{ marginTop: 10, gap: 12 }}>
             {visibleTasks.map((task, taskIndex) => {
               const shouldRenderDayEndBefore = showDayEndCard && dayEndInsertIndex === taskIndex
-              const meta = getTaskStatusMeta(task, roleNames)
+              const meta = getTaskStatusMeta(task, roleNames, user?.id)
               const metaStyles = statusPillStylePair(meta.tone)
               const kind = taskKindLabel(task.task_kind)
               const addr = task.property?.address || ''

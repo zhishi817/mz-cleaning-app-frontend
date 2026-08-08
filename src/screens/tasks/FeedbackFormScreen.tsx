@@ -295,6 +295,7 @@ function buildDefaultProject(kind: 'maintenance' | 'deep_cleaning'): PropertyFee
 function feedbackPreviewUrls(item: PropertyFeedback): string[] {
   const basePhotos = [
     ...normalizeUrls(item.media_urls),
+    ...normalizeUrls(item.completion_photo_urls),
     ...normalizeUrls(item.repair_photo_urls),
   ]
   if (item.kind === 'daily_necessities') return Array.from(new Set(basePhotos))
@@ -499,6 +500,7 @@ export default function FeedbackFormScreen(props: Props) {
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerUrls, setViewerUrls] = useState<string[]>([])
   const [viewerIndex, setViewerIndex] = useState(0)
+  const [viewerAccessTaskId, setViewerAccessTaskId] = useState<string | null>(null)
 
   const [actionOpen, setActionOpen] = useState(false)
   const [actionMode, setActionMode] = useState<ActionMode>('create')
@@ -537,6 +539,7 @@ export default function FeedbackFormScreen(props: Props) {
   const propertyId = String(task?.property_id || task?.property?.id || '').trim()
   const propertyCode = String(task?.property?.code || '').trim()
   const taskId = String(task?.id || props.route.params.taskId || '').trim()
+  const feedbackSourceTaskId = String((task as any)?.source_id || task?.id || '').trim()
   const isInspectionPanelBatchMode = props.route.params.source === 'inspection_panel_batch'
   const userKey = String((user as any)?.id || (user as any)?.username || (user as any)?.email || '').trim()
   const isAdminUser = useMemo(() => {
@@ -1284,11 +1287,12 @@ export default function FeedbackFormScreen(props: Props) {
     }
   }
 
-  function openViewer(urls: string[], index: number) {
+  function openViewer(urls: string[], index: number, accessTaskId?: string | null) {
     const list = urls.map(toAbsoluteUrl).filter(Boolean)
     if (!list.length) return
     setViewerUrls(list)
     setViewerIndex(Math.max(0, Math.min(index, list.length - 1)))
+    setViewerAccessTaskId(String(accessTaskId || '').trim() || null)
     setViewerOpen(true)
   }
 
@@ -1298,6 +1302,7 @@ export default function FeedbackFormScreen(props: Props) {
 
   function closeViewer() {
     setViewerOpen(false)
+    setViewerAccessTaskId(null)
   }
 
   function syncViewerIndex(offsetX: number) {
@@ -1329,7 +1334,10 @@ export default function FeedbackFormScreen(props: Props) {
     const target = items.find((it) => it.status !== 'completed') || items[0]
     if (target) {
       const fallbackBefore = normalizeUrls(feedback.media_urls)
-      const fallbackAfter = normalizeUrls(feedback.repair_photo_urls)
+      const fallbackAfter = Array.from(new Set([
+        ...normalizeUrls(feedback.completion_photo_urls),
+        ...normalizeUrls(feedback.repair_photo_urls),
+      ]))
       return {
         ...target,
         before_photos: target.before_photos.length ? target.before_photos : fallbackBefore,
@@ -1350,7 +1358,10 @@ export default function FeedbackFormScreen(props: Props) {
       ended_at: null,
       duration_minutes: null,
       before_photos: normalizeUrls(feedback.media_urls),
-      after_photos: normalizeUrls(feedback.repair_photo_urls),
+      after_photos: Array.from(new Set([
+        ...normalizeUrls(feedback.completion_photo_urls),
+        ...normalizeUrls(feedback.repair_photo_urls),
+      ])),
       status: feedback.status === 'resolved' ? 'completed' : 'open',
       completed_by: null,
       completed_at: feedback.completed_at || null,
@@ -1973,9 +1984,9 @@ export default function FeedbackFormScreen(props: Props) {
                         <Text style={styles.historySectionCountText}>{pendingHistoryCount}</Text>
                       </View>
                     </View>
-                    <FeedbackGroup token={token} title="房源维修" items={pendingGroups.maintenance} emptyText="暂无处理中维修反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
-                    <FeedbackGroup token={token} title="深度清洁" items={pendingGroups.deep} emptyText="暂无处理中深清反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
-                    <FeedbackGroup token={token} title="日用品反馈" items={pendingGroups.daily} emptyText="暂无处理中日用品反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
+                    <FeedbackGroup token={token} accessTaskId={feedbackSourceTaskId} title="房源维修" items={pendingGroups.maintenance} emptyText="暂无处理中维修反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
+                    <FeedbackGroup token={token} accessTaskId={feedbackSourceTaskId} title="深度清洁" items={pendingGroups.deep} emptyText="暂无处理中深清反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
+                    <FeedbackGroup token={token} accessTaskId={feedbackSourceTaskId} title="日用品反馈" items={pendingGroups.daily} emptyText="暂无处理中日用品反馈" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
                   </View>
 
                   <View style={styles.historySection}>
@@ -1993,7 +2004,7 @@ export default function FeedbackFormScreen(props: Props) {
                         </Pressable>
                       </View>
                     </View>
-                    {resolvedExpanded ? <FeedbackGroup token={token} title="完工记录" items={resolved} emptyText="暂无待复核记录" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} /> : null}
+                    {resolvedExpanded ? <FeedbackGroup token={token} accessTaskId={feedbackSourceTaskId} title="完工记录" items={resolved} emptyText="暂无待复核记录" canManage={isAdminUser} deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} /> : null}
                   </View>
                 </View>
               ) : null}
@@ -2070,13 +2081,13 @@ export default function FeedbackFormScreen(props: Props) {
                       {detailRecord.before_photos.length ? (
                         <>
                           <Text style={styles.photoSectionLabel}>{detailItem.kind === 'deep_cleaning' ? '深度清洁前照片' : '维修前照片'}</Text>
-                          <PhotoStrip token={token} urls={detailRecord.before_photos} onPress={openViewer} />
+                          <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} urls={detailRecord.before_photos} onPress={openViewer} />
                         </>
                       ) : null}
                       {detailRecord.after_photos.length ? (
                         <>
                           <Text style={styles.photoSectionLabel}>{detailItem.kind === 'deep_cleaning' ? '深度清洁后照片' : '维修后照片'}</Text>
-                          <PhotoStrip token={token} urls={detailRecord.after_photos} onPress={openViewer} />
+                          <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} urls={detailRecord.after_photos} onPress={openViewer} />
                         </>
                       ) : null}
                     </View>
@@ -2351,18 +2362,13 @@ export default function FeedbackFormScreen(props: Props) {
             >
             {viewerUrls.map((u, idx) => (
                 <View key={`${u}-${idx}`} style={[styles.viewerSlide, { width: screenWidth }]}>
-                <CleaningMediaPreview token={token} reference={u} style={{ width: '100%', height: '100%' }} />
+                <CleaningMediaPreview token={token} reference={u} accessTaskId={viewerAccessTaskId} style={{ width: '100%', height: '100%' }} />
               </View>
             ))}
             </ScrollView>
             <View style={[styles.viewerTop, { paddingTop: Math.max(insets.top, 12) }]}>
               <Pressable onPress={closeViewer}><Text style={styles.viewerText}>关闭</Text></Pressable>
               {viewerUrls.length ? <Text style={styles.viewerCounter}>{`${Math.min(viewerIndex + 1, viewerUrls.length)}/${viewerUrls.length}`}</Text> : null}
-              {viewerUrls[viewerIndex] ? (
-                <Pressable onPress={() => Linking.openURL(viewerUrls[viewerIndex]).catch(() => Alert.alert(t('common_error'), '打开失败'))}>
-                  <Text style={styles.viewerText}>浏览器打开</Text>
-                </Pressable>
-              ) : null}
             </View>
           </Pressable>
         </Pressable>
@@ -2436,14 +2442,14 @@ function StepCard(props: { step: string; title: string; subtitle?: string; highl
   )
 }
 
-function PhotoStrip(props: { token?: string | null; urls: string[]; onPress: (urls: string[], index: number) => void; onRemove?: (index: number) => void }) {
+function PhotoStrip(props: { token?: string | null; accessTaskId?: string | null; urls: string[]; onPress: (urls: string[], index: number, accessTaskId?: string | null) => void; onRemove?: (index: number) => void }) {
   if (!props.urls.length) return null
   return (
     <View style={styles.thumbRow}>
       {props.urls.map((u, idx) => (
         <View key={`${u}-${idx}`} style={styles.thumbItemWrap}>
-          <Pressable onPress={() => props.onPress(props.urls, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
-            <CleaningMediaImage token={props.token} remoteReference={u} style={styles.thumb} />
+          <Pressable onPress={() => props.onPress(props.urls, idx, props.accessTaskId)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
+            <CleaningMediaImage token={props.token} remoteReference={u} accessTaskId={props.accessTaskId} style={styles.thumb} />
           </Pressable>
           {props.onRemove ? (
             <Pressable onPress={() => props.onRemove?.(idx)} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
@@ -2458,6 +2464,7 @@ function PhotoStrip(props: { token?: string | null; urls: string[]; onPress: (ur
 
 function FeedbackGroup(props: {
   token?: string | null
+  accessTaskId?: string | null
   title: string
   items: PropertyFeedback[]
   emptyText?: string
@@ -2467,7 +2474,7 @@ function FeedbackGroup(props: {
   onEdit: (item: PropertyFeedback) => void
   onMove: (item: PropertyFeedback) => void
   onDelete: (item: PropertyFeedback) => void
-  onPreview: (urls: string[], index: number) => void
+  onPreview: (urls: string[], index: number, accessTaskId?: string | null) => void
 }) {
   return (
     <View style={styles.groupBlock}>
@@ -2489,8 +2496,8 @@ function FeedbackGroup(props: {
                   <Text style={styles.feedbackMeta}>{statusLabel(item)}</Text>
                 </View>
                 {previewUrl ? (
-                  <Pressable onPress={() => props.onPreview(previewUrls, 0)} style={({ pressed }) => [styles.feedbackThumbWrap, pressed ? styles.pressed : null]}>
-            <CleaningMediaImage token={props.token} remoteReference={previewUrl} style={styles.feedbackThumb} resizeMode="cover" />
+                  <Pressable accessibilityRole="button" accessibilityLabel="查看反馈照片" onPress={() => props.onPreview(previewUrls, 0, props.accessTaskId)} style={({ pressed }) => [styles.feedbackThumbWrap, pressed ? styles.pressed : null]}>
+            <CleaningMediaImage token={props.token} remoteReference={previewUrl} accessTaskId={props.accessTaskId} style={styles.feedbackThumb} resizeMode="cover" />
                     {previewUrls.length > 1 ? (
                       <View style={styles.feedbackThumbBadge}>
                         <Text style={styles.feedbackThumbBadgeText}>{previewUrls.length}</Text>
@@ -2499,7 +2506,7 @@ function FeedbackGroup(props: {
                   </Pressable>
                 ) : null}
                 <View style={styles.feedbackActions}>
-                  <Pressable onPress={() => props.onView(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
+                  <Pressable accessibilityRole="button" accessibilityLabel="查看反馈详情" onPress={() => props.onView(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
                     <Ionicons name="eye-outline" size={18} color="#2563EB" />
                   </Pressable>
                   <Pressable onPress={() => props.onEdit(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>

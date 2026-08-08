@@ -62,6 +62,7 @@ KNOWN_LEGACY_EXCEPTIONS = {
     ("src/screens/tasks/SuppliesFormScreen.tsx", "thumbDeleteBtn", "width", 18),
     ("src/screens/tasks/TaskDetailScreen.tsx", "tagDanger", "height", 24),
     ("src/screens/tasks/TaskDetailScreen.tsx", "actionBtnEqualWidth", "minWidth", 0),
+    ("src/screens/tasks/TaskDetailScreen.tsx", "maintenanceActionButton", "minWidth", 0),
     ("src/screens/tasks/TaskDetailScreen.tsx", "markPhotoRemoveVisual", "width", 40),
 }
 

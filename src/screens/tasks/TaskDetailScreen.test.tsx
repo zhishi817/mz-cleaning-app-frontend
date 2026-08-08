@@ -91,6 +91,14 @@ jest.mock('../../lib/keyUploadQueue', () => ({
   subscribeKeyUploadQueue: jest.fn(() => () => {}),
 }))
 
+jest.mock('../../lib/maintenanceCompletionPhotoDraft', () => ({
+  clearMaintenanceCompletionPhotoDraft: jest.fn(async () => {}),
+  createMaintenanceCompletionPhotoMediaId: jest.fn(() => 'media-1'),
+  getMaintenanceCompletionPhotoDraft: jest.fn(async () => []),
+  removeMaintenanceCompletionPhotoDraft: jest.fn(async () => {}),
+  setMaintenanceCompletionPhotoDraft: jest.fn(async (_taskId: string, _ownerId: string, photos: any[]) => photos),
+}))
+
 beforeEach(() => {
   mockKeyQueueItem = null
   require('../../lib/api').getWorkTaskFormPhotos.mockClear()
@@ -200,6 +208,43 @@ test('cleaning task with empty server actions does not fall back to generic mark
   })
 
   snapshot.items[0].available_actions = previousActions
+})
+
+test('maintenance executor complete and unfinished controls share the same flexible width', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  snapshot.items[0] = {
+    ...previousTask,
+    id: 'property_maintenance:m1',
+    task_kind: 'maintenance',
+    source_type: 'property_maintenance',
+    source_id: 'm1',
+    status: 'assigned',
+    available_actions: [],
+    maintenance_workflow: { status: 'assigned', available_actions: ['executor_complete', 'executor_unfinished'] },
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'maintenance-width', name: 'TaskDetail', params: { id: 'property_maintenance:m1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByTestId('maintenance-task-complete')).toBeTruthy()
+      expect(ui.getByTestId('maintenance-task-not-complete')).toBeTruthy()
+    })
+
+    const completeStyle = StyleSheet.flatten(ui.getByTestId('maintenance-task-complete').props.style)
+    const unfinishedStyle = StyleSheet.flatten(ui.getByTestId('maintenance-task-not-complete').props.style)
+    expect(completeStyle).toEqual(expect.objectContaining({ flex: 1, flexBasis: 0, minWidth: 0 }))
+    expect(unfinishedStyle).toEqual(expect.objectContaining({ flex: 1, flexBasis: 0, minWidth: 0 }))
+  } finally {
+    snapshot.items[0] = previousTask
+  }
 })
 
 test('task detail hides weak-network key sync error text while keeping pending state', async () => {
