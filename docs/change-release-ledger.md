@@ -58,7 +58,8 @@
 - User authorization: approved-for-push; user approved the exact mobile candidate content commit `ec505ff26b4b51747d5eb20c2c4d4059dea3b6a8` and branch `codex/release-20260809-001-003-004-006` on 2026-08-10.
 - Independent review: GO for `c555e5db93decec2b3da6844c375481fda6418df443d7b0af3fa9f8a7c4f2618`; paired review covered the full staged mobile diff, ledger, scope, generated-file and sensitive-information checks. No P0/P1 found; root server-contract deployment remains a dependency.
 - Remote push evidence: `origin/codex/release-20260809-001-003-004-006@99ce293984f91402a63f2cee5c9bcb817ded9106` created at 2026-08-10 21:37:55 AEST; `Dev` unchanged.
-- Action conclusion: GO for push completed; PR creation against `Dev` is the next separate step.
+- PR evidence: NOT VERIFIED; this environment has no `gh` command and no `GITHUB_TOKEN`/`GH_TOKEN`, so no mobile PR was created automatically.
+- Action conclusion: GO for push completed; mobile PR creation against `Dev` remains pending external GitHub authorization.
 
 ### Risks / Release Notes
 
