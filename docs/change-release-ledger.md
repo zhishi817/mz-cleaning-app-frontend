@@ -54,16 +54,17 @@
 - Required validation: PASS; five targeted suites, TypeScript and ESLint passed.
 - Shared-hunk review: PASS; the staged candidate contains only CRL-20260809-004 and CRL-20260810-001 files, including their shared task-detail hunks.
 - Generated-file review: PASS; staged paths contain no generated output, cache, coverage or map file.
-- Technical state: committed.
+- Technical state: pushed.
 - User authorization: approved-for-push; user approved the exact mobile candidate content commit `ec505ff26b4b51747d5eb20c2c4d4059dea3b6a8` and branch `codex/release-20260809-001-003-004-006` on 2026-08-10.
 - Independent review: GO for `c555e5db93decec2b3da6844c375481fda6418df443d7b0af3fa9f8a7c4f2618`; paired review covered the full staged mobile diff, ledger, scope, generated-file and sensitive-information checks. No P0/P1 found; root server-contract deployment remains a dependency.
-- Action conclusion: GO for push; the re-fetched `origin/Dev` base remains exact and the pre-push range report is required before network push.
+- Remote push evidence: `origin/codex/release-20260809-001-003-004-006@99ce293984f91402a63f2cee5c9bcb817ded9106` created at 2026-08-10 21:37:55 AEST; `Dev` unchanged.
+- Action conclusion: GO for push completed; PR creation against `Dev` is the next separate step.
 
 ### Risks / Release Notes
 
 - Device receipt, deployed service behavior, real historical object availability and manager/assignee/outsider checks remain unverified.
 - Sensitive-information review: no credentials, tokens, private photo URLs, media bytes, database URLs, `.env` values or logs are included.
-- Git state: candidate content commit `ec505ff26b4b51747d5eb20c2c4d4059dea3b6a8`; release receipt `bddf080f0147dd8f5044c5dd7e7149dca788d453`; remote push pending.
+- Git state: candidate content commit `ec505ff26b4b51747d5eb20c2c4d4059dea3b6a8`; pre-push ledger receipts through `99ce293984f91402a63f2cee5c9bcb817ded9106`; remote evidence receipt pending.
 
 ## CRL-20260809-004 — 内部维修详情缓存前照片回填（mobile）
 
