@@ -47,7 +47,7 @@
 - Selected CRLs: CRL-20260809-004, CRL-20260810-001.
 - Intended action: push.
 - Branch: codex/release-20260809-001-003-004-006.
-- Base: origin/Dev@316f59f0862e0fc29f866304854aa3c8797b4a2d; re-fetched and unchanged at 2026-08-10 21:36:03 AEST.
+- Base: origin/Dev@316f59f0862e0fc29f866304854aa3c8797b4a2d; fetched at 2026-08-10 21:36:03 AEST and unchanged on recheck.
 - Candidate patch SHA-256: c555e5db93decec2b3da6844c375481fda6418df443d7b0af3fa9f8a7c4f2618 (staged content excluding `docs/change-release-ledger.md`).
 - Commit SHA: ec505ff26b4b51747d5eb20c2c4d4059dea3b6a8 (candidate content commit).
 - Dependencies: root `CRL-20260809-001` must be deployed before this mobile client is expected to receive the new server reference contract.
