@@ -1,17 +1,17 @@
 import React from 'react'
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
 import CleaningMediaPreview from './CleaningMediaPreview'
-import { cacheCleaningMediaImage } from '../lib/cleaningMediaCache'
+import { loadCleaningMediaImage } from '../lib/cleaningMediaCache'
 
 jest.mock('../lib/cleaningMediaCache', () => ({
-  cacheCleaningMediaImage: jest.fn(async () => null),
+  loadCleaningMediaImage: jest.fn(async () => ({ uri: null, failure: null })),
 }))
 
-const mockedCacheCleaningMediaImage = jest.mocked(cacheCleaningMediaImage)
+const mockedLoadCleaningMediaImage = jest.mocked(loadCleaningMediaImage)
 
 beforeEach(() => {
-  mockedCacheCleaningMediaImage.mockReset()
-  mockedCacheCleaningMediaImage.mockResolvedValue(null)
+  mockedLoadCleaningMediaImage.mockReset()
+  mockedLoadCleaningMediaImage.mockResolvedValue({ uri: null, failure: null })
 })
 
 jest.mock('../config/env', () => ({
@@ -39,17 +39,17 @@ test('高清图失败时保留缩略图并允许重试', async () => {
 })
 
 test('缓存完成前高清图的原生请求失败不会抢先卸载预览节点', async () => {
-  let resolvePreview: (uri: string | null) => void = () => undefined
-  mockedCacheCleaningMediaImage.mockImplementation((source) => {
+  let resolvePreview: (result: { uri: string | null; failure: null }) => void = () => undefined
+  mockedLoadCleaningMediaImage.mockImplementation((source) => {
     if (source.uri?.includes('variant=preview')) return new Promise((resolve) => { resolvePreview = resolve })
-    return Promise.resolve(null)
+    return Promise.resolve({ uri: null, failure: null })
   })
   const ui = render(<CleaningMediaPreview token="token-1" reference="cleaning/photo-1.jpg" testID="photo" />)
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
 
   fireEvent(ui.getByTestId('photo-preview'), 'error')
   expect(ui.queryByText('原图加载失败，点击重试')).toBeNull()
-  await act(async () => resolvePreview('file:///cache/preview.jpg'))
+  await act(async () => resolvePreview({ uri: 'file:///cache/preview.jpg', failure: null }))
   fireEvent(ui.getByTestId('photo-preview'), 'load')
   expect(ui.queryByText('原图加载失败，点击重试')).toBeNull()
 })
@@ -60,4 +60,48 @@ test('缩略图失败时不伪装成黑色加载态并允许重试', async () =>
 
   fireEvent(ui.getByTestId('photo-thumbnail'), 'error')
   await waitFor(() => expect(ui.getByText('照片预览加载失败，点击重试')).toBeTruthy())
+})
+
+test('存在本地照片时，缩略图和原图预览都直接使用本地文件', async () => {
+  const ui = render(<CleaningMediaPreview token="token-1" reference="cleaning/photo-1.jpg" localUri="file:///draft/photo-1.jpg" testID="photo" />)
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+  expect(ui.getByTestId('photo-thumbnail').props.source).toEqual({ uri: 'file:///draft/photo-1.jpg' })
+  expect(ui.getByTestId('photo-preview').props.source).toEqual({ uri: 'file:///draft/photo-1.jpg' })
+})
+
+test('403 是权限终态，不展示自动或手动重试入口', async () => {
+  mockedLoadCleaningMediaImage.mockResolvedValue({
+    uri: null,
+    failure: { status: 403, message: '无查看这张照片的权限', retryable: false },
+  })
+  const ui = render(<CleaningMediaPreview token="token-1" reference="cleaning/photo-1.jpg" testID="photo" />)
+
+  await waitFor(() => expect(ui.getByText('无查看这张照片的权限')).toBeTruthy())
+  expect(ui.getByTestId('photo-terminal')).toBeTruthy()
+  expect(ui.queryByTestId('photo-retry')).toBeNull()
+})
+
+test('404 是照片缺失终态，网络错误才保留重试入口', async () => {
+  mockedLoadCleaningMediaImage.mockResolvedValueOnce({
+    uri: null,
+    failure: { status: 404, message: '照片已不可用（文件不存在）', retryable: false },
+  }).mockResolvedValueOnce({
+    uri: null,
+    failure: { status: null, message: '网络或服务暂不可用，请稍后重试', retryable: true },
+  })
+  const terminal = render(<CleaningMediaPreview token="token-1" reference="cleaning/photo-1.jpg" testID="terminal" />)
+
+  await waitFor(() => expect(terminal.getByText('照片已不可用（文件不存在）')).toBeTruthy())
+  expect(terminal.queryByTestId('terminal-retry')).toBeNull()
+
+  mockedLoadCleaningMediaImage.mockReset()
+  mockedLoadCleaningMediaImage.mockResolvedValue({
+    uri: null,
+    failure: { status: null, message: '网络或服务暂不可用，请稍后重试', retryable: true },
+  })
+  const retryable = render(<CleaningMediaPreview token="token-1" reference="cleaning/photo-2.jpg" testID="retryable" />)
+
+  await waitFor(() => expect(retryable.getByText('网络或服务暂不可用，请稍后重试')).toBeTruthy())
+  expect(retryable.getByTestId('retryable-retry')).toBeTruthy()
 })

@@ -232,6 +232,7 @@ export default function TaskDetailScreen(props: Props) {
   const [, bump] = useState(0)
   const id = props.route.params.id
   const action = props.route.params.action
+  const detailRefreshKeyRef = React.useRef<string | null>(null)
   const [marking, setMarking] = useState(false)
   const maintenanceOperationIds = React.useRef(new Map<string, string>())
   const [markPhotoUrls, setMarkPhotoUrls] = useState<string[]>([])
@@ -375,10 +376,15 @@ export default function TaskDetailScreen(props: Props) {
 
   useEffect(() => {
     if (!hasInit) return
-    if (task) return
     if (!token || !user?.id) return
+    const cachedTaskId = String(task?.id || '').trim()
+    const isCachedInternalMaintenanceTask = String(task?.source_type || '').trim() === 'property_maintenance'
+    if (cachedTaskId && !isCachedInternalMaintenanceTask) return
     let cancelled = false
     const view: WorkTasksView = canManagerView ? 'all' : 'mine'
+    const refreshKey = `${id}:${String(user.id)}:${view}`
+    if (detailRefreshKeyRef.current === refreshKey) return
+    detailRefreshKeyRef.current = refreshKey
     const { date_from, date_to } = buildDetailFallbackRange()
     setResolvingRemote(true)
     refreshWorkTasksFromServer({ token, userId: String(user.id), date_from, date_to, view })
@@ -389,7 +395,7 @@ export default function TaskDetailScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [canManagerView, hasInit, id, task, token, user?.id])
+  }, [canManagerView, hasInit, id, task?.id, task?.source_type, token, user?.id])
 
   useEffect(() => {
     void reloadKeyQueueItem()
@@ -768,7 +774,9 @@ export default function TaskDetailScreen(props: Props) {
         const name = String(asset?.fileName || uri.split('/').pop() || `offline-task-${Date.now()}.jpg`)
         const mimeType = String(asset?.mimeType || 'image/jpeg')
         const up = await uploadMzappMedia(token, { uri, name, mimeType })
-        uploaded.push(up.url)
+        const remoteReference = String(up.remoteReference || up.url || '').trim()
+        if (!remoteReference) throw new Error('上传成功但未返回照片引用')
+        uploaded.push(remoteReference)
       }
       if (!uploaded.length) return
       await saveTaskPhotos([...taskPhotoUrls, ...uploaded])
@@ -1090,6 +1098,7 @@ export default function TaskDetailScreen(props: Props) {
   const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
   const maintenanceDomain = maintenanceDomainForSourceType(task.source_type)
   const isMaintenanceTask = maintenanceDomain !== null
+  const isInternalMaintenanceTask = maintenanceDomain === 'internal'
   const maintenanceWorkflow = task.maintenance_workflow || null
   const maintenanceActions = new Set(Array.isArray(maintenanceWorkflow?.available_actions) ? maintenanceWorkflow.available_actions : [])
   const maintenanceCanComplete = maintenanceActions.has('executor_complete')
@@ -1101,6 +1110,9 @@ export default function TaskDetailScreen(props: Props) {
   // maintenance actions visible in pending review as disabled status controls;
   // do not infer a new action or locally close the workflow.
   const showTaskHandlingControls = canEditTaskHandling || maintenancePendingReview
+  const maintenanceBeforePhotoUrls = isInternalMaintenanceTask
+    ? normalizePhotoUrls((task as any).maintenance_before_photo_urls)
+    : []
   const maintenanceDisplayPhotoDrafts: MaintenanceCompletionPhotoDraft[] = maintenanceCompletionPhotoDrafts.length
     ? maintenanceCompletionPhotoDrafts
     : normalizePhotoUrls((task as any).completion_photo_urls).map((reference, index) => ({
@@ -1624,6 +1636,24 @@ export default function TaskDetailScreen(props: Props) {
                 <Text style={styles.summary}>{offlineDetail || detailText}</Text>
               </View>
             ) : null}
+            {maintenanceBeforePhotoUrls.length ? (
+              <View style={styles.taskPhotosPanel}>
+                <Text style={styles.sectionTitle}>维修前照片</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.markPhotoList}>
+                  {maintenanceBeforePhotoUrls.map((url, index) => (
+                    <View key={`${url}:${index}`} style={styles.markPhotoCard}>
+                      <Pressable
+                        testID={`maintenance-before-photo-${index}`}
+                        onPress={() => openPreview(String(url), task.id)}
+                        style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
+                      >
+                        <CleaningMediaImage token={token} remoteReference={String(url)} accessWorkTaskId={task.id} style={styles.markPhotoThumb} resizeMode="cover" />
+                      </Pressable>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null}
             {isOfflineTask ? (
               <View style={styles.taskPhotosPanel}>
                 <Text style={styles.sectionTitle}>任务照片</Text>
@@ -1645,10 +1675,10 @@ export default function TaskDetailScreen(props: Props) {
                     {taskPhotoUrls.map((url, index) => (
                       <View key={`${url}:${index}`} style={styles.markPhotoCard}>
                         <Pressable
-                          onPress={() => openPreview(String(url))}
+                          onPress={() => openPreview(String(url), task.id)}
                           style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
                         >
-                          <CleaningMediaImage token={token} remoteReference={url} style={styles.markPhotoThumb} resizeMode="cover" />
+                          <CleaningMediaImage token={token} remoteReference={url} accessWorkTaskId={task.id} style={styles.markPhotoThumb} resizeMode="cover" />
                         </Pressable>
                         <AppIconButton accessibilityLabel="删除任务照片" onPress={() => removeTaskPhoto(index)} disabled={taskPhotoSaving} style={styles.markPhotoRemoveBtn} visualStyle={styles.markPhotoRemoveVisual}>
                           <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />

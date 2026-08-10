@@ -48,6 +48,14 @@ test('binds maintenance feedback-media reads to the current work task', () => {
   })
 })
 
+test('routes a server-owned offline task reference through the authenticated proxy with the exact work task', () => {
+  const reference = 'r2://bucket-0123456789abcdef/mzapp/offline-task-photo.jpg'
+  expect(buildCleaningMediaImageSource('token-1', reference, 'thumbnail', { accessWorkTaskId: 'cleaning_offline_tasks:task-1' })).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?url=r2%3A%2F%2Fbucket-0123456789abcdef%2Fmzapp%2Foffline-task-photo.jpg&variant=thumbnail&work_task_id=cleaning_offline_tasks%3Atask-1',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+})
+
 test('routes legacy mzapp feedback media through the authenticated feedback proxy', () => {
   const url = 'https://media.r2.dev/mzapp/photo-1.jpg'
   expect(buildCleaningMediaImageSource('token-1', url, 'preview', { accessTaskId: 'cleaning-task-1' })).toEqual({

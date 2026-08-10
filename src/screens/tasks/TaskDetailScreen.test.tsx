@@ -32,6 +32,7 @@ jest.mock('../../lib/auth', () => {
 })
 
 jest.mock('../../lib/workTasksStore', () => {
+  const listeners = new Set<() => void>()
   const snapshot = {
     items: [
       {
@@ -55,10 +56,19 @@ jest.mock('../../lib/workTasksStore', () => {
     updatedAt: null,
   }
   return {
-    subscribeWorkTasks: () => () => {},
+    subscribeWorkTasks: (listener: () => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
     getWorkTasksSnapshot: () => snapshot,
-    patchWorkTaskItem: jest.fn(async () => {}),
+    patchWorkTaskItem: jest.fn(async (id: string, patch: Record<string, any>) => {
+      const index = snapshot.items.findIndex((item) => item.id === id)
+      if (index < 0) return
+      snapshot.items = snapshot.items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item)
+      for (const listener of listeners) listener()
+    }),
     refreshWorkTasksFromServer: jest.fn(async () => {}),
+    reconcileActiveWorkTasksAfterLocalPatch: jest.fn(async () => {}),
     findWorkTaskItemByAnyId: (id: string) => snapshot.items.find((item) => item.id === id || item.source_id === id) || null,
   }
 })
@@ -611,6 +621,91 @@ test('customer service password-only task hides checkout and shows executor vide
 
   snapshot.items[0] = previousTask
   mockAuthState.user = previousUser
+})
+
+test('internal maintenance detail refreshes a cached task once and renders returned before-repair photos', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const refreshMock = store.refreshWorkTasksFromServer as jest.Mock
+  snapshot.items[0] = {
+    ...previousTask,
+    task_kind: 'maintenance',
+    source_type: 'property_maintenance',
+    source_id: 'maintenance-stale-cache-1',
+    title: 'R-20260803-GHCG',
+    summary: '洗衣房门故障',
+    maintenance_before_photo_urls: undefined,
+    available_actions: [],
+  }
+  refreshMock.mockClear()
+  refreshMock.mockImplementationOnce(async () => {
+    await store.patchWorkTaskItem('w1', {
+      maintenance_before_photo_urls: ['mzapp/maintenance-before-refreshed.jpg'],
+    })
+  })
+  try {
+    const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'maintenance-before-refresh', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(refreshMock).toHaveBeenCalledTimes(1)
+      expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ token: 't1', userId: 'u1', view: 'mine' }))
+      expect(snapshot.items[0].maintenance_before_photo_urls).toEqual(['mzapp/maintenance-before-refreshed.jpg'])
+      expect(ui.getByText('维修前照片')).toBeTruthy()
+      expect(ui.getByTestId('maintenance-before-photo-0')).toBeTruthy()
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(refreshMock).toHaveBeenCalledTimes(1)
+  } finally {
+    refreshMock.mockReset()
+    refreshMock.mockImplementation(async () => {})
+    snapshot.items[0] = previousTask
+  }
+})
+
+test('internal maintenance detail keeps the cached task usable when its one refresh fails', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const refreshMock = store.refreshWorkTasksFromServer as jest.Mock
+  snapshot.items[0] = {
+    ...previousTask,
+    task_kind: 'maintenance',
+    source_type: 'property_maintenance',
+    source_id: 'maintenance-refresh-failure-1',
+    title: 'R-20260803-GHCG',
+    summary: '洗衣房门故障',
+    maintenance_before_photo_urls: undefined,
+    available_actions: [],
+  }
+  refreshMock.mockClear()
+  refreshMock.mockRejectedValueOnce(new Error('network unavailable'))
+  try {
+    const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'maintenance-before-refresh-failure', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(refreshMock).toHaveBeenCalledTimes(1)
+      expect(ui.getByText('洗衣房门故障')).toBeTruthy()
+      expect(ui.queryByText('维修前照片')).toBeNull()
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(refreshMock).toHaveBeenCalledTimes(1)
+    expect(snapshot.items[0].source_id).toBe('maintenance-refresh-failure-1')
+  } finally {
+    refreshMock.mockReset()
+    refreshMock.mockImplementation(async () => {})
+    snapshot.items[0] = previousTask
+  }
 })
 
 test('key handover execution task shows user-facing password-only label and video action', async () => {
