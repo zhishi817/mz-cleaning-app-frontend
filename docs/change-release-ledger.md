@@ -65,7 +65,7 @@
 
 - Device receipt, deployed service behavior, real historical object availability and manager/assignee/outsider checks remain unverified.
 - Sensitive-information review: no credentials, tokens, private photo URLs, media bytes, database URLs, `.env` values or logs are included.
-- Git state: candidate content commit `ec505ff26b4b51747d5eb20c2c4d4059dea3b6a8`; pre-push ledger receipts through `99ce293984f91402a63f2cee5c9bcb817ded9106`; remote evidence receipt pending.
+- Git state: release metadata receipts are pushed; the exact remote branch head is verified separately with post-push `git ls-remote`; `Dev` remains unchanged pending PR.
 
 ## CRL-20260809-004 — 内部维修详情缓存前照片回填（mobile）
 
