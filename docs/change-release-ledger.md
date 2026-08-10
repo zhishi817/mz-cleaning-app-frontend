@@ -49,21 +49,21 @@
 - Branch: codex/release-20260809-001-003-004-006.
 - Base: origin/Dev@316f59f0862e0fc29f866304854aa3c8797b4a2d; fetched at 2026-08-10 04:51:59 AEST.
 - Candidate patch SHA-256: c555e5db93decec2b3da6844c375481fda6418df443d7b0af3fa9f8a7c4f2618 (staged content excluding `docs/change-release-ledger.md`).
-- Commit SHA: not committed.
+- Commit SHA: ec505ff26b4b51747d5eb20c2c4d4059dea3b6a8 (candidate content commit).
 - Dependencies: root `CRL-20260809-001` must be deployed before this mobile client is expected to receive the new server reference contract.
 - Required validation: PASS; five targeted suites, TypeScript and ESLint passed.
 - Shared-hunk review: PASS; the staged candidate contains only CRL-20260809-004 and CRL-20260810-001 files, including their shared task-detail hunks.
 - Generated-file review: PASS; staged paths contain no generated output, cache, coverage or map file.
-- Technical state: verified.
+- Technical state: committed.
 - User authorization: selected-for-commit; user selected the paired photo repair and authorized this mobile-only renumber on 2026-08-10.
 - Independent review: GO for `c555e5db93decec2b3da6844c375481fda6418df443d7b0af3fa9f8a7c4f2618`; paired review covered the full staged mobile diff, ledger, scope, generated-file and sensitive-information checks. No P0/P1 found; root server-contract deployment remains a dependency.
-- Action conclusion: GO for commit only; push needs new SHA-bound user approval.
+- Action conclusion: GO for commit completed; push is NOT VERIFIED until the user explicitly approves this exact content commit and branch.
 
 ### Risks / Release Notes
 
 - Device receipt, deployed service behavior, real historical object availability and manager/assignee/outsider checks remain unverified.
 - Sensitive-information review: no credentials, tokens, private photo URLs, media bytes, database URLs, `.env` values or logs are included.
-- Git state: candidate worktree only; uncommitted.
+- Git state: candidate content commit `ec505ff26b4b51747d5eb20c2c4d4059dea3b6a8`; release receipt pending.
 
 ## CRL-20260809-004 — 内部维修详情缓存前照片回填（mobile）
 
