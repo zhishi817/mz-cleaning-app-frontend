@@ -2708,7 +2708,8 @@ export async function uploadMzappMedia(
   const u = String(data?.url || '').trim()
   if (!u) throw new Error('上传成功但未返回 url')
   const key = String(data?.key || '').trim()
-  return { url: u, key: key || undefined }
+  const remoteReference = String(data?.remote_reference || '').trim()
+  return { url: u, key: key || undefined, remoteReference: remoteReference || undefined }
 }
 
 export async function getMzappExpenseBootstrap(token: string) {

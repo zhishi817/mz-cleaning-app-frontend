@@ -1,5 +1,107 @@
 # Change Release Ledger
 
+## CRL-20260810-001 — 线下任务照片稳定引用与终态读取边界（mobile）
+
+- **Status:** candidate
+- **Updated:** 2026-08-10 00:55 AEST
+- **Request:** 将原本与 mobile TestFlight 诊断冲突的离线任务照片客户端部分重新编号，随 root `CRL-20260809-001` 发布。
+- **Outcome:** 上传响应保留兼容 URL 并读取 `remoteReference`；线下任务优先保存稳定服务端引用。当前 `r2://` 引用带 `work_task_id` 走认证 proxy，权限/缺失响应不再重试，网络/服务暂不可用仍可由用户重试。
+
+### Implementation
+
+- Previous behavior: 客户端将公共 URL 作为任务照片身份，canonical 引用未带任务上下文；终态读取错误可被缓存或重试 UI 误判。
+- New behavior: 任务照片保存 `remoteReference` 优先、URL 回退兼容旧后端；认证读取使用精确任务上下文，终态失败清除缓存并只展示说明。
+- Key decisions: 新 CRL 仅替代本次 mobile 照片客户端范围；保留 `CRL-20260809-001` 的历史 TestFlight runtime 诊断，不更改其事实或发布结论。
+
+### Files / Areas
+
+- `src/lib/api.ts` — 暴露上传 `remoteReference`。
+- `src/lib/api.test.ts` — 上传响应兼容回归。
+- `src/lib/cleaningMedia.ts` — canonical 线下引用走认证 proxy 并携带任务上下文。
+- `src/lib/cleaningMedia.test.ts` — proxy 参数回归。
+- `src/lib/cleaningMediaCache.ts` — 终态读取错误分类和缓存清理。
+- `src/lib/cleaningMediaCache.test.ts` — 403/404 与网络重试边界。
+- `src/components/CleaningMediaPreview.tsx` — 终态错误展示且不提供重试。
+- `src/components/CleaningMediaPreview.test.tsx` — 终态/可恢复失败和本地预览回归。
+- `src/screens/tasks/TaskDetailScreen.tsx` — 线下任务照片保存稳定引用和认证读取上下文。
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — 共享任务详情 mock 与回归。
+- `docs/change-release-ledger.md` — 本次 mobile 发布记录。
+
+### Impact / Dependencies
+
+- API: depends on root `CRL-20260809-001` returning `remote_reference` and enforcing `work_task_id` association.
+- Database / migration / config / dependencies: none.
+- Related units: root `CRL-20260809-001`; mobile `CRL-20260809-004`.
+
+### Validation
+
+- `jest --runInBand --no-cache src/lib/api.test.ts src/lib/cleaningMedia.test.ts src/lib/cleaningMediaCache.test.ts src/components/CleaningMediaPreview.test.tsx` — passed: 4 suites / 34 tests in the clean candidate.
+- `tsc -p tsconfig.json` — passed.
+- `eslint .` — passed with 0 errors and 113 existing warnings.
+
+### Release Attempts
+
+#### RA-20260810-mobile-maintenance-media-01
+
+- Repository: mobile.
+- Selected CRLs: CRL-20260809-004, CRL-20260810-001.
+- Intended action: commit.
+- Branch: codex/release-20260809-001-003-004-006.
+- Base: origin/Dev@316f59f0862e0fc29f866304854aa3c8797b4a2d; fetched at 2026-08-10 04:51:59 AEST.
+- Candidate patch SHA-256: c555e5db93decec2b3da6844c375481fda6418df443d7b0af3fa9f8a7c4f2618 (staged content excluding `docs/change-release-ledger.md`).
+- Commit SHA: not committed.
+- Dependencies: root `CRL-20260809-001` must be deployed before this mobile client is expected to receive the new server reference contract.
+- Required validation: PASS; five targeted suites, TypeScript and ESLint passed.
+- Shared-hunk review: PASS; the staged candidate contains only CRL-20260809-004 and CRL-20260810-001 files, including their shared task-detail hunks.
+- Generated-file review: PASS; staged paths contain no generated output, cache, coverage or map file.
+- Technical state: verified.
+- User authorization: selected-for-commit; user selected the paired photo repair and authorized this mobile-only renumber on 2026-08-10.
+- Independent review: GO for `c555e5db93decec2b3da6844c375481fda6418df443d7b0af3fa9f8a7c4f2618`; paired review covered the full staged mobile diff, ledger, scope, generated-file and sensitive-information checks. No P0/P1 found; root server-contract deployment remains a dependency.
+- Action conclusion: GO for commit only; push needs new SHA-bound user approval.
+
+### Risks / Release Notes
+
+- Device receipt, deployed service behavior, real historical object availability and manager/assignee/outsider checks remain unverified.
+- Sensitive-information review: no credentials, tokens, private photo URLs, media bytes, database URLs, `.env` values or logs are included.
+- Git state: candidate worktree only; uncommitted.
+
+## CRL-20260809-004 — 内部维修详情缓存前照片回填（mobile）
+
+- **Status:** candidate
+- **Updated:** 2026-08-10 00:55 AEST
+- **Request:** 已有 `property_maintenance` 缓存缺少维修前照片字段时，详情只刷新一次并显示服务端回填结果。
+- **Outcome:** 同一任务/用户/列表视图只刷新一次现有任务列表；成功后显示维修前照片，失败仍保留可用缓存。
+
+### Implementation
+
+- Previous behavior: 缓存任务直接渲染，缺失字段时不再向既有任务列表刷新。
+- New behavior: 仅内部维修缓存走一次既有列表刷新，正常 UI 以回填字段和认证图片组件显示照片；非维修任务保持原行为。
+
+### Files / Areas
+
+- `src/screens/tasks/TaskDetailScreen.tsx` — 一次性刷新和维修前照片展示。
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — 回填、只刷新一次和刷新失败回归。
+- `docs/change-release-ledger.md` — 本次 mobile 发布记录。
+
+### Impact / Dependencies
+
+- API: depends on existing `GET /mzapp/work-tasks` `maintenance_before_photo_urls` projection.
+- Database / migration / config / dependencies: none.
+- Related units: root `CRL-20260809-004`, root `CRL-20260809-006`, mobile `CRL-20260810-001`.
+
+### Validation
+
+- `jest --runInBand --no-cache src/screens/tasks/TaskDetailScreen.test.tsx` — passed: 1 suite / 17 tests in the clean candidate.
+- TypeScript and ESLint evidence is retained in `CRL-20260810-001` for this exact candidate.
+
+### Release Attempts
+
+- See `RA-20260810-mobile-maintenance-media-01` in CRL-20260810-001.
+
+### Risks / Release Notes
+
+- Authenticated proxy/device verification remains separate from source tests.
+
 ## CRL-20260809-002 — 新建可复现的 TestFlight iOS OTA 基线（mobile）
 
 - **Status:** ready

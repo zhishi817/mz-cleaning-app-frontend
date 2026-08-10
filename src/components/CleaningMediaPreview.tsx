@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View, type ImageProps, type StyleProp, type ViewStyle } from 'react-native'
 import { buildCleaningMediaImageSource } from '../lib/cleaningMedia'
-import { cacheCleaningMediaImage } from '../lib/cleaningMediaCache'
+import { loadCleaningMediaImage, type CleaningMediaReadFailure } from '../lib/cleaningMediaCache'
 
 type Props = {
   token?: string | null
@@ -26,6 +26,8 @@ export default function CleaningMediaPreview({ token, reference, localUri, thumb
   const [previewCacheSettled, setPreviewCacheSettled] = useState(false)
   const [thumbnailNativeFailed, setThumbnailNativeFailed] = useState(false)
   const [previewNativeFailed, setPreviewNativeFailed] = useState(false)
+  const [thumbnailReadFailure, setThumbnailReadFailure] = useState<CleaningMediaReadFailure | null>(null)
+  const [previewReadFailure, setPreviewReadFailure] = useState<CleaningMediaReadFailure | null>(null)
   const thumbnailSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || thumbnailReference || reference, 'thumbnail', { accessTaskId, accessWorkTaskId }), [accessTaskId, accessWorkTaskId, localUri, reference, thumbnailReference, token])
   const previewSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || reference, 'preview', { accessTaskId, accessWorkTaskId }), [accessTaskId, accessWorkTaskId, localUri, reference, token])
 
@@ -40,16 +42,19 @@ export default function CleaningMediaPreview({ token, reference, localUri, thumb
     setPreviewCacheSettled(false)
     setThumbnailNativeFailed(false)
     setPreviewNativeFailed(false)
+    setThumbnailReadFailure(null)
+    setPreviewReadFailure(null)
   }, [accessTaskId, accessWorkTaskId, localUri, reference, thumbnailReference, token])
 
   useEffect(() => {
     let active = true
-    void cacheCleaningMediaImage(thumbnailSource).then((uri) => {
+    void loadCleaningMediaImage(thumbnailSource).then((result) => {
       if (!active) return
-      if (uri) {
-        setCachedThumbnailUri(uri)
+      if (result.uri) {
+        setCachedThumbnailUri(result.uri)
         setThumbnailFailed(false)
       }
+      setThumbnailReadFailure(result.failure)
       setThumbnailCacheSettled(true)
     })
     return () => {
@@ -59,12 +64,13 @@ export default function CleaningMediaPreview({ token, reference, localUri, thumb
 
   useEffect(() => {
     let active = true
-    void cacheCleaningMediaImage(previewSource).then((uri) => {
+    void loadCleaningMediaImage(previewSource).then((result) => {
       if (!active) return
-      if (uri) {
-        setCachedPreviewUri(uri)
+      if (result.uri) {
+        setCachedPreviewUri(result.uri)
         setPreviewFailed(false)
       }
+      setPreviewReadFailure(result.failure)
       setPreviewCacheSettled(true)
     })
     return () => {
@@ -81,6 +87,11 @@ export default function CleaningMediaPreview({ token, reference, localUri, thumb
   }, [cachedPreviewUri, previewCacheSettled, previewNativeFailed])
 
   if (!reference && !localUri) return <View style={[styles.container, style]} />
+
+  const terminalReadFailure = [previewReadFailure, thumbnailReadFailure].find((failure) => failure && !failure.retryable) || null
+  const readFailure = terminalReadFailure || previewReadFailure || thumbnailReadFailure
+  const canRetry = !readFailure || readFailure.retryable
+  const failureMessage = readFailure?.message || (previewFailed ? '原图加载失败，点击重试' : '照片预览加载失败，点击重试')
 
   return (
     <View style={[styles.container, style]}>
@@ -107,6 +118,7 @@ export default function CleaningMediaPreview({ token, reference, localUri, thumb
           onLoad={() => {
             setPreviewNativeFailed(false)
             setPreviewFailed(false)
+            setPreviewReadFailure(null)
             setPreviewLoaded(true)
           }}
           onError={() => {
@@ -116,16 +128,22 @@ export default function CleaningMediaPreview({ token, reference, localUri, thumb
           }}
         />
       ) : null}
-      {!previewLoaded && !previewFailed && !thumbnailFailed ? (
+      {!previewLoaded && !previewFailed && !thumbnailFailed && !readFailure ? (
         <View style={styles.statusOverlay} pointerEvents="none">
           <ActivityIndicator color="#FFFFFF" />
           <Text style={styles.statusText}>高清图加载中…</Text>
         </View>
       ) : null}
-      {previewFailed || thumbnailFailed ? (
-        <Pressable testID={testID ? `${testID}-retry` : undefined} style={styles.retryOverlay} onPress={() => { setPreviewFailed(false); setThumbnailFailed(false); setPreviewLoaded(false); setCachedThumbnailUri(null); setCachedPreviewUri(null); setThumbnailCacheSettled(false); setPreviewCacheSettled(false); setThumbnailNativeFailed(false); setPreviewNativeFailed(false); setRetryKey((value) => value + 1) }}>
-          <Text style={styles.retryText}>{previewFailed ? '原图加载失败，点击重试' : '照片预览加载失败，点击重试'}</Text>
-        </Pressable>
+      {previewFailed || thumbnailFailed || readFailure ? (
+        canRetry ? (
+          <Pressable testID={testID ? `${testID}-retry` : undefined} style={styles.retryOverlay} onPress={() => { setPreviewFailed(false); setThumbnailFailed(false); setPreviewLoaded(false); setCachedThumbnailUri(null); setCachedPreviewUri(null); setThumbnailCacheSettled(false); setPreviewCacheSettled(false); setThumbnailNativeFailed(false); setPreviewNativeFailed(false); setThumbnailReadFailure(null); setPreviewReadFailure(null); setRetryKey((value) => value + 1) }}>
+            <Text style={styles.retryText}>{failureMessage}</Text>
+          </Pressable>
+        ) : (
+          <View testID={testID ? `${testID}-terminal` : undefined} style={styles.retryOverlay}>
+            <Text style={styles.retryText}>{failureMessage}</Text>
+          </View>
+        )
       ) : null}
     </View>
   )

@@ -53,6 +53,11 @@ function isLegacyPrivateR2Url(value: string) {
   }
 }
 
+function isServerManagedMzappTaskReference(value: string) {
+  const match = /^r2:\/\/([a-z0-9][a-z0-9._-]{0,119})\/(mzapp\/.*)$/i.exec(value)
+  return Boolean(match && normalizePrivateFeedbackObjectKey(match[2]))
+}
+
 export function buildCleaningMediaImageSource(
   token: string | null | undefined,
   rawReference: any,
@@ -62,7 +67,7 @@ export function buildCleaningMediaImageSource(
   const reference = cleanText(rawReference)
   if (!reference) return { uri: '' }
   const key = normalizePrivateFeedbackObjectKey(reference)
-  if (key || isLegacyPrivateR2Url(reference)) {
+  if (key || isLegacyPrivateR2Url(reference) || isServerManagedMzappTaskReference(reference)) {
     return {
       uri: cleaningMediaProxyUrl(key || reference, variant, options?.accessTaskId, options?.accessWorkTaskId),
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
