@@ -41,7 +41,7 @@
 - Branch: `codex/ci-inspection-timeout-20260811`
 - Base: `origin/Dev@fa7fcee086534a2343afc2df22039cb041df5295`; fetched at 2026-08-11 Australia/Melbourne.
 - Candidate patch SHA-256: `1368afaa4f74a2b97d947f2d7d4a59b6c549aea7cbf5ccb1b3bd8f6e3b75027c`; excludes `docs/change-release-ledger.md`.
-- Commit SHA: `c6afce2ff4c5648f20ce196eeb3a715d019dc25f` (candidate content commit); audit head is emitted by the release report.
+- Commit SHA: `c6afce28b117abc41a8d2cbdf7deea19ace652bc` (candidate content commit); audit head is emitted by the release report.
 - Dependencies: none; the test remains in the existing mobile `check:ci` quality gate.
 - Required validation: PASS — targeted screen test and `npm run check:ci` passed after the bounded-timeout change.
 - Shared-hunk review: PASS — only this test file and this CRL ledger entry are selected.
@@ -56,7 +56,7 @@
 - Risk: a real render deadlock can now occupy CI for at most 10 seconds; assertions and full-regression membership remain unchanged, so failure remains visible.
 - Rollback: restore the test's default timeout arguments; no business code or data requires rollback.
 - Sensitive-information review: no secrets, `.env` values, tokens, credentials, database URLs, caches, generated files, or production data are added.
-- Git state: candidate content commit `c6afce2ff4c5648f20ce196eeb3a715d019dc25f` created on `codex/ci-inspection-timeout-20260811`; not pushed, PR-created, merged, deployed, OTA-published or device-verified.
+- Git state: candidate content commit `c6afce28b117abc41a8d2cbdf7deea19ace652bc` created on `codex/ci-inspection-timeout-20260811`; not pushed, PR-created, merged, deployed, OTA-published or device-verified.
 
 ## CRL-20260811-004 — 修复交付状态与完成声明强制边界（mobile governance）
 
