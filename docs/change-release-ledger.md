@@ -47,7 +47,7 @@
 - Required validation: PASS; target Jest and `npm run check:ci` passed in this exact candidate.
 - Shared-hunk review: PASS; only the selected screen, its test and ledger records are in scope.
 - Generated-file review: PASS; no generated output, cache, environment file or dependency artifact is selected.
-- Technical state: pushed.
+- Technical state: committed.
 - User authorization: selected-for-commit; evidence: user instructed “那你合并吧” after confirming the PR #11 repair on 2026-08-11.
 - Independent review: GO for commit — independent read-only review rechecked the exact staged fingerprint, full diff, target Jest, `npm run check:ci`, ledger coverage, whitespace and sensitive/production-write risk; no P0/P1 found. Non-blocking P2 items are the root `FR-004` traceability receipt and an explicit `cleaning_submission_required` negative regression.
 - Action conclusion: GO for commit completed; blockers: exact commit-bound push authorization, PR creation and merge remain pending.
@@ -65,7 +65,7 @@
 - Required validation: PASS; evidence retained in RA-20260811-mobile-inspection-stability-01.
 - Shared-hunk review: PASS; evidence retained in RA-20260811-mobile-inspection-stability-01.
 - Generated-file review: PASS; no generated output, cache, environment file or dependency artifact is selected.
-- Technical state: committed.
+- Technical state: pushed.
 - User authorization: approved-for-push; evidence: user approved the exact mobile branch, candidate content commit `ffa0da0b69f98dfd7f1e313139506e0bf4fb5192` and earlier audit head `1b64ecc885020a55ad9bea01b9f3dbd7fa5a71a2` on 2026-08-11, including PR creation and merge to `Dev` after checks.
 - Independent review: GO for push — independent read-only review accepted `origin/Dev@6539fb59dac7adaa36a16d9075550f885e9b0407...01310106c305106c11328b40d18fac491ad685ef`, candidate content commit `ffa0da0b69f98dfd7f1e313139506e0bf4fb5192` and fingerprint `f563c2c4679b6b68f2e9ac972c165c28a0923c1ba7d4b491878e94d7681b73de`; no P0/P1. P2: explicit `cleaning_submission_required` negative regression remains a follow-up.
 - Remote push evidence: `origin/codex/release-inspection-stability-20260811@b8a0feec3051e36afb03bb452e3c7a4ad6a60963` created at 2026-08-11 14:02 AEST.
