@@ -30,3 +30,10 @@ This repository is independent from the root MZ Property System repository. Do n
 - Run `python3 scripts/audit_change_release_ledger.py` after updating the ledger. It verifies current working-tree path coverage; Phase 2 will add base/head PR coverage.
 - Preserve concurrent changes. Never reset, clean, broad-stage, or use `git add .` / `git add -A`. Stage only reviewed files or hunks.
 - Before commit, push, deployment, or EAS release, use an independent read-only review of the complete diff, ledger, tests, secret risk, and production-write risk. Do not push without explicit authorization.
+
+## Completion And Delivery Claims
+
+- Do not report “已修复”, “已完成”, “已交付”, “已发布” or “已上线” without naming the evidence stage. Use only the supported state: source fixed, local regression passed, committed, pushed to branch, merged into `Dev`, backend deployed, OTA published, or device verified.
+- A local mobile diff, test result, commit, push, PR, and `Dev` merge are separate facts. A user-visible cross-layer repair is not delivered until its compatible backend version (when required), OTA/build/channel, and declared device regression are all recorded.
+- End every implementation or release report with the CRL ID, repository, commit SHA or `not committed`, remote branch/SHA or `not pushed`, PR/merge state or `not created`/`not merged`, deployment/OTA state or `not deployed`/`not published`, and device/production verification or `not run`.
+- When asked whether a repair was committed, pushed, or released, re-check and report the exact repository evidence; never infer later delivery stages from local source, a ledger entry, or another repository.
