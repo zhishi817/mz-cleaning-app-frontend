@@ -30,7 +30,7 @@
 - `npm test -- --runInBand --no-cache src/screens/tasks/InspectionPanelScreen.test.tsx` — passed: 1 suite / 13 tests, including server-authoritative pure-checkin submission, queue progress without draft reload and controlled source refresh.
 - `npm run check:ci` — passed: ledger-range tests (11), working-tree ledger coverage (3/3), TypeScript, ESLint (0 errors / 113 existing warnings), strict button audit, fast Jest (3 suites / 18 tests) and serial full Jest.
 - `git diff --cached --check` — passed.
-- Independent review — pending; no commit, push, PR merge, EAS operation, deployment or production action has occurred.
+- Independent review — GO for `commit` only; no P0/P1 found. The non-blocking P2 follow-up is recorded in this attempt and does not authorize push, PR merge, EAS, deployment or production action.
 
 ### Release Attempts
 
@@ -42,15 +42,15 @@
 - Branch: `codex/release-inspection-stability-20260811`
 - Base: `origin/Dev@6539fb59dac7adaa36a16d9075550f885e9b0407`; fetched at 2026-08-11 12:41 AEST.
 - Candidate patch SHA-256: `f563c2c4679b6b68f2e9ac972c165c28a0923c1ba7d4b491878e94d7681b73de` excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed.
+- Commit SHA: `ffa0da0b69f98dfd7f1e313139506e0bf4fb5192` (candidate content commit).
 - Dependencies: none; current client continues to use the existing server-authoritative `submit_inspection` action.
 - Required validation: PASS; target Jest and `npm run check:ci` passed in this exact candidate.
 - Shared-hunk review: PASS; only the selected screen, its test and ledger records are in scope.
 - Generated-file review: PASS; no generated output, cache, environment file or dependency artifact is selected.
-- Technical state: verified.
+- Technical state: committed.
 - User authorization: selected-for-commit; evidence: user instructed “那你合并吧” after confirming the PR #11 repair on 2026-08-11.
 - Independent review: GO for commit — independent read-only review rechecked the exact staged fingerprint, full diff, target Jest, `npm run check:ci`, ledger coverage, whitespace and sensitive/production-write risk; no P0/P1 found. Non-blocking P2 items are the root `FR-004` traceability receipt and an explicit `cleaning_submission_required` negative regression.
-- Action conclusion: GO for commit; blockers: none for the exact commit. Push, PR creation and merge require a later exact commit-bound authorization.
+- Action conclusion: GO for commit completed; blockers: exact commit-bound push authorization, PR creation and merge remain pending.
 
 ### Risks / Release Notes
 
@@ -79,13 +79,13 @@
 
 ### Impact / Dependencies
 
-- API: 依赖既有 `/mzapp/work-tasks` `submit_inspection` action 与其 `disabled_reason`；不修改 API、数据库、迁移、配置或依赖。
+- API: 依赖既有 `/mzapp/work-tasks` `submit_inspection` action 与其 `disabled_reason`；根仓库 `docs/feature-regression-registry.md` 的 `FR-004` 记录该服务端权威 action 契约。不修改 API、数据库、迁移、配置或依赖。
 - Related unit: 与 `CRL-20260731-007` 同一候选、同一 Release Attempt。
 - Protected behavior: 服务端对清洁提交、照片、客人到达、挂钥匙/密码视频和权限的决定保持最终权威。
 
 ### Validation
 
-- See the shared target Jest, typecheck, `npm run check:ci`, ledger and whitespace evidence in `CRL-20260731-007`; independent review remains pending.
+- See the shared target Jest, typecheck, `npm run check:ci`, ledger, whitespace and independent-review evidence in `CRL-20260731-007`.
 
 ### Release Attempts
 
