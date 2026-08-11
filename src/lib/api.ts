@@ -583,6 +583,7 @@ export type WorkTaskActionId =
   | 'submit_inspection'
   | 'upload_access_video'
   | 'complete_cleaning'
+  | 'append_completion_photo'
   | 'report_issue'
   | 'mark_guest_checkout'
 
@@ -602,7 +603,7 @@ export type WorkTaskAvailableAction = {
   disabled_reason?: string
   read_only?: boolean
   target?: WorkTaskActionTarget
-  intent: 'cleaning' | 'inspection' | 'site_action' | 'issue' | 'manager'
+  intent: 'cleaning' | 'inspection' | 'site_action' | 'completion' | 'issue' | 'manager'
   source_type?: string | null
   source_id?: string | null
 }
@@ -3052,6 +3053,27 @@ export async function submitMaintenanceExecutorAction(
     status: string
     available_actions: string[]
   }
+}
+
+export async function appendWorkTaskCompletionPhotos(
+  token: string,
+  taskId: string,
+  params: { photo_urls: string[] },
+) {
+  const urls = buildUrlCandidates(`mzapp/work-tasks/${encodeURIComponent(taskId)}/completion-photos`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: boolean; completion_photo_urls: string[] }
 }
 
 export async function updateWorkTaskPhotos(

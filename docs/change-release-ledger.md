@@ -1,5 +1,178 @@
 # Change Release Ledger
 
+## CRL-20260811-004 — 修复交付状态与完成声明强制边界（mobile governance）
+
+- **Status:** candidate
+- **Updated:** 2026-08-11 Australia/Melbourne
+- **Request:** 防止本地已修复、已测试、已提交、已推送、已合并、已部署或已通过 OTA/真机验证被混为一谈，导致移动端修复被误报为已交付。
+- **Outcome:** 独立 mobile 仓库现在与 root 使用同一套交付状态规则：实现、测试、提交、推送、合并、后端部署、OTA 和设备验证必须逐项以实际证据报告；未执行阶段必须明确为未执行。
+
+### Files / Areas
+
+- `AGENTS.md` — 增加完成与交付声明规则，并要求以独立 mobile 仓库的实际 Git 和交付证据回答。
+- `docs/change-release-ledger.md` — 记录与 root `CRL-20260811-004` 配对的独立移动端治理单元。
+
+### Impact / Dependencies
+
+- **Runtime / API / database / migration / configuration / dependencies:** none；不改变业务代码、权限、媒体对象或生产数据。
+- **Related units:** root `CRL-20260811-004`; 本移动端 CRL 必须和 root 的规则保持同一交付阶段定义。
+
+### Validation
+
+- Source/diff review — passed：规则明确区分 source、local regression、commit、push、merge、backend deploy、OTA 与 device verification。
+- `npm run check:ci` — passed：ledger-range tests、ledger coverage、typecheck、lint（0 errors / 114 existing warnings）、strict button audit、fast Jest 与全量 Jest（54 suites / 275 tests）均通过。
+
+### Release Attempts
+
+- `RA-20260811-mobile-feedback-p1-01` — same selected mobile release attempt recorded under `CRL-20260811-005`; its independent review found the missing mobile companion rule, which this paired unit resolves before a new exact-candidate review.
+
+### Risks / Release Notes
+
+- Rollback: 删除该规则段；不影响运行时代码或数据。
+- Sensitive-information review: 未添加或记录 secrets、`.env`、token、数据库 URL、生产数据或敏感日志。
+- Git state: selected mobile candidate based on `origin/Dev@5c18c767d56290c54ee7fa47ec26e485fa94eca4`; not committed, pushed, PR-created, deployed, OTA-published or device-verified.
+
+## CRL-20260811-005 — 反馈表单布局与来源任务提交修复（mobile）
+
+- **Status:** candidate
+- **Updated:** 2026-08-11 Australia/Melbourne
+- **Request:** 修复反馈卡片窄屏中文逐字竖排、现场照片“拍照上传/相册选择”不居中，以及维修反馈将工作任务 ID 错作来源任务 ID 提交的问题。
+- **Outcome:** 历史反馈卡片把缩略图/文字与四个操作按钮分为两行，缩略图可随可用宽度收缩；现场照片两个按钮等宽且整组居中。所有反馈提交只使用 `task.source_id`，缺失来源时停止提交；批量反馈保留服务端对每一条记录返回的具体失败原因。
+
+### Files / Areas
+
+- `src/screens/tasks/FeedbackFormScreen.tsx` — 调整反馈卡片和现场照片按钮布局，恢复严格的 `source_task_id` 映射，并展示具体提交失败信息。
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — 覆盖窄屏两行布局、等宽居中按钮、`source_task_id` payload 与服务端错误显示。
+- `docs/change-release-ledger.md` — 记录本移动端候选。
+
+### Impact / Dependencies
+
+- **API / database / migration / config / dependencies:** none；使用既有反馈接口和照片授权逻辑，不改变操作权限。
+- **Related units:** `CRL-20260811-006` 追加已完成任务照片；本单元独立修复布局与反馈 source ID，不应夹带其他本地反馈页改动。
+
+### Validation
+
+- `jest --runInBand --no-cache src/screens/tasks/FeedbackFormScreen.test.tsx` — passed：3 tests，覆盖布局、payload 与具体错误。
+- `npm run typecheck` — passed in isolated candidate using the existing dependency tree; no dependency install.
+- `npm run lint` — passed：0 errors；114 existing warnings（本次未新增 lint error）。
+- `npm run check:ci` — passed：同一候选的完整移动端门禁，54 suites / 275 tests；详见 `RA-20260811-mobile-feedback-p1-02`。
+
+### Release Attempts
+
+#### RA-20260811-mobile-feedback-p1-01
+
+- Repository: `mobile`; selected CRLs: `CRL-20260811-004`, `CRL-20260811-005`, `CRL-20260811-006`, `CRL-20260811-007`; intended action: `commit`.
+- Branch: `codex/release-feedback-p1-20260811-mobile`; base: `origin/Dev@5c18c767d56290c54ee7fa47ec26e485fa94eca4`, fetched 2026-08-11.
+- Candidate patch SHA-256: `2988d198a10e60448bd2f00be7c28aa9da8c303abe0434bb6c875baeda73a71d` excluding `docs/change-release-ledger.md`; candidate content commit: not committed. This staged fingerprint includes the new `CleaningMediaImage.test.tsx` file.
+- Dependencies: root `CRL-20260811-004`, root/mobile `CRL-20260811-006`; the completion-photo API must be deployed before any OTA claim.
+- Required validation: `NOT VERIFIED`; shared-hunk / generated-file review: `PASS`; independent review: `NO-GO` (pre-fix reviewer found P1 completion-photo proxy/read-context, false-success/delete, mobile governance and full-gate gaps).
+- Technical state: `candidate`; user authorization: `selected-for-commit` (user selected `004`, `005`, `006`, `007` on 2026-08-11; exact commit-bound push authorization is still required); action conclusion: `BLOCKED`; blockers: reviewer P1 and full quality gates were not yet complete for this superseded candidate.
+
+#### RA-20260811-mobile-feedback-p1-02
+
+- Repository: `mobile`; selected CRLs: `CRL-20260811-004`, `CRL-20260811-005`, `CRL-20260811-006`, `CRL-20260811-007`; intended action: `commit`.
+- Branch: `codex/release-feedback-p1-20260811-mobile`; base: `origin/Dev@5c18c767d56290c54ee7fa47ec26e485fa94eca4`, fetched 2026-08-11.
+- Candidate patch SHA-256: `5b9cf994eb5b181cfba3062167c99745297ed05f7bc216b9879c1b84781f2ea0` excluding `docs/change-release-ledger.md`; candidate content commit: not committed.
+- Dependencies: root `CRL-20260811-004`, root/mobile `CRL-20260811-006`; the completion-photo API must be deployed before any OTA claim.
+- Required validation: superseded — `npm run check:ci` completed with 54 suites / 275 tests before the second independent review found the pending-remote-reference P1.
+- Shared-hunk / generated-file review: PASS — only selected source/tests/docs are present; no generated output, cache, environment file or dependency artifact is selected.
+- Independent review: `NO-GO` — exact staged review found that acknowledged remote references were lost when the business-save request failed.
+- Technical state: `candidate`; user authorization: `selected-for-commit`; action conclusion: `BLOCKED`; this fingerprint is superseded by the pending-reference retry repair and must not be committed.
+
+#### RA-20260811-mobile-feedback-p1-03
+
+- Repository: `mobile`; selected CRLs: `CRL-20260811-004`, `CRL-20260811-005`, `CRL-20260811-006`, `CRL-20260811-007`; intended action: `commit`.
+- Branch: `codex/release-feedback-p1-20260811-mobile`; base: `origin/Dev@5c18c767d56290c54ee7fa47ec26e485fa94eca4`, fetched 2026-08-11.
+- Candidate patch SHA-256: `5b241081896fd206feadc87d83878b22765e958115b2e26de700f38069f44f5c` excluding `docs/change-release-ledger.md`; candidate content commit: not committed.
+- Dependencies: root `CRL-20260811-004`, root/mobile `CRL-20260811-006`; the completion-photo API must be deployed before any OTA claim.
+- Required validation: PASS — `npm run check:ci` completed after the P1 retry repair with 55 suites / 278 tests; 114 pre-existing lint warnings and no errors.
+- Shared-hunk / generated-file review: PASS — exact staged range contains only selected source/tests/docs; no generated output, cache, environment file or dependency artifact is selected.
+- Independent review: GO for commit — independent read-only review found no P0/P1 in the exact paired root/mobile fingerprints; real device restart, weak-network retry and deployed Dev backend verification remain P2 post-commit gates.
+- Technical state: `verified`; user authorization: `selected-for-commit`; action conclusion: `GO` for commit.
+
+### Risks / Release Notes
+
+- Runtime risk: 缺少 `source_id` 的异常旧任务现在会明确阻止提交并提示刷新，不再把错误的工作任务 ID 发给后端。
+- Rollback: 恢复原布局与提交映射；不涉及照片授权、服务端字段或历史数据迁移。
+- Sensitive-information review: 未添加或记录 secrets、`.env`、token、数据库 URL、生产数据或敏感日志。
+- Git state: selected mobile candidate based on `origin/Dev@5c18c767d56290c54ee7fa47ec26e485fa94eca4`; not committed, pushed, PR-created, deployed, OTA-published or device-verified.
+
+## CRL-20260811-006 — 已完成线下任务补充完成记录照片（mobile）
+
+- **Status:** candidate
+- **Updated:** 2026-08-11 Australia/Melbourne
+- **Request:** 已完成线下任务的“任务处理”照片不得只留在页面内存；需要明确、受权限控制地保存为完成记录，维修任务不受影响。
+- **Outcome:** 客户端仅在服务端 `available_actions` 包含 `append_completion_photo` 时显示“补充拍照/补充相册”。远端上传成功后，先按任务和当前用户持久化“待保存”引用，再请求追加完成记录；若业务保存失败，照片不显示为已保存，但保留跨页面的“重试保存已上传照片”动作，不会重新上传。缩略图和预览都传同一 `work_task_id`；没有服务端删除 action 时隐藏已完成照片的删除入口。无动作时入口保持隐藏，通用“标记完成”保持禁用；维修任务继续使用既有专用流程。
+
+### Files / Areas
+
+- `src/lib/api.ts` — 增加服务端受控的完成照片追加 action/intent 与 API 调用。
+- `src/lib/workTaskCompletionPhotoPending.ts` — 任务/用户范围内持久化并校验已上传、尚未保存的私有媒体引用；仅服务器确认完成记录后清除。
+- `src/lib/workTaskCompletionPhotoPending.test.ts` — 覆盖持久化去重、用户隔离和确认后清除。
+- `src/screens/tasks/TaskDetailScreen.tsx` — 按服务端动作显示补充入口；先持久化待保存引用，业务保存失败后提供仅重试保存的动作；只有服务器确认才显示已保存照片；缩略图/预览传任务读取上下文，并隐藏无服务端动作的已完成照片删除入口。
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — 覆盖有动作时落库调用、跨页面重试不重新上传、读取上下文、保存失败不显示、已完成照片无本地假删除和既有完成状态边界。
+- `docs/change-release-ledger.md` — 记录本移动端候选及配对依赖。
+
+### Impact / Dependencies
+
+- **API:** 依赖 root `CRL-20260811-006` 提供仅适用于 `cleaning_offline_tasks` 的 `POST /mzapp/work-tasks/:id/completion-photos` 与 `append_completion_photo`。
+- **Database / migration / config / dependencies:** none；移动端不做本地“已保存”推断；本地仅保存私有远端引用和任务/用户归属，不保存 token 或公开 R2 URL。
+- **Related units:** root/mobile `CRL-20260811-006` 必须作为同一配对版本发布；不得用 OTA 单独假设后端接口已存在。
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/screens/tasks/TaskDetailScreen.test.tsx src/lib/workTaskCompletionPhotoPending.test.ts` — passed：2 suites / 35 tests，含上传成功后业务保存失败的持久化、重开后只重试保存不重传、确认后清除。
+- `npm run typecheck` — passed in isolated candidate using the existing dependency tree; no dependency install.
+- `npm run lint` — passed：0 errors；114 existing warnings（本次未新增 lint error）。
+- `npm run check:ci` — passed：P1 retry repair后的完整移动端门禁，55 suites / 278 tests，0 errors / 114 existing warnings；详见 `RA-20260811-mobile-feedback-p1-03`。
+
+### Release Attempts
+
+- `RA-20260811-mobile-feedback-p1-01` — same selected mobile release attempt recorded under `CRL-20260811-005`; the root/mobile `CRL-20260811-006` dependency and all commit/push gates apply unchanged.
+
+### Risks / Release Notes
+
+- Runtime risk: 后端未同步部署时服务器不会下发 action，客户端入口保持隐藏；服务端返回失败时照片不会被标示为已保存，而是保留任务/用户范围的待保存引用并只重试业务保存。若设备本地待保存记录写入也失败，页面会明确要求留在当前页重试，且不会在未持久化前发起业务保存。不得将该候选单独作为“已完成照片已保存”的发布证据。
+- Rollback: 删除补充 action 的客户端调用和入口；不影响已有维修动作或既有完成照片。
+- Sensitive-information review: 未添加或记录 secrets、`.env`、token、数据库 URL、生产数据或敏感日志。
+- Git state: selected mobile candidate based on `origin/Dev@5c18c767d56290c54ee7fa47ec26e485fa94eca4`; not committed, pushed, PR-created, deployed, OTA-published or device-verified.
+
+## CRL-20260811-007 — 线下任务缩略图失败原因可见（mobile）
+
+- **Status:** candidate
+- **Updated:** 2026-08-11 Australia/Melbourne
+- **Request:** 线下任务私有照片读取失败时不能只显示空灰框；需要区分权限、对象缺失和可重试读取失败，以便继续追踪实际服务端根因。
+- **Outcome:** 缩略图组件保留认证媒体加载的失败分类：403/404 显示明确终态原因且不重试；网络、超时或 5xx 显示“点击重试”。不暴露私有 R2 URL、token 或原始请求内容。
+
+### Files / Areas
+
+- `src/components/CleaningMediaImage.tsx` — 保存媒体读取失败状态并渲染终态原因或重试入口，替代空白占位。
+- `src/components/CleaningMediaImage.test.tsx` — 覆盖 403/404 原因可见和可重试失败的重试入口。
+- `docs/change-release-ledger.md` — 记录本移动端候选。
+
+### Impact / Dependencies
+
+- **API / database / migration / config / dependencies:** none；继续经已有认证媒体代理读取，不改照片授权。
+- **Related units:** 依赖既有私有媒体代理；实际请求是 403、404、部署不同步还是网络问题，仍需与已部署服务配对后做一次受控真机读取追踪。
+
+### Validation
+
+- `jest --runInBand --no-cache src/components/CleaningMediaImage.test.tsx src/components/CleaningMediaPreview.test.tsx src/lib/cleaningMediaCache.test.ts` — passed：3 suites / 12 tests。
+- `npm run typecheck` — passed in isolated candidate using the existing dependency tree; no dependency install.
+- `npm run lint` — passed：0 errors；114 existing warnings（本次未新增 lint error）。
+- `npm run check:ci` — passed：同一候选的完整移动端门禁，54 suites / 275 tests；详见 `RA-20260811-mobile-feedback-p1-02`。
+
+### Release Attempts
+
+- `RA-20260811-mobile-feedback-p1-01` — same selected mobile release attempt recorded under `CRL-20260811-005`; this diagnostic-thumbnail unit has no server deployment dependency but must pass the same selected-range review.
+
+### Risks / Release Notes
+
+- Runtime risk: 本修复让失败可诊断，不会自行修复未部署、授权、对象缺失或网络根因；禁止据此宣称线上照片已恢复。
+- Rollback: 恢复原缩略图失败占位；不修改任何远端媒体对象、授权或缓存清理。
+- Sensitive-information review: 未添加或记录 secrets、`.env`、token、数据库 URL、生产数据或敏感日志。
+- Git state: selected mobile candidate based on `origin/Dev@5c18c767d56290c54ee7fa47ec26e485fa94eca4`; not committed, pushed, PR-created, deployed, OTA-published or device-verified.
+
 ## CRL-20260731-007 — 检查照片上传进度不重载草稿
 
 - **Status:** candidate

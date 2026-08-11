@@ -4,6 +4,7 @@ import { fireEvent, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 
 let mockKeyQueueItem: any = null
+let mockPendingCompletionPhotoReferences: string[] = []
 const mockAuthState: any = { user: { id: 'u1', username: 'tester', role: 'staff' }, token: 't1' }
 
 jest.mock('react-native-safe-area-context', () => {
@@ -18,6 +19,7 @@ jest.mock('expo-image-picker', () => {
   return {
     MediaType: { IMAGE: 'images', VIDEO: 'videos' },
     requestCameraPermissionsAsync: jest.fn(async () => ({ granted: true })),
+    requestMediaLibraryPermissionsAsync: jest.fn(async () => ({ granted: true })),
     launchCameraAsync: jest.fn(async () => ({
       canceled: false,
       assets: [{ uri: 'file:///tmp/k.jpg', fileName: 'k.jpg', mimeType: 'image/jpeg' }],
@@ -28,6 +30,14 @@ jest.mock('expo-image-picker', () => {
 jest.mock('../../lib/auth', () => {
   return {
     useAuth: () => mockAuthState,
+  }
+})
+
+jest.mock('../../components/CleaningMediaImage', () => {
+  const React = require('react')
+  return {
+    __esModule: true,
+    default: (props: any) => React.createElement('CleaningMediaImage', props),
   }
 })
 
@@ -80,7 +90,9 @@ jest.mock('../../lib/api', () => {
     uploadCleaningMedia: jest.fn(async () => ({ url: 'http://example.com/k.jpg' })),
     getWorkTaskFormPhotos: jest.fn(async () => ({ items: [] })),
     markWorkTask: jest.fn(async () => ({ ok: true })),
+    appendWorkTaskCompletionPhotos: jest.fn(async () => ({ ok: true, completion_photo_urls: ['mzapp/completion-photo.jpg'] })),
     startCleaningTask: jest.fn(async () => ({ ok: true })),
+    uploadMzappMedia: jest.fn(async () => ({ remoteReference: 'mzapp/completion-photo.jpg', url: 'mzapp/completion-photo.jpg' })),
   }
 })
 
@@ -109,9 +121,23 @@ jest.mock('../../lib/maintenanceCompletionPhotoDraft', () => ({
   setMaintenanceCompletionPhotoDraft: jest.fn(async (_taskId: string, _ownerId: string, photos: any[]) => photos),
 }))
 
+jest.mock('../../lib/workTaskCompletionPhotoPending', () => ({
+  clearPendingWorkTaskCompletionPhotoReferences: jest.fn(async () => { mockPendingCompletionPhotoReferences = [] }),
+  getPendingWorkTaskCompletionPhotoReferences: jest.fn(async () => mockPendingCompletionPhotoReferences),
+  normalizePendingCompletionPhotoReferences: jest.fn((values: any[]) => Array.from(new Set((Array.isArray(values) ? values : []).map((item) => String(item || '').trim()).filter(Boolean)))),
+  setPendingWorkTaskCompletionPhotoReferences: jest.fn(async (_taskId: string, _ownerId: string, values: string[]) => {
+    mockPendingCompletionPhotoReferences = values
+    return values
+  }),
+}))
+
 beforeEach(() => {
   mockKeyQueueItem = null
+  mockPendingCompletionPhotoReferences = []
   require('../../lib/api').getWorkTaskFormPhotos.mockClear()
+  require('../../lib/workTaskCompletionPhotoPending').clearPendingWorkTaskCompletionPhotoReferences.mockClear()
+  require('../../lib/workTaskCompletionPhotoPending').getPendingWorkTaskCompletionPhotoReferences.mockClear()
+  require('../../lib/workTaskCompletionPhotoPending').setPendingWorkTaskCompletionPhotoReferences.mockClear()
 })
 
 test('uploading key photo queues sync and refreshes the task projection', async () => {
@@ -1081,6 +1107,192 @@ test('offline task can be marked done without uploading photos first', async () 
   snapshot.items[0].start_time = '10am'
   snapshot.items[0].end_time = '3pm'
   snapshot.items[0].summary = null
+})
+
+test('completed non-maintenance task saves supplemental completion photos only through the server action', async () => {
+  jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const api = require('../../lib/api')
+  api.uploadMzappMedia.mockClear()
+  api.appendWorkTaskCompletionPhotos.mockClear()
+  snapshot.items[0] = {
+    ...previousTask,
+    task_kind: 'offline',
+    source_type: 'cleaning_offline_tasks',
+    source_id: 'offline-completed-1',
+    assignee_id: 'u1',
+    status: 'done',
+    completion_photo_urls: ['r2://bucket-test/mzapp/completion-existing.jpg'],
+    available_actions: [
+      { id: 'append_completion_photo', label: '补充完成记录照片', placement: 'more', enabled: true, target: 'TaskDetail', intent: 'completion' },
+    ],
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'completed-photo-append', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByText('已保存 1 张完成记录照片，可继续补充')).toBeTruthy()
+      expect(ui.getByText('补充拍照')).toBeTruthy()
+      expect(ui.queryByText('标记完成')).toBeNull()
+      expect(ui.getByTestId('maintenance-action-photo-0').props.accessWorkTaskId).toBe('w1')
+      expect(ui.queryByLabelText('删除标记照片')).toBeNull()
+    })
+    fireEvent.press(ui.getByTestId('offline-task-mark-camera'))
+
+    await waitFor(() => {
+      expect(api.uploadMzappMedia).toHaveBeenCalledWith('t1', expect.objectContaining({ uri: 'file:///tmp/k.jpg' }))
+      expect(api.appendWorkTaskCompletionPhotos).toHaveBeenCalledWith('t1', 'w1', { photo_urls: ['mzapp/completion-photo.jpg'] })
+      expect(store.patchWorkTaskItem).toHaveBeenCalledWith('w1', { completion_photo_urls: ['mzapp/completion-photo.jpg'] })
+    })
+  } finally {
+    snapshot.items[0] = previousTask
+  }
+})
+
+test('completed supplemental-photo append failure persists an uploaded reference and retries the business save without re-uploading', async () => {
+  const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const api = require('../../lib/api')
+  const pendingStore = require('../../lib/workTaskCompletionPhotoPending')
+  api.uploadMzappMedia.mockClear()
+  api.appendWorkTaskCompletionPhotos.mockClear()
+  api.appendWorkTaskCompletionPhotos.mockRejectedValueOnce(new Error('completion_photo_append_failed'))
+  store.patchWorkTaskItem.mockClear()
+  snapshot.items[0] = {
+    ...previousTask,
+    task_kind: 'offline',
+    source_type: 'cleaning_offline_tasks',
+    source_id: 'offline-completed-append-fail',
+    assignee_id: 'u1',
+    status: 'done',
+    completion_photo_urls: [],
+    available_actions: [
+      { id: 'append_completion_photo', label: '补充完成记录照片', placement: 'more', enabled: true, target: 'TaskDetail', intent: 'completion' },
+    ],
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'completed-photo-append-fail', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+    await waitFor(() => expect(ui.getByText('任务已完成，可补充完成记录照片')).toBeTruthy())
+    fireEvent.press(ui.getByTestId('offline-task-mark-camera'))
+
+    await waitFor(() => {
+      expect(api.appendWorkTaskCompletionPhotos).toHaveBeenCalledWith('t1', 'w1', { photo_urls: ['mzapp/completion-photo.jpg'] })
+      expect(store.patchWorkTaskItem).not.toHaveBeenCalled()
+      expect(ui.queryByTestId('maintenance-action-photo-0')).toBeNull()
+      expect(ui.queryByLabelText('删除标记照片')).toBeNull()
+      expect(pendingStore.setPendingWorkTaskCompletionPhotoReferences).toHaveBeenCalledWith('w1', 'u1', ['mzapp/completion-photo.jpg'])
+      expect(ui.getByText('已有 1 张照片已上传，等待保存到完成记录')).toBeTruthy()
+      expect(ui.getByTestId('offline-task-completion-photo-retry-save')).toBeTruthy()
+      expect(alertSpy).toHaveBeenCalledWith('出错了', '照片已上传，尚未保存到完成记录：completion_photo_append_failed。可点击重试保存，无需重新上传。')
+    })
+
+    fireEvent.press(ui.getByTestId('offline-task-completion-photo-retry-save'))
+
+    await waitFor(() => {
+      expect(api.uploadMzappMedia).toHaveBeenCalledTimes(1)
+      expect(api.appendWorkTaskCompletionPhotos).toHaveBeenCalledTimes(2)
+      expect(store.patchWorkTaskItem).toHaveBeenCalledWith('w1', { completion_photo_urls: ['mzapp/completion-photo.jpg'] })
+      expect(pendingStore.clearPendingWorkTaskCompletionPhotoReferences).toHaveBeenCalledWith('w1', 'u1')
+      expect(ui.queryByTestId('offline-task-completion-photo-retry-save')).toBeNull()
+    })
+  } finally {
+    snapshot.items[0] = previousTask
+    alertSpy.mockRestore()
+  }
+})
+
+test('completed supplemental-photo retry reloads a persisted remote reference without requesting the camera again', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const api = require('../../lib/api')
+  const pendingStore = require('../../lib/workTaskCompletionPhotoPending')
+  mockPendingCompletionPhotoReferences = ['mzapp/completion-resume.jpg']
+  api.uploadMzappMedia.mockClear()
+  api.appendWorkTaskCompletionPhotos.mockClear()
+  store.patchWorkTaskItem.mockClear()
+  snapshot.items[0] = {
+    ...previousTask,
+    task_kind: 'offline',
+    source_type: 'cleaning_offline_tasks',
+    source_id: 'offline-completed-resume',
+    assignee_id: 'u1',
+    status: 'done',
+    completion_photo_urls: [],
+    available_actions: [
+      { id: 'append_completion_photo', label: '补充完成记录照片', placement: 'more', enabled: true, target: 'TaskDetail', intent: 'completion' },
+    ],
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'completed-photo-append-resume', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+    await waitFor(() => {
+      expect(pendingStore.getPendingWorkTaskCompletionPhotoReferences).toHaveBeenCalledWith('w1', 'u1')
+      expect(ui.getByTestId('offline-task-completion-photo-retry-save')).toBeTruthy()
+    })
+
+    fireEvent.press(ui.getByTestId('offline-task-completion-photo-retry-save'))
+
+    await waitFor(() => {
+      expect(api.uploadMzappMedia).not.toHaveBeenCalled()
+      expect(api.appendWorkTaskCompletionPhotos).toHaveBeenCalledWith('t1', 'w1', { photo_urls: ['mzapp/completion-resume.jpg'] })
+      expect(store.patchWorkTaskItem).toHaveBeenCalledWith('w1', { completion_photo_urls: ['mzapp/completion-photo.jpg'] })
+    })
+  } finally {
+    snapshot.items[0] = previousTask
+  }
+})
+
+test('completed non-maintenance task hides supplemental photo controls without the server capability', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  snapshot.items[0] = {
+    ...previousTask,
+    task_kind: 'offline',
+    source_type: 'cleaning_offline_tasks',
+    source_id: 'offline-completed-no-capability',
+    assignee_id: 'u1',
+    status: 'done',
+    available_actions: [],
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'completed-photo-no-capability', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+    await waitFor(() => {
+      expect(ui.getByText('任务已完成；当前账号没有补充完成记录照片权限。')).toBeTruthy()
+      expect(ui.queryByTestId('offline-task-mark-camera')).toBeNull()
+      expect(ui.queryByTestId('offline-task-mark-library')).toBeNull()
+    })
+  } finally {
+    snapshot.items[0] = previousTask
+  }
 })
 
 test('customer service can edit an offline task and save its executor', async () => {

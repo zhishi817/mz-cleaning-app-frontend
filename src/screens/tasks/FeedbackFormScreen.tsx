@@ -539,7 +539,9 @@ export default function FeedbackFormScreen(props: Props) {
   const propertyId = String(task?.property_id || task?.property?.id || '').trim()
   const propertyCode = String(task?.property?.code || '').trim()
   const taskId = String(task?.id || props.route.params.taskId || '').trim()
-  const feedbackSourceTaskId = String((task as any)?.source_id || task?.id || '').trim()
+  // Feedback records belong to the source cleaning task. `task.id` is only the
+  // mobile work-task projection and the API correctly rejects it as a source.
+  const feedbackSourceTaskId = String((task as any)?.source_id || '').trim()
   const isInspectionPanelBatchMode = props.route.params.source === 'inspection_panel_batch'
   const userKey = String((user as any)?.id || (user as any)?.username || (user as any)?.email || '').trim()
   const isAdminUser = useMemo(() => {
@@ -1058,13 +1060,18 @@ export default function FeedbackFormScreen(props: Props) {
     setTimePickerOpen(true)
   }
 
-  function dismissCreateSuccess(successCount: number, failedLabels: string[]) {
-    if (!failedLabels.length) {
+  function feedbackFailureLabel(label: string, reason?: unknown) {
+    const detail = String(reason || '').trim().replace(/\s+/g, ' ')
+    return detail ? `${label}（${detail.slice(0, 160)}）` : label
+  }
+
+  function dismissCreateSuccess(successCount: number, failedItems: Array<{ label: string; reason?: unknown }>) {
+    if (!failedItems.length) {
       Alert.alert(t('common_ok'), successCount > 1 ? `已成功提交 ${successCount} 条记录` : '提交成功')
       return
     }
     const prefix = successCount > 0 ? `已成功提交 ${successCount} 条，` : ''
-    Alert.alert(t('common_error'), `${prefix}以下记录提交失败：${failedLabels.join('、')}`)
+    Alert.alert(t('common_error'), `${prefix}以下记录提交失败：${failedItems.map((item) => feedbackFailureLabel(item.label, item.reason)).join('、')}`)
   }
 
   async function submitFeedback() {
@@ -1122,6 +1129,10 @@ export default function FeedbackFormScreen(props: Props) {
       }
     }
     if (!token || !propertyId) return
+    if (!feedbackSourceTaskId) {
+      Alert.alert(t('common_error'), '当前任务缺少来源记录，无法提交反馈；请刷新任务后重试。')
+      return
+    }
     try {
       setSubmitting(true)
       if (kind === 'maintenance') {
@@ -1137,24 +1148,24 @@ export default function FeedbackFormScreen(props: Props) {
         const payloads = maintenanceDrafts.map((draft) => ({
           kind: 'maintenance' as const,
           property_id: propertyId,
-          source_task_id: task?.id ? String(task.id) : undefined,
+          source_task_id: feedbackSourceTaskId,
           area: draft.area || undefined,
           detail: draft.detail.trim(),
           media_urls: draft.media,
         }))
         const createResults = await createPropertyFeedbackBatch(token, payloads)
-        const failedIds = new Set<string>()
+        const failures = new Map<string, string>()
         let successCount = 0
         for (let idx = 0; idx < createResults.length; idx += 1) {
           const result = createResults[idx]
           const draft = maintenanceDrafts[idx]
           if (!result?.ok) {
-            failedIds.add(draft.clientId)
+            failures.set(draft.clientId, String(result?.error || '提交失败'))
             continue
           }
           const feedbackId = String(result.response?.id || '').trim()
           if (!feedbackId) {
-            failedIds.add(draft.clientId)
+            failures.set(draft.clientId, '后端未返回维修记录编号')
             continue
           }
           if (draft.submitAsCompleted) {
@@ -1168,21 +1179,24 @@ export default function FeedbackFormScreen(props: Props) {
               await completePropertyFeedbackProject(token, 'maintenance', feedbackId, String(project.item.id), {
                 note: draft.completionNote.trim() || undefined,
                 detail: draft.detail.trim(),
-                source_task_id: task?.id ? String(task.id) : undefined,
+                source_task_id: feedbackSourceTaskId,
                 before_photos: draft.media,
                 after_photos: draft.completionAfterPhotos,
               })
-            } catch {
-              failedIds.add(draft.clientId)
+            } catch (e: any) {
+              failures.set(draft.clientId, `完工信息：${String(e?.message || '提交失败')}`)
               continue
             }
           }
           successCount += 1
         }
-        const nextMaintenanceDrafts = !failedIds.size ? [buildMaintenanceDraft()] : maintenanceDrafts.filter((draft) => failedIds.has(draft.clientId))
+        const nextMaintenanceDrafts = !failures.size ? [buildMaintenanceDraft()] : maintenanceDrafts.filter((draft) => failures.has(draft.clientId))
         setMaintenanceDrafts(nextMaintenanceDrafts)
         await persistFeedbackDraftSnapshot({ maintenanceDrafts: nextMaintenanceDrafts })
-        dismissCreateSuccess(successCount, maintenanceDrafts.filter((draft) => failedIds.has(draft.clientId)).map((_, idx) => `维修记录${idx + 1}`))
+        dismissCreateSuccess(successCount, maintenanceDrafts
+          .map((draft, idx) => ({ draft, label: `维修记录${idx + 1}` }))
+          .filter(({ draft }) => failures.has(draft.clientId))
+          .map(({ draft, label }) => ({ label, reason: failures.get(draft.clientId) })))
       } else if (kind === 'deep_cleaning') {
         const invalidIndex = deepCleaningDrafts.findIndex((draft) => {
           if (!draft.area || !draft.detail.trim() || !draft.media.length) return true
@@ -1199,24 +1213,24 @@ export default function FeedbackFormScreen(props: Props) {
         const payloads = deepCleaningDrafts.map((draft) => ({
           kind: 'deep_cleaning' as const,
           property_id: propertyId,
-          source_task_id: task?.id ? String(task.id) : undefined,
+          source_task_id: feedbackSourceTaskId,
           areas: draft.area ? [draft.area] : [],
           detail: draft.detail.trim(),
           media_urls: draft.media,
         }))
         const createResults = await createPropertyFeedbackBatch(token, payloads)
-        const failedIds = new Set<string>()
+        const failures = new Map<string, string>()
         let successCount = 0
         for (let idx = 0; idx < createResults.length; idx += 1) {
           const result = createResults[idx]
           const draft = deepCleaningDrafts[idx]
           if (!result?.ok) {
-            failedIds.add(draft.clientId)
+            failures.set(draft.clientId, String(result?.error || '提交失败'))
             continue
           }
           const feedbackId = String(result.response?.id || '').trim()
           if (!feedbackId) {
-            failedIds.add(draft.clientId)
+            failures.set(draft.clientId, '后端未返回深清记录编号')
             continue
           }
           if (draft.submitAsCompleted) {
@@ -1229,23 +1243,26 @@ export default function FeedbackFormScreen(props: Props) {
               await completePropertyFeedbackProject(token, 'deep_cleaning', feedbackId, String(project.item.id), {
                 note: draft.completionNote.trim() || undefined,
                 detail: draft.detail.trim(),
-                source_task_id: task?.id ? String(task.id) : undefined,
+                source_task_id: feedbackSourceTaskId,
                 started_at: draft.completionStartedAt || undefined,
                 ended_at: draft.completionEndedAt || undefined,
                 before_photos: draft.media,
                 after_photos: draft.completionAfterPhotos,
               })
-            } catch {
-              failedIds.add(draft.clientId)
+            } catch (e: any) {
+              failures.set(draft.clientId, `完工信息：${String(e?.message || '提交失败')}`)
               continue
             }
           }
           successCount += 1
         }
-        const nextDeepCleaningDrafts = !failedIds.size ? [buildDeepCleaningDraft()] : deepCleaningDrafts.filter((draft) => failedIds.has(draft.clientId))
+        const nextDeepCleaningDrafts = !failures.size ? [buildDeepCleaningDraft()] : deepCleaningDrafts.filter((draft) => failures.has(draft.clientId))
         setDeepCleaningDrafts(nextDeepCleaningDrafts)
         await persistFeedbackDraftSnapshot({ deepCleaningDrafts: nextDeepCleaningDrafts })
-        dismissCreateSuccess(successCount, deepCleaningDrafts.filter((draft) => failedIds.has(draft.clientId)).map((_, idx) => `深清记录${idx + 1}`))
+        dismissCreateSuccess(successCount, deepCleaningDrafts
+          .map((draft, idx) => ({ draft, label: `深清记录${idx + 1}` }))
+          .filter(({ draft }) => failures.has(draft.clientId))
+          .map(({ draft, label }) => ({ label, reason: failures.get(draft.clientId) })))
       } else {
         const invalidIndex = dailyDrafts.findIndex((draft) => {
           const qty = Number(draft.qty)
@@ -1260,7 +1277,7 @@ export default function FeedbackFormScreen(props: Props) {
           dailyDrafts.map((draft) => ({
             kind: 'daily_necessities' as const,
             property_id: propertyId,
-            source_task_id: task?.id ? String(task.id) : undefined,
+            source_task_id: feedbackSourceTaskId,
             status: draft.status,
             item_name: draft.itemName.trim(),
             quantity: Math.trunc(Number(draft.qty)),
@@ -1268,16 +1285,19 @@ export default function FeedbackFormScreen(props: Props) {
             media_urls: draft.media,
           })),
         )
-        const failedIds = new Set<string>()
+        const failures = new Map<string, string>()
         let successCount = 0
         results.forEach((result, idx) => {
           if (result.ok) successCount += 1
-          else failedIds.add(dailyDrafts[idx].clientId)
+          else failures.set(dailyDrafts[idx].clientId, String(result.error || '提交失败'))
         })
-        const nextDailyDrafts = !failedIds.size ? [buildDailyDraft()] : dailyDrafts.filter((draft) => failedIds.has(draft.clientId))
+        const nextDailyDrafts = !failures.size ? [buildDailyDraft()] : dailyDrafts.filter((draft) => failures.has(draft.clientId))
         setDailyDrafts(nextDailyDrafts)
         await persistFeedbackDraftSnapshot({ dailyDrafts: nextDailyDrafts })
-        dismissCreateSuccess(successCount, dailyDrafts.filter((draft) => failedIds.has(draft.clientId)).map((_, idx) => `日用品记录${idx + 1}`))
+        dismissCreateSuccess(successCount, dailyDrafts
+          .map((draft, idx) => ({ draft, label: `日用品记录${idx + 1}` }))
+          .filter(({ draft }) => failures.has(draft.clientId))
+          .map(({ draft, label }) => ({ label, reason: failures.get(draft.clientId) })))
       }
       await refreshLists({ force: true })
     } catch (e: any) {
@@ -1590,7 +1610,7 @@ export default function FeedbackFormScreen(props: Props) {
         const resp = await completePropertyFeedbackProject(token, actionFeedback.kind as 'maintenance' | 'deep_cleaning', actionFeedback.id, actionProject.id, {
           note: String(projectForm.note || '').trim() || undefined,
           detail: String(projectForm.detail || '').trim() || undefined,
-          source_task_id: task?.id ? String(task.id) : undefined,
+          source_task_id: feedbackSourceTaskId,
           started_at: String(projectForm.started_at || '').trim() || undefined,
           ended_at: String(projectForm.ended_at || '').trim() || undefined,
           before_photos: projectForm.before_photos,
@@ -2414,11 +2434,11 @@ export default function FeedbackFormScreen(props: Props) {
 
 function UploadButtons(props: { onCamera: () => void; onLibrary: () => void }) {
   return (
-    <View style={styles.photoRow}>
-      <Pressable onPress={props.onCamera} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
+    <View testID="feedback-photo-upload-actions" style={styles.photoRow}>
+      <Pressable testID="feedback-photo-upload-camera" onPress={props.onCamera} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
         <Text style={styles.photoBtnText}>拍照上传</Text>
       </Pressable>
-      <Pressable onPress={props.onLibrary} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
+      <Pressable testID="feedback-photo-upload-library" onPress={props.onLibrary} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
         <Text style={styles.photoBtnText}>相册选择</Text>
       </Pressable>
     </View>
@@ -2490,7 +2510,7 @@ function FeedbackGroup(props: {
           const previewUrl = previewUrls[0] ? toAbsoluteUrl(previewUrls[0]) : ''
           return (
             <View key={`${item.kind}:${item.id}`} style={styles.feedbackItem}>
-              <View style={styles.feedbackRow}>
+              <View testID={`feedback-card-primary-row-${item.id}`} style={styles.feedbackRow}>
                 <View style={styles.feedbackMain}>
                   <Text style={styles.feedbackTitle}>{feedbackListTitle(item)}</Text>
                   <Text style={styles.feedbackMeta}>{statusLabel(item)}</Text>
@@ -2505,7 +2525,8 @@ function FeedbackGroup(props: {
                     ) : null}
                   </Pressable>
                 ) : null}
-                <View style={styles.feedbackActions}>
+              </View>
+              <View testID={`feedback-card-actions-${item.id}`} style={styles.feedbackActions}>
                   <Pressable accessibilityRole="button" accessibilityLabel="查看反馈详情" onPress={() => props.onView(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
                     <Ionicons name="eye-outline" size={18} color="#2563EB" />
                   </Pressable>
@@ -2526,7 +2547,6 @@ function FeedbackGroup(props: {
                       <Ionicons name="trash-outline" size={18} color="#DC2626" />
                     </Pressable>
                   ) : null}
-                </View>
               </View>
             </View>
           )
@@ -2583,9 +2603,9 @@ const styles = StyleSheet.create({
   chipText: { color: '#111827', fontWeight: '700', fontSize: 12 },
   chipTextActive: { color: '#1D4ED8' },
   chipTextDisabled: { color: '#64748B' },
-  photoRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
-  photoBtn: { minHeight: layoutTokens.button.height, backgroundColor: '#EFF6FF', borderRadius: layoutTokens.button.radius, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderWidth: hairline(), borderColor: '#BFDBFE' },
-  photoBtnText: { color: '#1D4ED8', fontWeight: '800' },
+  photoRow: { width: '100%', flexDirection: 'row', gap: 10, justifyContent: 'center' },
+  photoBtn: { flex: 1, minWidth: layoutTokens.button.height, minHeight: layoutTokens.button.height, backgroundColor: '#EFF6FF', borderRadius: layoutTokens.button.radius, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderWidth: hairline(), borderColor: '#BFDBFE', alignItems: 'center', justifyContent: 'center' },
+  photoBtnText: { color: '#1D4ED8', fontWeight: '800', textAlign: 'center' },
   choiceGrid: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   choiceCard: { flex: 1, minWidth: 130, borderRadius: 16, borderWidth: hairline(), borderColor: '#D1D5DB', backgroundColor: '#F8FAFC', paddingHorizontal: 14, paddingVertical: 12 },
   choiceCardActive: { backgroundColor: '#EFF6FF', borderColor: '#93C5FD' },
@@ -2682,7 +2702,7 @@ const styles = StyleSheet.create({
   feedbackThumb: { width: '100%', height: '100%', backgroundColor: '#DBEAFE' },
   feedbackThumbBadge: { position: 'absolute', right: 4, bottom: 4, minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4, backgroundColor: 'rgba(15,23,42,0.78)', alignItems: 'center', justifyContent: 'center' },
   feedbackThumbBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
-  feedbackActions: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' },
+  feedbackActions: { width: '100%', marginTop: 10, flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' },
   muted: { color: '#6B7280', marginTop: 8, fontWeight: '600' },
   modalRoot: { flex: 1, backgroundColor: 'rgba(17,24,39,0.45)', alignItems: 'center', justifyContent: 'center', padding: 16 },
   modalBackdrop: { ...StyleSheet.absoluteFillObject },

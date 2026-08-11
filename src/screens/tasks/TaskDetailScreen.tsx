@@ -23,7 +23,7 @@ import {
 import { hairline, isCompactWidth, moderateScale } from '../../lib/scale'
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, reconcileActiveWorkTasksAfterLocalPatch, refreshWorkTasksFromServer, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
-import { deleteKeyPhoto, listCleaningAppPropertyCodes, listUsers, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, submitMaintenanceExecutorAction, updateCleaningOfflineTask, updateWorkTaskPhotos, uploadMzappMedia } from '../../lib/api'
+import { appendWorkTaskCompletionPhotos, deleteKeyPhoto, listCleaningAppPropertyCodes, listUsers, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, submitMaintenanceExecutorAction, updateCleaningOfflineTask, updateWorkTaskPhotos, uploadMzappMedia } from '../../lib/api'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { isPropertyFollowupTask, propertyFollowupTaskDetail, propertyFollowupTaskTitle } from '../../lib/propertyFollowupTaskDisplay'
@@ -54,6 +54,12 @@ import {
   setMaintenanceCompletionPhotoDraft,
   type MaintenanceCompletionPhotoDraft,
 } from '../../lib/maintenanceCompletionPhotoDraft'
+import {
+  clearPendingWorkTaskCompletionPhotoReferences,
+  getPendingWorkTaskCompletionPhotoReferences,
+  normalizePendingCompletionPhotoReferences,
+  setPendingWorkTaskCompletionPhotoReferences,
+} from '../../lib/workTaskCompletionPhotoPending'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
 type OfflineEditUserOption = { id: string; username?: string | null; display_name?: string | null }
@@ -236,6 +242,7 @@ export default function TaskDetailScreen(props: Props) {
   const [marking, setMarking] = useState(false)
   const maintenanceOperationIds = React.useRef(new Map<string, string>())
   const [markPhotoUrls, setMarkPhotoUrls] = useState<string[]>([])
+  const [pendingCompletionPhotoReferences, setPendingCompletionPhotoReferences] = useState<string[]>([])
   const [maintenanceCompletionPhotoDrafts, setMaintenanceCompletionPhotoDrafts] = useState<MaintenanceCompletionPhotoDraft[]>([])
   const [taskPhotoUrls, setTaskPhotoUrls] = useState<string[]>([])
   const [taskPhotoSaving, setTaskPhotoSaving] = useState(false)
@@ -276,6 +283,8 @@ export default function TaskDetailScreen(props: Props) {
   const task = useMemo<WorkTaskItem | null>(() => findWorkTaskItemByAnyId(id), [id, items])
   const maintenancePhotoDraftTaskId = task && maintenanceDomainForSourceType(task.source_type) ? String(task.id || '').trim() : ''
   const maintenancePhotoDraftOwnerId = String((user as any)?.id || (user as any)?.user_id || (user as any)?.username || '').trim()
+  const completionPhotoPendingTaskId = task && String(task.source_type || '').trim() === 'cleaning_offline_tasks' ? String(task.id || '').trim() : ''
+  const completionPhotoPendingOwnerId = maintenancePhotoDraftOwnerId
   const taskCompletionPhotoUrlsKey = useMemo(() => JSON.stringify(normalizePhotoUrls((task as any)?.completion_photo_urls)), [task])
   const openPreview = (url: string, workTaskId?: string | null, localUri?: string | null) => {
     setPreviewWorkTaskId(String(workTaskId || '').trim() || null)
@@ -321,6 +330,37 @@ export default function TaskDetailScreen(props: Props) {
       cancelled = true
     }
   }, [maintenanceCompletionPhotoDrafts, maintenancePhotoDraftOwnerId, maintenancePhotoDraftTaskId, task, taskCompletionPhotoUrlsKey])
+
+  useEffect(() => {
+    let cancelled = false
+    setPendingCompletionPhotoReferences([])
+    if (!completionPhotoPendingTaskId || !completionPhotoPendingOwnerId) return () => { cancelled = true }
+    void getPendingWorkTaskCompletionPhotoReferences(completionPhotoPendingTaskId, completionPhotoPendingOwnerId)
+      .then((references) => {
+        if (!cancelled) setPendingCompletionPhotoReferences(references)
+      })
+      .catch(() => {
+        if (!cancelled) setPendingCompletionPhotoReferences([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [completionPhotoPendingOwnerId, completionPhotoPendingTaskId])
+
+  useEffect(() => {
+    if (!completionPhotoPendingTaskId || !completionPhotoPendingOwnerId || !pendingCompletionPhotoReferences.length) return
+    const saved = normalizePhotoUrls((task as any)?.completion_photo_urls)
+    if (!pendingCompletionPhotoReferences.every((reference) => saved.includes(reference))) return
+    let cancelled = false
+    void clearPendingWorkTaskCompletionPhotoReferences(completionPhotoPendingTaskId, completionPhotoPendingOwnerId)
+      .then(() => {
+        if (!cancelled) setPendingCompletionPhotoReferences([])
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [completionPhotoPendingOwnerId, completionPhotoPendingTaskId, pendingCompletionPhotoReferences, task, taskCompletionPhotoUrlsKey])
   const previewSize = useMemo(() => ({ width, height }), [height, width])
   const taskPhotoUrlsKey = useMemo(() => JSON.stringify(normalizePhotoUrls((task as any)?.photo_urls)), [task])
   const isCompactLayout = isCompactWidth(width)
@@ -662,6 +702,51 @@ export default function TaskDetailScreen(props: Props) {
     }
   }
 
+  async function saveUploadedCompletionPhotoReferences(references: string[]) {
+    if (!task || !token) return false
+    if (!completionPhotoPendingTaskId || !completionPhotoPendingOwnerId) {
+      Alert.alert(t('common_error'), '缺少完成照片待保存归属')
+      return false
+    }
+    const pending = normalizePendingCompletionPhotoReferences([...pendingCompletionPhotoReferences, ...references])
+    if (!pending.length) return false
+    // Keep a visible in-page retry state even if local storage itself is temporarily unavailable.
+    // The append request is deliberately not attempted until its remote references are durably recorded.
+    setPendingCompletionPhotoReferences(pending)
+    let persisted: string[]
+    try {
+      persisted = await setPendingWorkTaskCompletionPhotoReferences(completionPhotoPendingTaskId, completionPhotoPendingOwnerId, pending)
+      setPendingCompletionPhotoReferences(persisted)
+    } catch (error: any) {
+      Alert.alert(t('common_error'), `照片已上传，但待保存记录写入失败；请保持当前页面并点击重试保存：${String(error?.message || '请重试')}`)
+      return false
+    }
+    try {
+      const receipt = await appendWorkTaskCompletionPhotos(token, String(task.id), { photo_urls: persisted })
+      const saved = normalizePhotoUrls(receipt.completion_photo_urls)
+      setMarkPhotoUrls(saved)
+      setPendingCompletionPhotoReferences([])
+      void clearPendingWorkTaskCompletionPhotoReferences(completionPhotoPendingTaskId, completionPhotoPendingOwnerId).catch(() => undefined)
+      // The server receipt is the business-save confirmation. A local list-cache failure must not turn that success into a false error.
+      await patchWorkTaskItem(String(task.id), { completion_photo_urls: saved } as any).catch(() => undefined)
+      Alert.alert(t('common_ok'), persisted.length > 1 ? `已保存 ${persisted.length} 张补充完成照片` : '补充完成照片已保存')
+      return true
+    } catch (error: any) {
+      Alert.alert(t('common_error'), `照片已上传，尚未保存到完成记录：${String(error?.message || '请重试')}。可点击重试保存，无需重新上传。`)
+      return false
+    }
+  }
+
+  async function retrySavingUploadedCompletionPhotos() {
+    if (!pendingCompletionPhotoReferences.length) return
+    setMarking(true)
+    try {
+      await saveUploadedCompletionPhotoReferences([])
+    } finally {
+      setMarking(false)
+    }
+  }
+
   async function onAppendPhotosForMarking(source: 'camera' | 'library') {
     if (!task) return
     if (!token) {
@@ -706,16 +791,26 @@ export default function TaskDetailScreen(props: Props) {
           const name = String(asset?.fileName || uri.split('/').pop() || `task-${Date.now()}.jpg`)
           const mimeType = String(asset?.mimeType || 'image/jpeg')
           const up = await uploadMzappMedia(token, { uri, name, mimeType })
-          uploaded.push(up.url)
+          const remoteReference = String(up.remoteReference || up.url || '').trim()
+          if (!remoteReference) throw new Error('上传成功但未返回照片引用')
+          uploaded.push(remoteReference)
         }
         keepCapturing = continuousCamera
       }
       if (!uploaded.length) return
+      if (isAlreadyDone) {
+        await saveUploadedCompletionPhotoReferences(uploaded)
+        return
+      }
       applyUploaded()
       if (!continuousCamera) Alert.alert(t('common_ok'), uploaded.length > 1 ? `已上传 ${uploaded.length} 张照片` : '照片已上传')
     } catch (e: any) {
-      applyUploaded()
-      Alert.alert(t('common_error'), String(e?.message || '上传失败'))
+      if (isAlreadyDone) {
+        Alert.alert(t('common_error'), `补充完成照片上传失败：${String(e?.message || '请重试')}`)
+      } else {
+        applyUploaded()
+        Alert.alert(t('common_error'), String(e?.message || '上传失败'))
+      }
     } finally {
       setMarking(false)
     }
@@ -1104,7 +1199,14 @@ export default function TaskDetailScreen(props: Props) {
   const maintenanceCanComplete = maintenanceActions.has('executor_complete')
   const maintenanceCanUnfinished = maintenanceActions.has('executor_unfinished')
   const maintenanceCanAct = maintenanceCanComplete || maintenanceCanUnfinished
-  const canEditTaskHandling = !isMaintenanceTask || maintenanceCanAct
+  const isAlreadyDone = (() => {
+    const s = String(task.status || '').trim().toLowerCase()
+    return s === 'done' || s === 'completed' || s === 'ready'
+  })()
+  const taskActions = availableActionsForTask(task, { roleNames })
+  const completionPhotoAppendAction = taskActions.find((action) => action.id === 'append_completion_photo') || null
+  const canAppendCompletionPhotos = !isMaintenanceTask && isAlreadyDone && completionPhotoAppendAction?.enabled === true
+  const canEditTaskHandling = (!isMaintenanceTask && !isAlreadyDone) || maintenanceCanAct
   const maintenancePendingReview = isMaintenanceTask && String(maintenanceWorkflow?.status || '').trim() === 'pending_review'
   // The server receipt removes executor actions after submission. Keep the two
   // maintenance actions visible in pending review as disabled status controls;
@@ -1222,7 +1324,6 @@ export default function TaskDetailScreen(props: Props) {
         : `${label}${suffix}`
     })
     .filter(Boolean) as string[]
-  const taskActions = availableActionsForTask(task, { roleNames })
   const hasServerTaskActions = Array.isArray((task as any)?.available_actions)
   const renderTaskActionButton = (action: WorkTaskAvailableAction) => {
     const disabledReason = action.disabled_reason ? actionDisabledReasonText(action.disabled_reason) : ''
@@ -1306,14 +1407,11 @@ export default function TaskDetailScreen(props: Props) {
     const s = stripPhotoLines(task.summary)
     return propertyFollowupTaskDetail(task, s) || null
   })()
-  const isAlreadyDone = (() => {
-    const s = String(task.status || '').trim().toLowerCase()
-    return s === 'done' || s === 'completed'
-  })()
   const effectiveMarkPhotoUrls = isMaintenanceTask
     ? maintenanceDisplayPhotoDrafts.map((photo) => String(photo.remote_reference || '').trim()).filter(Boolean)
     : markPhotoUrls
   const maintenancePhotosAwaitingUpload = isMaintenanceTask && maintenanceDisplayPhotoDrafts.some((photo) => !String(photo.remote_reference || '').trim())
+  const hasPendingCompletionPhotoSave = !isMaintenanceTask && isAlreadyDone && pendingCompletionPhotoReferences.length > 0
   const requiresMarkPhotos = !isOfflineTask
   const offlineDetail = (() => {
     if (!isOfflineTask) return null
@@ -1695,6 +1793,14 @@ export default function TaskDetailScreen(props: Props) {
                 ? '已提交完成，等待审核'
                 : isMaintenanceTask && !maintenanceCanAct
                   ? '当前维修任务暂无可操作动作，请刷新后重试。'
+                  : hasPendingCompletionPhotoSave
+                    ? `已有 ${pendingCompletionPhotoReferences.length} 张照片已上传，等待保存到完成记录`
+                    : canAppendCompletionPhotos
+                    ? (effectiveMarkPhotoUrls.length ? `已保存 ${effectiveMarkPhotoUrls.length} 张完成记录照片，可继续补充` : '任务已完成，可补充完成记录照片')
+                    : !isMaintenanceTask && isAlreadyDone
+                      ? (completionPhotoAppendAction?.disabled_reason
+                        ? `任务已完成；${actionDisabledReasonText(completionPhotoAppendAction.disabled_reason)}`
+                        : '任务已完成；当前账号没有补充完成记录照片权限。')
                   : maintenancePhotosAwaitingUpload
                     ? `已保存 ${maintenanceDisplayPhotoDrafts.length} 张本地照片，等待上传后再提交`
                     : effectiveMarkPhotoUrls.length
@@ -1703,14 +1809,14 @@ export default function TaskDetailScreen(props: Props) {
                       ? '未完成须填写原因；照片可选，可补充拍照留档'
                       : (requiresMarkPhotos ? '未上传照片（需要拍照/相册上传后才能提交）' : '照片可选，可直接提交，也可补充拍照留档'))}
             </Text>
-            {canEditTaskHandling ? <View style={styles.compactActionRow}>
+            {canEditTaskHandling || canAppendCompletionPhotos ? <View style={styles.compactActionRow}>
               <Pressable testID="offline-task-mark-camera" onPress={() => onAppendPhotosForMarking('camera')} disabled={marking || (isMaintenanceTask && !maintenanceCanAct)} style={({ pressed }) => [styles.compactActionBtn, pressed ? styles.pressed : null, marking || (isMaintenanceTask && !maintenanceCanAct) ? styles.compactActionBtnDisabled : null]}>
                 <Ionicons name="camera-outline" size={moderateScale(16)} color={marking || (isMaintenanceTask && !maintenanceCanAct) ? '#9CA3AF' : '#2563EB'} />
-                <Text style={[styles.compactActionText, marking || (isMaintenanceTask && !maintenanceCanAct) ? styles.compactActionTextDisabled : null]}>拍照上传</Text>
+                <Text style={[styles.compactActionText, marking || (isMaintenanceTask && !maintenanceCanAct) ? styles.compactActionTextDisabled : null]}>{canAppendCompletionPhotos ? '补充拍照' : '拍照上传'}</Text>
               </Pressable>
               <Pressable testID="offline-task-mark-library" onPress={() => onAppendPhotosForMarking('library')} disabled={marking || (isMaintenanceTask && !maintenanceCanAct)} style={({ pressed }) => [styles.compactActionBtn, pressed ? styles.pressed : null, marking || (isMaintenanceTask && !maintenanceCanAct) ? styles.compactActionBtnDisabled : null]}>
                 <Ionicons name="images-outline" size={moderateScale(16)} color={marking || (isMaintenanceTask && !maintenanceCanAct) ? '#9CA3AF' : '#2563EB'} />
-                <Text style={[styles.compactActionText, marking || (isMaintenanceTask && !maintenanceCanAct) ? styles.compactActionTextDisabled : null]}>相册上传</Text>
+                <Text style={[styles.compactActionText, marking || (isMaintenanceTask && !maintenanceCanAct) ? styles.compactActionTextDisabled : null]}>{canAppendCompletionPhotos ? '补充相册' : '相册上传'}</Text>
               </Pressable>
             </View> : null}
             {maintenancePhotosAwaitingUpload && canEditTaskHandling ? (
@@ -1721,6 +1827,17 @@ export default function TaskDetailScreen(props: Props) {
                 disabled={!maintenanceCanAct}
                 tone="outline"
                 onPress={() => { void retryMaintenanceCompletionPhotoUploads() }}
+                style={styles.maintenancePhotoRetryBtn}
+              />
+            ) : null}
+            {hasPendingCompletionPhotoSave ? (
+              <AppButton
+                testID="offline-task-completion-photo-retry-save"
+                label="重试保存已上传照片"
+                loading={marking}
+                disabled={!canAppendCompletionPhotos}
+                tone="outline"
+                onPress={() => { void retrySavingUploadedCompletionPhotos() }}
                 style={styles.maintenancePhotoRetryBtn}
               />
             ) : null}
@@ -1741,12 +1858,12 @@ export default function TaskDetailScreen(props: Props) {
                 ).map((photo, index) => (
                   <View key={`${photo.media_id}:${index}`} style={styles.markPhotoCard}>
                     <Pressable
-                      onPress={() => openPreview(String(photo.remote_reference || ''), isMaintenanceTask ? task.id : null, photo.local_uri)}
+                      onPress={() => openPreview(String(photo.remote_reference || ''), task.id, photo.local_uri)}
                       style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
                     >
-                      <CleaningMediaImage testID={`maintenance-action-photo-${index}`} token={token} localUri={photo.local_uri} remoteReference={String(photo.remote_reference || '')} accessWorkTaskId={isMaintenanceTask ? task.id : undefined} style={styles.markPhotoThumb} resizeMode="cover" />
+                      <CleaningMediaImage testID={`maintenance-action-photo-${index}`} token={token} localUri={photo.local_uri} remoteReference={String(photo.remote_reference || '')} accessWorkTaskId={task.id} style={styles.markPhotoThumb} resizeMode="cover" />
                     </Pressable>
-                    {(!isMaintenanceTask || (maintenanceCanAct && maintenanceCompletionPhotoDrafts.length)) ? (
+                    {(!isAlreadyDone && !isMaintenanceTask) || (isMaintenanceTask && maintenanceCanAct && maintenanceCompletionPhotoDrafts.length) ? (
                       <AppIconButton accessibilityLabel="删除标记照片" onPress={() => removeMarkPhoto(index)} style={styles.markPhotoRemoveBtn} visualStyle={styles.markPhotoRemoveVisual}>
                         <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
                       </AppIconButton>
