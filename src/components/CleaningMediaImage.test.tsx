@@ -12,6 +12,7 @@ jest.mock('../config/env', () => ({
 }))
 
 const mockedLoadCleaningMediaImage = jest.mocked(loadCleaningMediaImage)
+const testAuthProps = { token: 'test-media-token' }
 
 beforeEach(() => {
   mockedLoadCleaningMediaImage.mockReset()
@@ -25,8 +26,8 @@ test('offline task thumbnail surfaces a terminal authorization failure instead o
   })
   const ui = render(
     <CleaningMediaImage
+      {...testAuthProps}
       testID="offline-task-thumbnail"
-      token="token-1"
       remoteReference="r2://private-bucket/mzapp/offline-photo.jpg"
       accessWorkTaskId="cleaning_offline_tasks:task-1"
       style={{ width: 96, height: 96 }}
@@ -46,8 +47,8 @@ test('offline task thumbnail keeps an explicit retry for transient media failure
     .mockResolvedValueOnce({ uri: 'file:///cache/recovered.jpg', failure: null })
   const ui = render(
     <CleaningMediaImage
+      {...testAuthProps}
       testID="offline-task-thumbnail-retry"
-      token="token-1"
       remoteReference="r2://private-bucket/mzapp/offline-photo.jpg"
       accessWorkTaskId="cleaning_offline_tasks:task-1"
       style={{ width: 96, height: 96 }}

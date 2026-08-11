@@ -97,6 +97,24 @@
 - User authorization: selected-for-commit — user selected CRL-004,005,006,007 on 2026-08-11.
 - Action conclusion: GO — commit completed; push still requires exact commit-bound authorization for the current branch head.
 
+#### RA-20260811-mobile-feedback-p1-04
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260811-004`, `CRL-20260811-005`, `CRL-20260811-006`, `CRL-20260811-007`
+- Intended action: `commit`
+- Branch: `codex/release-feedback-p1-20260811-mobile`
+- Base: `origin/Dev@5c18c767d56290c54ee7fa47ec26e485fa94eca4`; fetched at 2026-08-11 Australia/Melbourne.
+- Candidate patch SHA-256: `24acb20235462e5046e0e54de11af21f3fb06935aa9d66804fa93a4bccaf81bc` excluding `docs/change-release-ledger.md`.
+- Commit SHA: not committed
+- Dependencies: root `CRL-20260811-004`, root/mobile `CRL-20260811-006`; the completion-photo API must be deployed before any OTA claim.
+- Required validation: PASS — after the test-prop correction, `npm run check:ci` passed: 55 suites / 278 tests, strict button audit, 0 lint errors and 114 existing warnings.
+- Shared-hunk review: pending final staged-range audit.
+- Generated-file review: pending final staged-range audit.
+- Independent review: pending exact staged-candidate review.
+- Technical state: candidate
+- User authorization: selected-for-commit — user selected CRL-004,005,006,007 on 2026-08-11.
+- Action conclusion: NOT VERIFIED — this test-only change must pass the full gate and independent review before commit.
+
 ### Risks / Release Notes
 
 - Runtime risk: 缺少 `source_id` 的异常旧任务现在会明确阻止提交并提示刷新，不再把错误的工作任务 ID 发给后端。
