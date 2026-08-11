@@ -52,6 +52,24 @@
 - Independent review: GO for commit — independent read-only review rechecked the exact staged fingerprint, full diff, target Jest, `npm run check:ci`, ledger coverage, whitespace and sensitive/production-write risk; no P0/P1 found. Non-blocking P2 items are the root `FR-004` traceability receipt and an explicit `cleaning_submission_required` negative regression.
 - Action conclusion: GO for commit completed; blockers: exact commit-bound push authorization, PR creation and merge remain pending.
 
+#### RA-20260811-mobile-inspection-stability-02
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260731-005`, `CRL-20260731-007`
+- Intended action: `push`
+- Branch: `codex/release-inspection-stability-20260811`
+- Base: `origin/Dev@6539fb59dac7adaa36a16d9075550f885e9b0407`; re-fetched unchanged at 2026-08-11 13:51 AEST.
+- Candidate patch SHA-256: `f563c2c4679b6b68f2e9ac972c165c28a0923c1ba7d4b491878e94d7681b73de` excluding `docs/change-release-ledger.md`.
+- Commit SHA: `ffa0da0b69f98dfd7f1e313139506e0bf4fb5192` (candidate content commit).
+- Dependencies: none; current client continues to use the existing server-authoritative `submit_inspection` action.
+- Required validation: PASS; evidence retained in RA-20260811-mobile-inspection-stability-01.
+- Shared-hunk review: PASS; evidence retained in RA-20260811-mobile-inspection-stability-01.
+- Generated-file review: PASS; no generated output, cache, environment file or dependency artifact is selected.
+- Technical state: committed.
+- User authorization: approved-for-push; evidence: user approved the exact mobile branch, candidate content commit `ffa0da0b69f98dfd7f1e313139506e0bf4fb5192` and earlier audit head `1b64ecc885020a55ad9bea01b9f3dbd7fa5a71a2` on 2026-08-11, including PR creation and merge to `Dev` after checks.
+- Independent review: NOT VERIFIED; pending exact committed-range push review after this receipt.
+- Action conclusion: NOT VERIFIED; blockers: exact committed-range push review is pending. PR merge remains a separate action after remote/PR checks.
+
 ### Risks / Release Notes
 
 - Real-device scroll behavior, weak-network recovery, native build, OTA, deployment and production acceptance are not inferred from source tests.
