@@ -37,7 +37,22 @@ jest.mock('../../components/CleaningMediaImage', () => {
   const React = require('react')
   return {
     __esModule: true,
-    default: (props: any) => React.createElement('CleaningMediaImage', props),
+    default: (props: any) => React.createElement('CleaningMediaImage', {
+      ...props,
+      accessibilityLabel: `${String(props.remoteReference || '')}|${String(props.accessWorkTaskId || '')}`,
+    }),
+  }
+})
+
+jest.mock('../../components/CleaningMediaPreview', () => {
+  const React = require('react')
+  return {
+    __esModule: true,
+    default: (props: any) => React.createElement('CleaningMediaPreview', {
+      ...props,
+    testID: 'cleaning-media-preview',
+    accessibilityLabel: `${String(props.reference || '')}|${String(props.accessWorkTaskId || '')}`,
+    }),
   }
 })
 
@@ -647,6 +662,44 @@ test('customer service password-only task hides checkout and shows executor vide
 
   snapshot.items[0] = previousTask
   mockAuthState.user = previousUser
+})
+
+test('offline task photos force a historical HTTPS reference through the exact-task authenticated reader', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const offlineTaskId = 'cleaning_offline_tasks:offline-historical-task-photo'
+  const taskPhotoReference = 'https://current-public-base.r2.dev/historical/offline-task-photo.jpg'
+  snapshot.items[0] = {
+    ...previousTask,
+    id: offlineTaskId,
+    task_kind: 'offline',
+    source_type: 'cleaning_offline_tasks',
+    source_id: 'offline-historical-task-photo-source',
+    status: 'todo',
+    photo_urls: [taskPhotoReference],
+    completion_photo_urls: [],
+  }
+
+  try {
+    const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'offline-historical-task-photo', name: 'TaskDetail', params: { id: offlineTaskId } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByLabelText(`${taskPhotoReference}|${offlineTaskId}`)).toHaveProp('offlineWorkTaskMedia', true)
+    })
+    fireEvent.press(ui.getByLabelText(`${taskPhotoReference}|${offlineTaskId}`))
+    await waitFor(() => {
+      expect(ui.getByTestId('cleaning-media-preview')).toHaveProp('offlineWorkTaskMedia', true)
+      expect(ui.getByTestId('cleaning-media-preview')).toHaveProp('accessibilityLabel', `${taskPhotoReference}|${offlineTaskId}`)
+    })
+  } finally {
+    snapshot.items[0] = previousTask
+  }
 })
 
 test('internal maintenance detail refreshes a cached task once and renders returned before-repair photos', async () => {

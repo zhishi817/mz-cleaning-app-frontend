@@ -62,12 +62,13 @@ export function buildCleaningMediaImageSource(
   token: string | null | undefined,
   rawReference: any,
   variant: CleaningMediaImageVariant = 'original',
-  options?: { accessTaskId?: string | null; accessWorkTaskId?: string | null },
+  options?: { accessTaskId?: string | null; accessWorkTaskId?: string | null; offlineWorkTaskMedia?: boolean },
 ) {
   const reference = cleanText(rawReference)
   if (!reference) return { uri: '' }
   const key = normalizePrivateFeedbackObjectKey(reference)
-  if (key || isLegacyPrivateR2Url(reference) || isServerManagedMzappTaskReference(reference)) {
+  const forceOfflineWorkTaskProxy = Boolean(options?.offlineWorkTaskMedia && cleanText(options?.accessWorkTaskId) && /^https:\/\//i.test(reference))
+  if (key || isLegacyPrivateR2Url(reference) || isServerManagedMzappTaskReference(reference) || forceOfflineWorkTaskProxy) {
     return {
       uri: cleaningMediaProxyUrl(key || reference, variant, options?.accessTaskId, options?.accessWorkTaskId),
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,

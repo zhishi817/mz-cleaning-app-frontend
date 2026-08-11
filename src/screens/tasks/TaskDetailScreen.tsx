@@ -254,6 +254,7 @@ export default function TaskDetailScreen(props: Props) {
   const [keyDeleting, setKeyDeleting] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [previewWorkTaskId, setPreviewWorkTaskId] = useState<string | null>(null)
+  const [previewOfflineWorkTaskMedia, setPreviewOfflineWorkTaskMedia] = useState(false)
   const [previewLocalUri, setPreviewLocalUri] = useState<string | null>(null)
   const [autoUploadKeyDone, setAutoUploadKeyDone] = useState(false)
   const [checkedOutPending, setCheckedOutPending] = useState(false)
@@ -286,14 +287,16 @@ export default function TaskDetailScreen(props: Props) {
   const completionPhotoPendingTaskId = task && String(task.source_type || '').trim() === 'cleaning_offline_tasks' ? String(task.id || '').trim() : ''
   const completionPhotoPendingOwnerId = maintenancePhotoDraftOwnerId
   const taskCompletionPhotoUrlsKey = useMemo(() => JSON.stringify(normalizePhotoUrls((task as any)?.completion_photo_urls)), [task])
-  const openPreview = (url: string, workTaskId?: string | null, localUri?: string | null) => {
+  const openPreview = (url: string, workTaskId?: string | null, localUri?: string | null, offlineWorkTaskMedia = false) => {
     setPreviewWorkTaskId(String(workTaskId || '').trim() || null)
+    setPreviewOfflineWorkTaskMedia(offlineWorkTaskMedia)
     setPreviewLocalUri(String(localUri || '').trim() || null)
     setPreviewUrl(url)
   }
   const closePreview = () => {
     setPreviewUrl(null)
     setPreviewWorkTaskId(null)
+    setPreviewOfflineWorkTaskMedia(false)
     setPreviewLocalUri(null)
   }
 
@@ -1773,10 +1776,10 @@ export default function TaskDetailScreen(props: Props) {
                     {taskPhotoUrls.map((url, index) => (
                       <View key={`${url}:${index}`} style={styles.markPhotoCard}>
                         <Pressable
-                          onPress={() => openPreview(String(url), task.id)}
+                          onPress={() => openPreview(String(url), task.id, null, true)}
                           style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
                         >
-                          <CleaningMediaImage token={token} remoteReference={url} accessWorkTaskId={task.id} style={styles.markPhotoThumb} resizeMode="cover" />
+                          <CleaningMediaImage token={token} remoteReference={url} accessWorkTaskId={task.id} offlineWorkTaskMedia style={styles.markPhotoThumb} resizeMode="cover" />
                         </Pressable>
                         <AppIconButton accessibilityLabel="删除任务照片" onPress={() => removeTaskPhoto(index)} disabled={taskPhotoSaving} style={styles.markPhotoRemoveBtn} visualStyle={styles.markPhotoRemoveVisual}>
                           <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
@@ -2036,7 +2039,7 @@ export default function TaskDetailScreen(props: Props) {
           >
             {previewUrl ? (
               <View style={{ width: previewSize.width, height: Math.max(240, previewSize.height - insets.top - insets.bottom - 80) }}>
-                <CleaningMediaPreview token={token} reference={previewUrl} localUri={previewLocalUri} accessWorkTaskId={previewWorkTaskId} style={{ width: '100%', height: '100%' }} />
+                <CleaningMediaPreview token={token} reference={previewUrl} localUri={previewLocalUri} accessWorkTaskId={previewWorkTaskId} offlineWorkTaskMedia={previewOfflineWorkTaskMedia} style={{ width: '100%', height: '100%' }} />
               </View>
             ) : null}
           </ScrollView>
