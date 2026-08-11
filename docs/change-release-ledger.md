@@ -1,5 +1,66 @@
 # Change Release Ledger
 
+## CRL-20260811-009 — 线下任务历史公共基址照片认证读取（mobile）
+
+- **Status:** committed
+- **Updated:** 2026-08-12 Australia/Melbourne
+- **Request:** 修复线下任务顶部「任务照片」的历史 HTTPS 引用直连对象而无法查看；本次只选择 mobile/root `CRL-20260811-009` 提交。
+- **Outcome:** 仅 `cleaning_offline_tasks` 顶部任务照片会为历史 HTTPS 引用显式设置 offline 认证读取标记。缩略图与预览均携带同一 `work_task_id` 请求既有代理；非 offline 来源及任务处理照片不在本 CRL 范围。
+
+### Implementation
+
+- Previous behavior: 共享媒体构造器只按 URL 中的私有路径识别媒体。历史 current-public-base 任务照片不含 `mzapp/` 路径，因此被当作普通 HTTPS 请求直连对象。
+- New behavior: `TaskDetailScreen` 的 offline task photo 调用点显式传递 `offlineWorkTaskMedia`；`cleaningMedia`、缩略图与全屏预览透传该标记和精确任务 ID，是否可读完全由 root 认证代理决定。
+- Key decisions: 不新增 Viewer、缓存、公开链接或本地权限推断；不改变上传/任务处理照片的 CRL-20260811-005 行为。
+
+### Files / Areas
+
+- `src/lib/cleaningMedia.ts` — 对显式 offline task context 的历史 HTTPS 引用构造认证代理 URL。
+- `src/components/CleaningMediaImage.tsx`, `src/components/CleaningMediaPreview.tsx` — 透传标记，使缩略图和预览使用相同上下文。
+- `src/screens/tasks/TaskDetailScreen.tsx` — 仅顶部 offline task photo 调用点启用标记及任务 ID。
+- `src/lib/cleaningMedia.test.ts`, `src/components/CleaningMediaPreview.test.tsx`, `src/screens/tasks/TaskDetailScreen.test.tsx` — opt-in、缩略图、预览与页面上下文回归。
+- `docs/change-release-ledger.md` — 本 CRL 的发布证据。
+
+### Impact / Dependencies
+
+- API dependency: root `CRL-20260811-009` 必须先提供 current-public-base、精确 `photo_urls` 关联与既有执行人授权检查。
+- Database / migration / configuration / R2 / production data: none.
+- Shared dependency: 共享媒体组件只有在 offline task 显式 opt-in 时改变请求路线；其它调用维持现有行为。
+
+### Validation
+
+- Rebuilt on mobile `origin/Dev@16649be48cf99b0d1e3378eff01380d52d681ed3`.
+- `npm run check:ci` — passed (exit 0): ledger-range audit (11 tests), candidate ledger audit (8/8), TypeScript, full lint (0 errors / 114 existing warnings), strict button audit, fast Jest (3 suites / 18 tests) and full Jest (55 suites / 281 tests).
+- Paired root contract tests and TypeScript no-emit check — passed on unchanged root candidate; final paired review pending.
+- Deployed backend, device, OTA/build and production verification — not run.
+
+### Release Attempts
+
+#### RA-20260811-009-mobile-01
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260811-009`
+- Intended action: `commit`
+- Branch: `codex/release-offline-task-photo-auth-20260811`
+- Base: `origin/Dev@16649be48cf99b0d1e3378eff01380d52d681ed3`; fetched at `2026-08-12T00:31:05+10:00`.
+- Candidate patch SHA-256: `fed2681ed1c4a247cd3a6e78de6a54c190054ed60faa8adb731bcb5b8854891c`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `4d0d256515e7b921b879e4856f321b2187119767`.
+- Dependencies: root `CRL-20260811-009`; no unselected CRL is included.
+- Required validation: PASS; rebuilt candidate passed `npm run check:ci`.
+- Shared-hunk review: PASS; independent staged review confirmed all 8 paths belong to this selected CRL and no unselected hunk is included.
+- Generated-file review: PASS; independent staged review found no generated output, cache, dependency artifact or sensitive file.
+- Technical state: committed.
+- User authorization: selected-for-commit; evidence: user confirmed paired root/mobile `CRL-20260811-009` after remote CRL-008 use was verified.
+- Independent review: GO for `commit` only; independent read-only review confirmed fingerprint `fed2681ed1c4a247cd3a6e78de6a54c190054ed60faa8adb731bcb5b8854891c`, exact scope and validation evidence.
+- Action conclusion: GO for `commit` completed; push, PR, merge, deployment, OTA and device verification are not authorized or verified.
+
+### Risks / Release Notes
+
+- Risk: root is intentionally fail-closed for a host/path that is not the configured current public base or exact persisted task reference; the client must not fall back to direct object access.
+- Rollback: revert the offline task-only adapter pair; no data rollback is needed.
+- Sensitive-information review: no credentials, tokens, database URLs, private media references, image bytes, user records, logs or caches included.
+- Git state: candidate content commit `4d0d256515e7b921b879e4856f321b2187119767` created in a clean release worktree; remote branch not pushed, PR not created, not merged, not deployed and device/production verification not run.
+
 ## CRL-20260811-008 — 稳定检查面板全量回归超时（mobile）
 
 - **Status:** ready

@@ -70,6 +70,21 @@ test('存在本地照片时，缩略图和原图预览都直接使用本地文�
   expect(ui.getByTestId('photo-preview').props.source).toEqual({ uri: 'file:///draft/photo-1.jpg' })
 })
 
+test('历史线下任务照片的缩略图和预览共用认证代理及精确任务上下文', async () => {
+  const reference = 'https://current-public-base.r2.dev/historical/offline-task-photo.jpg'
+  const ui = render(<CleaningMediaPreview token="token-1" reference={reference} accessWorkTaskId="cleaning_offline_tasks:task-1" offlineWorkTaskMedia testID="photo" />)
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+  expect(ui.getByTestId('photo-thumbnail').props.source).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fcurrent-public-base.r2.dev%2Fhistorical%2Foffline-task-photo.jpg&variant=thumbnail&work_task_id=cleaning_offline_tasks%3Atask-1',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+  expect(ui.getByTestId('photo-preview').props.source).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fcurrent-public-base.r2.dev%2Fhistorical%2Foffline-task-photo.jpg&variant=preview&work_task_id=cleaning_offline_tasks%3Atask-1',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+})
+
 test('403 是权限终态，不展示自动或手动重试入口', async () => {
   mockedLoadCleaningMediaImage.mockResolvedValue({
     uri: null,

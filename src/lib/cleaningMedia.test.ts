@@ -56,6 +56,20 @@ test('routes a server-owned offline task reference through the authenticated pro
   })
 })
 
+test('routes a historical offline task URL through the authenticated proxy only with explicit offline task context', () => {
+  const reference = 'https://current-public-base.r2.dev/historical/offline-task-photo.jpg'
+  expect(buildCleaningMediaImageSource('token-1', reference, 'thumbnail', {
+    accessWorkTaskId: 'cleaning_offline_tasks:task-1',
+    offlineWorkTaskMedia: true,
+  })).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fcurrent-public-base.r2.dev%2Fhistorical%2Foffline-task-photo.jpg&variant=thumbnail&work_task_id=cleaning_offline_tasks%3Atask-1',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+  expect(buildCleaningMediaImageSource('token-1', reference, 'thumbnail', {
+    accessWorkTaskId: 'cleaning_offline_tasks:task-1',
+  })).toEqual({ uri: reference })
+})
+
 test('routes legacy mzapp feedback media through the authenticated feedback proxy', () => {
   const url = 'https://media.r2.dev/mzapp/photo-1.jpg'
   expect(buildCleaningMediaImageSource('token-1', url, 'preview', { accessTaskId: 'cleaning-task-1' })).toEqual({
