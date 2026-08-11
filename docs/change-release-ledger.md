@@ -58,7 +58,7 @@
 - Selected CRLs: `CRL-20260731-005`, `CRL-20260731-007`
 - Intended action: `push`
 - Branch: `codex/release-inspection-stability-20260811`
-- Base: `origin/Dev@6539fb59dac7adaa36a16d9075550f885e9b0407`; re-fetched unchanged at 2026-08-11 13:51 AEST.
+- Base: `origin/Dev@6539fb59dac7adaa36a16d9075550f885e9b0407`; fetched at 2026-08-11 13:51 AEST and verified unchanged.
 - Candidate patch SHA-256: `f563c2c4679b6b68f2e9ac972c165c28a0923c1ba7d4b491878e94d7681b73de` excluding `docs/change-release-ledger.md`.
 - Commit SHA: `ffa0da0b69f98dfd7f1e313139506e0bf4fb5192` (candidate content commit).
 - Dependencies: none; current client continues to use the existing server-authoritative `submit_inspection` action.
