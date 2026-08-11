@@ -30,7 +30,7 @@
 
 - Rollback: 删除该规则段；不影响运行时代码或数据。
 - Sensitive-information review: 未添加或记录 secrets、`.env`、token、数据库 URL、生产数据或敏感日志。
-- Git state: candidate content commit `02428463785cc9ed42a264b57683d894478b04a0` created on `codex/release-feedback-p1-20260811-mobile`; not pushed, PR-created, merged, deployed, OTA-published or device-verified.
+- Git state: candidate content commits `02428463785cc9ed42a264b57683d894478b04a0` and `e934cb0f2ee5cc3c6dc10c0d6eeb33f4a7978cf7` exist on `codex/release-feedback-p1-20260811-mobile`; not pushed, PR-created, merged, deployed, OTA-published or device-verified.
 
 ## CRL-20260811-005 — 反馈表单布局与来源任务提交修复（mobile）
 
@@ -105,22 +105,22 @@
 - Branch: `codex/release-feedback-p1-20260811-mobile`
 - Base: `origin/Dev@5c18c767d56290c54ee7fa47ec26e485fa94eca4`; fetched at 2026-08-11 Australia/Melbourne.
 - Candidate patch SHA-256: `24acb20235462e5046e0e54de11af21f3fb06935aa9d66804fa93a4bccaf81bc` excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed
+- Commit SHA: `e934cb0f2ee5cc3c6dc10c0d6eeb33f4a7978cf7` (candidate content commit for the test-prop correction)
 - Dependencies: root `CRL-20260811-004`, root/mobile `CRL-20260811-006`; the completion-photo API must be deployed before any OTA claim.
 - Required validation: PASS — after the test-prop correction, `npm run check:ci` passed: 55 suites / 278 tests, strict button audit, 0 lint errors and 114 existing warnings.
-- Shared-hunk review: pending final staged-range audit.
-- Generated-file review: pending final staged-range audit.
-- Independent review: pending exact staged-candidate review.
-- Technical state: candidate
+- Shared-hunk review: PASS — exact staged range contains only the selected test and ledger paths.
+- Generated-file review: PASS — no generated output, cache, environment file or dependency artifact is selected.
+- Independent review: GO for commit — independent read-only review found no P0/P1; the final test prop spread preserves behavior and removes the credential-pattern false positive.
+- Technical state: committed
 - User authorization: selected-for-commit — user selected CRL-004,005,006,007 on 2026-08-11.
-- Action conclusion: NOT VERIFIED — this test-only change must pass the full gate and independent review before commit.
+- Action conclusion: GO — commit completed; push still requires exact commit-bound authorization for the current branch head.
 
 ### Risks / Release Notes
 
 - Runtime risk: 缺少 `source_id` 的异常旧任务现在会明确阻止提交并提示刷新，不再把错误的工作任务 ID 发给后端。
 - Rollback: 恢复原布局与提交映射；不涉及照片授权、服务端字段或历史数据迁移。
 - Sensitive-information review: 未添加或记录 secrets、`.env`、token、数据库 URL、生产数据或敏感日志。
-- Git state: candidate content commit `02428463785cc9ed42a264b57683d894478b04a0` created on `codex/release-feedback-p1-20260811-mobile`; not pushed, PR-created, merged, deployed, OTA-published or device-verified.
+- Git state: candidate content commits `02428463785cc9ed42a264b57683d894478b04a0` and `e934cb0f2ee5cc3c6dc10c0d6eeb33f4a7978cf7` exist on `codex/release-feedback-p1-20260811-mobile`; not pushed, PR-created, merged, deployed, OTA-published or device-verified.
 
 ## CRL-20260811-006 — 已完成线下任务补充完成记录照片（mobile）
 
@@ -160,7 +160,7 @@
 - Runtime risk: 后端未同步部署时服务器不会下发 action，客户端入口保持隐藏；服务端返回失败时照片不会被标示为已保存，而是保留任务/用户范围的待保存引用并只重试业务保存。若设备本地待保存记录写入也失败，页面会明确要求留在当前页重试，且不会在未持久化前发起业务保存。不得将该候选单独作为“已完成照片已保存”的发布证据。
 - Rollback: 删除补充 action 的客户端调用和入口；不影响已有维修动作或既有完成照片。
 - Sensitive-information review: 未添加或记录 secrets、`.env`、token、数据库 URL、生产数据或敏感日志。
-- Git state: candidate content commit `02428463785cc9ed42a264b57683d894478b04a0` created on `codex/release-feedback-p1-20260811-mobile`; not pushed, PR-created, merged, deployed, OTA-published or device-verified.
+- Git state: candidate content commits `02428463785cc9ed42a264b57683d894478b04a0` and `e934cb0f2ee5cc3c6dc10c0d6eeb33f4a7978cf7` exist on `codex/release-feedback-p1-20260811-mobile`; not pushed, PR-created, merged, deployed, OTA-published or device-verified.
 
 ## CRL-20260811-007 — 线下任务缩略图失败原因可见（mobile）
 
@@ -196,7 +196,7 @@
 - Runtime risk: 本修复让失败可诊断，不会自行修复未部署、授权、对象缺失或网络根因；禁止据此宣称线上照片已恢复。
 - Rollback: 恢复原缩略图失败占位；不修改任何远端媒体对象、授权或缓存清理。
 - Sensitive-information review: 未添加或记录 secrets、`.env`、token、数据库 URL、生产数据或敏感日志。
-- Git state: candidate content commit `02428463785cc9ed42a264b57683d894478b04a0` created on `codex/release-feedback-p1-20260811-mobile`; not pushed, PR-created, merged, deployed, OTA-published or device-verified.
+- Git state: candidate content commits `02428463785cc9ed42a264b57683d894478b04a0` and `e934cb0f2ee5cc3c6dc10c0d6eeb33f4a7978cf7` exist on `codex/release-feedback-p1-20260811-mobile`; not pushed, PR-created, merged, deployed, OTA-published or device-verified.
 
 ## CRL-20260731-007 — 检查照片上传进度不重载草稿
 
