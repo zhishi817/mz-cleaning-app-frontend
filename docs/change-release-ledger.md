@@ -2,7 +2,7 @@
 
 ## CRL-20260811-009 — 线下任务历史公共基址照片认证读取（mobile）
 
-- **Status:** candidate
+- **Status:** committed
 - **Updated:** 2026-08-12 Australia/Melbourne
 - **Request:** 修复线下任务顶部「任务照片」的历史 HTTPS 引用直连对象而无法查看；本次只选择 mobile/root `CRL-20260811-009` 提交。
 - **Outcome:** 仅 `cleaning_offline_tasks` 顶部任务照片会为历史 HTTPS 引用显式设置 offline 认证读取标记。缩略图与预览均携带同一 `work_task_id` 请求既有代理；非 offline 来源及任务处理照片不在本 CRL 范围。
@@ -44,22 +44,22 @@
 - Branch: `codex/release-offline-task-photo-auth-20260811`
 - Base: `origin/Dev@16649be48cf99b0d1e3378eff01380d52d681ed3`; fetched at `2026-08-12T00:31:05+10:00`.
 - Candidate patch SHA-256: `fed2681ed1c4a247cd3a6e78de6a54c190054ed60faa8adb731bcb5b8854891c`, excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed.
+- Commit SHA: `4d0d256515e7b921b879e4856f321b2187119767`.
 - Dependencies: root `CRL-20260811-009`; no unselected CRL is included.
 - Required validation: PASS; rebuilt candidate passed `npm run check:ci`.
 - Shared-hunk review: PASS; independent staged review confirmed all 8 paths belong to this selected CRL and no unselected hunk is included.
 - Generated-file review: PASS; independent staged review found no generated output, cache, dependency artifact or sensitive file.
-- Technical state: verified.
+- Technical state: committed.
 - User authorization: selected-for-commit; evidence: user confirmed paired root/mobile `CRL-20260811-009` after remote CRL-008 use was verified.
 - Independent review: GO for `commit` only; independent read-only review confirmed fingerprint `fed2681ed1c4a247cd3a6e78de6a54c190054ed60faa8adb731bcb5b8854891c`, exact scope and validation evidence.
-- Action conclusion: GO for `commit`; push, PR, merge, deployment, OTA and device verification are not authorized or verified.
+- Action conclusion: GO for `commit` completed; push, PR, merge, deployment, OTA and device verification are not authorized or verified.
 
 ### Risks / Release Notes
 
 - Risk: root is intentionally fail-closed for a host/path that is not the configured current public base or exact persisted task reference; the client must not fall back to direct object access.
 - Rollback: revert the offline task-only adapter pair; no data rollback is needed.
 - Sensitive-information review: no credentials, tokens, database URLs, private media references, image bytes, user records, logs or caches included.
-- Git state: candidate rebuilt in a clean release worktree after mobile Dev advanced; no generated output, dependency artifact, local cache or unrelated worktree change is in scope.
+- Git state: candidate content commit `4d0d256515e7b921b879e4856f321b2187119767` created in a clean release worktree; remote branch not pushed, PR not created, not merged, not deployed and device/production verification not run.
 
 ## CRL-20260811-008 — 稳定检查面板全量回归超时（mobile）
 
