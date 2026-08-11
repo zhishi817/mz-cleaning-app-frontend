@@ -1,5 +1,101 @@
 # Change Release Ledger
 
+## CRL-20260731-007 — 检查照片上传进度不重载草稿
+
+- **Status:** candidate
+- **Updated:** 2026-08-11 12:43 AEST
+- **Request:** 将 PR #11 中的检查照片上传进度稳定性修复正确合入当前 `Dev`。
+- **Outcome:** 队列进度事件仅更新当前批次状态与错误展示；完整草稿只在初始加载或明确重试时读取，过期异步读取不会回写界面。
+
+### Implementation
+
+- Previous behavior: 上传队列每一次进度通知都会触发完整 `loadLocalState()`，重复还原草稿并造成检查页滚动闪动。
+- New behavior: 仅当批次状态或错误实际变化时更新批次展示；用读取版本号阻止迟到的异步结果覆盖当前页面。
+- Key decisions: 只迁移 `deba0fe` 中的检查页与测试改动；不带入旧分支的 `main` 合并提交、版本配置、工作流、依赖或其他历史台账内容。
+
+### Files / Areas
+
+- `src/screens/tasks/InspectionPanelScreen.tsx` — 队列进度展示与草稿完整读取解耦，并保护过期异步读取。
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — 覆盖队列进度不重读草稿、状态仍刷新和同任务来源变化时受控重读。
+- `docs/change-release-ledger.md` — 记录本次从旧 PR 正确迁移的发布单元与尝试。
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Related unit: `CRL-20260731-005` 随同一原始提交进入本候选；不依赖新的后端变更。
+- Protected behavior: 上传顺序、幂等处理、本地媒体保留、服务端任务 action、权限与弱网队列语义不变。
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/screens/tasks/InspectionPanelScreen.test.tsx` — passed: 1 suite / 13 tests, including server-authoritative pure-checkin submission, queue progress without draft reload and controlled source refresh.
+- `npm run check:ci` — passed: ledger-range tests (11), working-tree ledger coverage (3/3), TypeScript, ESLint (0 errors / 113 existing warnings), strict button audit, fast Jest (3 suites / 18 tests) and serial full Jest.
+- `git diff --cached --check` — passed.
+- Independent review — pending; no commit, push, PR merge, EAS operation, deployment or production action has occurred.
+
+### Release Attempts
+
+#### RA-20260811-mobile-inspection-stability-01
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260731-005`, `CRL-20260731-007`
+- Intended action: `commit`
+- Branch: `codex/release-inspection-stability-20260811`
+- Base: `origin/Dev@6539fb59dac7adaa36a16d9075550f885e9b0407`; fetched at 2026-08-11 12:41 AEST.
+- Candidate patch SHA-256: `f563c2c4679b6b68f2e9ac972c165c28a0923c1ba7d4b491878e94d7681b73de` excluding `docs/change-release-ledger.md`.
+- Commit SHA: not committed.
+- Dependencies: none; current client continues to use the existing server-authoritative `submit_inspection` action.
+- Required validation: PASS; target Jest and `npm run check:ci` passed in this exact candidate.
+- Shared-hunk review: PASS; only the selected screen, its test and ledger records are in scope.
+- Generated-file review: PASS; no generated output, cache, environment file or dependency artifact is selected.
+- Technical state: verified.
+- User authorization: selected-for-commit; evidence: user instructed “那你合并吧” after confirming the PR #11 repair on 2026-08-11.
+- Independent review: GO for commit — independent read-only review rechecked the exact staged fingerprint, full diff, target Jest, `npm run check:ci`, ledger coverage, whitespace and sensitive/production-write risk; no P0/P1 found. Non-blocking P2 items are the root `FR-004` traceability receipt and an explicit `cleaning_submission_required` negative regression.
+- Action conclusion: GO for commit; blockers: none for the exact commit. Push, PR creation and merge require a later exact commit-bound authorization.
+
+### Risks / Release Notes
+
+- Real-device scroll behavior, weak-network recovery, native build, OTA, deployment and production acceptance are not inferred from source tests.
+- Rollback: revert the exact `Dev` merge commit in a later reviewed change; no data rollback is required.
+- Sensitive-information review: no secrets, `.env` values, tokens, credentials, private media, logs or production data are selected.
+
+## CRL-20260731-005 — 纯入住检查不再错误要求清洁提交
+
+- **Status:** candidate
+- **Updated:** 2026-08-11 12:43 AEST
+- **Request:** 将 PR #11 中纯入住检查被旧本地字段错误阻断的修复正确合入当前 `Dev`。
+- **Outcome:** 客户端不再将遗留 `cleaning_submission_ready=false` 作为本地否决条件；仅遵从服务端 `submit_inspection` action 的明确禁用原因。
+
+### Implementation
+
+- Previous behavior: 服务端已允许的纯入住检查可能被客户端旧字段误判并阻止提交。
+- New behavior: 仅服务端返回 `cleaning_submission_required` 时显示清洁提交前置阻断。
+- Key decisions: 不放宽服务端前置、照片/视频门槛、权限或任务状态；该变更删除客户端的重复推断。
+
+### Files / Areas
+
+- `src/screens/tasks/InspectionPanelScreen.tsx` — 删除遗留字段的本地阻断。
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — 覆盖旧字段为 false 但服务端 action 允许时可提交。
+- `docs/change-release-ledger.md` — 记录同一候选中的独立功能单元。
+
+### Impact / Dependencies
+
+- API: 依赖既有 `/mzapp/work-tasks` `submit_inspection` action 与其 `disabled_reason`；不修改 API、数据库、迁移、配置或依赖。
+- Related unit: 与 `CRL-20260731-007` 同一候选、同一 Release Attempt。
+- Protected behavior: 服务端对清洁提交、照片、客人到达、挂钥匙/密码视频和权限的决定保持最终权威。
+
+### Validation
+
+- See the shared target Jest, typecheck, `npm run check:ci`, ledger and whitespace evidence in `CRL-20260731-007`; independent review remains pending.
+
+### Release Attempts
+
+- See `RA-20260811-mobile-inspection-stability-01` in `CRL-20260731-007`.
+
+### Risks / Release Notes
+
+- The client no longer blocks an allowed action locally; the server still rejects disallowed submissions. No production data or external sync is performed.
+- Sensitive-information review: no secrets, tokens, credentials, private media, logs or production records are selected.
+
 ## CRL-20260810-001 — 线下任务照片稳定引用与终态读取边界（mobile）
 
 - **Status:** candidate
