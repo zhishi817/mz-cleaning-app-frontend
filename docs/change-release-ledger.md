@@ -81,14 +81,21 @@
 
 #### RA-20260811-mobile-feedback-p1-03
 
-- Repository: `mobile`; selected CRLs: `CRL-20260811-004`, `CRL-20260811-005`, `CRL-20260811-006`, `CRL-20260811-007`; intended action: `commit`.
-- Branch: `codex/release-feedback-p1-20260811-mobile`; base: `origin/Dev@5c18c767d56290c54ee7fa47ec26e485fa94eca4`, fetched 2026-08-11.
-- Candidate patch SHA-256: `5b241081896fd206feadc87d83878b22765e958115b2e26de700f38069f44f5c` excluding `docs/change-release-ledger.md`; candidate content commit: `02428463785cc9ed42a264b57683d894478b04a0`.
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260811-004`, `CRL-20260811-005`, `CRL-20260811-006`, `CRL-20260811-007`
+- Intended action: `commit`
+- Branch: `codex/release-feedback-p1-20260811-mobile`
+- Base: `origin/Dev@5c18c767d56290c54ee7fa47ec26e485fa94eca4`; fetched at 2026-08-11 Australia/Melbourne.
+- Candidate patch SHA-256: `5b241081896fd206feadc87d83878b22765e958115b2e26de700f38069f44f5c` excluding `docs/change-release-ledger.md`.
+- Commit SHA: `02428463785cc9ed42a264b57683d894478b04a0` (candidate content commit)
 - Dependencies: root `CRL-20260811-004`, root/mobile `CRL-20260811-006`; the completion-photo API must be deployed before any OTA claim.
 - Required validation: PASS — `npm run check:ci` completed after the P1 retry repair with 55 suites / 278 tests; 114 pre-existing lint warnings and no errors.
-- Shared-hunk / generated-file review: PASS — exact staged range contains only selected source/tests/docs; no generated output, cache, environment file or dependency artifact is selected.
+- Shared-hunk review: PASS — exact staged range contains only selected source/tests/docs.
+- Generated-file review: PASS — no generated output, cache, environment file or dependency artifact is selected.
 - Independent review: GO for commit — independent read-only review found no P0/P1 in the exact paired root/mobile fingerprints; real device restart, weak-network retry and deployed Dev backend verification remain P2 post-commit gates.
-- Technical state: `committed`; user authorization: `selected-for-commit`; action conclusion: `GO` for commit completed. Push still requires exact commit-bound authorization for the current branch head.
+- Technical state: committed
+- User authorization: selected-for-commit — user selected CRL-004,005,006,007 on 2026-08-11.
+- Action conclusion: GO — commit completed; push still requires exact commit-bound authorization for the current branch head.
 
 ### Risks / Release Notes
 
