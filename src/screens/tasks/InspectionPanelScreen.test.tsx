@@ -141,8 +141,8 @@ test('检查人员可打开检查与补充页面并看到四个核心步骤', as
     expect(ui.getByText('有阳台时拍摄（可选）')).toBeTruthy()
     expect(ui.getByText('5. 标记已完成')).toBeTruthy()
     expect(ui.getByTestId('inspection-sync-status-card')).toBeTruthy()
-  })
-})
+  }, { timeout: 5_000 })
+}, 10_000)
 
 test('检查人员可区分添加其他补充项和下次退房补充项', async () => {
   const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>

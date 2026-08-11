@@ -1,5 +1,63 @@
 # Change Release Ledger
 
+## CRL-20260811-008 — 稳定检查面板全量回归超时（mobile）
+
+- **Status:** ready
+- **Updated:** 2026-08-11 Australia/Melbourne
+- **Request:** GitHub Full Regression 的检查面板首个页面渲染测试超出 Jest 默认 5 秒；用户授权按最小方案修复。
+- **Outcome:** 为该测试保留完整页面断言，同时给异步等待设置 5 秒边界、给测试整体设置 10 秒边界；不改检查页运行时代码。
+
+### Implementation
+
+- Previous behavior: 首个检查页 smoke test 使用默认 `waitFor` 与 Jest 5 秒测试上限；共享 CI runner 较慢时会超时并阻断全量回归。
+- New behavior: 等待条件最多 5 秒，整个测试最多 10 秒；测试继续断言四个核心步骤和可用入口，不能因超时修复而放宽业务断言或移出全量 Jest。
+- Key decisions: 仅修复测试基础设施的有界等待；不改 `InspectionPanelScreen.tsx`、任务动作、权限、API、队列、数据或配置。
+
+### Files / Areas
+
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — modified: 首个页面渲染测试采用显式有界 `waitFor` 与 Jest timeout。
+- `docs/change-release-ledger.md` — modified: 记录独立可选择的 CI 稳定性修复。
+
+### Impact / Dependencies
+
+- **API / database / migration / configuration / dependencies:** none。
+- **Regression registry:** 关联 root `FR-004` 的既有检查页测试映射；该单元不改变业务不变量或映射的覆盖状态，测试仍由 `check:ci` 全量 Jest 执行。
+- **Related units:** `CRL-20260811-004`～`CRL-20260811-007` 已分别合并；本单元不混入其业务范围。
+
+### Validation
+
+- GitHub Full Regression — failed before this change: `InspectionPanelScreen.test.tsx:121` exceeded the default 5-second test timeout; 54 suites / 277 tests passed and 1 test failed in the captured run.
+- `npm test -- --runInBand --no-cache src/screens/tasks/InspectionPanelScreen.test.tsx` — passed: 1 suite / 13 tests; the protected first render test completed in 2.581 seconds.
+- `npm run check:ci` — passed: ledger-range audit, ledger coverage, typecheck, lint (0 errors / 114 existing warnings), strict button audit, fast regression (3 suites / 18 tests), and full Jest all completed successfully. A temporary, exact `node_modules` dependency link was excluded only from this isolated worktree's Git audit invocation; no source path was excluded.
+- Native/device/API/database verification — not applicable: no runtime behavior is changed.
+
+### Release Attempts
+
+#### RA-20260811-mobile-ci-inspection-timeout-01
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260811-008`
+- Intended action: `commit`
+- Branch: `codex/ci-inspection-timeout-20260811`
+- Base: `origin/Dev@fa7fcee086534a2343afc2df22039cb041df5295`; fetched at 2026-08-11 Australia/Melbourne.
+- Candidate patch SHA-256: `1368afaa4f74a2b97d947f2d7d4a59b6c549aea7cbf5ccb1b3bd8f6e3b75027c`; excludes `docs/change-release-ledger.md`.
+- Commit SHA: not committed; audit head is emitted by the release report after commit.
+- Dependencies: none; the test remains in the existing mobile `check:ci` quality gate.
+- Required validation: PASS — targeted screen test and `npm run check:ci` passed after the bounded-timeout change.
+- Shared-hunk review: PASS — only this test file and this CRL ledger entry are selected.
+- Generated-file review: PASS — no generated output, cache, environment file or dependency artifact is selected.
+- Technical state: verified
+- User authorization: selected-for-commit — user replied “提交” after `CRL-20260811-008` was presented on 2026-08-11.
+- Independent review: GO for commit — independent read-only review found no P0/P1; the exact candidate preserves every assertion and remains in the full Jest gate.
+- Action conclusion: GO — exact candidate fingerprint, targeted test, `check:ci`, scope review and independent commit review all passed.
+
+### Risks / Release Notes
+
+- Risk: a real render deadlock can now occupy CI for at most 10 seconds; assertions and full-regression membership remain unchanged, so failure remains visible.
+- Rollback: restore the test's default timeout arguments; no business code or data requires rollback.
+- Sensitive-information review: no secrets, `.env` values, tokens, credentials, database URLs, caches, generated files, or production data are added.
+- Git state: uncommitted; no staging, commit, push, PR, merge, deployment, OTA or device verification performed.
+
 ## CRL-20260811-004 — 修复交付状态与完成声明强制边界（mobile governance）
 
 - **Status:** candidate
