@@ -37,7 +37,7 @@
 
 - Repository: `mobile`
 - Selected CRLs: `CRL-20260811-008`
-- Intended action: `commit`
+- Intended action: `push`
 - Branch: `codex/ci-inspection-timeout-20260811`
 - Base: `origin/Dev@fa7fcee086534a2343afc2df22039cb041df5295`; fetched at 2026-08-11 Australia/Melbourne.
 - Candidate patch SHA-256: `1368afaa4f74a2b97d947f2d7d4a59b6c549aea7cbf5ccb1b3bd8f6e3b75027c`; excludes `docs/change-release-ledger.md`.
@@ -46,17 +46,17 @@
 - Required validation: PASS — targeted screen test and `npm run check:ci` passed after the bounded-timeout change.
 - Shared-hunk review: PASS — only this test file and this CRL ledger entry are selected.
 - Generated-file review: PASS — no generated output, cache, environment file or dependency artifact is selected.
-- Technical state: committed
-- User authorization: selected-for-commit — user replied “提交” after `CRL-20260811-008` was presented on 2026-08-11.
-- Independent review: GO for commit — independent read-only review found no P0/P1; the exact candidate preserves every assertion and remains in the full Jest gate.
-- Action conclusion: GO — commit completed; push requires a separate, exact commit-bound authorization.
+- Independent review: GO for push — independent read-only review found no P0/P1 in the exact committed range; every assertion remains in the full Jest gate.
+- Technical state: pushed
+- User authorization: approved-for-push — user replied “推送” after the exact mobile `8fcf4dfa69242d14fb08904f5816f095eee2e568` commit and branch were presented on 2026-08-11.
+- Action conclusion: GO — push succeeded; `origin/codex/ci-inspection-timeout-20260811` was verified by `git ls-remote` at `8fcf4dfa69242d14fb08904f5816f095eee2e568`. PR, merge, deployment, OTA and device verification remain separate and not performed.
 
 ### Risks / Release Notes
 
 - Risk: a real render deadlock can now occupy CI for at most 10 seconds; assertions and full-regression membership remain unchanged, so failure remains visible.
 - Rollback: restore the test's default timeout arguments; no business code or data requires rollback.
 - Sensitive-information review: no secrets, `.env` values, tokens, credentials, database URLs, caches, generated files, or production data are added.
-- Git state: candidate content commit `c6afce28b117abc41a8d2cbdf7deea19ace652bc` created on `codex/ci-inspection-timeout-20260811`; not pushed, PR-created, merged, deployed, OTA-published or device-verified.
+- Git state: candidate content commit `c6afce28b117abc41a8d2cbdf7deea19ace652bc` is pushed with audit head `8fcf4dfa69242d14fb08904f5816f095eee2e568` on `origin/codex/ci-inspection-timeout-20260811`; PR not created, not merged, not deployed, OTA not published and device/production verification not run.
 
 ## CRL-20260811-004 — 修复交付状态与完成声明强制边界（mobile governance）
 
