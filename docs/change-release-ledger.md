@@ -1,5 +1,57 @@
 # Change Release Ledger
 
+## CRL-20260812-009 — Root/mobile PR 范围审计与配对分支 CI 修复
+
+- **Status:** ready
+- **Updated:** 2026-08-12 Australia/Melbourne
+- **Request:** 修复 mobile PR #24 与配对 root PR #303 的合并门禁失败：CI 的 `--base/--head` PR 范围调用被审计器误拒绝，导致质量作业在参数解析阶段退出。
+- **Outcome:** 移动端审计器恢复只读 `base...head` PR 覆盖审计；`--release-report` 仍保留给带 repository/CRL/候选证据的严格 Release Attempt。
+
+### Implementation
+
+- Previous behavior: 审计器把 `--base`/`--head` 误视为只属于 Release Attempt，移动端质量工作流的 PR 调用直接返回 exit 2。
+- New behavior: 普通模式接受成对 `--base`/`--head` 并执行三点范围覆盖与空白检查；仅 `--repo`/`--crl` 继续要求 `--release-report`，避免削弱发布审计。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — 恢复 PR 范围审计 CLI 分支并保留台账谱系预检。
+- `scripts/tests/test_audit_change_release_ledger.py` — 覆盖成功范围、未登记路径和不完整范围拒绝。
+- `docs/change-release-ledger.md` — 本移动端 CI 修复记录。
+
+### Impact / Dependencies
+
+- CI only; no app screen, API, permission, database, cache, R2, OTA or production-data change.
+- Paired unit: root `CRL-20260812-009`; both PR #24 and root PR #303 rely on the compatible PR-range CLI.
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed: 18 tests, including PR range success, uncovered path failure and incomplete range rejection.
+- `python3 scripts/audit_change_release_ledger.py --base origin/Dev --head HEAD` — passed for PR #24: 27 changed / 27 recorded paths.
+- `ruby -ryaml -e 'YAML.load_file(...)'`, `python3 scripts/audit_change_release_ledger.py` and `git diff --check` — passed.
+- `npm run check:ci` — passed with a temporary ignored dependency link: typecheck, lint (0 errors / 109 existing warnings), button audit and 56 suites / 293 tests passed; the link was removed.
+
+### Release Attempts
+
+#### RA-20260812-mobile-001-009-03
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260812-001`, `CRL-20260812-002`, `CRL-20260812-003`, `CRL-20260812-004`, `CRL-20260812-005`, `CRL-20260812-006`, `CRL-20260812-007`, `CRL-20260812-008`, `CRL-20260812-009`.
+- Intended action: `commit`; branch: `codex/release-crl-20260812-001-007`; target: `Dev`.
+- Base: `origin/Dev@94b75a81c2a321f2ee44d9c197bf43b0f2b68733`; fetched at `2026-08-12T16:32:37+10:00`.
+- Candidate patch SHA-256: `6c6d4ed389a869dd63c074dcdc2942c6197a9e7f42f8a9435d4565aa68cedaa1`, excluding `docs/change-release-ledger.md`.
+- Candidate content commit: `not committed`.
+- Dependencies: paired root `CRL-20260812-001`, `CRL-20260812-002`, `CRL-20260812-003`, `CRL-20260812-006`, `CRL-20260812-007`, `CRL-20260812-008`, `CRL-20260812-009`; all base-range mobile paths are attributed to the selected CRLs.
+- Required validation: PASS — exact PR range and working-tree ledger audits, 18 ledger regression tests, plus the previously rerun complete `npm run check:ci` gate (typecheck, lint 0 errors / 109 existing warnings, button audit and 56 suites / 293 tests).
+- Shared-hunk review: PASS — staged CI files belong only to `CRL-20260812-009`; the complete candidate has no unselected changed path.
+- Generated-file / secret review: PASS — no generated outputs, environment files, credentials, tokens, media objects or production data are staged.
+- Independent review: GO for `commit` — paired root resolver P1 was repaired and independently re-reviewed; this exact mobile fingerprint remained unchanged, with no generated file or secret risk. P2: this repository's governance references a missing review document; it does not block this CI repair.
+- Technical state: `candidate`; user authorization: `selected-for-commit` (user asked to repair the root/mobile PR merge gates); action conclusion: `GO` for commit.
+
+### Risks / Release Notes
+
+- Risk: PR range coverage remains intentionally narrower than a Release Attempt; it cannot supply candidate hash, push authorization or independent-release evidence.
+- Sensitive-information review: no credentials, tokens, environment values or production data are added.
+
 ## CRL-20260812-005 — 日用品任务标签中文化（mobile）
 
 - **Status:** ready
