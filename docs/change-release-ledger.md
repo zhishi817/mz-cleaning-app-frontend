@@ -37,13 +37,13 @@
 - Intended action: `commit`; branch: `codex/release-crl-20260812-001-007`; target: `Dev`.
 - Base: `origin/Dev@94b75a81c2a321f2ee44d9c197bf43b0f2b68733`; fetched at `2026-08-12T09:25:36+10:00`.
 - Candidate patch SHA-256: `0c643779e5db8cedbb51430f969a1b24d6c73578160427f149dcdcc5cb7070a8`, excluding `docs/change-release-ledger.md`.
-- Candidate content commit: not committed.
+- Candidate content commit: `f57ca04e835659592f2dd46a54c7cec6a334df40`.
 - Dependencies: paired root `CRL-20260812-001`, `-002`, `-003`, `-006`, `-007`; no unselected mobile CRL is staged.
 - Required validation: PASS — `npm run check:ci` passed: ledger-range tests, ledger coverage audit, typecheck, lint (0 errors / 109 existing warnings), strict button audit, fast regression, and full Jest (56 files / 293 tests).
 - Shared-hunk review: PASS — independent read-only review confirmed every staged path belongs to the selected CRLs.
 - Generated-file / secret review: PASS — the temporary dependency link was excluded only while the Git audit ran and removed immediately afterward; staged paths contain no environment, credential, cache or media artifact.
 - Independent review: GO for `commit` — independent read-only review reconfirmed this exact fingerprint, source coverage, generated-file/secret safety and paired dependencies.
-- Technical state: `verified`; user authorization: `selected-for-commit` (user selected the joint 1–7 release scope); action conclusion: `GO` for commit. Push remains unapproved until the exact commit SHA is presented.
+- Technical state: `committed`; user authorization: `selected-for-commit` (user selected the joint 1–7 release scope); action conclusion: `GO` for commit completed. Push remains unapproved until the final ledger audit head is presented.
 
 ### Risks / Release Notes
 
