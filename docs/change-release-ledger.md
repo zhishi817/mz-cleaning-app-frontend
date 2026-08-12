@@ -49,15 +49,19 @@
 
 - Repository: `mobile`.
 - Selected CRLs: `CRL-20260812-001`, `CRL-20260812-002`, `CRL-20260812-003`, `CRL-20260812-004`, `CRL-20260812-005`, `CRL-20260812-006`, `CRL-20260812-007`.
-- Intended action: `push`; branch: `codex/release-crl-20260812-001-007`; target: `Dev`.
-- Base: `origin/Dev@94b75a81c2a321f2ee44d9c197bf43b0f2b68733`; refreshed at `2026-08-12T15:35:31+10:00` and unchanged.
+- Intended action: `push`; target: `Dev`.
+- Branch: `codex/release-crl-20260812-001-007`.
+- Base: `origin/Dev@94b75a81c2a321f2ee44d9c197bf43b0f2b68733`; fetched at `2026-08-12T15:35:31+10:00` and unchanged.
 - Candidate patch SHA-256: `0c643779e5db8cedbb51430f969a1b24d6c73578160427f149dcdcc5cb7070a8`, excluding `docs/change-release-ledger.md`.
-- Candidate content commit: `f57ca04e835659592f2dd46a54c7cec6a334df40`; current audit head is emitted by the release report.
+- Commit SHA: `f57ca04e835659592f2dd46a54c7cec6a334df40` (candidate content commit); current audit head is emitted by the release report.
 - Dependencies: paired root candidate content commit `3c038520fe3d08d1a661845322144c44915ba573` for root `CRL-20260812-001`, `-002`, `-003`, `-006`, `-007`.
 - Required validation: PASS — prior `check:ci` and current exact fingerprint/range checks remain valid.
-- Shared-hunk / generated-file / secret review: PASS — prior independent review and current clean range evidence.
-- Technical state: `committed`; user authorization: `approved-for-push` (user instructed “推送” after both exact committed branch heads were presented).
-- Independent review: pending committed-range re-review; action conclusion: `NOT VERIFIED` until that review and the exact release report pass.
+- Shared-hunk review: PASS; evidence: prior independent review and current clean range evidence.
+- Generated-file review: PASS; evidence: no generated files, cache, environment or sensitive artifact in the exact range.
+- Technical state: `committed`.
+- User authorization: `approved-for-push`; evidence: user instructed “推送” after both exact committed branch heads were presented.
+- Independent review: NEEDS OWNER; evidence: committed-range re-review pending.
+- Action conclusion: `NOT VERIFIED`; blockers: committed-range re-review and exact release report pending.
 
 ### Risks / Release Notes
 
