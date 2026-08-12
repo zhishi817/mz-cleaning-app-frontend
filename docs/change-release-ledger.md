@@ -58,10 +58,11 @@
 - Required validation: PASS — prior `check:ci` and current exact fingerprint/range checks remain valid.
 - Shared-hunk review: PASS; evidence: prior independent review and current clean range evidence.
 - Generated-file review: PASS; evidence: no generated files, cache, environment or sensitive artifact in the exact range.
-- Technical state: `committed`.
+- Technical state: `pushed`.
 - User authorization: `approved-for-push`; evidence: user replied “批准” after root `7046279c978ff982c1731b8a1af55fa3916c60de`, mobile `f57ca04e835659592f2dd46a54c7cec6a334df40` and both branch names were presented.
 - Independent review: GO for `push`; evidence: independent committed-range review matched base/head/content commit/fingerprint, verified owner/date and notice-context proxy contract compatibility with root, and found no generated-file or secret risk.
-- Action conclusion: `GO` for push; blockers: none.
+- Action conclusion: `GO` for push completed; blockers: none.
+- Remote branch / SHA: `origin/codex/release-crl-20260812-001-007@6c9a96173084be7bb3a100d191fc8bd63c6c6042`, confirmed immediately after the source-range push.
 
 ### Risks / Release Notes
 
