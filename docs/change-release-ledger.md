@@ -1,5 +1,393 @@
 # Change Release Ledger
 
+## CRL-20260812-009 — Root/mobile PR 范围审计与配对分支 CI 修复
+
+- **Status:** ready
+- **Updated:** 2026-08-12 Australia/Melbourne
+- **Request:** 修复 mobile PR #24 与配对 root PR #303 的合并门禁失败：CI 的 `--base/--head` PR 范围调用被审计器误拒绝，导致质量作业在参数解析阶段退出。
+- **Outcome:** 移动端审计器恢复只读 `base...head` PR 覆盖审计；`--release-report` 仍保留给带 repository/CRL/候选证据的严格 Release Attempt。
+
+### Implementation
+
+- Previous behavior: 审计器把 `--base`/`--head` 误视为只属于 Release Attempt，移动端质量工作流的 PR 调用直接返回 exit 2。
+- New behavior: 普通模式接受成对 `--base`/`--head` 并执行三点范围覆盖与空白检查；仅 `--repo`/`--crl` 继续要求 `--release-report`，避免削弱发布审计。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — 恢复 PR 范围审计 CLI 分支并保留台账谱系预检。
+- `scripts/tests/test_audit_change_release_ledger.py` — 覆盖成功范围、未登记路径和不完整范围拒绝。
+- `docs/change-release-ledger.md` — 本移动端 CI 修复记录。
+
+### Impact / Dependencies
+
+- CI only; no app screen, API, permission, database, cache, R2, OTA or production-data change.
+- Paired unit: root `CRL-20260812-009`; both PR #24 and root PR #303 rely on the compatible PR-range CLI.
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed: 18 tests, including PR range success, uncovered path failure and incomplete range rejection.
+- `python3 scripts/audit_change_release_ledger.py --base origin/Dev --head HEAD` — passed for PR #24: 27 changed / 27 recorded paths.
+- `ruby -ryaml -e 'YAML.load_file(...)'`, `python3 scripts/audit_change_release_ledger.py` and `git diff --check` — passed.
+- `npm run check:ci` — passed with a temporary ignored dependency link: typecheck, lint (0 errors / 109 existing warnings), button audit and 56 suites / 293 tests passed; the link was removed.
+
+### Release Attempts
+
+#### RA-20260812-mobile-001-009-03
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260812-001`, `CRL-20260812-002`, `CRL-20260812-003`, `CRL-20260812-004`, `CRL-20260812-005`, `CRL-20260812-006`, `CRL-20260812-007`, `CRL-20260812-009`.
+- Intended action: `commit`.
+- Branch: `codex/release-crl-20260812-001-007`.
+- Target: `Dev`.
+- Base: `origin/Dev@94b75a81c2a321f2ee44d9c197bf43b0f2b68733`; fetched at `2026-08-12T16:32:37+10:00`.
+- Candidate patch SHA-256: `6c6d4ed389a869dd63c074dcdc2942c6197a9e7f42f8a9435d4565aa68cedaa1`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `ec95bf316d9f483f3dbb628295e62cb699ef6c98` (candidate content commit; final audit head is emitted by the release report).
+- Dependencies: paired root `CRL-20260812-001`, `CRL-20260812-002`, `CRL-20260812-003`, `CRL-20260812-006`, `CRL-20260812-007`, `CRL-20260812-008`, `CRL-20260812-009`; all base-range mobile paths are attributed to the selected CRLs.
+- Required validation: PASS — exact PR range and working-tree ledger audits, 18 ledger regression tests, plus the previously rerun complete `npm run check:ci` gate (typecheck, lint 0 errors / 109 existing warnings, button audit and 56 suites / 293 tests).
+- Shared-hunk review: PASS — staged CI files belong only to `CRL-20260812-009`; the complete candidate has no unselected changed path.
+- Generated-file / secret review: PASS — no generated outputs, environment files, credentials, tokens, media objects or production data are staged.
+- Independent review: GO for `commit` — paired root resolver P1 was repaired and independently re-reviewed; this exact mobile fingerprint remained unchanged, with no generated file or secret risk. P2: this repository's governance references a missing review document; it does not block this CI repair.
+- Technical state: `committed`.
+- User authorization: `selected-for-commit`; evidence: user asked to repair the root/mobile PR merge gates.
+- Action conclusion: `GO` for commit completed. Push requires a new explicit approval bound to the final branch head.
+
+#### RA-20260812-mobile-001-009-04
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260812-001`, `CRL-20260812-002`, `CRL-20260812-003`, `CRL-20260812-004`, `CRL-20260812-005`, `CRL-20260812-006`, `CRL-20260812-007`, `CRL-20260812-009`.
+- Intended action: `push`.
+- Branch: `codex/release-crl-20260812-001-007`.
+- Target: `Dev`.
+- Base: `origin/Dev@94b75a81c2a321f2ee44d9c197bf43b0f2b68733`; fetched at `2026-08-12T17:33:59+10:00` and unchanged.
+- Candidate patch SHA-256: `6c6d4ed389a869dd63c074dcdc2942c6197a9e7f42f8a9435d4565aa68cedaa1`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `ec95bf316d9f483f3dbb628295e62cb699ef6c98` (candidate content commit; final audit head is emitted by the release report).
+- Remote branch at action verification: `origin/codex/release-crl-20260812-001-007@ed694512e951d4481b92d6f27aeb3925626a94ad`; source-range push verified at `2026-08-12T17:52:03+10:00`.
+- Dependencies: paired root content commit `9ba3a1f72accc721af79c60b695e6eb7d1d73f44` for root `CRL-20260812-001`, `CRL-20260812-002`, `CRL-20260812-003`, `CRL-20260812-006`, `CRL-20260812-007`, `CRL-20260812-008`, `CRL-20260812-009`.
+- Required validation: PASS — complete mobile `npm run check:ci` passed: typecheck, lint (0 errors / 109 existing warnings), button audit, and 56 suites / 293 tests; exact range/current ledger audits and whitespace checks pass.
+- Shared-hunk review: PASS — complete selected range has no unselected path; current CI-repair paths are exclusive to `CRL-20260812-009`.
+- Generated-file review: PASS — no generated outputs, environment files, credentials, tokens, media objects or production data are in the candidate.
+- Technical state: `pushed`.
+- User authorization: `approved-for-push`; evidence: user replied “授权” to push mobile content commit `ec95bf316d9f483f3dbb628295e62cb699ef6c98` (review head `84a0a10bc71bb7b2e968e469ae642959df52c258`) to this branch and authorized this final authorization receipt.
+- Independent review: GO for `push` — independent exact-range review matched base, content commit and fingerprint; all 27 paths are selected, with no generated or sensitive files. P2: this repository's governance references a missing review document; it does not block this CI repair push.
+- Action conclusion: `GO` for push completed; remote branch SHA was verified after the fast-forward push.
+
+### Risks / Release Notes
+
+- Risk: PR range coverage remains intentionally narrower than a Release Attempt; it cannot supply candidate hash, push authorization or independent-release evidence.
+- Sensitive-information review: no credentials, tokens, environment values or production data are added.
+
+## CRL-20260812-005 — 日用品任务标签中文化（mobile）
+
+- **Status:** ready
+- **Updated:** 2026-08-12 Australia/Melbourne
+- **Request:** 任务列表和任务详情不得向用户展示内部 `daily_necessities` 枚举。
+- **Outcome:** 两处任务类型标签都显示“日用品”；任务标题、API 原始字段、状态、权限和路由不变。
+
+### Implementation
+
+- Previous behavior: 两个 `taskKindLabel()` 未映射该类型，未知值回退为原始枚举。
+- New behavior: 两处显示函数都映射 `daily_necessities` 为“日用品”。
+
+### Files / Areas
+
+- `src/screens/tabs/TasksScreen.tsx` — 任务列表标签。
+- `src/screens/tasks/TaskDetailScreen.tsx` — 任务详情标签。
+- `src/screens/tabs/TasksScreen.test.tsx`、`src/screens/tasks/TaskDetailScreen.test.tsx` — 现有页面回归。
+- `docs/change-release-ledger.md` — 本单元记录。
+
+### Impact / Dependencies
+
+- Runtime behavior: only display text; no API, database, cache, permissions or production-data change.
+- Dependencies: none.
+
+### Validation
+
+- Candidate validation in progress: mobile typecheck, lint and relevant Jest suites are run before commit.
+
+### Release Attempts
+
+#### RA-20260812-mobile-001-007-01
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260812-001`, `CRL-20260812-002`, `CRL-20260812-003`, `CRL-20260812-004`, `CRL-20260812-005`, `CRL-20260812-006`, `CRL-20260812-007`.
+- Intended action: `commit`; branch: `codex/release-crl-20260812-001-007`; target: `Dev`.
+- Base: `origin/Dev@94b75a81c2a321f2ee44d9c197bf43b0f2b68733`; fetched at `2026-08-12T09:25:36+10:00`.
+- Candidate patch SHA-256: `0c643779e5db8cedbb51430f969a1b24d6c73578160427f149dcdcc5cb7070a8`, excluding `docs/change-release-ledger.md`.
+- Candidate content commit: `f57ca04e835659592f2dd46a54c7cec6a334df40`.
+- Dependencies: paired root `CRL-20260812-001`, `-002`, `-003`, `-006`, `-007`; no unselected mobile CRL is staged.
+- Required validation: PASS — `npm run check:ci` passed: ledger-range tests, ledger coverage audit, typecheck, lint (0 errors / 109 existing warnings), strict button audit, fast regression, and full Jest (56 files / 293 tests).
+- Shared-hunk review: PASS — independent read-only review confirmed every staged path belongs to the selected CRLs.
+- Generated-file / secret review: PASS — the temporary dependency link was excluded only while the Git audit ran and removed immediately afterward; staged paths contain no environment, credential, cache or media artifact.
+- Independent review: GO for `commit` — independent read-only review reconfirmed this exact fingerprint, source coverage, generated-file/secret safety and paired dependencies.
+- Technical state: `committed`; user authorization: `selected-for-commit` (user selected the joint 1–7 release scope); action conclusion: `GO` for commit completed. Push remains unapproved until the final ledger audit head is presented.
+
+#### RA-20260812-mobile-001-007-02
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260812-001`, `CRL-20260812-002`, `CRL-20260812-003`, `CRL-20260812-004`, `CRL-20260812-005`, `CRL-20260812-006`, `CRL-20260812-007`.
+- Intended action: `push`; target: `Dev`.
+- Branch: `codex/release-crl-20260812-001-007`.
+- Base: `origin/Dev@94b75a81c2a321f2ee44d9c197bf43b0f2b68733`; fetched at `2026-08-12T16:02:07+10:00` and unchanged.
+- Candidate patch SHA-256: `0c643779e5db8cedbb51430f969a1b24d6c73578160427f149dcdcc5cb7070a8`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `f57ca04e835659592f2dd46a54c7cec6a334df40` (candidate content commit); current audit head is emitted by the release report.
+- Dependencies: paired root candidate content commit `7046279c978ff982c1731b8a1af55fa3916c60de` for root `CRL-20260812-001`, `-002`, `-003`, `-006`, `-007`, `-008`.
+- Required validation: PASS — prior `check:ci` and current exact fingerprint/range checks remain valid.
+- Shared-hunk review: PASS; evidence: prior independent review and current clean range evidence.
+- Generated-file review: PASS; evidence: no generated files, cache, environment or sensitive artifact in the exact range.
+- Technical state: `pushed`.
+- User authorization: `approved-for-push`; evidence: user replied “批准” after root `7046279c978ff982c1731b8a1af55fa3916c60de`, mobile `f57ca04e835659592f2dd46a54c7cec6a334df40` and both branch names were presented.
+- Independent review: GO for `push`; evidence: independent committed-range review matched base/head/content commit/fingerprint, verified owner/date and notice-context proxy contract compatibility with root, and found no generated-file or secret risk.
+- Action conclusion: `GO` for push completed; blockers: none.
+- Remote branch / SHA: `origin/codex/release-crl-20260812-001-007@6c9a96173084be7bb3a100d191fc8bd63c6c6042`, confirmed immediately after the source-range push.
+
+### Risks / Release Notes
+
+- Risk: device and OTA rendering verification are not local-test evidence.
+- Sensitive-information review: no secrets, tokens, media bytes, logs or production data are included.
+
+## CRL-20260812-004 — 任务完成操作按钮等宽（mobile）
+
+- **Status:** ready
+- **Updated:** 2026-08-12 Australia/Melbourne
+- **Request:** 日用品和同类任务的完成/未完成操作应等宽；检查完成页底部双按钮也应保持同一布局契约。
+- **Outcome:** 并排操作采用 `flex: 1`、`flexGrow: 1`、`flexShrink: 1`、`flexBasis: 0` 与 `minWidth: 0`；检查完成页在窄屏堆叠为全宽按钮。
+
+### Implementation
+
+- Previous behavior: 完成操作可能受内容宽度或历史最小宽度影响；检查完成的主按钮未使用同一弹性约束。
+- New behavior: 任务详情和检查完成页均使用共享等分样式，严格按钮审计登记这些受控 `minWidth: 0` 约束。
+
+### Files / Areas
+
+- `src/screens/tasks/TaskDetailScreen.tsx` — 完成/未完成与 self-complete 操作等宽。
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — 视频/完成双按钮等宽与紧凑布局。
+- `scripts/audit_button_contract.py` — 等分按钮的已审查约束。
+- `src/screens/tasks/TaskDetailScreen.test.tsx`、`src/screens/tasks/InspectionCompleteScreen.test.tsx` — 页面回归。
+- `docs/change-release-ledger.md` — 本单元记录。
+
+### Impact / Dependencies
+
+- Runtime behavior: layout only; no task state, API, permissions, database, R2 or production-data change.
+- Dependencies: existing `AppButton`, `layoutTokens` and compact-width helper.
+
+### Validation
+
+- Candidate validation in progress: strict button audit, typecheck, lint and relevant Jest suites are run before commit.
+
+### Release Attempts
+
+- None yet. User selected this unit for a joint commit candidate; push remains unapproved until exact commit SHA is presented.
+
+### Risks / Release Notes
+
+- Risk: real narrow-width and enlarged-font device verification is not run.
+- Sensitive-information review: no secrets, tokens, media bytes, logs or production data are included.
+
+## CRL-20260812-003 — 远端台账身份不可变门禁（mobile governance）
+
+- **Status:** ready
+- **Updated:** 2026-08-12 Australia/Melbourne
+- **Request:** 解决共享移动端工作区台账不能安全发布的问题，并禁止本地历史记录覆盖 `origin/Dev` 业务身份。
+- **Outcome:** 审计要求本地台账保留远端全部 CRL 与不可变业务字段；干净候选以已抓取的远端基线独立通过审计。
+
+### Implementation
+
+- Previous behavior: 覆盖检查不能发现远端记录缺失或同编号业务身份被改写。
+- New behavior: 审计与 Release Attempt 报告比较已抓取的 `origin/Dev` 台账；缺失、变更或不可验证基线会明确返回门禁结果。
+
+### Files / Areas
+
+- `AGENTS.md`、`scripts/audit_change_release_ledger.py`、`scripts/tests/test_audit_change_release_ledger.py` — mobile 谱系门禁和回归。
+- `docs/change-release-ledger.md` — 本单元记录。
+
+### Impact / Dependencies
+
+- Runtime / API / database / migration / configuration / production data: none.
+- Paired unit: root `CRL-20260812-003`.
+
+### Validation
+
+- Candidate validation in progress: ledger regression, compile and exact coverage audit are run before commit.
+
+### Release Attempts
+
+- None yet. User selected this unit for a joint commit candidate; push remains unapproved until exact commit SHA is presented.
+
+### Risks / Release Notes
+
+- Risk: missing `origin/Dev` history is correctly `NOT VERIFIED`, not assumed safe.
+- Sensitive-information review: no credentials, tokens, database URLs, logs, caches or production data are included.
+
+## CRL-20260812-002 — 反馈照片本地持久化、续传与私有预览收口（mobile）
+
+- **Status:** ready
+- **Updated:** 2026-08-12 Australia/Melbourne
+- **Request:** 反馈照片在上传或业务保存失败后必须保留本地可重试证据，私有预览不应交给系统浏览器。
+- **Outcome:** 照片先以 JPEG 本地草稿保存；提交时携带稳定 `task_id` / `media_id` 上传，远端对象成功但业务保存失败仍保留本地副本，业务保存成功后才清理。
+
+### Implementation
+
+- Previous behavior: 反馈照片上传失败或后续业务保存失败可能丢失唯一可预览副本，私有链接可进入浏览器。
+- New behavior: 反馈草稿保存元数据与阶段检查点，提交可续传而不重复创建业务记录；大图保持应用内认证预览。
+
+### Files / Areas
+
+- `src/lib/localMediaDrafts.ts` — 调用方可指定草稿压缩尺寸和质量。
+- `src/lib/api.ts` — 声明服务端反馈记录返回的操作权限字段。
+- `src/screens/tasks/FeedbackFormScreen.tsx` — 本地草稿、稳定上传 ID、续传、业务成功后清理和应用内预览。
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — 本地预览、失败重试、稳定 ID 与无浏览器入口回归。
+- `docs/change-release-ledger.md` — 本单元记录。
+
+### Impact / Dependencies
+
+- API / database / migration / configuration / R2 / production data: none; reuses existing authenticated upload and feedback APIs.
+- Dependencies: shared authenticated media components remain the sole private-media renderer.
+
+### Validation
+
+- Candidate validation in progress: feedback and shared-media Jest suites, typecheck and lint are run before commit.
+
+### Release Attempts
+
+- None yet. User selected this unit for a joint commit candidate; push remains unapproved until exact commit SHA is presented.
+
+### Risks / Release Notes
+
+- Risk: real network interruption, deployed backend and device verification remain separate from local regression.
+- Sensitive-information review: no credentials, tokens, media bytes, database URLs, logs or production data are included.
+
+## CRL-20260812-001 — 日终交接照片本地预览与精确认证读取（mobile）
+
+- **Status:** ready
+- **Updated:** 2026-08-12 Australia/Melbourne
+- **Request:** 修复日终照片上传后但业务未保存时的无权限预览；已保存照片必须携带精确 owner/date 读取上下文。
+- **Outcome:** 新照片先持久化为本地草稿，本地 URI 优先于待关联远端引用；业务成功前不删除本地副本，已关联远端照片才进入认证代理。
+
+### Implementation
+
+- Previous behavior: 上传引用立即交给认证图片组件，业务尚未关联时被服务端拒绝；队列可在业务保存失败前删除本地证据。
+- New behavior: 日终页面先写本地草稿并使用稳定 media ID；共享媒体组件接受可选 day-end owner/date；队列只在既有业务成功路径后清理草稿。
+
+### Files / Areas
+
+- `src/screens/tasks/DayEndBackupKeysScreen.tsx`、`src/lib/dayEndHandoverQueue.ts` — 本地优先预览与安全清理时机。
+- `src/lib/cleaningMedia.ts`、`src/components/CleaningMediaImage.tsx`、`src/components/CleaningMediaPreview.tsx` — 可选 owner/date 认证上下文。
+- `src/lib/cleaningMedia.test.ts` — 日终 URL 回归。
+- `src/lib/dayEndHandoverQueue.test.ts` — 本地证据队列回归。
+- `src/screens/tasks/DayEndBackupKeysScreen.test.tsx` — 页面预览回归。
+- `docs/change-release-ledger.md` — 本单元记录。
+
+### Impact / Dependencies
+
+- API dependency: root `CRL-20260812-001` must be deployed before saved day-end remote media can be read.
+- Database / migration / configuration / R2 / production data: none.
+
+### Validation
+
+- Candidate validation in progress: day-end/shared-media Jest suites, typecheck and lint are run before commit.
+
+### Release Attempts
+
+- None yet. User selected this unit for a joint commit candidate; push remains unapproved until exact commit SHA is presented.
+
+### Risks / Release Notes
+
+- Risk: camera, weak-network, deployed proxy, OTA and device verification remain not run.
+- Sensitive-information review: no credentials, tokens, private media references, image bytes, logs or production data are included.
+
+## CRL-20260812-007 — 当天任务临时通知保存前本地预览（mobile）
+
+- **Status:** ready
+- **Updated:** 2026-08-12 Australia/Melbourne
+- **Request:** 临时通知在管理端选择照片后仍显示红叉/无权限；修复保存前本地预览，但不得放宽私有照片读取授权。
+- **Outcome:** 候选实现保留每张刚上传照片的本地 URI 与远端引用；缩略图/预览在保存前只使用本地 URI，保存成功后清除本地预览并向既有认证代理传递已保存 notice ID。
+
+### Implementation
+
+- Previous behavior: `ManagerDailyTaskScreen` 上传成功后仅保存私有远端引用，并直接用 `CleaningMediaPreview` 读取；该对象尚无通知记录关联，所以认证代理按 fail-closed 规则返回拒绝。
+- New behavior: 管理端临时通知照片状态保留本地预览映射。保存失败不丢失本地 URI 或远端引用，删除或保存成功才清除该映射；已保存照片继续经 `guest_luggage_id` 读取。
+- Key decisions: 复用已有 `CleaningMediaPreview` 的 `localUri` 优先规则和既有 upload/save API；不新增队列、直连 R2、页面级私有 URL、权限判断、数据库/R2/生产数据操作。
+
+### Files / Areas
+
+- `src/lib/managerDailyTaskPhotos.ts` — 临时通知照片的保存前本地预览/保存后认证上下文适配。
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — 保留本地 URI、保存/移除时管理其生命周期，并为已保存照片传入 notice ID。
+- `src/screens/tasks/ManagerDailyTaskScreen.test.ts` — 锁定保存前本地预览与保存后认证读取上下文。
+- `docs/change-release-ledger.md` — 记录本移动端修复单元。
+
+### Impact / Dependencies
+
+- API: no new endpoint; uses the existing upload, save-notice and authenticated image APIs.
+- Database / migration / configuration / R2 / production data: none.
+- Paired root unit: root `CRL-20260812-007` updates FR-004; this repair requires root/mobile `CRL-20260812-006` before already-saved notice photos can be read.
+
+### Validation
+
+- `npm run test -- --runInBand --no-cache src/screens/tasks/ManagerDailyTaskScreen.test.ts src/lib/cleaningMedia.test.ts src/components/CleaningMediaPreview.test.tsx src/components/GuestLuggageCard.test.tsx` — passed: 4 suites / 28 tests; the newly-uploaded photo keeps its local URI, while saved media uses the notice ID context.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors / 114 existing warnings.
+- `npm run test -- --runInBand --no-cache` — passed: 56 suites / 285 tests.
+- `python3 scripts/audit_change_release_ledger.py`, `git diff --check` — passed: 11 changed files are recorded and formatting is clean.
+- Paired root `npm run test:mzapp-media-visibility`, `npm run test:cleaning-media-image`, `npm run build`, `npm run check:feature-registry` and ledger audit — passed.
+
+### Release Attempts
+
+- None yet.
+
+### Risks / Release Notes
+
+- Risk: the in-memory local URI remains available only for the active editing session; this repair does not add an offline draft/queue or recover earlier orphan objects.
+- Rollback: revert the display-state adapter and screen state; no data rollback is required.
+- Sensitive-information review: no credentials, tokens, private media URL, object key, database connection, image bytes or production data recorded.
+- Git state: uncommitted in an isolated worktree; no push, PR, deployment, OTA or device verification.
+
+## CRL-20260812-006 — 当天任务临时通知照片认证读取（mobile）
+
+- **Status:** ready
+- **Updated:** 2026-08-12 Australia/Melbourne
+- **Request:** 修复移动端当天任务临时通知的已保存照片无法显示或原图预览失败。
+- **Outcome:** 源码修复完成：临时通知卡片的缩略图和原图预览向既有认证媒体代理传递同一个通知记录上下文；管理每日任务也传入登录 token。
+
+### Implementation
+
+- Previous behavior: 临时通知图片只传递对象引用，缺少通知记录上下文；管理每日任务卡片还缺少 token。
+- New behavior: 共用媒体组件把 `guest_luggage_id` 附加到认证代理请求，缩略图和预览一致；不创建页面级图片读取逻辑。
+- Key decisions: 不修改上传、队列、缓存清理、公开 URL 或 Viewer 架构；依赖 root 端先按通知记录精确授权。
+
+### Files / Areas
+
+- `src/lib/cleaningMedia.ts` — 认证图片请求的通知上下文。
+- `src/components/CleaningMediaImage.tsx`, `src/components/CleaningMediaPreview.tsx`, `src/components/GuestLuggageCard.tsx` — 一致传递缩略图/预览上下文。
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — 向临时通知卡片提供登录 token。
+- `src/lib/cleaningMedia.test.ts`, `src/components/CleaningMediaPreview.test.tsx`, `src/components/GuestLuggageCard.test.tsx` 与 `docs/change-release-ledger.md` — 代理上下文、缩略图/预览一致性和卡片传参回归。
+- `src/components/GuestLuggageCard.test.tsx` — 临时通知卡片向缩略图与原图预览传递同一通知上下文和 Bearer token 的回归测试。
+
+### Impact / Dependencies
+
+- API: 使用既有 `GET /cleaning-app/media/image`，增加 root 配对实现所需的 `guest_luggage_id` 查询上下文。
+- Database / migration / configuration / R2 / production data: none.
+- Paired root unit: root `CRL-20260812-006` 必须与本移动端变更兼容部署；旧后端会继续拒绝该来源，不能仅发布移动端。
+
+### Validation
+
+- `npm run test -- --runInBand --no-cache src/lib/cleaningMedia.test.ts src/components/CleaningMediaPreview.test.tsx src/components/GuestLuggageCard.test.tsx` — passed: 3 suites / 22 tests.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed with 0 errors / 114 existing warnings.
+- `npm run test -- --runInBand --no-cache` — passed: 56 suites / 284 tests, including consumables, task, inspection, day-end, feedback and profile media consumers.
+- `git diff --check` — passed.
+- `python3 scripts/audit_change_release_ledger.py`（mobile）— passed：当前 9 个改动均已记录。
+
+### Release Attempts
+
+- None yet.
+
+### Risks / Release Notes
+
+- Risk: `cleaningMedia` 是共享读取辅助函数；仅添加可选上下文，必须回归既有来源 URL 构造。
+- Rollback: 移除临时通知上下文传递；不影响已保存媒体或本地队列。
+- Sensitive-information review: 不记录或提交 token、私有图片 URL、对象 key、数据库连接或生产数据。
+- Git state: uncommitted in an isolated worktree; no commit, push, PR, deployment, OTA or device verification.
+
 ## CRL-20260811-009 — 线下任务历史公共基址照片认证读取（mobile）
 
 - **Status:** committed

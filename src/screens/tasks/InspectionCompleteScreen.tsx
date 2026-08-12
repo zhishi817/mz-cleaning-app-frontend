@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
@@ -27,7 +27,7 @@ import {
   type InspectionMediaQueueItem,
 } from '../../lib/inspectionMediaQueue'
 import { inspectionScopeLabel, isPasswordOnlyInspectionTask } from '../../lib/cleaningInspection'
-import { hairline, moderateScale } from '../../lib/scale'
+import { hairline, isCompactWidth, moderateScale } from '../../lib/scale'
 import { isEarlyCheckinTime } from '../../lib/taskTime'
 import { getInspectionScopeTone, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
 import { getWorkTasksSnapshot, patchWorkTaskItem } from '../../lib/workTasksStore'
@@ -91,6 +91,8 @@ export default function InspectionCompleteScreen(props: Props) {
   const { t } = useI18n()
   const { token } = useAuth()
   const insets = useSafeAreaInsets()
+  const { width } = useWindowDimensions()
+  const isCompactLayout = isCompactWidth(width)
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -491,16 +493,18 @@ export default function InspectionCompleteScreen(props: Props) {
       </View>
     </ScrollView>
     <SafeAreaBottomBar>
-      <View style={styles.row}>
+      <View style={[styles.row, isCompactLayout ? styles.rowCompact : null]}>
         <AppButton
+          testID="inspection-complete-upload-video"
           label={lockboxItem?.uploaded_url ? '重拍视频' : '拍视频并上传'}
           onPress={onUploadVideo}
           disabled={videoCaptureDisabled}
           loading={uploading}
           tone="secondary"
-          style={[styles.grayBtn, videoCaptureDisabled ? styles.disabled : null]}
+          style={[styles.grayBtn, isCompactLayout ? styles.rowButtonCompact : null, videoCaptureDisabled ? styles.disabled : null]}
         />
         <AppButton
+          testID="inspection-complete-submit"
           label={lockboxSaved
             ? '已同步完成'
             : !isPasswordOnlyInspection && !panelVideoReadiness.ready
@@ -509,7 +513,7 @@ export default function InspectionCompleteScreen(props: Props) {
           onPress={onSubmitComplete}
           disabled={!canComplete}
           loading={submitting}
-          style={!canComplete ? styles.disabledPrimary : null}
+          style={[styles.primaryBtn, isCompactLayout ? styles.rowButtonCompact : null, !canComplete ? styles.disabledPrimary : null]}
         />
       </View>
     </SafeAreaBottomBar>
@@ -555,11 +559,13 @@ const styles = StyleSheet.create({
   retryBtn: { marginTop: 10, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: layoutTokens.button.radius, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: layoutTokens.button.gap, alignSelf: 'flex-start' },
   retryText: { fontWeight: '900', color: '#2563EB', textAlign: 'center' },
 
-  row: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
-  grayBtn: { flex: 1, flexShrink: 1, minWidth: 140, minHeight: layoutTokens.button.height, borderRadius: layoutTokens.button.radius, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0 },
+  row: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: layoutTokens.button.rowGap },
+  rowCompact: { flexDirection: 'column', alignItems: 'stretch' },
+  grayBtn: { flex: 1, flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0, minHeight: layoutTokens.button.height, borderRadius: layoutTokens.button.radius, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0 },
   grayText: { fontWeight: '900', color: '#111827', textAlign: 'center' },
-  primaryBtn: { flex: 1, flexShrink: 1, minWidth: 140, minHeight: layoutTokens.button.height, borderRadius: layoutTokens.button.radius, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0 },
+  primaryBtn: { flex: 1, flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0, minHeight: layoutTokens.button.height, borderRadius: layoutTokens.button.radius, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0 },
   primaryText: { fontWeight: '900', color: '#FFFFFF', textAlign: 'center' },
+  rowButtonCompact: { flexGrow: 0, width: '100%' },
   disabled: { opacity: 0.65 },
   disabledPrimary: { backgroundColor: '#93C5FD' },
 })

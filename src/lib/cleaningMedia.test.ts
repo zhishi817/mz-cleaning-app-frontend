@@ -48,6 +48,27 @@ test('binds maintenance feedback-media reads to the current work task', () => {
   })
 })
 
+test('binds day-end media reads to the recorded handover owner and date', () => {
+  expect(buildCleaningMediaImageSource('token-1', 'cleaning/day-end-photo.jpg', 'thumbnail', {
+    dayEndUserId: 'cleaner-1',
+    dayEndDate: '2026-08-12',
+  })).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fday-end-photo.jpg&variant=thumbnail&day_end_user_id=cleaner-1&day_end_date=2026-08-12',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+})
+
+test('binds temporary-notice thumbnails and previews to the saved notice record', () => {
+  expect(buildCleaningMediaImageSource('token-1', 'cleaning/notice-photo-1.jpg', 'thumbnail', { guestLuggageId: 'guest-luggage-1' })).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fnotice-photo-1.jpg&variant=thumbnail&guest_luggage_id=guest-luggage-1',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+  expect(buildCleaningMediaImageSource('token-1', 'cleaning/notice-photo-1.jpg', 'preview', { guestLuggageId: 'guest-luggage-1' })).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fnotice-photo-1.jpg&variant=preview&guest_luggage_id=guest-luggage-1',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+})
+
 test('routes a server-owned offline task reference through the authenticated proxy with the exact work task', () => {
   const reference = 'r2://bucket-0123456789abcdef/mzapp/offline-task-photo.jpg'
   expect(buildCleaningMediaImageSource('token-1', reference, 'thumbnail', { accessWorkTaskId: 'cleaning_offline_tasks:task-1' })).toEqual({

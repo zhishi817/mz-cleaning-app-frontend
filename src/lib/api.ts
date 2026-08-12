@@ -1047,6 +1047,11 @@ export type PropertyFeedback = {
   repair_photo_urls?: string[] | null
   repair_notes?: string | null
   project_items?: PropertyFeedbackProject[] | null
+  capabilities?: {
+    can_edit_content: boolean
+    can_delete: boolean
+    can_move_category: boolean
+  }
 }
 
 export type PropertyFeedbackProject = {

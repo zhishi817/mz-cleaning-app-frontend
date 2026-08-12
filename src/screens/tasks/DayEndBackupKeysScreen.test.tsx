@@ -1,5 +1,5 @@
 import React from 'react'
-import { Alert } from 'react-native'
+import { Alert, Image } from 'react-native'
 import { fireEvent, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 
@@ -121,11 +121,50 @@ test('retryable timeout saves day-end section as offline draft', async () => {
     </I18nProvider>,
   )
 
-  await waitFor(() => expect(ui.getByText('已上传')).toBeTruthy())
+  await waitFor(() => expect(ui.getByText('已上传，待提交关联')).toBeTruthy())
   fireEvent.press(ui.getByText('保存备用钥匙照片'))
 
   await waitFor(() => {
     expect(queue.saveDayEndHandoverDraft).toHaveBeenCalled()
     expect(alertSpy).toHaveBeenCalledWith('确定', '已离线保存，网络恢复后可再次保存')
   })
+})
+
+test('new day-end photos keep the durable local preview until the handover record is saved', async () => {
+  mockAuthState.user = { id: 'cleaner-1', username: 'cleaner-a', role: 'cleaner', roles: ['cleaner'] as string[] }
+  const imagePicker = require('expo-image-picker') as { launchCameraAsync: jest.Mock }
+  const api = require('../../lib/api') as { uploadCleaningMedia: jest.Mock }
+  const queue = require('../../lib/dayEndHandoverQueue') as { persistDayEndDraftPhoto: jest.Mock }
+  imagePicker.launchCameraAsync.mockResolvedValue({
+    canceled: false,
+    assets: [{ uri: 'file:///picked-day-end.jpg', fileName: 'day-end.jpg', mimeType: 'image/jpeg' }],
+  })
+  queue.persistDayEndDraftPhoto.mockResolvedValue({
+    id: 'key-local-1',
+    uri: 'file:///private/day-end-key.jpg',
+    captured_at: '2026-08-12T01:00:00.000Z',
+    uploaded_url: null,
+    watermark_text: 'cleaner-a 日终交接-备用钥匙',
+  })
+  api.uploadCleaningMedia.mockResolvedValue({ key: 'cleaning/day-end-key.jpg', url: 'https://example.com/day-end-key.jpg' })
+  const Screen = require('./DayEndBackupKeysScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <Screen
+        navigation={{ push: jest.fn(), goBack: jest.fn() } as any}
+        route={{ key: 'day-end-local-preview', name: 'DayEndBackupKeys', params: { date: '2026-08-12', targetRoles: ['cleaning'], taskRoomCodes: ['MQ101'] } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByText('1. 备用钥匙照片')).toBeTruthy())
+  fireEvent.press(ui.getByText('拍备用钥匙'))
+
+  await waitFor(() => expect(api.uploadCleaningMedia).toHaveBeenCalledWith(
+    'local:test',
+    expect.objectContaining({ uri: 'file:///private/day-end-key.jpg' }),
+    expect.objectContaining({ purpose: 'backup_key_return', media_id: 'key-local-1' }),
+  ))
+  await waitFor(() => expect(ui.getByText('已上传，待提交关联')).toBeTruthy())
+  expect(ui.UNSAFE_getAllByType(Image).map((node) => node.props.source)).toContainEqual({ uri: 'file:///private/day-end-key.jpg' })
 })

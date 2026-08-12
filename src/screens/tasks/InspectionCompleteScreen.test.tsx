@@ -1,5 +1,5 @@
 import React from 'react'
-import { Alert } from 'react-native'
+import { Alert, StyleSheet } from 'react-native'
 import { fireEvent, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 
@@ -157,6 +157,16 @@ test('password-only access video completion does not require inspection panel ba
     expect(ui.queryByText('进入检查与补充')).toBeNull()
     expect(ui.getByText(/视频文件已上传/)).toBeTruthy()
   })
+
+  for (const testID of ['inspection-complete-upload-video', 'inspection-complete-submit']) {
+    expect(StyleSheet.flatten(ui.getByTestId(testID).props.style)).toEqual(expect.objectContaining({
+      flex: 1,
+      flexGrow: 1,
+      flexShrink: 1,
+      flexBasis: 0,
+      minWidth: 0,
+    }))
+  }
 
   fireEvent.press(ui.getByText('改密码完成'))
 

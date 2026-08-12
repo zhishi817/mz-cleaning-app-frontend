@@ -12,6 +12,12 @@ export type ManagerDailyTaskPhotoLoadIssue = {
   retryable: boolean
 }
 
+export type ManagerGuestLuggagePhotoDisplayItem = {
+  remoteReference: string
+  localUri: string | null
+  guestLuggageId: string | null
+}
+
 const PHOTO_SOURCE_LABEL: Record<ManagerDailyTaskPhotoSource, string> = {
   consumables: '清洁补品照片',
   completion: '清洁完成照片',
@@ -51,6 +57,34 @@ export function managerDailyTaskPhotoLoadIssue(
     message,
     retryable: !!error?.retryable || status === 0 || status >= 500,
   }
+}
+
+/**
+ * A temporary-notice upload is not readable through the authenticated proxy
+ * until its enclosing notice is saved. Preserve the picker URI for that
+ * transitional state; only saved references receive the notice read context.
+ */
+export function managerGuestLuggagePhotoDisplayItems(
+  remoteReferences: unknown,
+  localPreviewByReference: Record<string, string | null | undefined> | null | undefined,
+  savedNoticeId: unknown,
+): ManagerGuestLuggagePhotoDisplayItem[] {
+  const values = Array.isArray(remoteReferences) ? remoteReferences : remoteReferences ? [remoteReferences] : []
+  const seen = new Set<string>()
+  const noticeId = String(savedNoticeId || '').trim() || null
+  const previewByReference = localPreviewByReference || {}
+
+  return values.flatMap((value) => {
+    const remoteReference = String(value || '').trim()
+    if (!remoteReference || seen.has(remoteReference)) return []
+    seen.add(remoteReference)
+    const localUri = String(previewByReference[remoteReference] || '').trim() || null
+    return [{
+      remoteReference,
+      localUri,
+      guestLuggageId: localUri ? null : noticeId,
+    }]
+  })
 }
 
 export function inspectionPhotoTaskIdsFromTask(task: any) {

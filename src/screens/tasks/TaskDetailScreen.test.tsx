@@ -1138,6 +1138,18 @@ test('offline task can be marked done without uploading photos first', async () 
     expect(ui.getByTestId('offline-task-not-complete')).toBeTruthy()
   })
 
+  for (const testID of ['offline-task-complete', 'offline-task-not-complete']) {
+    const style = ui.getByTestId(testID).props.style
+    const resolvedStyle = typeof style === 'function' ? style({ pressed: false }) : style
+    expect(StyleSheet.flatten(resolvedStyle)).toEqual(expect.objectContaining({
+      flex: 1,
+      flexGrow: 1,
+      flexShrink: 1,
+      flexBasis: 0,
+      minWidth: 0,
+    }))
+  }
+
   fireEvent.press(ui.getByText('标记完成'))
 
   await waitFor(() => {

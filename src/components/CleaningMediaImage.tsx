@@ -16,7 +16,10 @@ type Props = Omit<ImageProps, 'source'> & {
   variant?: CleaningMediaImageVariant
   accessTaskId?: string | null
   accessWorkTaskId?: string | null
+  guestLuggageId?: string | null
   offlineWorkTaskMedia?: boolean
+  dayEndUserId?: string | null
+  dayEndDate?: string | null
 }
 
 export default function CleaningMediaImage({
@@ -28,7 +31,10 @@ export default function CleaningMediaImage({
   variant = 'thumbnail',
   accessTaskId,
   accessWorkTaskId,
+  guestLuggageId,
   offlineWorkTaskMedia,
+  dayEndUserId,
+  dayEndDate,
   onError,
   ...imageProps
 }: Props) {
@@ -54,8 +60,8 @@ export default function CleaningMediaImage({
     thumbnailFailed,
   })
   const selectedSource = useMemo(
-    () => buildCleaningMediaImageSource(token, selected.reference, variant, { accessTaskId, accessWorkTaskId, offlineWorkTaskMedia }),
-    [accessTaskId, accessWorkTaskId, offlineWorkTaskMedia, selected.reference, token, variant],
+    () => buildCleaningMediaImageSource(token, selected.reference, variant, { accessTaskId, accessWorkTaskId, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }),
+    [accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, offlineWorkTaskMedia, selected.reference, token, variant],
   )
 
   useEffect(() => {

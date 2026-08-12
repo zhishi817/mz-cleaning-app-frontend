@@ -479,6 +479,7 @@ function taskKindLabel(kind: string) {
   if (s === 'execution') return '执行'
   if (s === 'maintenance') return '维修'
   if (s === 'deep_cleaning') return '深清'
+  if (s === 'daily_necessities') return '日用品'
   if (s === 'offline') return '线下'
   if (s) return s
   return '任务'

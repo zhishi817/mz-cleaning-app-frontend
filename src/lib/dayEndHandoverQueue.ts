@@ -72,19 +72,6 @@ function deleteLocalFile(uri: string) {
   try { new File(localUri).delete() } catch {}
 }
 
-function deleteUploadedDraftFiles(draft: DayEndHandoverDraft) {
-  const allPhotos = [
-    ...(draft.key_items || []),
-    ...(draft.return_wash_items || []),
-    ...(draft.warehouse_key_items || []),
-    ...(draft.consumable_items || []),
-    ...((draft.reject_items || []).flatMap((item) => item.photos || [])),
-  ]
-  for (const item of allPhotos) {
-    if (String(item.uploaded_url || '').trim()) deleteLocalFile(item.uri)
-  }
-}
-
 function normalizeDraft(raw: any): DayEndHandoverDraft | null {
   if (!raw || typeof raw !== 'object') return null
   return {
@@ -236,7 +223,6 @@ export async function processDayEndHandoverQueue(token: string) {
         }
         drafts[k] = nextDraft
         await saveAllDrafts(drafts)
-        deleteUploadedDraftFiles(nextDraft)
 
         const payload = {
           date: nextDraft.date,
