@@ -42,12 +42,13 @@
 - Base: `origin/Dev@94b75a81c2a321f2ee44d9c197bf43b0f2b68733`; fetched at `2026-08-12T16:32:37+10:00`.
 - Candidate patch SHA-256: `6c6d4ed389a869dd63c074dcdc2942c6197a9e7f42f8a9435d4565aa68cedaa1`, excluding `docs/change-release-ledger.md`.
 - Commit SHA: `ec95bf316d9f483f3dbb628295e62cb699ef6c98` (candidate content commit; final audit head is emitted by the release report).
+- Remote branch: `origin/codex/release-crl-20260812-001-007@ed694512e951d4481b92d6f27aeb3925626a94ad`; pushed at `2026-08-12T17:52:03+10:00`.
 - Dependencies: paired root `CRL-20260812-001`, `CRL-20260812-002`, `CRL-20260812-003`, `CRL-20260812-006`, `CRL-20260812-007`, `CRL-20260812-008`, `CRL-20260812-009`; all base-range mobile paths are attributed to the selected CRLs.
 - Required validation: PASS — exact PR range and working-tree ledger audits, 18 ledger regression tests, plus the previously rerun complete `npm run check:ci` gate (typecheck, lint 0 errors / 109 existing warnings, button audit and 56 suites / 293 tests).
 - Shared-hunk review: PASS — staged CI files belong only to `CRL-20260812-009`; the complete candidate has no unselected changed path.
 - Generated-file / secret review: PASS — no generated outputs, environment files, credentials, tokens, media objects or production data are staged.
 - Independent review: GO for `commit` — paired root resolver P1 was repaired and independently re-reviewed; this exact mobile fingerprint remained unchanged, with no generated file or secret risk. P2: this repository's governance references a missing review document; it does not block this CI repair.
-- Technical state: `committed`.
+- Technical state: `pushed`.
 - User authorization: `selected-for-commit`; evidence: user asked to repair the root/mobile PR merge gates.
 - Action conclusion: `GO` for commit completed. Push requires a new explicit approval bound to the final branch head.
 
@@ -68,7 +69,7 @@
 - Technical state: `committed`.
 - User authorization: `approved-for-push`; evidence: user replied “授权” to push mobile content commit `ec95bf316d9f483f3dbb628295e62cb699ef6c98` (review head `84a0a10bc71bb7b2e968e469ae642959df52c258`) to this branch and authorized this final authorization receipt.
 - Independent review: GO for `push` — independent exact-range review matched base, content commit and fingerprint; all 27 paths are selected, with no generated or sensitive files. P2: this repository's governance references a missing review document; it does not block this CI repair push.
-- Action conclusion: `GO` for push; all exact-range gates are recorded and the user granted explicit authorization for this content commit and branch.
+- Action conclusion: `GO` for push completed; remote branch SHA was verified after the fast-forward push.
 
 ### Risks / Release Notes
 
