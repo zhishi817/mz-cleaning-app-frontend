@@ -85,6 +85,20 @@ test('历史线下任务照片的缩略图和预览共用认证代理及精确�
   })
 })
 
+test('临时通知照片的缩略图和预览共用认证代理及通知上下文', async () => {
+  const ui = render(<CleaningMediaPreview token="token-1" reference="cleaning/notice-photo-1.jpg" guestLuggageId="guest-luggage-1" testID="photo" />)
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+  expect(ui.getByTestId('photo-thumbnail').props.source).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fnotice-photo-1.jpg&variant=thumbnail&guest_luggage_id=guest-luggage-1',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+  expect(ui.getByTestId('photo-preview').props.source).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fnotice-photo-1.jpg&variant=preview&guest_luggage_id=guest-luggage-1',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+})
+
 test('403 是权限终态，不展示自动或手动重试入口', async () => {
   mockedLoadCleaningMediaImage.mockResolvedValue({
     uri: null,

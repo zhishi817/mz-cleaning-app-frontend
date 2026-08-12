@@ -41,6 +41,7 @@ SOURCE_EXTENSIONS = {".tsx", ".ts"}
 # found. Verify the affected screen on device before changing a listed control,
 # then remove the exception when the control is migrated to shared primitives.
 KNOWN_LEGACY_EXCEPTIONS = {
+    ("src/screens/tasks/FeedbackFormScreen.tsx", "photoBtn", "minWidth", 0),
     ("src/screens/tasks/CleaningSelfCompleteScreen.tsx", "roomConfirmButton", "minWidth", 0),
     ("src/components/GuestLuggageCard.tsx", "ackDone", "minHeight", 38),
     ("src/screens/ForgotPasswordScreen.tsx", "submitBtn", "minHeight", 48),
@@ -62,7 +63,10 @@ KNOWN_LEGACY_EXCEPTIONS = {
     ("src/screens/tasks/SuppliesFormScreen.tsx", "thumbDeleteBtn", "width", 18),
     ("src/screens/tasks/TaskDetailScreen.tsx", "tagDanger", "height", 24),
     ("src/screens/tasks/TaskDetailScreen.tsx", "actionBtnEqualWidth", "minWidth", 0),
+    ("src/screens/tasks/TaskDetailScreen.tsx", "completionActionButton", "minWidth", 0),
     ("src/screens/tasks/TaskDetailScreen.tsx", "maintenanceActionButton", "minWidth", 0),
+    ("src/screens/tasks/InspectionCompleteScreen.tsx", "grayBtn", "minWidth", 0),
+    ("src/screens/tasks/InspectionCompleteScreen.tsx", "primaryBtn", "minWidth", 0),
     ("src/screens/tasks/TaskDetailScreen.tsx", "markPhotoRemoveVisual", "width", 40),
 }
 

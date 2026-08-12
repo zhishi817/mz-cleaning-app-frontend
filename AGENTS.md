@@ -27,13 +27,23 @@ This repository is independent from the root MZ Property System repository. Do n
 ## Change Ledger And Release
 
 - Every repository mutation needs a granular entry in `docs/change-release-ledger.md` with exact files, behavior, validation, risks, dependencies, rollback, sensitive-data review, and Git state.
-- Run `python3 scripts/audit_change_release_ledger.py` after updating the ledger. It verifies current working-tree path coverage; Phase 2 will add base/head PR coverage.
+- Run `python3 scripts/audit_change_release_ledger.py` after updating the ledger. It verifies current working-tree path coverage; a release attempt additionally requires the exact base/head range evidence defined below.
+- The audit also compares the local ledger with fetched `origin/Dev`: every remote CRL must remain present, and a shared ID must retain its title, Request, Outcome, Implementation, Files / Areas, and Impact / Dependencies. A mismatch is `BLOCKED`; assign a new CRL and keep only a dated reconciliation receipt on the historical unit.
 - Preserve concurrent changes. Never reset, clean, broad-stage, or use `git add .` / `git add -A`. Stage only reviewed files or hunks.
 - Before commit, push, deployment, or EAS release, use an independent read-only review of the complete diff, ledger, tests, secret risk, and production-write risk. Do not push without explicit authorization.
 
-## Completion And Delivery Claims
+### Release Decision Contract
 
-- Do not report “已修复”, “已完成”, “已交付”, “已发布” or “已上线” without naming the evidence stage. Use only the supported state: source fixed, local regression passed, committed, pushed to branch, merged into `Dev`, backend deployed, OTA published, or device verified.
-- A local mobile diff, test result, commit, push, PR, and `Dev` merge are separate facts. A user-visible cross-layer repair is not delivered until its compatible backend version (when required), OTA/build/channel, and declared device regression are all recorded.
-- End every implementation or release report with the CRL ID, repository, commit SHA or `not committed`, remote branch/SHA or `not pushed`, PR/merge state or `not created`/`not merged`, deployment/OTA state or `not deployed`/`not published`, and device/production verification or `not run`.
-- When asked whether a repair was committed, pushed, or released, re-check and report the exact repository evidence; never infer later delivery stages from local source, a ledger entry, or another repository.
+- This mobile repository is independent. A root CRL, root branch, root review, or root test is never mobile release evidence unless this ledger records the exact related root CRL/SHA as a dependency.
+- A CRL describes an implementation change. A **Release Attempt** records one exact release attempt and must bind repository, selected CRLs, target action, base ref/SHA and fetch time, candidate patch SHA-256, candidate content commit SHA when one exists, branch, dependencies, review/validation evidence, authorization, and remote evidence. The report command, not a self-referential ledger line, records the exact audit `head` SHA.
+- Keep these facts separate:
+  - technical state: `candidate`, `verified`, `committed`, `pushed`, `merged`, or `deployed`;
+  - user authorization: `not-selected`, `selected-for-commit`, or `approved-for-push`;
+  - conclusion for a stated action: `GO`, `BLOCKED`, or `NOT VERIFIED`.
+- `NOT VERIFIED` means evidence is absent. `BLOCKED` means a concrete gate failed, including stale/invalid base, scope collision, range mismatch, failed test, uncovered path, generated-file issue, or sensitive-information risk. Do not call either situation “基本可以推”.
+- `commit-ready` requires `verified`, `selected-for-commit`, and `GO` for commit. `push-ready` requires `committed`, a passing exact `base...head` range audit, `approved-for-push`, and `GO` for push. A selection never authorizes push. Changes to CRLs, base SHA, commit SHA, or branch invalidate prior push approval.
+- Candidate patch SHA-256 is calculated from selected `base...head` content excluding `docs/change-release-ledger.md`; the exact range audit still includes the ledger. A recorded candidate content commit must be inside the reported range. This avoids impossible self-reference when a commit records its own hash.
+- When asked “哪些更新可以推送”, report only: `可供选择的候选`、`已选择但仍被阻塞`、`已获授权且可提交`、`已提交、已批准且可推送`、`已推送`、`不在本次范围`. An uninspected worktree or `codex/*` branch is `NOT VERIFIED`, not absent.
+- After user scope selection, fetch and record `origin/Dev@SHA`, then prepare the attempt in a clean mobile release worktree based on that SHA. Do not pull, rebase, stash, reset, clean, or derive a release from the mixed development worktree. Only selected CRL files or verified hunks may enter the release worktree; it must be clean after its commit.
+- Use `docs/codex-release-review.md` for a pre-commit independent review of the staged candidate fingerprint. The reviewer `GO` authorizes only the stated commit action; after commit, the range fingerprint must match before a separate explicit user push approval can be used.
+- After a candidate content commit exists, run the read-only exact attempt report with `python3 scripts/audit_change_release_ledger.py --release-report --repo mobile --base <origin-dev-sha> --head <audit-head-sha> --crl <CRL-ID> --format markdown`. It never fetches or changes Git/ledger state; `0` is `GO`, `1` is `BLOCKED`, and `2` is `NOT VERIFIED`. Use `--format json` only for the same evidence in machine-readable form.

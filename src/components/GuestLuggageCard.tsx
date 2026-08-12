@@ -1,20 +1,11 @@
 import React, { useState } from 'react'
 import { Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { API_BASE_URL } from '../config/env'
 import { acknowledgeGuestLuggageNotice, type GuestLuggageNotice } from '../lib/api'
 import { hairline, moderateScale } from '../lib/scale'
 import { layoutTokens } from '../lib/theme'
 import CleaningMediaImage from './CleaningMediaImage'
 import CleaningMediaPreview from './CleaningMediaPreview'
-
-function absoluteUrl(rawUrl: string) {
-  const value = String(rawUrl || '').trim()
-  if (!value || /^https?:\/\//i.test(value)) return value
-  if (value.startsWith('//')) return `https:${value}`
-  const base = String(API_BASE_URL || '').trim().replace(/\/+$/g, '').replace(/\/auth\/?$/g, '').replace(/\/api\/?$/g, '')
-  return value.startsWith('/') ? `${base}${value}` : value
-}
 
 function AckGroup(props: { label: string; items: GuestLuggageNotice['acknowledgements']['cleaners'] }) {
   if (!props.items.length) return null
@@ -84,11 +75,12 @@ export default function GuestLuggageCard(props: {
         {photoUrls.length ? (
           <View style={styles.photos}>
             {photoUrls.map((url, index) => (
-              <Pressable key={`${url}-${index}`} onPress={() => setPreviewUrl(absoluteUrl(url))} style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}>
+              <Pressable testID={`guest-luggage-photo-${index}`} key={`${url}-${index}`} onPress={() => setPreviewUrl(url)} style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}>
                 <CleaningMediaImage
                   token={props.token}
                   localUri={String(url).startsWith('file://') ? url : null}
                   remoteReference={url}
+                  guestLuggageId={notice.id}
                   style={styles.photo}
                 />
               </Pressable>
@@ -124,7 +116,7 @@ export default function GuestLuggageCard(props: {
 
       <Modal visible={!!previewUrl} transparent animationType="fade" onRequestClose={() => setPreviewUrl(null)}>
         <Pressable style={styles.previewBackdrop} onPress={() => setPreviewUrl(null)}>
-          {previewUrl ? <CleaningMediaPreview token={props.token} reference={previewUrl} style={styles.previewImage} /> : null}
+          {previewUrl ? <CleaningMediaPreview token={props.token} reference={previewUrl} guestLuggageId={notice.id} style={styles.previewImage} /> : null}
         </Pressable>
       </Modal>
     </>

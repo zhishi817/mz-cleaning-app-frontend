@@ -29,18 +29,34 @@ export function cleaningMediaReference(upload: { key?: string | null; url?: stri
 
 export type CleaningMediaImageVariant = 'original' | 'thumbnail' | 'preview'
 
-function cleaningMediaProxyUrl(reference: string, variant: CleaningMediaImageVariant = 'original', accessTaskId?: string | null, accessWorkTaskId?: string | null) {
+type CleaningMediaAccessOptions = {
+  accessTaskId?: string | null
+  accessWorkTaskId?: string | null
+  guestLuggageId?: string | null
+  offlineWorkTaskMedia?: boolean
+  dayEndUserId?: string | null
+  dayEndDate?: string | null
+}
+
+function cleaningMediaProxyUrl(reference: string, variant: CleaningMediaImageVariant = 'original', options?: CleaningMediaAccessOptions) {
   const base = normalizeBase(API_BASE_URL)
   const apiRoot = base.replace(/\/auth\/?$/g, '')
   if (!apiRoot) return ''
   const key = normalizePrivateFeedbackObjectKey(reference)
   const query = key ? `key=${encodeURIComponent(key)}` : `url=${encodeURIComponent(reference)}`
   const variantQuery = variant === 'original' ? '' : `&variant=${variant}`
-  const taskId = cleanText(accessTaskId)
+  const taskId = cleanText(options?.accessTaskId)
   const taskQuery = taskId ? `&source_task_id=${encodeURIComponent(taskId)}` : ''
-  const workTaskId = cleanText(accessWorkTaskId)
+  const workTaskId = cleanText(options?.accessWorkTaskId)
   const workTaskQuery = workTaskId ? `&work_task_id=${encodeURIComponent(workTaskId)}` : ''
-  return `${apiRoot}/cleaning-app/media/image?${query}${variantQuery}${taskQuery}${workTaskQuery}`
+  const guestLuggage = cleanText(options?.guestLuggageId)
+  const guestLuggageQuery = guestLuggage ? `&guest_luggage_id=${encodeURIComponent(guestLuggage)}` : ''
+  const dayEndUserId = cleanText(options?.dayEndUserId)
+  const dayEndDate = cleanText(options?.dayEndDate)
+  const dayEndQuery = dayEndUserId && dayEndDate
+    ? `&day_end_user_id=${encodeURIComponent(dayEndUserId)}&day_end_date=${encodeURIComponent(dayEndDate)}`
+    : ''
+  return `${apiRoot}/cleaning-app/media/image?${query}${variantQuery}${taskQuery}${workTaskQuery}${guestLuggageQuery}${dayEndQuery}`
 }
 
 function isLegacyPrivateR2Url(value: string) {
@@ -62,7 +78,7 @@ export function buildCleaningMediaImageSource(
   token: string | null | undefined,
   rawReference: any,
   variant: CleaningMediaImageVariant = 'original',
-  options?: { accessTaskId?: string | null; accessWorkTaskId?: string | null; offlineWorkTaskMedia?: boolean },
+  options?: CleaningMediaAccessOptions,
 ) {
   const reference = cleanText(rawReference)
   if (!reference) return { uri: '' }
@@ -70,7 +86,7 @@ export function buildCleaningMediaImageSource(
   const forceOfflineWorkTaskProxy = Boolean(options?.offlineWorkTaskMedia && cleanText(options?.accessWorkTaskId) && /^https:\/\//i.test(reference))
   if (key || isLegacyPrivateR2Url(reference) || isServerManagedMzappTaskReference(reference) || forceOfflineWorkTaskProxy) {
     return {
-      uri: cleaningMediaProxyUrl(key || reference, variant, options?.accessTaskId, options?.accessWorkTaskId),
+      uri: cleaningMediaProxyUrl(key || reference, variant, options),
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     }
   }

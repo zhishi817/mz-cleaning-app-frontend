@@ -29,6 +29,7 @@ import { findWorkTaskItemByAnyId, patchWorkTaskItem, refreshWorkTasksFromServer,
 import {
   completionPhotoTaskIdsFromTask,
   inspectionPhotoTaskIdsFromTask,
+  managerGuestLuggagePhotoDisplayItems,
   mergeManagerCompletionPhotoItems,
   mergeManagerLivingRoomPhotoUrls,
   managerDailyTaskPhotoLoadIssue,
@@ -293,6 +294,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const [guestNote, setGuestNote] = useState('')
   const [luggageNote, setLuggageNote] = useState('')
   const [luggagePhotoUrls, setLuggagePhotoUrls] = useState<string[]>([])
+  const [luggageLocalPreviewByUrl, setLuggageLocalPreviewByUrl] = useState<Record<string, string>>({})
   const [luggageSaving, setLuggageSaving] = useState(false)
   const [luggageUploading, setLuggageUploading] = useState(false)
   const [keysRequired, setKeysRequired] = useState(1)
@@ -339,6 +341,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     syncedLuggageVersionRef.current = syncVersion
     setLuggageNote(String((task as any)?.guest_luggage?.note || '').trim())
     setLuggagePhotoUrls(normalizeUrlList((task as any)?.guest_luggage?.photo_urls).slice(0, 3))
+    setLuggageLocalPreviewByUrl({})
   }, [task?.id, (task as any)?.guest_luggage?.version])
 
   useEffect(() => {
@@ -627,16 +630,25 @@ export default function ManagerDailyTaskScreen(props: Props) {
           })
       if (picked.canceled || !picked.assets?.length) return
       setLuggageUploading(true)
-      const uploaded: string[] = []
+      const uploaded: { remoteReference: string; localUri: string }[] = []
       for (const asset of picked.assets.slice(0, remaining)) {
         const uri = String(asset.uri || '').trim()
         if (!uri) continue
         const name = String(asset.fileName || uri.split('/').pop() || `guest-luggage-${Date.now()}.jpg`)
         const mimeType = String(asset.mimeType || 'image/jpeg')
         const result = await uploadMzappMedia(token, { uri, name, mimeType }, { purpose: 'guest_luggage' })
-        uploaded.push(result.url)
+        const remoteReference = String(result.url || '').trim()
+        if (remoteReference) uploaded.push({ remoteReference, localUri: uri })
       }
-      if (uploaded.length) setLuggagePhotoUrls((prev) => uniqueTextList([...prev, ...uploaded]).slice(0, 3))
+      if (uploaded.length) {
+        const references = uploaded.map((item) => item.remoteReference)
+        setLuggagePhotoUrls((prev) => uniqueTextList([...prev, ...references]).slice(0, 3))
+        setLuggageLocalPreviewByUrl((prev) => {
+          const next = { ...prev }
+          for (const item of uploaded) next[item.remoteReference] = item.localUri
+          return next
+        })
+      }
     } catch (error: any) {
       Alert.alert('上传失败', String(error?.message || '请稍后重试'))
     } finally {
@@ -660,6 +672,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
       await patchWorkTaskItem(task.id, { guest_luggage: result.guest_luggage } as any)
       setLuggageNote(String(result.guest_luggage.note || ''))
       setLuggagePhotoUrls(result.guest_luggage.photo_urls || [])
+      setLuggageLocalPreviewByUrl({})
       Alert.alert('已保存', '已通知相关清洁、检查、admin 和线下经理。')
     } catch (error: any) {
       Alert.alert('保存失败', String(error?.message || '请稍后重试'))
@@ -677,6 +690,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
       await patchWorkTaskItem(task.id, { guest_luggage: null } as any)
       setLuggageNote('')
       setLuggagePhotoUrls([])
+      setLuggageLocalPreviewByUrl({})
       Alert.alert('已移除', '当天任务临时通知已移除。')
     } catch (error: any) {
       Alert.alert('移除失败', String(error?.message || '请稍后重试'))
@@ -712,6 +726,11 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const canEditGeneralInfo = canEditManagerFields && !saving && !isHistoricalTask
   const canEditLuggage = hasAnyRole(user, ['customer_service', 'admin', 'offline_manager']) && isTodayTask
   const canEditKeysOnly = canEditManagerFields && !saving
+  const luggagePhotoItems = managerGuestLuggagePhotoDisplayItems(
+    luggagePhotoUrls,
+    luggageLocalPreviewByUrl,
+    (task as any)?.guest_luggage?.id,
+  )
 
   const uncleanPhotos = inspectionItems.filter((x) => x.area === 'unclean')
   const roomPhotoAreas = ['living', 'sofa', 'bedroom', 'kitchen'] as const
@@ -947,12 +966,25 @@ export default function ManagerDailyTaskScreen(props: Props) {
             multiline
           />
           <View style={styles.luggagePhotos}>
-            {luggagePhotoUrls.map((url, index) => (
-              <View key={`${url}-${index}`} style={styles.luggagePhotoItem}>
-                <CleaningMediaPreview token={token} reference={url} style={styles.luggagePhoto} />
+            {luggagePhotoItems.map((photo, index) => (
+              <View key={`${photo.remoteReference}-${index}`} style={styles.luggagePhotoItem}>
+                <CleaningMediaPreview
+                  token={token}
+                  localUri={photo.localUri}
+                  reference={photo.remoteReference}
+                  guestLuggageId={photo.guestLuggageId}
+                  style={styles.luggagePhoto}
+                />
                 {canEditLuggage ? (
                   <Pressable
-                    onPress={() => setLuggagePhotoUrls((prev) => prev.filter((_, itemIndex) => itemIndex !== index))}
+                    onPress={() => {
+                      setLuggagePhotoUrls((prev) => prev.filter((_, itemIndex) => itemIndex !== index))
+                      setLuggageLocalPreviewByUrl((prev) => {
+                        const next = { ...prev }
+                        delete next[photo.remoteReference]
+                        return next
+                      })
+                    }}
                     style={({ pressed }) => [styles.luggageRemovePhoto, pressed ? styles.pressed : null]}
                   >
                     <Ionicons name="close-circle" size={moderateScale(22)} color="#DC2626" />
@@ -1005,6 +1037,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
           ) : null}
           <GuestLuggageCard
             notice={(task as any)?.guest_luggage || null}
+            token={token}
             showAcknowledgementSummary
             compact
           />

@@ -21,6 +21,7 @@ import {
   type KeyUploadQueueItem,
 } from '../../lib/keyUploadQueue'
 import { hairline, isCompactWidth, moderateScale } from '../../lib/scale'
+import { layoutTokens } from '../../lib/theme'
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, reconcileActiveWorkTasksAfterLocalPatch, refreshWorkTasksFromServer, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import { appendWorkTaskCompletionPhotos, deleteKeyPhoto, listCleaningAppPropertyCodes, listUsers, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, submitMaintenanceExecutorAction, updateCleaningOfflineTask, updateWorkTaskPhotos, uploadMzappMedia } from '../../lib/api'
@@ -72,6 +73,7 @@ function taskKindLabel(kind: string) {
   if (s === 'execution') return '执行'
   if (s === 'maintenance') return '维修'
   if (s === 'deep_cleaning') return '深清'
+  if (s === 'daily_necessities') return '日用品'
   if (s === 'offline') return '线下'
   if (s) return s
   return '任务'
@@ -1331,7 +1333,7 @@ export default function TaskDetailScreen(props: Props) {
   const renderTaskActionButton = (action: WorkTaskAvailableAction) => {
     const disabledReason = action.disabled_reason ? actionDisabledReasonText(action.disabled_reason) : ''
     const checkedOutVisual = action.id === 'mark_guest_checkout' && isCheckedOut
-    const isEqualWidthAction = action.id === 'upload_key_photo' || action.id === 'fill_supplies'
+    const isEqualWidthAction = action.id === 'upload_key_photo' || action.id === 'fill_supplies' || action.id === 'complete_cleaning'
     const isFullWidthAction = action.id === 'report_issue'
     const localDisabled =
       (action.id === 'upload_key_photo' && (keyUploading || keyPhotoEffectiveState !== 'missing'))
@@ -1908,7 +1910,7 @@ export default function TaskDetailScreen(props: Props) {
                       onMarkDone()
                     }}
                     disabled={marking || isAlreadyDone}
-                    style={({ pressed }) => [isOfflineTask ? styles.compactPrimaryBtn : styles.markPrimary, !isOfflineTask && isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking || isAlreadyDone ? styles.markBtnDisabled : null]}
+                    style={({ pressed }) => [isOfflineTask ? styles.compactPrimaryBtn : styles.markPrimary, styles.completionActionButton, !isOfflineTask && isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking || isAlreadyDone ? styles.markBtnDisabled : null]}
                   >
                     <Text style={styles.markPrimaryText}>标记完成</Text>
                   </Pressable>
@@ -1927,7 +1929,7 @@ export default function TaskDetailScreen(props: Props) {
                     testID={isOfflineTask ? 'offline-task-not-complete' : undefined}
                     onPress={() => setShowUnfinished(v => !v)}
                     disabled={marking}
-                    style={({ pressed }) => [isOfflineTask ? styles.compactSecondaryBtn : [styles.markBtn, { flex: 1, marginTop: 0 }], !isOfflineTask && isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}
+                    style={({ pressed }) => [isOfflineTask ? styles.compactSecondaryBtn : [styles.markBtn, { marginTop: 0 }], styles.completionActionButton, !isOfflineTask && isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}
                   >
                     <Text style={isOfflineTask ? styles.compactSecondaryText : styles.markBtnText}>未完成</Text>
                   </Pressable>
@@ -2140,7 +2142,7 @@ const styles = StyleSheet.create({
   compactActionBtnDisabled: { borderColor: '#E5E7EB', backgroundColor: '#F3F4F6' },
   compactActionText: { color: '#2563EB', fontSize: 12, fontWeight: '900' },
   compactActionTextDisabled: { color: '#9CA3AF' },
-  compactCompletionRow: { marginTop: 14, flexDirection: 'row', gap: 8 },
+  compactCompletionRow: { marginTop: 14, flexDirection: 'row', gap: layoutTokens.button.rowGap },
   compactPrimaryBtn: { flex: 1, minHeight: 44, borderRadius: 10, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 0 },
   compactSecondaryBtn: { flex: 1, minHeight: 44, borderRadius: 10, borderWidth: hairline(), borderColor: '#D1D5DB', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 0 },
   compactSecondaryText: { color: '#4B5563', fontSize: 13, fontWeight: '900' },
@@ -2154,6 +2156,7 @@ const styles = StyleSheet.create({
   markBtnText: { flexShrink: 1, fontWeight: '900', color: '#FFFFFF', fontSize: 13, lineHeight: 17, textAlign: 'center' },
   markPrimary: { flex: 1, flexShrink: 1, minWidth: 128, minHeight: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 0 },
   markPrimaryText: { flexShrink: 1, color: '#FFFFFF', fontWeight: '900', fontSize: 13, lineHeight: 17, textAlign: 'center' },
+  completionActionButton: { flex: 1, flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 },
   maintenanceActionButton: { flex: 1, flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 },
   maintenanceActionButtonCompact: { flexGrow: 0, width: '100%' },
   markBtnDisabled: { backgroundColor: '#E5E7EB' },

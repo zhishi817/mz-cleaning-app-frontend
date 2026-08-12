@@ -10,13 +10,16 @@ type Props = {
   thumbnailReference?: string | null
   accessTaskId?: string | null
   accessWorkTaskId?: string | null
+  guestLuggageId?: string | null
   offlineWorkTaskMedia?: boolean
+  dayEndUserId?: string | null
+  dayEndDate?: string | null
   style?: StyleProp<ViewStyle>
   resizeMode?: ImageProps['resizeMode']
   testID?: string
 }
 
-export default function CleaningMediaPreview({ token, reference, localUri, thumbnailReference, accessTaskId, accessWorkTaskId, offlineWorkTaskMedia, style, resizeMode = 'contain', testID }: Props) {
+export default function CleaningMediaPreview({ token, reference, localUri, thumbnailReference, accessTaskId, accessWorkTaskId, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate, style, resizeMode = 'contain', testID }: Props) {
   const [previewLoaded, setPreviewLoaded] = useState(false)
   const [previewFailed, setPreviewFailed] = useState(false)
   const [thumbnailFailed, setThumbnailFailed] = useState(false)
@@ -29,8 +32,8 @@ export default function CleaningMediaPreview({ token, reference, localUri, thumb
   const [previewNativeFailed, setPreviewNativeFailed] = useState(false)
   const [thumbnailReadFailure, setThumbnailReadFailure] = useState<CleaningMediaReadFailure | null>(null)
   const [previewReadFailure, setPreviewReadFailure] = useState<CleaningMediaReadFailure | null>(null)
-  const thumbnailSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || thumbnailReference || reference, 'thumbnail', { accessTaskId, accessWorkTaskId, offlineWorkTaskMedia }), [accessTaskId, accessWorkTaskId, localUri, offlineWorkTaskMedia, reference, thumbnailReference, token])
-  const previewSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || reference, 'preview', { accessTaskId, accessWorkTaskId, offlineWorkTaskMedia }), [accessTaskId, accessWorkTaskId, localUri, offlineWorkTaskMedia, reference, token])
+  const thumbnailSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || thumbnailReference || reference, 'thumbnail', { accessTaskId, accessWorkTaskId, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }), [accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, localUri, offlineWorkTaskMedia, reference, thumbnailReference, token])
+  const previewSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || reference, 'preview', { accessTaskId, accessWorkTaskId, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }), [accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, localUri, offlineWorkTaskMedia, reference, token])
 
   useEffect(() => {
     setPreviewLoaded(false)
@@ -45,7 +48,7 @@ export default function CleaningMediaPreview({ token, reference, localUri, thumb
     setPreviewNativeFailed(false)
     setThumbnailReadFailure(null)
     setPreviewReadFailure(null)
-  }, [accessTaskId, accessWorkTaskId, localUri, offlineWorkTaskMedia, reference, thumbnailReference, token])
+  }, [accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, localUri, offlineWorkTaskMedia, reference, thumbnailReference, token])
 
   useEffect(() => {
     let active = true

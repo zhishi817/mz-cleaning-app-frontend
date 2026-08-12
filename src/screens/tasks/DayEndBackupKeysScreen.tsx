@@ -4,7 +4,6 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import * as ImagePicker from 'expo-image-picker'
 import { Ionicons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { API_BASE_URL } from '../../config/env'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
@@ -52,20 +51,8 @@ const FALLBACK_LINEN_TYPES: LinenTypeOption[] = [
 let cachedLinenTypeOptions: LinenTypeOption[] | null = null
 let cachedPropertyCodeOptions: Array<{ id: string; code: string }> | null = null
 
-function normalizeBase(raw: string) {
-  return String(raw || '').trim().replace(/\/+$/g, '')
-}
-
-function toAbsoluteUrl(rawUrl: any) {
-  const s = String(rawUrl || '').trim()
-  if (!s) return ''
-  if (/^(https?:|file:|content:|asset-library:|data:|ph:)/i.test(s)) return s
-  const base = normalizeBase(API_BASE_URL)
-  const stripAuth = base.replace(/\/auth\/?$/g, '')
-  const stripApi = stripAuth.replace(/\/api\/?$/g, '')
-  const root = stripApi || stripAuth || base
-  if (!root) return s
-  return `${root}${s.startsWith('/') ? s : `/${s}`}`
+function isLocalDayEndDraftUri(value: string | null | undefined) {
+  return /^file:\/\//i.test(String(value || '').trim())
 }
 
 function makeLocalId(prefix: string) {
@@ -240,7 +227,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
   const [linenTypeOptions, setLinenTypeOptions] = useState<LinenTypeOption[]>(FALLBACK_LINEN_TYPES)
   const [propertyCodeOptions, setPropertyCodeOptions] = useState<Array<{ id: string; code: string }>>([])
   const [draftReady, setDraftReady] = useState(false)
-  const [viewerUrls, setViewerUrls] = useState<string[]>([])
+  const [viewerPhotos, setViewerPhotos] = useState<PhotoItem[]>([])
   const [viewerIndex, setViewerIndex] = useState(0)
   const persistEnabledRef = useRef(false)
   const lastLoadAlertRef = useRef('')
@@ -583,22 +570,22 @@ export default function DayEndBackupKeysScreen(props: Props) {
   }
 
   function openPhotoViewer(items: PhotoItem[], index: number) {
-    const urls = (items || [])
-      .map((item) => toAbsoluteUrl(item.uploaded_url || item.uri))
-      .filter(Boolean)
-    if (!urls.length) return
-    setViewerUrls(urls)
-    setViewerIndex(Math.max(0, Math.min(index, urls.length - 1)))
+    const photos = (items || []).filter((item) => !!String(item.uploaded_url || item.uri || '').trim())
+    if (!photos.length) return
+    const currentId = String(items?.[index]?.id || '').trim()
+    const nextIndex = Math.max(0, photos.findIndex((item) => item.id === currentId))
+    setViewerPhotos(photos)
+    setViewerIndex(nextIndex)
   }
 
   function closePhotoViewer() {
-    setViewerUrls([])
+    setViewerPhotos([])
     setViewerIndex(0)
   }
 
   function movePhotoViewer(delta: number) {
     setViewerIndex((prev) => {
-      const count = viewerUrls.length
+      const count = viewerPhotos.length
       if (!count) return 0
       return (prev + delta + count) % count
     })
@@ -721,8 +708,21 @@ export default function DayEndBackupKeysScreen(props: Props) {
     if (!uri) return
     const capturedAt = new Date().toISOString()
     const watermarkText = buildWatermarkText(kind, capturedAt)
-    const tempId = makeLocalId(kind)
-    const tempItem: PhotoItem = { id: tempId, uri, captured_at: capturedAt, uploaded_url: null, watermark_text: watermarkText }
+    let tempItem: PhotoItem
+    try {
+      tempItem = await persistDayEndDraftPhoto({
+        user_id: currentUserId,
+        date,
+        bucket: kind,
+        source_uri: uri,
+        captured_at: capturedAt,
+        watermark_text: watermarkText,
+      })
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '本地照片保存失败，请重新拍摄'))
+      return
+    }
+    const tempId = tempItem.id
     persistEnabledRef.current = true
     if (kind === 'key') setKeyItems((prev) => [tempItem, ...prev])
     else if (kind === 'return_wash') setReturnWashItems((prev) => [tempItem, ...prev])
@@ -735,10 +735,10 @@ export default function DayEndBackupKeysScreen(props: Props) {
 
     setUploading(true)
     try {
-      const name = String(a.fileName || uri.split('/').pop() || `${kind}-${Date.now()}.jpg`)
+      const name = String(a.fileName || tempItem.uri.split('/').pop() || `${kind}-${Date.now()}.jpg`)
       const mimeType = String(a.mimeType || 'image/jpeg')
       const purpose = kind === 'key' ? 'backup_key_return' : kind === 'return_wash' ? 'return_wash_linen' : kind === 'warehouse_key' ? 'warehouse_key_return' : kind === 'consumable' ? 'remaining_consumables' : 'reject_linen_return'
-      const up = await uploadCleaningMedia(token, { uri, name, mimeType }, { purpose, captured_at: capturedAt, watermark: '1', watermark_text: watermarkText })
+      const up = await uploadCleaningMedia(token, { uri: tempItem.uri, name, mimeType }, { purpose, media_id: tempId, captured_at: capturedAt, watermark: '1', watermark_text: watermarkText })
       const remoteReference = cleaningMediaReference(up)
       if (kind === 'key') {
         setKeyItems((prev) => {
@@ -770,28 +770,12 @@ export default function DayEndBackupKeysScreen(props: Props) {
       }
       promptContinueCapture(kind, rejectItemId)
     } catch (e: any) {
-      if (!isNetworkishError(e)) {
-        if (kind === 'key') setKeyItems((prev) => prev.filter((x) => x.id !== tempId))
-        else if (kind === 'return_wash') setReturnWashItems((prev) => prev.filter((x) => x.id !== tempId))
-        else if (kind === 'warehouse_key') setWarehouseKeyItems((prev) => prev.filter((x) => x.id !== tempId))
-        else if (kind === 'consumable') setConsumableItems((prev) => prev.filter((x) => x.id !== tempId))
-        else if (rejectItemId) updateRejectPhotos(rejectItemId, (photos) => photos.filter((x) => x.id !== tempId))
-        Alert.alert(t('common_error'), String(e?.message || '上传失败'))
-        return
-      }
-      try {
-        const queued = await persistDayEndDraftPhoto({ user_id: currentUserId, date, bucket: kind, source_uri: uri, captured_at: capturedAt, watermark_text: watermarkText })
-        if (kind === 'key') setKeyItems((prev) => prev.map((x) => (x.id === tempId ? queued : x)))
-        else if (kind === 'return_wash') setReturnWashItems((prev) => prev.map((x) => (x.id === tempId ? queued : x)))
-        else if (kind === 'warehouse_key') setWarehouseKeyItems((prev) => prev.map((x) => (x.id === tempId ? queued : x)))
-        else if (kind === 'consumable') setConsumableItems((prev) => prev.map((x) => (x.id === tempId ? queued : x)))
-        else if (rejectItemId) {
-          updateRejectPhotos(rejectItemId, (photos) => photos.map((x) => (x.id === tempId ? queued : x)))
-        }
-        Alert.alert(t('common_ok'), '已离线保存，网络恢复后自动上传')
-      } catch (e2: any) {
-        Alert.alert(t('common_error'), String(e2?.message || e?.message || '保存失败'))
-      }
+      Alert.alert(
+        isNetworkishError(e) ? t('common_ok') : t('common_error'),
+        isNetworkishError(e)
+          ? '照片已离线保存，网络恢复后可再次提交。'
+          : `${String(e?.message || '上传失败')}；照片已保留在本机，请删除后重新拍摄。`,
+      )
     } finally {
       setUploading(false)
     }
@@ -865,10 +849,18 @@ export default function DayEndBackupKeysScreen(props: Props) {
         {items.map((it, index) => (
           <View key={it.id} style={styles.gridItem}>
             <Pressable onPress={() => openPhotoViewer(items, index)} style={({ pressed }) => [styles.gridImgPress, pressed ? styles.pressed : null]}>
-              <CleaningMediaImage token={token} remoteReference={it.uploaded_url || it.uri} style={styles.gridImg} resizeMode="contain" />
+              <CleaningMediaImage
+                token={token}
+                localUri={isLocalDayEndDraftUri(it.uri) ? it.uri : undefined}
+                remoteReference={it.uploaded_url || it.uri}
+                dayEndUserId={targetUserId || currentUserId}
+                dayEndDate={date}
+                style={styles.gridImg}
+                resizeMode="contain"
+              />
             </Pressable>
             <View style={styles.gridFoot}>
-              <Text style={styles.gridMeta} numberOfLines={1}>{it.uploaded_url ? '已上传' : '已离线保存'}</Text>
+              <Text style={styles.gridMeta} numberOfLines={1}>{it.uploaded_url ? '已上传，待提交关联' : '已离线保存'}</Text>
               {canEdit ? (
                 <Pressable onPress={() => onRemove(it.id)} style={({ pressed }) => [styles.removeBtn, pressed ? styles.pressed : null]} disabled={uploading || submitting}>
                   <Text style={styles.removeText}>删除</Text>
@@ -1206,24 +1198,31 @@ export default function DayEndBackupKeysScreen(props: Props) {
         </>
       )}
     </ScrollView>
-    <Modal visible={!!viewerUrls.length} transparent animationType="fade" onRequestClose={closePhotoViewer}>
+    <Modal visible={!!viewerPhotos.length} transparent animationType="fade" onRequestClose={closePhotoViewer}>
       <View style={styles.viewerBackdrop}>
         <View style={[styles.viewerTop, { paddingTop: Math.max(insets.top, 12) }]}>
-          <Text style={styles.viewerCount}>{viewerUrls.length ? `${viewerIndex + 1} / ${viewerUrls.length}` : ''}</Text>
+          <Text style={styles.viewerCount}>{viewerPhotos.length ? `${viewerIndex + 1} / ${viewerPhotos.length}` : ''}</Text>
           <Pressable onPress={closePhotoViewer} style={({ pressed }) => [styles.viewerCloseBtn, pressed ? styles.pressed : null]}>
             <Text style={styles.viewerCloseText}>关闭</Text>
           </Pressable>
         </View>
         <View style={styles.viewerBody}>
-          {viewerUrls.length > 1 ? (
+          {viewerPhotos.length > 1 ? (
             <Pressable onPress={() => movePhotoViewer(-1)} style={({ pressed }) => [styles.viewerNavBtn, styles.viewerNavLeft, pressed ? styles.pressed : null]}>
               <Ionicons name="chevron-back" size={moderateScale(28)} color="#FFFFFF" />
             </Pressable>
           ) : null}
-          {viewerUrls[viewerIndex] ? (
-            <CleaningMediaPreview token={token} reference={viewerUrls[viewerIndex]} style={styles.viewerImage} />
+          {viewerPhotos[viewerIndex] ? (
+            <CleaningMediaPreview
+              token={token}
+              localUri={isLocalDayEndDraftUri(viewerPhotos[viewerIndex].uri) ? viewerPhotos[viewerIndex].uri : undefined}
+              reference={viewerPhotos[viewerIndex].uploaded_url || viewerPhotos[viewerIndex].uri}
+              dayEndUserId={targetUserId || currentUserId}
+              dayEndDate={date}
+              style={styles.viewerImage}
+            />
           ) : null}
-          {viewerUrls.length > 1 ? (
+          {viewerPhotos.length > 1 ? (
             <Pressable onPress={() => movePhotoViewer(1)} style={({ pressed }) => [styles.viewerNavBtn, styles.viewerNavRight, pressed ? styles.pressed : null]}>
               <Ionicons name="chevron-forward" size={moderateScale(28)} color="#FFFFFF" />
             </Pressable>

@@ -1,4 +1,30 @@
-import { completionPhotoTaskIdsFromTask, inspectionPhotoTaskIdsFromTask, mergeManagerCompletionPhotoItems } from '../../lib/managerDailyTaskPhotos'
+import { completionPhotoTaskIdsFromTask, inspectionPhotoTaskIdsFromTask, managerGuestLuggagePhotoDisplayItems, mergeManagerCompletionPhotoItems } from '../../lib/managerDailyTaskPhotos'
+
+test('temporary notice retains a local preview until save and attaches notice context only afterwards', () => {
+  expect(
+    managerGuestLuggagePhotoDisplayItems(
+      ['cleaning/guest-luggage/new-photo.jpg'],
+      { 'cleaning/guest-luggage/new-photo.jpg': 'file:///picker/new-photo.jpg' },
+      'saved-notice-id',
+    ),
+  ).toEqual([{
+    remoteReference: 'cleaning/guest-luggage/new-photo.jpg',
+    localUri: 'file:///picker/new-photo.jpg',
+    guestLuggageId: null,
+  }])
+
+  expect(
+    managerGuestLuggagePhotoDisplayItems(
+      ['cleaning/guest-luggage/saved-photo.jpg'],
+      {},
+      'saved-notice-id',
+    ),
+  ).toEqual([{
+    remoteReference: 'cleaning/guest-luggage/saved-photo.jpg',
+    localUri: null,
+    guestLuggageId: 'saved-notice-id',
+  }])
+})
 
 test('inspection photo lookup includes active and related cleaning task ids when canonical display is available', () => {
   expect(
