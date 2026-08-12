@@ -51,6 +51,25 @@
 - User authorization: `selected-for-commit`; evidence: user asked to repair the root/mobile PR merge gates.
 - Action conclusion: `GO` for commit completed. Push requires a new explicit approval bound to the final branch head.
 
+#### RA-20260812-mobile-001-009-04
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260812-001`, `CRL-20260812-002`, `CRL-20260812-003`, `CRL-20260812-004`, `CRL-20260812-005`, `CRL-20260812-006`, `CRL-20260812-007`, `CRL-20260812-009`.
+- Intended action: `push`.
+- Branch: `codex/release-crl-20260812-001-007`.
+- Target: `Dev`.
+- Base: `origin/Dev@94b75a81c2a321f2ee44d9c197bf43b0f2b68733`; fetched at `2026-08-12T17:33:59+10:00` and unchanged.
+- Candidate patch SHA-256: `6c6d4ed389a869dd63c074dcdc2942c6197a9e7f42f8a9435d4565aa68cedaa1`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `ec95bf316d9f483f3dbb628295e62cb699ef6c98` (candidate content commit; final audit head is emitted by the release report).
+- Dependencies: paired root content commit `9ba3a1f72accc721af79c60b695e6eb7d1d73f44` for root `CRL-20260812-001`, `CRL-20260812-002`, `CRL-20260812-003`, `CRL-20260812-006`, `CRL-20260812-007`, `CRL-20260812-008`, `CRL-20260812-009`.
+- Required validation: PASS — complete mobile `npm run check:ci` passed: typecheck, lint (0 errors / 109 existing warnings), button audit, and 56 suites / 293 tests; exact range/current ledger audits and whitespace checks pass.
+- Shared-hunk review: PASS — complete selected range has no unselected path; current CI-repair paths are exclusive to `CRL-20260812-009`.
+- Generated-file review: PASS — no generated outputs, environment files, credentials, tokens, media objects or production data are in the candidate.
+- Technical state: `committed`.
+- User authorization: `not-selected`; evidence: prior approval bound to the pre-receipt branch head, and user now authorized creation of this push-attempt receipt only.
+- Independent review: `not run`; evidence: exact push-attempt review must bind this receipt's final range.
+- Action conclusion: `NOT VERIFIED`; blockers: independent push review and explicit approval for the final push attempt are pending.
+
 ### Risks / Release Notes
 
 - Risk: PR range coverage remains intentionally narrower than a Release Attempt; it cannot supply candidate hash, push authorization or independent-release evidence.
