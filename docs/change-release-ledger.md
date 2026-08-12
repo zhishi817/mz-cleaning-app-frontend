@@ -66,9 +66,9 @@
 - Shared-hunk review: PASS — complete selected range has no unselected path; current CI-repair paths are exclusive to `CRL-20260812-009`.
 - Generated-file review: PASS — no generated outputs, environment files, credentials, tokens, media objects or production data are in the candidate.
 - Technical state: `committed`.
-- User authorization: `not-selected`; evidence: prior approval bound to the pre-receipt branch head, and user now authorized creation of this push-attempt receipt only.
+- User authorization: `approved-for-push`; evidence: user replied “授权” to push mobile content commit `ec95bf316d9f483f3dbb628295e62cb699ef6c98` (review head `84a0a10bc71bb7b2e968e469ae642959df52c258`) to this branch and authorized this final authorization receipt.
 - Independent review: GO for `push` — independent exact-range review matched base, content commit and fingerprint; all 27 paths are selected, with no generated or sensitive files. P2: this repository's governance references a missing review document; it does not block this CI repair push.
-- Action conclusion: `NOT VERIFIED`; blocker: explicit approved-for-push authorization for this exact mobile content commit and branch is pending.
+- Action conclusion: `GO` for push; all exact-range gates are recorded and the user granted explicit authorization for this content commit and branch.
 
 ### Risks / Release Notes
 
