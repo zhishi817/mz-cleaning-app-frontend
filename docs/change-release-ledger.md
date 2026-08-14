@@ -4943,7 +4943,7 @@
 - Candidate patch SHA-256: `c7c83a20601227ed9cc4bfbed0b0b76ff143862dab19310dd83056912f349575` excluding `docs/change-release-ledger.md`
 - Commit SHA: `879ee3b61be6ae6f682e4421021028bc7bf82f02`; content commit for this selected CRL
 - Dependencies: `root/CRL-20260814-002` is parallel governance only; no cross-repository content dependency.
-- Required validation: focused audit suite, diff check and exact pre-commit gate passed; `npm run check:ci` remains blocked because this clean worktree intentionally has no dependencies and `tsc` is unavailable.
+- Required validation: `PASS` — focused audit suite, diff check and exact pre-commit gate passed; `npm run check:ci` remains blocked because this clean worktree intentionally has no dependencies and `tsc` is unavailable.
 - Shared-hunk review: PASS — 43 declared non-ledger hunks plus the selected CRL ledger section.
 - Generated-file review: not applicable.
 - Technical state: `committed`
