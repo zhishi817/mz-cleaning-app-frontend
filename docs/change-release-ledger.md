@@ -75,6 +75,25 @@
 - User authorization: `selected-for-commit`.
 - Action conclusion: `GO` — selected content commit created locally; push remains unauthorized.
 
+#### RA-20260815-p1-ntf01-ntf02-mobile-02
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260814-004`, `CRL-20260815-001`
+- Selected CRL identities: `mobile/CRL-20260814-004`, `mobile/CRL-20260815-001`
+- Intended action: `push`; target: `Dev`.
+- Branch: `codex/p1-ntf01-ntf02`
+- Base: `origin/Dev@7ecdbf5114a61ecf951efde194d0a56eeccc2982`; fetched at `2026-08-15T01:30:38+1000 AEST` and unchanged.
+- Candidate patch SHA-256: `3f256dbe7be01a7b3a9839636f10fc0872cc208037ee9d071545dc603fd112b5`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `d52658c020deb50c8602d9154058cfd932aac264` (candidate content commit; exact audit head is emitted by the release report).
+- Dependencies: paired `root/CRL-20260814-003` content commit `ac1f00723384583e323516a94b22ef49bb654a1f`; P1-NTF-02 adds no Root source change.
+- Required validation: `PASS` — focused Mobile Jest, typecheck, lint, whitespace, current-ledger and exact committed-range audits passed.
+- Shared-hunk review: `PASS` — 39 selected non-ledger fingerprints only; no unselected hunk is in the candidate.
+- Generated-file review: `PASS` — no generated outputs, credentials, environment data, media payloads or production data are selected.
+- Technical state: `committed`.
+- User authorization: `approved-for-push`; evidence: user instructed “两个一起推送吧” on 2026-08-15 after the exact Mobile branch, candidate content commit and audit head were presented; limited to this branch and paired Root branch, not to PR, merge, deployment or OTA.
+- Independent review: `GO` for `push` — independent read-only review verified the exact committed source range, candidate fingerprint, selected CRL identity, generated/sensitive-file boundary and the receipt-only staged hunk; no P0/P1/P2 finding.
+- Action conclusion: `GO` for push; pre-network exact-range audit must pass before the remote action.
+
 ### Risks / Release Notes
 
 - Historical Inbox rows without a valid string `task_id` now suppress their private photo rather than attempting a raw URL. This is intentional fail-closed behavior; a server-backed refresh is required to obtain an eligible current record.
