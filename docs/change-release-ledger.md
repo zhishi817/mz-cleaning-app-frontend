@@ -1751,15 +1751,15 @@
 - Branch: `codex/mobile-ledger-finalization-20260814`
 - Base: `origin/Dev@afb46f1dd4b87dc4ab575e50ec9eb3bb38b7fedb`; fetched at `2026-08-14 13:20 AEST`
 - Candidate patch SHA-256: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` (empty non-ledger content diff; this is a ledger-only candidate)
-- Commit SHA: not committed; audit head will be emitted by the post-commit release report.
+- Commit SHA: `8e04e375548d65d9e2a48927ea6d619bda290b3d` (candidate content commit; descendant of the recorded base).
 - Dependencies: none.
 - Required validation: `PASS`; evidence: R0 classification confirms `35 = 13 + 5 + 17`, `git diff --check` passed, and the mobile ledger audit returned Coverage PASS.
 - Shared-hunk review: not applicable; the candidate changes only `docs/change-release-ledger.md`.
 - Generated-file review: not applicable; no generated file is in the candidate.
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: 2026-08-14 instruction to finalize the ledger-only reconciliation candidate.
 - Independent review: `GO for commit`; evidence: independent read-only review completed after correcting the Release Attempt's CRL placement; no P0/P1/P2 findings remain.
-- Action conclusion: `GO`; blockers: none for the selected commit action.
+- Action conclusion: `GO`; completed action: selected ledger-only commit created. The post-commit exact report verified the base, range, remote lineage, non-ledger fingerprint, generated-file and sensitive-information gates; its push gates remain `NOT VERIFIED` pending a separate exact push authorization.
 
 ### Risks / Release Notes
 
