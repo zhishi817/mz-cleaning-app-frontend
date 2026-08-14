@@ -1,5 +1,86 @@
 # Change Release Ledger
 
+## CRL-20260815-001 — P1-NTF-02 挂钥匙通知认证媒体渲染（mobile）
+
+- **Repository:** `mobile`
+- **Status:** verified; selected-for-commit
+- **Updated:** 2026-08-15 Australia/Melbourne
+- **Request:** 修复 `keys_hung` 通知在信息中心列表、详情和大图直接读取私有 `cleaning/...` 引用导致照片无法显示的问题；本单元仅包含照片关联上下文和认证读取。
+- **Outcome:** `keys_hung` 从同一 Inbox `data.task_id` 取得受控任务上下文，三处展示均使用既有认证媒体组件和 `/cleaning-app/media/image`。缺失、非字符串或空任务 ID 时不渲染、不请求私有照片；其他通知类型的当前展示不变。
+
+### Implementation
+
+- Previous behavior: `keys_hung` 与其他非临时通知共用 `<Image source={{ uri }}>`，私有 `cleaning/...` 引用没有携带 Bearer token 或 `source_task_id`，因此移动端不能经过后端媒体授权读取。
+- New behavior: `normalizeCleaningTaskNoticeId` 仅接受受控字符串任务 ID。通知列表缩略图传入 `accessTaskId`；通知详情缩略图和 viewer 传入相同 ID。已有 `CleaningMediaImage` / `CleaningMediaPreview` 负责认证请求、缓存和失败显示。
+- Key decisions: 不修改通知收件人、Inbox、Badge、Push、任务导航、R2 权限或后端 `cleaning_task_media` 授权；不为私有照片保留裸 URL 回退。
+
+### Files / Areas
+
+- `src/lib/cleaningMedia.ts`, `src/lib/cleaningMedia.test.ts` — Inbox 任务媒体上下文的严格字符串规范化与回归。
+- `src/screens/tabs/NoticesScreen.tsx`, `src/screens/tabs/NoticesScreen.test.tsx` — `keys_hung` 列表缩略图认证读取和无效 ID 失败关闭。
+- `src/screens/notices/NoticeDetailScreen.tsx`, `src/screens/notices/NoticeDetailScreen.test.tsx` — `keys_hung` 详情缩略图、大图认证读取和无效 ID 的零渲染边界。
+- `docs/change-release-ledger.md` — 本独立恢复单元与 staged hunk 范围。
+
+### Impact / Dependencies
+
+- Backend contract: 复用已存在的 `cleaning_task_media` 精确关联及 `canViewMzappRecordedCleaningMedia` 授权；此单元不修改 Root。该路由在错误/无关联/越权时保持 `403 forbidden_media`，已授权但对象缺失时保持 `404 media_not_found`。
+- Grouped release: 可与 `mobile/CRL-20260814-004` 和其配对的 `root/CRL-20260814-003` 同轮候选提交，但每个 CRL 保持独立测试和 review 证据。
+- Database / migration / configuration / storage / production data: none.
+- Excluded: 补货、发现问题、Photo ID/Visa、收件人 policy、Inbox/Badge/Push 治理、OTA 和真机验证。
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/lib/cleaningMedia.test.ts src/components/CleaningMediaPreview.test.tsx src/components/GuestLuggageCard.test.tsx src/screens/tabs/NoticesScreen.test.tsx src/screens/notices/NoticeDetailScreen.test.tsx` — passed: 5 suites / 39 tests; covers `keys_hung` list, detail and preview task-context propagation plus non-string ID zero-render.
+- `npx tsc --noEmit` — passed.
+- `git diff --check` — passed.
+- `npm run lint` — passed: 0 errors, 109 pre-existing warnings.
+- Independent review, staged audit, commit, push, PR, merge, backend deployment, OTA and real-role device verification: not run.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared for selected `mobile/CRL-20260815-001` only.
+- **Allowed paths:** only the six non-ledger paths listed in **Files / Areas** plus this ledger section. Shared test files contain separate `mobile/CRL-20260814-004` hunks; they must be staged and audited by exact hunk ownership.
+- **Untracked review:** no candidate source files expected.
+- Shared zero-context hunks with `mobile/CRL-20260814-004` are intentionally selected only as the combined P1 commit; the same fingerprints are recorded in that paired scope for the exact union gate.
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `b1e5aa5060a1515df2157df64dd3c359bc3fbbb1b7f0263ccc061c560de80cb9`
+- `src/lib/cleaningMedia.ts` — SHA-256: `a4c15db59f6150ac251cf7baf29e9c25689172ff0e66279595b2e204218ed9ec`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `b5fe994835167303fcd55f1d3388dd66ac5b7458d4cf10bfffadc61e38e98053`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `800bf8cb1e210b3f886122f274e363c5543139d2fe5daf4cfe6789fe2b1d7845`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `703ca8bc7149c2d0e99b3d07f0b781e0d4c01c52f9056a6e0d5d31b64c1d489f`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `9a875952f112d886fcc90135bf6073fe248d7c22e6529c6b661a212731651a34`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `17ad257384a1b824179f3863b3893b346526ede8295ebc8d353cd9f8e35ca173`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `5cf643e166c329926af8acec4f3763d3bb53932ffc959dd92ab29bed2b0498cc`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `a8aacc79d19113d262daf693c3cb57943296112e1399da51255e67288a619960`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `c3f45e29fe1e82bed32539d4ff77b59a6c6b5baafe37a7cf7d47a0c7e17e0244`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `301104578b63f6409294ac655c98bb71dda4122a30854b2e17bfa23048e2465b`
+
+### Release Attempts
+
+#### RA-20260815-p1-ntf01-ntf02-mobile-01
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260814-004`, `CRL-20260815-001`
+- Selected CRL identities: `mobile/CRL-20260814-004`, `mobile/CRL-20260815-001`
+- Intended action: `commit`
+- Branch: `codex/p1-ntf01-ntf02`
+- Base: `origin/Dev@7ecdbf5114a61ecf951efde194d0a56eeccc2982`; fetched 2026-08-15 Australia/Melbourne.
+- Candidate patch SHA-256: `3f256dbe7be01a7b3a9839636f10fc0872cc208037ee9d071545dc603fd112b5`, excluding `docs/change-release-ledger.md`.
+- Candidate content commit: not committed.
+- Dependencies: `root/CRL-20260814-003` provides the paired P1-NTF-01 exact-association authorization; P1-NTF-02 reuses the already-deployed task-media authorization contract without Root source changes.
+- Required validation: `PASS` — focused Mobile Jest, typecheck, lint, ledger coverage audit, whitespace check and exact staged pre-commit audit passed.
+- Independent review: `GO` for this commit action only.
+- Technical state: `verified`.
+- User authorization: `selected-for-commit`.
+- Action conclusion: `GO` for the selected commit action only.
+
+### Risks / Release Notes
+
+- Historical Inbox rows without a valid string `task_id` now suppress their private photo rather than attempting a raw URL. This is intentional fail-closed behavior; a server-backed refresh is required to obtain an eligible current record.
+- This repair cannot grant access: the backend remains the authority for the exact recorded task medium and reader role. Runtime proof still requires an authorized account to test list → detail → viewer after a compatible OTA/build.
+- Sensitive-information review: no credentials, tokens, private URLs, media bytes, logs, caches or production data are added.
+- Git state: candidate worktree only; not committed, not pushed, no PR, not deployed, no OTA and no device verification.
+
 ## CRL-20260814-001 — 维修完工照片本地草稿与安全关联补充（mobile）
 
 - **Status:** pending-local
@@ -4982,3 +5063,96 @@
 
 - `package.json` 的质量 scripts hunk、`.nvmrc` 和 `.github/workflows/quality.yml` 从这个长期未完成的屏幕测试单元中拆出，由 `CRL-20260729-001` 单独治理、验证和选择性提交。
 - 本单元保留屏幕测试和 SafeArea 业务/UI 范围；不得因为治理文件的提交而把这些未完成页面改动混入发布。
+## CRL-20260814-004 — P1-NTF-01 Legacy Recovery：当天临时通知认证媒体渲染（mobile）
+
+- **Repository:** `mobile`
+- **Status:** verified; selected-for-commit
+- **Updated:** 2026-08-15 Australia/Melbourne
+- **Request:** 从 `mobile` Legacy source `CRL-20260813-002` 恢复 P1-NTF-01 的 Inbox 列表、详情和大图认证读取到 `origin/Dev@7ecdbf5114a61ecf951efde194d0a56eeccc2982`，仅处理 `guest_luggage_updated` 的私有照片。
+- **Outcome:** `guest_luggage_updated` 的缩略图、详情图和大图都通过已有认证媒体组件读取，并从同一 Inbox `data.guest_luggage_id` 传递精确通知上下文；缺失或非 UUIDv4 的 ID 时不渲染、不请求私有媒体。其他通知类型保持当前 Dev 行为。
+
+### Implementation
+
+- Previous behavior: 通知列表和详情对临时通知直接使用私有引用作为 `<Image source={{ uri }}>`，认证代理无法获得通知 ID。
+- New behavior: 仅 `guest_luggage_updated` 使用 `CleaningMediaImage` / `CleaningMediaPreview`；共享媒体库先将 `guest_luggage_id` 规范化为 UUIDv4，只有有效值才允许列表、详情和 viewer 创建私有媒体组件或请求。既有 `GuestLuggageCard` 保持现有职责，不重复修改。
+- Key decisions: 不迁移钥匙、问题反馈、收件人、Badge、Push 或缓存治理；没有原始 URL 回退。
+
+### Files / Areas
+
+- `src/screens/tabs/NoticesScreen.tsx` — Inbox 列表缩略图认证读取。
+- `src/screens/notices/NoticeDetailScreen.tsx` — 详情缩略图和 viewer 认证读取。
+- `src/lib/cleaningMedia.ts` — 临时通知媒体 ID 的 UUIDv4 规范化与失败关闭。
+- `src/screens/tabs/NoticesScreen.test.tsx`, `src/screens/notices/NoticeDetailScreen.test.tsx` — ID 全链路回归与缺失 ID 的零渲染/零请求边界。
+- `src/lib/cleaningMedia.test.ts`, `src/components/CleaningMediaPreview.test.tsx`, `src/components/GuestLuggageCard.test.tsx` — 使用真实 `mzapp/...` 引用的认证 URL / 卡片契约。
+- `docs/change-release-ledger.md` — 本恢复候选记录。
+
+### Impact / Dependencies
+
+- Backend API contract: requires the paired `root/CRL-20260814-003` exact association and authorization path.
+- Database / migration / OTA / production data: none.
+- Deferred: `docs/notification-registry.yaml` and non-P1 notification governance are out of scope and do not block this source-specific render repair.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/lib/cleaningMedia.test.ts src/components/CleaningMediaPreview.test.tsx src/components/GuestLuggageCard.test.tsx src/screens/tabs/NoticesScreen.test.tsx src/screens/notices/NoticeDetailScreen.test.tsx` — passed: 5 suites, 34 tests; covers valid UUIDv4 propagation plus missing and non-string invalid ID zero-render boundaries.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed with 0 errors and 109 existing warnings.
+- `git diff --check` — passed.
+- Independent candidate review (2026-08-15): initial `NO-GO` identified missing-ID private-media rendering; follow-up review also rejected non-string invalid IDs. Both remediated with UUIDv4 validation plus list/detail/viewer suppression. Final combined independent review: `GO` for the commit action.
+- Compatible backend deployment, OTA/build installation, and real-role device verification: not run.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared for selected `mobile/CRL-20260814-004` and `mobile/CRL-20260815-001` only.
+- **Allowed paths:** only the eight non-ledger paths listed in **Files / Areas** plus this ledger section.
+- **Untracked review:** none expected.
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `03168d0888faca1d4f9fb088ed233f7dde496f28f1478b1c26be90c3efa31a6c`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `555d7639d4e2f9a6c4819133f05f3d0efab7b9850926ed3cad07d30cd4bd814a`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `d9361e678c8ef02feceb91da5ddae5ff1bc3feae94547d82a8ac44e69aa3b892`
+- `src/components/GuestLuggageCard.test.tsx` — SHA-256: `637c60c306829a8078688e7b476775271c331abe7fcd7b4f4d9ec8708e9d1fe4`
+- `src/components/GuestLuggageCard.test.tsx` — SHA-256: `63c45e11e05e9342818b66249eced7d0a109dbbfbd720684cd62c52d98ae4b94`
+- `src/components/GuestLuggageCard.test.tsx` — SHA-256: `dcd1fef7448c31b85ed10632256a30681b1a0287eaefee30830f097c8a84544f`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `8acd4fa4340dbb4d826cc34ad6a402a5e0050d186f822009e9e496a70c3c90e0`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `95d1c2c47869dc84f2449736670761db6066ed90fd03bbf2aa52010b7a61fac8`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `b1e5aa5060a1515df2157df64dd3c359bc3fbbb1b7f0263ccc061c560de80cb9`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `f74c4aad91af7fa1a864d999177898656572cf24a697ea27963185c49ca0195a`
+- `src/lib/cleaningMedia.ts` — SHA-256: `a4c15db59f6150ac251cf7baf29e9c25689172ff0e66279595b2e204218ed9ec`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `0d2c5db623cf6fd367c30767eded315aa01f63b0015fc804d4cd5769151473e9`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `0d479cbc9a70b4d17b35d0f25487244aa5d99eca68d56390abf679e2e6a14500`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `251fb7e8aa2d66ea630f199056536e6e0fedd3121043f053c66f18ac4d2f83fa`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `7b1c33f89fcd0937312d56926700c7a1bed267a8f93ba00ffdc1c695b09b7d0e`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `b5fe994835167303fcd55f1d3388dd66ac5b7458d4cf10bfffadc61e38e98053`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `b7961a5853439f8cede691ddc2e31b99dfe8f8a8e07924707f960f34a5b94770`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `17ad257384a1b824179f3863b3893b346526ede8295ebc8d353cd9f8e35ca173`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `2564504d4401e818da174cca8d7679ae381942cfc54fb4488d923f98edb0fdae`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `59a32bc95d3a1add647feef289202484a902652870435e0c14ccadd105d6aedd`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `5cf643e166c329926af8acec4f3763d3bb53932ffc959dd92ab29bed2b0498cc`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `65e6312e9dfeb2e4e1a3b7d956f28d8b41a510f0c73e7b0cc9f691f7ab0d0e7b`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `67a9e7607a11f7bd4ae36d7ed9f4fcbee5935fe6b9c653fc1f8f6c29dcd19962`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `703ca8bc7149c2d0e99b3d07f0b781e0d4c01c52f9056a6e0d5d31b64c1d489f`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `800bf8cb1e210b3f886122f274e363c5543139d2fe5daf4cfe6789fe2b1d7845`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `8b0f5c92c299c52370969c944d822807dd2967ce230cef62ab48089c34a266b5`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `9a875952f112d886fcc90135bf6073fe248d7c22e6529c6b661a212731651a34`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `a3064a4282fd6241ea5cfb52fedd0687bfdee84670f13a7b63f594cf5757f211`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `b1850ac316d18ec3b916830161efdc9742743d477aefc1a35c06d6318532bed3`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `f755e9681d22a494ad2027883720be682a00172e3068ee0d625b725db26b9a64`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `389df156ebb8b020aabd2c689e033e7fb2315767afcd054e21a4f1b454ac274d`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `720deee79b29a24a64d522d3b89b540862cb5e11023c3826c1b7de4170994d94`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `9a5ffe46b72daafa6778379aecc3197d2be7c428af2791cfea6f2a65167ce9af`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `a8aacc79d19113d262daf693c3cb57943296112e1399da51255e67288a619960`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `d8ada42dbc13de41f7b3912e88e6804e278e77b0f42a4689001fff76789fbeb0`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `f8387bd12a1995dd63e4717944ad11fafcfaca352ac676a710e5e221e5bf8632`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `301104578b63f6409294ac655c98bb71dda4122a30854b2e17bfa23048e2465b`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `4b55e41a388096e08968381f1de6e41f2091a28d368d36c7875681aa285bc15b`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `c3f45e29fe1e82bed32539d4ff77b59a6c6b5baafe37a7cf7d47a0c7e17e0244`
+
+### Release Attempts
+
+- See `RA-20260815-p1-ntf01-ntf02-mobile-01` under `mobile/CRL-20260815-001`; this paired CRL is selected only for the same commit attempt.
+
+### Risks / Release Notes
+
+- Runtime risk: tests prove token/context propagation, not receipt of a compatible OTA/build on a real device.
+- Security boundary: notification subtype selection is fail-closed on missing or invalid `guest_luggage_id`; no raw private URL is introduced for this subtype.
+- Sensitive-information review: no secrets, credentials, tokens, `.env` values, private media payloads, production data, or logs are added.

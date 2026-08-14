@@ -12,6 +12,8 @@ import { layoutTokens } from '../../lib/theme'
 import { getJson, setJson } from '../../lib/storage'
 import { getNoticesSnapshot, initNoticesStore, markNoticeRead, refreshNotices, subscribeNotices, type Notice } from '../../lib/noticesStore'
 import { getPresentedNotice } from '../../lib/noticePresentation'
+import CleaningMediaImage from '../../components/CleaningMediaImage'
+import { normalizeCleaningTaskNoticeId, normalizeGuestLuggageNoticeId } from '../../lib/cleaningMedia'
 import { syncInboxNotifications } from '../../lib/notificationInbox'
 import { isTaskInspectorUser, isTaskManagerUser, roleNamesOf } from '../../lib/roles'
 import { normalizeHttpUrl } from '../../lib/urls'
@@ -797,6 +799,10 @@ export default function NoticesScreen(props: Props) {
     const unread = !!getNoticesSnapshot().unreadIds[notice.id]
     const icon = notice.type === 'update' ? 'megaphone-outline' : notice.type === 'key' ? 'key-outline' : 'clipboard-outline'
     const img = notice.images[0] || null
+    const isGuestLuggageNotice = String((notice as any)?.data?.kind || '').trim() === 'guest_luggage_updated'
+    const guestLuggageId = isGuestLuggageNotice ? normalizeGuestLuggageNoticeId((notice as any)?.data?.guest_luggage_id) : null
+    const isKeysHungNotice = String((notice as any)?.data?.kind || '').trim() === 'keys_hung'
+    const keysHungTaskId = isKeysHungNotice ? normalizeCleaningTaskNoticeId((notice as any)?.data?.task_id) : null
     return (
       <Pressable
         onPress={() => {
@@ -816,7 +822,15 @@ export default function NoticesScreen(props: Props) {
             {notice.summary}
           </Text>
         </View>
-        {img ? <Image source={{ uri: img }} style={styles.noticeThumb} /> : null}
+        {img ? (isGuestLuggageNotice
+          ? guestLuggageId
+            ? <CleaningMediaImage testID="guest-luggage-notice-thumbnail" token={token} remoteReference={img} guestLuggageId={guestLuggageId} variant="thumbnail" style={styles.noticeThumb} />
+            : null
+          : isKeysHungNotice
+            ? keysHungTaskId
+              ? <CleaningMediaImage testID="keys-hung-notice-thumbnail" token={token} remoteReference={img} accessTaskId={keysHungTaskId} variant="thumbnail" style={styles.noticeThumb} />
+              : null
+          : <Image source={{ uri: img }} style={styles.noticeThumb} />) : null}
         <View style={styles.noticeRight}>
           <View style={styles.noticeTimeRow}>
             <Text style={styles.noticeTime}>{formatTime(notice.createdAt).split(' ')[1]}</Text>

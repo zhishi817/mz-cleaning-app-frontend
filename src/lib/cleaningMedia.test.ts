@@ -1,6 +1,8 @@
 import {
   buildCleaningMediaImageSource,
   cleaningMediaReference,
+  normalizeCleaningTaskNoticeId,
+  normalizeGuestLuggageNoticeId,
   normalizeCleaningObjectKey,
   selectCleaningMediaReference,
 } from './cleaningMedia'
@@ -59,14 +61,28 @@ test('binds day-end media reads to the recorded handover owner and date', () => 
 })
 
 test('binds temporary-notice thumbnails and previews to the saved notice record', () => {
-  expect(buildCleaningMediaImageSource('token-1', 'cleaning/notice-photo-1.jpg', 'thumbnail', { guestLuggageId: 'guest-luggage-1' })).toEqual({
-    uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fnotice-photo-1.jpg&variant=thumbnail&guest_luggage_id=guest-luggage-1',
+  const noticeId = '4a0dbea0-cbaf-4eef-87ec-2f4bb038703e'
+  expect(buildCleaningMediaImageSource('token-1', 'mzapp/notice-photo-1.jpg', 'thumbnail', { guestLuggageId: noticeId })).toEqual({
+    uri: `https://api.example.com/api/cleaning-app/media/image?key=mzapp%2Fnotice-photo-1.jpg&variant=thumbnail&guest_luggage_id=${noticeId}`,
     headers: { Authorization: 'Bearer token-1' },
   })
-  expect(buildCleaningMediaImageSource('token-1', 'cleaning/notice-photo-1.jpg', 'preview', { guestLuggageId: 'guest-luggage-1' })).toEqual({
-    uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fnotice-photo-1.jpg&variant=preview&guest_luggage_id=guest-luggage-1',
+  expect(buildCleaningMediaImageSource('token-1', 'mzapp/notice-photo-1.jpg', 'preview', { guestLuggageId: noticeId })).toEqual({
+    uri: `https://api.example.com/api/cleaning-app/media/image?key=mzapp%2Fnotice-photo-1.jpg&variant=preview&guest_luggage_id=${noticeId}`,
     headers: { Authorization: 'Bearer token-1' },
   })
+})
+
+test('accepts only UUIDv4 temporary-notice media ids', () => {
+  expect(normalizeGuestLuggageNoticeId('4A0DBEA0-CBAF-4EEF-87EC-2F4BB038703E')).toBe('4a0dbea0-cbaf-4eef-87ec-2f4bb038703e')
+  expect(normalizeGuestLuggageNoticeId(undefined)).toBeNull()
+  expect(normalizeGuestLuggageNoticeId({ id: '4a0dbea0-cbaf-4eef-87ec-2f4bb038703e' })).toBeNull()
+  expect(normalizeGuestLuggageNoticeId('guest-luggage-1')).toBeNull()
+})
+
+test('accepts only string cleaning-task ids from notification media context', () => {
+  expect(normalizeCleaningTaskNoticeId(' cleaning-task-1 ')).toBe('cleaning-task-1')
+  expect(normalizeCleaningTaskNoticeId(undefined)).toBeNull()
+  expect(normalizeCleaningTaskNoticeId({ id: 'cleaning-task-1' })).toBeNull()
 })
 
 test('routes a server-owned offline task reference through the authenticated proxy with the exact work task', () => {

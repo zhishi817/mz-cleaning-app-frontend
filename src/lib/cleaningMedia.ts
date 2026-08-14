@@ -27,6 +27,18 @@ export function cleaningMediaReference(upload: { key?: string | null; url?: stri
   return normalizeCleaningObjectKey(upload?.key) || cleanText(upload?.url)
 }
 
+export function normalizeGuestLuggageNoticeId(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const id = value.trim().toLowerCase()
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id) ? id : null
+}
+
+export function normalizeCleaningTaskNoticeId(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const id = value.trim()
+  return id && id.length <= 160 ? id : null
+}
+
 export type CleaningMediaImageVariant = 'original' | 'thumbnail' | 'preview'
 
 type CleaningMediaAccessOptions = {
