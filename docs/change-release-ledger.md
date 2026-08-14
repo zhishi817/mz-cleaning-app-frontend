@@ -1754,7 +1754,7 @@
 - Commit SHA: `8e04e375548d65d9e2a48927ea6d619bda290b3d` (candidate content commit; descendant of the recorded base).
 - Dependencies: none.
 - Required validation: `PASS`; evidence: R0 classification confirms `35 = 13 + 5 + 17`, `git diff --check` passed, and the mobile ledger audit returned Coverage PASS.
-- Shared-hunk review: not applicable; the candidate changes only `docs/change-release-ledger.md`.
+- Shared-hunk review: `PASS`; the user explicitly selected the complete Mobile Ledger Finalization as one ledger-only reconciliation scope. The independently reviewed exact range contains no runtime hunk, and every changed hunk is a status, classification, identity-receipt, or Release Attempt record in `docs/change-release-ledger.md`.
 - Generated-file review: not applicable; no generated file is in the candidate.
 - Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: 2026-08-14 instruction to finalize the ledger-only reconciliation candidate.
