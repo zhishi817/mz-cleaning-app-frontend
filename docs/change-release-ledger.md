@@ -4951,6 +4951,25 @@
 - Independent review: `GO` — 2026-08-14 fresh independent read-only pre-commit review found no P0/P1.
 - Action conclusion: `GO` — commit only; push, PR, merge and deployment remain separate actions.
 
+#### RA-20260814-004
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260814-003`
+- Selected CRL identities: `mobile/CRL-20260814-003`
+- Intended action: `push`
+- Branch: `codex/governance-ledger-gates-20260814`
+- Base: `origin/Dev@4c264ba2e46b9bdc2632509f73eb087a60a2fa9a`; fetched at `2026-08-14 22:34 AEST`
+- Candidate patch SHA-256: `c7c83a20601227ed9cc4bfbed0b0b76ff143862dab19310dd83056912f349575` excluding `docs/change-release-ledger.md`
+- Commit SHA: `879ee3b61be6ae6f682e4421021028bc7bf82f02`; content commit for this selected CRL
+- Dependencies: `root/CRL-20260814-002` is parallel governance only; no cross-repository content dependency.
+- Required validation: `PASS` — focused audit suite, diff check and exact range audit passed; `npm run check:ci` remains blocked because this clean worktree intentionally has no dependencies and `tsc` is unavailable.
+- Shared-hunk review: `PASS` — 43 declared non-ledger hunks plus the selected CRL ledger section.
+- Generated-file review: not applicable.
+- Technical state: `committed`
+- User authorization: `approved-for-push` — user said “推送” after receiving the exact Mobile branch and current HEAD `2de3a035c06f18111d9c1cb62812886cef7af279`.
+- Independent review: `GO` — 2026-08-14 fresh independent read-only pre-commit review found no P0/P1.
+- Action conclusion: `GO` — authorized to push this exact branch; PR, merge and deployment remain separate actions.
+
 ### Risks / Release Notes
 
 - Risk: this gate deliberately cannot prove or classify frozen historical working-tree deltas; a later business recovery needs a new CRL and fresh hunk extraction.
