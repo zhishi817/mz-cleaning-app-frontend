@@ -89,10 +89,11 @@
 - Required validation: `PASS` — focused Mobile Jest, typecheck, lint, whitespace, current-ledger and exact committed-range audits passed.
 - Shared-hunk review: `PASS` — 39 selected non-ledger fingerprints only; no unselected hunk is in the candidate.
 - Generated-file review: `PASS` — no generated outputs, credentials, environment data, media payloads or production data are selected.
-- Technical state: `committed`.
+- Technical state: `pushed`.
 - User authorization: `approved-for-push`; evidence: user instructed “两个一起推送吧” on 2026-08-15 after the exact Mobile branch, candidate content commit and audit head were presented; limited to this branch and paired Root branch, not to PR, merge, deployment or OTA.
 - Independent review: `GO` for `push` — independent read-only review verified the exact committed source range, candidate fingerprint, selected CRL identity, generated/sensitive-file boundary and the receipt-only staged hunk; no P0/P1/P2 finding.
-- Action conclusion: `GO` for push; pre-network exact-range audit must pass before the remote action.
+- Remote branch / SHA: `origin/codex/p1-ntf01-ntf02@56257b08c5219d1c9be8dbabee2a8a54ee05343b`, verified immediately after the fast-forward source-range push.
+- Action conclusion: `GO` for push completed; PR, merge, deployment, OTA and device verification remain separate and unperformed.
 
 ### Risks / Release Notes
 
