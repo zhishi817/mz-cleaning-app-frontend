@@ -4847,6 +4847,117 @@
 - Sensitive-information review: 未记录密码、token、cookie、私钥、数据库 URL、`.env` 内容或敏感日志。
 - Git state: uncommitted；未执行 stage、commit、push 或发布。
 
+## CRL-20260814-003 — Mobile Legacy 冻结边界与分层台账门禁
+
+- **Repository:** `mobile`
+- **Status:** ready
+- **Updated:** 2026-08-14 21:51 AEST
+- **Request:** 为已冻结的 Root/Mobile 脏工作区建立非日期化的 `LEGACY_FROZEN_WORKSPACE` 边界，并在独立 mobile 仓库实施可执行的本地提交与已提交范围门禁；不追溯、恢复或发布任何 Legacy 业务 hunk。
+- **Outcome:** Mobile CRL 跨仓引用使用 `mobile/CRL-ID`；本地候选只在干净工作树中按路径与 hunk 通过，提交后按精确 `base...head` 复核。ledger receipt 只能记录已成功的内容提交，不可成为绕过业务 hunk 的入口。
+
+### Implementation
+
+- Previous behavior: mobile 审计仅能检查路径覆盖或 Release Attempt，无法阻止未跟踪文件、仓库身份缺失、暂存 hunk 漏记，历史脏工作区也容易被误当作候选范围。
+- New behavior: 增加 `--pre-commit --repo mobile --crl` 的本地暂存检查，强化 `--release-report` 的 canonical identity、精确范围 hunk 与清洁工作树检查；mobile Agent 同步冻结与分层审计规则。
+- Key decisions: 保留现有 current-worktree 与 `--base/--head` 覆盖能力；不改业务页面、功能测试、Registry、CI 工作流、依赖、原生构建、API、数据库或生产数据。
+
+### Files / Areas
+
+- `AGENTS.md` — modified: mobile 独立仓库的冻结边界与分层门禁规则。
+- `scripts/audit_change_release_ledger.py` — modified: 本地候选、范围 hunk、canonical identity 和 clean-worktree 检查。
+- `scripts/tests/test_audit_change_release_ledger.py` — modified: 覆盖通过候选、未跟踪阻断、hunk 不匹配阻断、精确范围 receipt、跨 CRL ledger hunk 与伪造 receipt 指纹阻断。
+- `docs/change-release-ledger.md` — modified: 本独立治理 CRL 与 Release Attempt receipt。
+
+### Impact / Dependencies
+
+- API / database / configuration / CI: none.
+- Production / device / user role: none.
+- Dependencies: `root/CRL-20260814-002` is the matching Root governance unit; neither CRL depends on an extraction from the frozen business workspace.
+- Related units: `mobile/CRL-20260814-001` and `mobile/CRL-20260814-002` remain separate, unselected source-only continuations.
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed: 25 tests, including verified receipt acceptance, cross-CRL staged-ledger blocking and bad receipt content-fingerprint blocking.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/audit_change_release_ledger.py --pre-commit --repo mobile --crl CRL-20260814-003` — passed: canonical identity, selected paths, untracked review, selected-ledger section and 43 non-ledger hunk fingerprints all matched.
+- `git diff --check` — passed.
+- `npm run check:ci` — blocked after its ledger audit passed because this clean worktree intentionally has no installed dependencies and `tsc` is unavailable; no dependency install is authorized in this governance scope.
+- Governance read-only boundary: audit functions invoke local Git only; no mobile screen, service API, database, device, EAS/native build or production environment is in scope.
+
+### Staged Commit Scope
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** `none; clean candidate worktree confirmed`
+- `AGENTS.md` — SHA-256: `ae5042d4621108e5957b94792ce7c81fc444b4d3109057035ebf7a665439e425`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `0485fd6915b60941b191e112b7627a0f4391711e94f547233095c96dc4d3e4d9`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `06e9da5af178fcc4caffc446ed2e24e685761fc185ad803b003563533e374f77`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `0ac1525678952e50adeb934c115fd45fca54a7bdb6b4bca29a6bd7b8d24a172b`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `1b5fb463fe8b606c69fd3ad49036a661e1ab79a4502de6b91a2f0b232fe14cc9`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `29e0e5d5ae854b91bf4931eee5aa3ce7c24baceb7aded46ef35069c2124ab416`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `47b16ef7089ac774d46214b89d88c6bcb9cecab36f20d55bd703d76f70719df1`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `4c002c6d6d6c0a32bc5e452a07c966dc574276a844794646fef318ad77dd9d7d`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `4c6f6318eb20231d465d075116f4c9b36358bb6cc75ac20de551aa5570c7a359`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `56516d457b72af1e6e0bfdb7392c738e6816d1701c70bd35c7f48c44113d24da`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `5b2610bcd0634eee2baf832f6704ec6aef5a1702c98b2409f07f91d43c2007e5`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `5e92f2f371ff84495ce85a553fa3e556d61e21ee2c376e245232069364696b1b`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `638d7a3f967e75b2a84514db4b2552a71c04fc1ee423f561550b8c742f5a96ef`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `7a7ae2164d0f45eb3b497985588db82f45e9432c57103b875c827d788364505c`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `7d790629856ef31206f868bb787867c271abc3e5e8fa74734f2ed22f054fd917`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `8319d4af6512f046abe5aefcbdf1be5b351dda6a104bab760db4d08f010173ec`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `9538785cbdcc465be4fbac52c3d58210bf4ad2d330c452e19352a03565cd1534`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `95431539215650b427d3bc17d987f81612bb9297d47715c70847f4a4707a359f`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `a51a55ce625c93d6fa09f9a02c6380316627b5fb0baa50f7accbc76310df8f82`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `a5f40ea25ea24eb72232e86f515ec9aad938c0bd038673e52187568a3230b7f6`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `aba40c7c5b638b0aa5e45170270d09c823da5fbefed9eb69aada75253a80d674`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `b9cdf50e233b8ec72e6a28594a0e87af69f691c71db0af59dea8f58c026f1920`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `c48cc52c8e610da8c9a1c4b292b19e39a9b5c91a2baa29a9515f45c2e7ae7aae`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `c89a3efd5de56faaef75518a8a02b433c9a1f95dcf52e947632354a367ae7e4a`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `d4e85a39aa966a85119870890257946e0885d0dc22f56a03925eca57284cb222`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `d6c85fb8f6e44d4c718cfc85465dabccf2529711e19e4578ab3c989655fea979`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `de2f4f5b0e0b57aa5f34d3c8dd5008a6a8a1e43a4bce264b5420abcc431fe866`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `f7140a93472a38725186d5714b5b9a231e4ca7a4f0c1e20c4eece7dfff895da0`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `0785911eb1be14086179d00a1bff5cbdd622295fd0d1a1a78934e82ff6214909`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `1f6520e8915461a9331547b2bb745f2c82de1d8c8e9e0fd2fa142cc5b58f42c1`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `384217018cdf605bcf19fd716b4856c8c857179aca8e380e8b60e972e6176f8a`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `3dd71a751e66437e60ca3370f16c6fe29f7cb4457bed8ea150ee2e399fa0194a`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `69ff1580d3609303cc89af20c1093ad6dc665b791c0c8c94137d5529573d007b`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `6bdece6c4545b2deae59ef7a113a5ab4dcc213f56a71e36fde2eb9e2b7acceab`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `6dc35d590d6d55238db8e05a188320214e77427fbac975023f01c6a6f41acc24`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `92cf1c5ab8d574645975db435d4dff4dbc25afb99214f7582a03dc449cfc3c65`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `94dbabf5153e6c88778d8239c1f9b10c240afadfe857ee68e9b08be6532ca518`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `9d4d90d5c3c6472601c56df72f839af9db76cde2ddc40865f4403b3bfbf61f0c`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `9f7e07582e0594c1dfe633680928ad47f6e38b84f662dbf2e139038e538fae3f`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `af6a38ea5e0dcc3b8dbcc6bc391a2454531aa76df24c7d3b0ebd42db8f72349c`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `eb6ed5581db057ac5a8238887012e4d2ce820de1038eee7f4ebca23db57537d2`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `eddac5a800751f8622c8e659d70c936f5475b390c463e02f58e400566be2de5b`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `f35c682758c77f015935bcc7cc8af153680ba13e64c8d544d8d379295ef8167d`
+### Release Attempts
+
+#### RA-20260814-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260814-003`
+- Selected CRL identities: `mobile/CRL-20260814-003`
+- Intended action: `commit`
+- Branch: `codex/governance-ledger-gates-20260814`
+- Base: `origin/Dev@4c264ba2e46b9bdc2632509f73eb087a60a2fa9a`; fetched at `2026-08-14 AEST`
+- Candidate patch SHA-256: `c7c83a20601227ed9cc4bfbed0b0b76ff143862dab19310dd83056912f349575` excluding `docs/change-release-ledger.md`
+- Commit SHA: `not committed`; audit head is emitted by the report command
+- Dependencies: `root/CRL-20260814-002` is parallel governance only; no cross-repository content dependency.
+- Required validation: focused audit suite, diff check and exact pre-commit gate passed; `npm run check:ci` remains blocked because this clean worktree intentionally has no dependencies and `tsc` is unavailable.
+- Shared-hunk review: PASS — 43 declared non-ledger hunks plus the selected CRL ledger section.
+- Generated-file review: not applicable.
+- Technical state: `verified`
+- User authorization: `selected-for-commit` — user said “就这样做吧”.
+- Independent review: `GO` — 2026-08-14 fresh independent read-only pre-commit review found no P0/P1.
+- Action conclusion: `GO` — commit only; push, PR, merge and deployment remain separate actions.
+
+### Risks / Release Notes
+
+- Risk: this gate deliberately cannot prove or classify frozen historical working-tree deltas; a later business recovery needs a new CRL and fresh hunk extraction.
+- Rollback: revert only this governance CRL's commits; no runtime data or mobile device state needs rollback.
+- Sensitive-information review: no secrets, credentials, tokens, `.env` values, private URLs, caches, logs or production data are added.
+- Git state: clean worktree candidate on `origin/Dev@4c264ba2e46b9bdc2632509f73eb087a60a2fa9a`; not committed, not pushed, no PR, not published, no device verification.
+
 ### Governance extraction — 2026-07-29
 
 - `package.json` 的质量 scripts hunk、`.nvmrc` 和 `.github/workflows/quality.yml` 从这个长期未完成的屏幕测试单元中拆出，由 `CRL-20260729-001` 单独治理、验证和选择性提交。
