@@ -6,6 +6,9 @@ import { hairline, moderateScale } from '../../lib/scale'
 import { getNoticesSnapshot, initNoticesStore, markNoticeRead, subscribeNotices, type Notice } from '../../lib/noticesStore'
 import { layoutTokens } from '../../lib/theme'
 import { getPresentedNotice } from '../../lib/noticePresentation'
+import CleaningMediaImage from '../../components/CleaningMediaImage'
+import CleaningMediaPreview from '../../components/CleaningMediaPreview'
+import { normalizeCleaningTaskNoticeId, normalizeGuestLuggageNoticeId } from '../../lib/cleaningMedia'
 import type { NoticesStackParamList } from '../../navigation/RootNavigator'
 import { useI18n } from '../../lib/i18n'
 import { API_BASE_URL } from '../../config/env'
@@ -109,6 +112,7 @@ export default function NoticeDetailScreen(props: Props) {
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const [storeReady, setStoreReady] = useState(false)
   const [rawNotice, setRawNotice] = useState<Notice | null>(null)
+  const [mediaToken, setMediaToken] = useState<string | null>(null)
   const [openingTask, setOpeningTask] = useState(false)
 
   useLayoutEffect(() => {
@@ -149,12 +153,14 @@ export default function NoticeDetailScreen(props: Props) {
     ;(async () => {
       await initNoticesStore()
       if (!alive) return
+      const token = await getAuthToken().catch(() => null)
+      if (!alive) return
+      setMediaToken(token || null)
       update()
       setStoreReady(true)
       unsub = subscribeNotices(update)
       await markNoticeRead(id)
       try {
-        const token = await getAuthToken()
         const current = getNoticesSnapshot().items.find((item) => item.id === id) || null
         const serverId = String((current as any)?.data?._server_id || '').trim()
         if (token && serverId) await markInboxNotificationsRead(String(token), { ids: [serverId] })
@@ -198,6 +204,11 @@ export default function NoticeDetailScreen(props: Props) {
   const targetUserName = String((notice as any)?.data?.target_user_name || '').trim()
   const canOpenDayEnd = action === 'open_day_end_handover' && !!targetDate
   const noticeData = (rawNotice as any)?.data || (notice as any)?.data || {}
+  const isGuestLuggageNotice = String((noticeData as any)?.kind || '').trim() === 'guest_luggage_updated'
+  const guestLuggageId = isGuestLuggageNotice ? normalizeGuestLuggageNoticeId((noticeData as any)?.guest_luggage_id) : null
+  const isKeysHungNotice = String((noticeData as any)?.kind || '').trim() === 'keys_hung'
+  const keysHungTaskId = isKeysHungNotice ? normalizeCleaningTaskNoticeId((noticeData as any)?.task_id) : null
+  const displayImages = (isGuestLuggageNotice && !guestLuggageId) || (isKeysHungNotice && !keysHungTaskId) ? [] : imgs
   const taskRouteId = pickTaskRouteIdFromNoticeData(noticeData)
   const canOpenTask = !!taskRouteId && !canOpenDayEnd
 
@@ -275,9 +286,9 @@ export default function NoticeDetailScreen(props: Props) {
             </View>
           ) : null}
 
-          {!imagesAtBottom && imgs.length ? (
+          {!imagesAtBottom && displayImages.length ? (
             <View style={styles.imagesWrap}>
-              {imgs.map((u) => (
+              {displayImages.map((u) => (
                 <Pressable
                   key={u}
                   onPress={() => {
@@ -286,7 +297,15 @@ export default function NoticeDetailScreen(props: Props) {
                   }}
                   style={({ pressed }) => [styles.imagePress, pressed ? styles.pressed : null]}
                 >
-                  <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.image} />
+                  {isGuestLuggageNotice
+                    ? mediaToken
+                      ? <CleaningMediaImage testID="guest-luggage-notice-image" token={mediaToken} remoteReference={u} guestLuggageId={guestLuggageId} variant="thumbnail" style={styles.image} />
+                      : <View style={styles.image} />
+                    : isKeysHungNotice
+                      ? mediaToken
+                        ? <CleaningMediaImage testID="keys-hung-notice-image" token={mediaToken} remoteReference={u} accessTaskId={keysHungTaskId} variant="thumbnail" style={styles.image} />
+                        : <View style={styles.image} />
+                    : <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.image} />}
                 </Pressable>
               ))}
             </View>
@@ -320,11 +339,11 @@ export default function NoticeDetailScreen(props: Props) {
             </Pressable>
           ) : null}
 
-          {imagesAtBottom && imgs.length ? (
+          {imagesAtBottom && displayImages.length ? (
             <View style={styles.photoSection}>
               <Text style={styles.noteLabel}>照片</Text>
               <View style={styles.imagesWrap}>
-              {imgs.map((u) => (
+              {displayImages.map((u) => (
                 <Pressable
                   key={u}
                   onPress={() => {
@@ -333,7 +352,15 @@ export default function NoticeDetailScreen(props: Props) {
                   }}
                   style={({ pressed }) => [styles.imagePress, pressed ? styles.pressed : null]}
                 >
-                  <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.image} />
+                  {isGuestLuggageNotice
+                    ? mediaToken
+                      ? <CleaningMediaImage testID="guest-luggage-notice-image" token={mediaToken} remoteReference={u} guestLuggageId={guestLuggageId} variant="thumbnail" style={styles.image} />
+                      : <View style={styles.image} />
+                    : isKeysHungNotice
+                      ? mediaToken
+                        ? <CleaningMediaImage testID="keys-hung-notice-image" token={mediaToken} remoteReference={u} accessTaskId={keysHungTaskId} variant="thumbnail" style={styles.image} />
+                        : <View style={styles.image} />
+                    : <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.image} />}
                 </Pressable>
               ))}
             </View>
@@ -361,9 +388,17 @@ export default function NoticeDetailScreen(props: Props) {
           <View style={styles.viewerTopRow} pointerEvents="none">
             <Text style={styles.viewerCloseText}>点击任意位置关闭</Text>
           </View>
-          {viewerUrl ? (
+          {viewerUrl && ((!isGuestLuggageNotice || guestLuggageId) && (!isKeysHungNotice || keysHungTaskId)) ? (
             <View style={{ flex: 1 }} pointerEvents="none">
-              <Image source={{ uri: toAbsoluteUrl(viewerUrl) }} style={styles.viewerImg} resizeMode="contain" />
+              {isGuestLuggageNotice
+                ? mediaToken
+                  ? <CleaningMediaPreview testID="guest-luggage-notice-preview" token={mediaToken} reference={viewerUrl} guestLuggageId={guestLuggageId} style={styles.viewerImg} />
+                  : <View style={styles.viewerImg} />
+                : isKeysHungNotice
+                  ? mediaToken
+                    ? <CleaningMediaPreview testID="keys-hung-notice-preview" token={mediaToken} reference={viewerUrl} accessTaskId={keysHungTaskId} style={styles.viewerImg} />
+                    : <View style={styles.viewerImg} />
+                : <Image source={{ uri: toAbsoluteUrl(viewerUrl) }} style={styles.viewerImg} resizeMode="contain" />}
             </View>
           ) : null}
         </Pressable>
