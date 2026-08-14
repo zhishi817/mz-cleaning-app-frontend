@@ -1,8 +1,1526 @@
 # Change Release Ledger
 
+## CRL-20260814-001 — 维修完工照片本地草稿与安全关联补充（mobile）
+
+- **Status:** pending-local
+- **Reconciliation state:** LOCAL_UNCOMMITTED_VERIFIED
+- **Request:** 在不改变远端 CRL-20260808-001 不可变业务身份的前提下，为 R0 已证实仍留在原 mobile 工作树的独有维修完工照片草稿增量建立独立、可审计的本地 continuation。
+- **Outcome:** 远端 CRL-20260808-001 保持原样；本记录只承接该 source-only delta 的归属，不迁移、覆盖或执行任何业务代码。
+- **Source evidence:** R0 在原 mobile 工作树中确认 maintenance completion photo draft 模块及其针对性测试均有与 origin/Dev 不同且唯一的未提交增量。
+- **Historical identity boundary:** local historical CRL-20260808-001 与远端 canonical ID 发生不可变身份冲突；本 CRL 是新编号 continuation，不重写远端身份。
+- **Files / Areas:** `docs/change-release-ledger.md` — 仅记录归属和恢复前置条件；本 clean worktree 未包含业务代码。
+- **Validation:** R0 content comparison and unique-path attribution completed. No business test was run because no business code was migrated.
+- **Release state:** not selected; not committed; not pushed; no PR; not deployed; no OTA; device verification not run.
+- **Risk / dependency:** 原 mobile 工作树仍是唯一源证据。任何恢复必须在单独 R1 授权中冻结 CRL、基线、语义、路径和 hunk allowlist。
+
+## CRL-20260814-002 — 当天任务临时通知照片本地草稿与认证读取补充（mobile）
+
+- **Status:** pending-local
+- **Reconciliation state:** LOCAL_UNCOMMITTED_VERIFIED
+- **Request:** 在不改变远端 CRL-20260812-006 不可变业务身份的前提下，为 R0 已证实仍留在原 mobile 工作树的独有当天任务临时通知照片草稿增量建立独立、可审计的本地 continuation。
+- **Outcome:** 远端 CRL-20260812-006 保持原样；本记录只承接该 source-only delta 的归属，不迁移、覆盖或执行任何业务代码。
+- **Source evidence:** R0 在原 mobile 工作树中确认 guest luggage photo draft 模块及其针对性测试均有与 origin/Dev 不同且唯一的未提交增量。
+- **Historical identity boundary:** local historical CRL-20260812-006 与远端 canonical ID 发生不可变身份冲突；本 CRL 是新编号 continuation，不重写远端身份。
+- **Files / Areas:** `docs/change-release-ledger.md` — 仅记录归属和恢复前置条件；本 clean worktree 未包含业务代码。
+- **Validation:** R0 content comparison and unique-path attribution completed. No business test was run because no business code was migrated.
+- **Release state:** not selected; not committed; not pushed; no PR; not deployed; no OTA; device verification not run.
+- **Risk / dependency:** 原 mobile 工作树仍是唯一源证据。任何恢复必须在单独 R1 授权中冻结 CRL、基线、语义、路径和 hunk allowlist。
+
+## CRL-20260813-002 — 临时通知照片认证上下文闭环（mobile）
+
+- **Status:** pending-local
+- **Reconciliation state:** LOCAL_UNCOMMITTED_VERIFIED
+- **Reconciliation evidence:** R0 proves a distinct current source-worktree delta, but no business hunk is present in this clean ledger-only worktree.
+- **Updated:** 2026-08-13 Australia/Melbourne
+- **Request:** 配对修复当天任务临时通知照片：任务卡片、信息中心列表、详情和大图必须把相同 `guest_luggage_id` 交给认证图片读取；不得退回原始私有 URL，并与 root 的精确关联/授权修复一起交付。
+- **Outcome:** `cleaningMedia`、`CleaningMediaImage` 和 `CleaningMediaPreview` 接收该受控上下文并生成认证代理参数。`GuestLuggageCard`、通知列表、详情和 viewer 全链路传递同一个通知 ID；钥匙照片通知继续使用 CRL-20260813-001 的认证组件，不传临时通知 ID。
+
+### Implementation
+
+- Previous behavior: 临时通知卡片缩略图和大图遗漏来源 ID，且预览会把 `mzapp/...` 引用转换为原始 URL；通知列表/详情虽改为认证组件，但未向共享读取器传递精确行上下文。
+- New behavior: 仅 `guest_luggage_updated` 从服务端 Inbox `data.guest_luggage_id` 取值；其缩略图和 preview 使用同一值。任务卡片使用已保存通知 `id`。没有 ID 的读取不会创建 URL 级别的兼容回退，后端将安全拒绝。
+- Key decisions: 复用现有认证媒体组件、缓存和终态错误显示；不增加客户端角色判断、公开链接、替代 viewer 或通知数据重写。
+
+### Files / Areas
+
+- `src/lib/cleaningMedia.ts` — 可选的 source-specific `guest_luggage_id` 认证参数。
+- `src/components/CleaningMediaImage.tsx` — 缩略图透传该参数。
+- `src/components/CleaningMediaPreview.tsx` — 预览透传该参数。
+- `src/components/GuestLuggageCard.tsx` — 卡片缩略图/大图保留通知 ID，不转换私有引用为原始 URL。
+- `src/components/GuestLuggageCard.test.tsx` — 卡片缩略图/大图的 ID 链路回归。
+- `src/screens/tabs/NoticesScreen.tsx` — 临时通知列表读取上下文。
+- `src/screens/tabs/NoticesScreen.test.tsx` — 临时通知列表 ID 链路回归。
+- `src/screens/notices/NoticeDetailScreen.tsx` — 临时通知详情/preview 读取上下文。
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — 临时通知详情/preview ID 链路回归。
+- `src/lib/cleaningMedia.test.ts` — 认证 URL 构造回归；钥匙照片认证读继续覆盖。
+- `docs/change-release-ledger.md` — 本移动端配对单元记录。
+
+### Impact / Dependencies
+
+- API / database / configuration / storage: no new endpoint, schema, R2 setting or data mutation. Requires root CRL-20260813-002 backend to require and authorize the same ID.
+- Notification governance: no change to NTF-006/NTF-017 generator, recipients, Inbox, Push, Badge or navigation.
+- Shared dependency: all changed renderer calls retain their existing task/work-task/day-end contexts; the targeted renderer and proxy-construction regressions were rerun.
+- Excluded: Photo ID/visa, financial receipts, other media sources, EAS build/OTA and production/device operations.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/lib/cleaningMedia.test.ts src/components/GuestLuggageCard.test.tsx src/screens/tabs/NoticesScreen.test.tsx src/screens/notices/NoticeDetailScreen.test.tsx src/components/CleaningMediaPreview.test.tsx` — passed: 5 suites / 31 tests.
+- `npm test -- --runInBand --no-cache` — passed: 57 suites / 342 tests. Existing `CleaningMediaPreview` feedback tests emit four `act(...)` warnings; no test fails.
+- `npm run typecheck` — passed. `npm run lint` — passed with 0 errors and 109 existing warnings. `npm run check:buttons` — passed.
+- Scoped `git diff --check` — passed.
+- `npm run check:ci` — blocked at its first `check:ledger` step by pre-existing shared-ledger lineage drift: 18 remote CRLs absent locally and 19 historical immutable identities differ from fetched `origin/Dev`. Typecheck/lint/button/Jest were run independently above; no mobile release gate is green.
+
+### Release Attempts
+
+- None. No staging, commit, push, PR, OTA/build, backend deployment, production write or real-account device validation is authorized or performed.
+
+### Risks / Release Notes
+
+- Risk: old cached Inbox data without `guest_luggage_id` fails closed on refresh instead of exposing a private photo through a raw URL. The notification writer already includes this field; production refresh and all three roles must be verified after a coordinated deployment/OTA.
+- Release block: this shared worktree currently reports `src/components/CleaningMediaPreview.tsx` as a staged deletion with an untracked working-copy replacement. The tested source is present, but it must be reconstructed in a clean release worktree; do not commit from this mixed index.
+- Rollback: revert the paired mobile/root context contract together; do not retain raw URL fallback.
+- Sensitive-information review: no token, credential, private URL, image bytes or production data is recorded.
+- Git state: shared mobile worktree was already dirty; this unit is unstaged, uncommitted, unpushed, unpublished and not device-verified.
+
+## CRL-20260812-013 — checkout 移动端服务端 Inbox 收件人收口（mobile）
+
+- **Status:** pending-local
+- **Reconciliation state:** LOCAL_UNCOMMITTED_VERIFIED
+- **Reconciliation evidence:** R0 proves a distinct current source-worktree delta, but no business hunk is present in this clean ledger-only worktree.
+- **Updated:** 2026-08-12 Australia/Melbourne
+- **Request:** 执行通知治理阶段 5.2：移动端不能使用本地任务缓存二次判断收件人；服务端已授权的 Inbox 通知必须展示，Push 点击只消费同 event ID 的服务端 Inbox 记录。
+- **Outcome:** `RootNavigator` 不再根据 `cleaner_id` / `inspector_id` / `assignee_id` 和本地任务缓存拒绝 Push 或过滤 Inbox 同步。前台 Push 只触发 Inbox 同步；点击回执只从同步返回的 server-owned notice 找同 event ID，并仅以该记录的数据决定通知详情或任务跳转。
+
+### Implementation
+
+- Previous behavior: `shouldShowTaskNoticeForCurrentUser()` 会按本地 task cache 和角色关系过滤五类任务通知；缓存无任务、改派后的旧关系或投影延迟时，客户端可把已授权 Inbox 记录排除。Push 点击还会直接信任原始 payload 继续任务导航。
+- New behavior: 删除该 local recipient filter 和 `syncInboxNotifications(include)` 入口。`notificationInbox` 将每个服务端 Inbox row 原样映射/写入 notice store；RootNavigator 在响应场景只使用同步到的同 event ID notice 的 data，未找到时进入通知列表而不按原始 Push payload 跳任务。
+- Protected behavior: 服务端的 Inbox read state、现有 notice-only/action 跳转、任务刷新和用户主动通知列表刷新继续保留；客户端不新建收件人规则或角色判断。
+
+### Files / Areas
+
+- `src/navigation/RootNavigator.tsx` — 去除 local task-cache recipient authorization；Push response 从同步的 Inbox notice 读取导航数据。
+- `src/lib/notificationInbox.ts`、`src/lib/notificationInbox.test.ts` — 移除 include/filter API，测试 server-authorized checkout 即使无本地任务也会同步，并按 event ID 解析已授权 notice。
+- `docs/change-release-ledger.md` — 本移动端配对单元记录。
+
+### Impact / Dependencies
+
+- API / database / migration / config: none. Continues to call existing authenticated Inbox API and Push registration APIs; no production reads/writes performed in this task.
+- Paired root units: root `CRL-20260812-012` supplies the confirmed checkout server recipient contract; root `CRL-20260812-013` records the matching Registry/FR contract. Both must be deployed/released with this mobile unit before user-facing completion can be claimed.
+- Excluded: server policy resolver, task cache behavior outside notification entry, Badge implementation, push registration, EAS/native build and real devices.
+
+### Validation
+
+- `npm run test -- --runInBand --no-cache src/lib/notificationInbox.test.ts` — passed (1 suite, 4 tests), including a server-authorized checkout row that has no matching local task cache and event-ID lookup of the synchronized authoritative notice.
+- `npm run typecheck`, `npm run lint`, and `npm run check:buttons` — passed. Lint completed with 0 errors and 109 pre-existing repository warnings.
+- `npm test -- --runInBand` — passed (56 suites, 338 tests). Four existing React `act(...)` console warnings in the `CleaningMediaPreview` feedback test remain unrelated to this notification unit.
+- `npm run check:ci` — blocked before TypeScript/lint/Jest by its first `check:ledger` step: 16 remote CRLs are absent locally and 14 historical CRL identities differ. The remaining checks above were therefore run separately. Scoped `git diff --check` — passed; the direct mobile ledger audit has the same pre-existing block, so release coverage cannot be claimed.
+- No API/network/Push/device flow is exercised locally.
+- 阶段 7 真机前置（2026-08-12）— iPhone 13 已连接且 Developer Mode 可用；设备仅安装 MZStay 1.0.26 (Build 26)，不能加载这份未发布源码。EAS `development` profile 构建清单为空，且项目没有 `ios/` 原生目录或 `expo-dev-client` 依赖；未启动 App、登录、注册 token、触发 checkout 或发送 Push。创建仅供 dev 验收的 development build 需要用户单独授权，不能用 TestFlight 版本替代本单元证据。
+
+### Release Attempts
+
+- None. The user authorized local implementation only; no staging, commit, push, PR, EAS update/build, deployment or production operation is authorized.
+
+### Risks / Release Notes
+
+- Risk: a Push whose event ID is not returned by the latest Inbox sync now opens the notices list rather than trusting unverified raw payload for task navigation. This is intentional authorization fail-safe; real device Push timing remains unverified.
+- CRL ID reconciliation: this uncommitted mobile unit was previously numbered `CRL-20260812-011`. It is paired with the root governance unit, so both are renumbered to `CRL-20260812-013` after fetched root `origin/Dev` showed that `008` and `009` are already reserved by unrelated units.
+- Rollback: restore the removed client filter and include callback together; no server or stored notification data requires rollback.
+- Sensitive-information review: no tokens, credentials, `.env` values, database URLs, device logs, private media or production records added.
+- Git state: shared mobile worktree already contains extensive unrelated changes. This unit is unstaged, uncommitted, unpushed and undeployed.
+
+## CRL-20260811-002 — 入住检查承接状态与延期展示修正（mobile）
+
+- **Status:** pending-local
+- **Reconciliation state:** LOCAL_UNCOMMITTED_VERIFIED
+- **Reconciliation evidence:** R0 proves a distinct current source-worktree delta, but no business hunk is present in this clean ledger-only worktree.
+- **Updated:** 2026-08-11 11:02 Australia/Melbourne
+- **Request:** 已承接的延期检查在移动端被错误显示为“已检查”；退房日须保留延期检查，承接日仅显示真实入住检查。
+- **Outcome:** 移动端与服务端归一化投影一致：旧承接记录仍显示延期计划和原日期，实际 `checkin_clean` 显示“入住检查”，承接日不再出现重复延期卡。
+
+### Files / Areas
+
+- `src/lib/cleaningInspection.ts` — 归一化旧承接记录。
+- `src/lib/cleaningInspection.test.ts` — 覆盖延期/真实完成显示边界。
+- `src/screens/tabs/TasksScreen.tsx`, `src/screens/tasks/ManagerDailyTaskScreen.tsx` — 复用归一化结果，保留延期日期并明确入住检查。
+- `docs/change-release-ledger.md` — 记录本独立 mobile 单元。
+
+### Impact / Dependencies
+
+- API: depends on root `CRL-20260811-002` 返回规范化承接字段；不改变请求、权限、离线队列或本地媒体。
+- Database / migration / configuration: none.
+
+### Validation
+
+- `npm test -- --runInBand src/lib/cleaningInspection.test.ts` — passed: 1 suite / 4 tests.
+- `npm run typecheck` — passed.
+- `npx eslint src/lib/cleaningInspection.ts src/lib/cleaningInspection.test.ts src/screens/tabs/TasksScreen.tsx src/screens/tasks/ManagerDailyTaskScreen.tsx` — passed with 0 errors; existing warnings remain.
+- Device, deployed backend, OTA/build and production verification — not run.
+
+### Release Attempts
+
+- None. This runtime correction is uncommitted and not selected for commit or push.
+
+### Risks / Release Notes
+
+- The client cannot correct a deployed backend that still sends the old `checked_done` projection; root and mobile must be released in the documented order.
+- Sensitive-information review: no credentials, tokens, database URLs, guest data, media bytes, or production records are added.
+
+## CRL-20260807-003 — 检查面板媒体稳定上传与终态重试隔离（mobile）
+
+- **Status:** pending-local
+- **Reconciliation state:** LOCAL_UNCOMMITTED_VERIFIED
+- **Reconciliation evidence:** R0 proves a distinct current source-worktree delta, but no business hunk is present in this clean ledger-only worktree.
+- **Updated:** 2026-08-07 Australia/Melbourne
+- **Request:** 执行照片规范阶段 5，修复检查面板上传未传稳定任务/媒体 ID，且 401/403/本地文件丢失会在联网、回前台或登录恢复时反复重试的问题。
+- **Outcome:** 检查批次、检查后追加问题和检查批次中的反馈照片都使用稳定媒体身份上传；自动队列不会重传 401、403、缺本地文件、无稳定 ID 或幂等冲突的失败。仅用户主动重试可再次尝试 401。
+
+### Implementation
+
+- Previous behavior: 检查批次上传仅传 `purpose` 等显示元数据，R2 key 会由后端回退随机值；自动队列对失败步骤不分类，网络恢复/回前台可再次请求 401、403 或本地文件已丢失的上传，并可能继续执行依赖上传结果的业务保存。
+- New behavior: 既有检查批次队列上传统一传 `cleaning_task_id + media_id`，检查后追加问题同样传入；检查批次反馈照片将新建的 `media_id` 持久化到既有 photo metadata，历史草稿使用不暴露路径的确定性兼容 ID。上传未成功时不再继续写补品、检查或反馈业务记录。401 可由用户明确重试一次，403/缺文件等终态失败只能保留原因并等待权限刷新或重建草稿。
+- Key decisions: 不新增队列、缓存键、上传接口、数据库、依赖或 R2 直传；继续复用已有检查队列、Auth 恢复维护入口与本地文件保留/延迟清理机制。
+
+### Files / Areas
+
+- `src/lib/inspectionPanelSubmitQueue.ts` — 稳定上传元数据、历史反馈媒体兼容 ID、不可自动恢复错误的队列阻断、上传失败后的业务步骤依赖保护。
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — 覆盖稳定 ID、401/403/本地文件终态阻断及明确 401 重试。
+- `src/lib/inspectionPanelFeedbackDraft.ts` — 检查批次反馈照片元数据持久化稳定 `media_id`。
+- `src/screens/tasks/FeedbackFormScreen.tsx` — 检查批次模式新照片生成并保存稳定反馈媒体 ID。
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — 覆盖检查批次反馈照片稳定媒体 ID 的本地持久化。
+- `src/screens/tasks/InspectionPanelScreen.tsx` — 检查后问题照片上传传入稳定 ID；用户点击“重试同步”时才允许再次尝试 401。
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — 覆盖检查后问题照片上传元数据。
+- `docs/change-release-ledger.md` — 记录本 mobile 单元。
+
+### Impact / Dependencies
+
+- API: consumes paired root `CRL-20260807-005` 对检查领域上传的 `task_id` / `media_id` 强制契约；不新增客户端 API。
+- Database / migration / config / dependencies: none.
+- Protected behavior: 网络、超时和 5xx 保留现有可恢复重试；本地媒体不因失败删除。403/缺文件仍在现有失败详情中可见，用户可“放弃并重建草稿”。
+- Related units: must release together with root `CRL-20260807-005`; server-first release would block old mobile inspection uploads.
+- Production data / external sync: none read or written.
+
+### Validation
+
+- `npm run test -- --runInBand --no-cache src/lib/inspectionPanelSubmitQueue.test.ts src/screens/tasks/InspectionPanelScreen.test.tsx src/screens/tasks/FeedbackFormScreen.test.tsx` — passed: 3 suites / 41 tests. Jest emitted two existing `CleaningMediaPreview` asynchronous `act(...)` warnings; no test failed.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors / 112 existing warnings.
+- `npm run check:buttons` — passed: no suspicious hard-coded button dimensions.
+- Root upload diagnostics and backend no-emit typecheck — passed; see paired root `CRL-20260807-005`.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 104 changed files / 104 recorded.
+- `git diff --check -- <current-task root/mobile paths>` — passed.
+
+### Release Attempts
+
+- None. User authorized implementation only; no staging, commit, push, PR, EAS build/OTA, deployment or production action is authorized.
+
+### Risks / Release Notes
+
+- Real iOS/Android login refresh, actual camera file loss, background/foreground recovery, deployed API compatibility and non-production R2 overwrite have not been run.
+- Rollback: revert together with root `CRL-20260807-005`; no local migration or remote object deletion occurs.
+- Sensitive-information review: no credentials, tokens, media bytes, raw private URLs, `.env` values, database URLs, logs or production data were added.
+- Git state: shared mobile worktree was already extensively dirty; this unit is uncommitted and unrelated changes remain untouched.
+
+## CRL-20260806-005 — Android 自适应启动图标安全区修复（mobile）
+
+- **Status:** pending-local
+- **Reconciliation state:** LOCAL_UNCOMMITTED_VERIFIED
+- **Reconciliation evidence:** R0 proves a distinct current source-worktree delta, but no business hunk is present in this clean ledger-only worktree.
+- **Updated:** 2026-08-06 21:12 Australia/Melbourne
+- **Request:** 安卓版本 App Logo 显示不全。
+- **Outcome:** Android 启动器改用保留安全留白的自适应前景图，M/Z 标识不再贴近系统掩膜裁切边界；iOS 图标与 App 内业务界面不变。
+
+### Implementation
+
+- Previous behavior: `android.adaptiveIcon.foregroundImage` 直接使用铺满 1024px 画布的 `icon.png`，Android launcher 掩膜会裁掉贴近边缘的 M/Z 笔画；背景颜色也与黑色品牌底图不一致。
+- New behavior: `adaptive-icon.png` 使用原有标识的确定性缩放透明前景版本，标识完整置于中央 620px 安全区；Android 配置引用该前景图并使用黑色背景。
+- Key decisions: 只调整 Android launcher 资源与 Expo 配置；不修改 `icon.png`、iOS、版本号、EAS profile、应用逻辑、API、权限、任务状态或生产数据。
+
+### Files / Areas
+
+- `assets/adaptive-icon.png` — replaced Expo template grid with the existing MZ mark centered inside Android adaptive-icon safe padding as a transparent RGBA foreground.
+- `app.json` — Android adaptive foreground path and matching black background.
+- `docs/change-release-ledger.md` — records this mobile unit.
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies / external sync: none.
+- Config: Android native launcher resource only; it requires a new Android binary build to reach installed devices and cannot be delivered by a JavaScript-only OTA update.
+- Protected behavior: authentication, task flow, weak-network queues, permissions, media, iOS icon, and App UI are unchanged.
+- Production data: none read or written.
+
+### Validation
+
+- Expo resolved-config check — passed: foreground resolves to `./assets/adaptive-icon.png`, background to `#000000`, while the general/iOS icon remains `./assets/icon.png`.
+- Deterministic asset inspection — passed: 1024 × 1024 RGBA PNG; non-transparent M/Z bounds are `x=213..807`, `y=258..737`, fully inside the `202..821` safe region.
+- `npm run check:ci` — passed: mobile ledger coverage, TypeScript, ESLint (0 errors / 112 existing warnings), strict button audit, and 54 Jest suites / 299 tests.
+- Launcher/emulator and physical Android verification — not run.
+
+### Release Attempts
+
+- None. The user requested a source repair only; no staging, commit, push, EAS build, OTA, deployment or production write is authorized.
+
+### Risks / Release Notes
+
+- Risk: actual launcher masks and OEM icon scaling still require installation on an Android device or emulator to prove the visual result.
+- Rollback: restore the previous adaptive resource/configuration; no app data, server data or media is affected.
+- Sensitive-information review: no credentials, tokens, `.env` contents, private-media data, device logs or production data were added.
+- Git state: shared dirty mobile worktree; this unit's files are unstaged, uncommitted, unpushed and undeployed.
+
+## CRL-20260806-003 — 补品照片本地可解码防线（mobile）
+
+- **Status:** pending-local
+- **Reconciliation state:** LOCAL_UNCOMMITTED_VERIFIED
+- **Reconciliation evidence:** R0 proves a distinct current source-worktree delta, but no business hunk is present in this clean ledger-only worktree.
+- **Updated:** 2026-08-06 Australia/Melbourne
+- **Request:** WSP3709B 的补品现场照片会被标记“已拍”但缩略图空白；在本地媒体保存后补上可解码验证。
+- **Outcome:** 补品照片复制到 App 私有目录后，必须由原生图片解码器成功读取，才会返回给页面写入草稿；不支持或损坏的本地副本立即删除并提示重新拍摄，不能再显示为“已拍”。
+
+### Implementation
+
+- Previous behavior: 格式转换已返回新 URI 时，只确认目标文件存在；不能读取的 HEIC/JPEG 副本仍会写入草稿并在页面显示“已拍”。
+- New behavior: `persistCompressedCleaningConsumablesPhoto` 在私有副本创建后调用 `Image.getSize` 验证正尺寸解码；失败使用稳定 `LOCAL_IMAGE_UNREADABLE` 错误，删除仅本次刚创建、尚未入草稿的副本并阻止页面状态更新。
+- Key decisions: 保持相机、压缩、弱网队列、上传、任务状态和后端鉴权不变；不尝试自动修复已损坏的历史本地照片。
+
+### Files / Areas
+
+- `src/lib/imageCompression.ts` — 新增本地图片可解码断言和稳定错误码。
+- `src/lib/cleaningConsumablesDraft.ts` — 补品私有副本保存后验证，失败时仅清理该未引用副本。
+- `src/lib/imageCompression.test.ts` — 覆盖原生解码失败。
+- `src/lib/cleaningConsumablesDraft.test.ts` — 覆盖副本验证成功、失败清理与拒绝返回。
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — 覆盖不可解码照片不显示“已拍”。
+- `docs/change-release-ledger.md` — 本独立移动仓库变更记录。
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Protected behavior: 捕获失败发生在页面草稿与队列之前；不会上传媒体、提交补品、改变任务状态或重试已有请求。
+- Related units: FR-004；mobile `CRL-20260806-002` 仅处理上传失败诊断；root `CRL-20260806-005` 记录本次 FR 更新。
+- Production data / external sync: none during implementation or validation.
+
+### Validation
+
+- `npm run test -- --runInBand --no-cache src/lib/imageCompression.test.ts src/lib/cleaningConsumablesDraft.test.ts src/screens/tasks/SuppliesFormScreen.test.tsx` — passed: 3 suites / 19 tests.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors / 112 existing warnings.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 101 changed files / 101 recorded.
+- `npm run check:feature-registry` (root) — passed: 13 FRs / 135 test mappings.
+- `git diff --check -- <current-task paths>` — passed.
+- EAS/native build, iOS/Android physical-device capture, weak-network, deployed API and production verification — not run.
+
+### Release Attempts
+
+- None. User authorized this implementation only; no staging, commit, push, PR, EAS update/build, deployment or production data write is authorized.
+
+### Risks / Release Notes
+
+- `Image.getSize` is a native-decoder gate; physical iPhone verification is still required before claiming the installed App is fixed.
+- Existing blank local photos are not auto-deleted or repaired by this change; users should re-capture after receiving a compatible App build.
+- Rollback: remove the post-copy assertion and its focused tests; no server, R2, task or submitted draft rollback is required.
+- Sensitive-information review: no credentials, tokens, private-media bytes, user data, database URL or production logs were added.
+- Git state: shared mobile worktree has extensive unrelated staged and unstaged changes; this unit is uncommitted, unpushed and undeployed.
+
+## CRL-20260802-005 — 账户与联系人按钮契约收口
+
+- **Status:** pending-local
+- **Reconciliation state:** LOCAL_UNCOMMITTED_VERIFIED
+- **Reconciliation evidence:** R0 proves a distinct current source-worktree delta, but no business hunk is present in this clean ledger-only worktree.
+- **Updated:** 2026-08-02 Australia/Melbourne
+- **Request:** 为移动端台账审计归属已有账户、支出和联系人按钮契约改动，继续验证但不纳入延期检查通知发布范围。
+- **Outcome:** 忘记密码、修改密码、支出操作与联系人拨号复用现有按钮/尺寸 token；提交、密码显示切换、支出选择和拨号行为保持原有调用路径。
+
+### Files / Areas
+
+- `src/screens/ForgotPasswordScreen.tsx` — shared submit button.
+- `src/screens/me/ChangePasswordScreen.tsx` — shared submit/icon buttons.
+- `src/screens/me/ExpenseCenterScreen.tsx` — existing action controls use shared button dimensions.
+- `src/screens/tabs/ContactsScreen.tsx` — call action uses the shared icon-button touch frame.
+- `docs/change-release-ledger.md` — this release unit.
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Related units: existing shared `AppButton` / `AppIconButton` contract; separate from CRL-20260801-011 and its notification dependencies.
+- Production data: none read, written, synchronized or changed.
+
+### Validation
+
+- `npm run test -- --runInBand --no-cache src/components/ui/AppButton.test.tsx src/components/ui/AppIconButton.test.tsx` — passed: 2 suites, 4 tests.
+- `npm run check:buttons` — passed; the four reviewed controls in this unit remain clear.
+- `npm run check:ci` — passed: ledger 98/98, typecheck, lint 0 errors / 113 existing warnings, strict button audit, Jest 53 suites / 280 tests.
+
+### Risks / Release Notes
+
+- This is UI contract work only; no backend requests, permissions or payloads were changed.
+- Selective release must keep these four screen hunks separate from concurrent screen edits.
+- Sensitive-information review: no credentials, tokens, database URLs, contact data, logs or production data were added.
+- Git state: uncommitted and unstaged in a concurrent mobile worktree.
+
+## CRL-20260802-004 — 补品本地媒体清理引用保护
+
+- **Status:** pending-local
+- **Reconciliation state:** LOCAL_UNCOMMITTED_VERIFIED
+- **Reconciliation evidence:** R0 proves a distinct current source-worktree delta, but no business hunk is present in this clean ledger-only worktree.
+- **Updated:** 2026-08-02 Australia/Melbourne
+- **Request:** 为移动端台账审计归属补品媒体清理触发与 v2 引用键改动，并补充本地文件保护回归。
+- **Outcome:** 登录、网络恢复和回到前台时，既有维护流程会处理已排队的补品媒体清理；本地清理在判断孤儿文件前识别补品 v2 队列、草稿和待清理记录中的 `file://` 引用，避免把仍被本机状态引用的媒体误判为孤儿。
+
+### Files / Areas
+
+- `src/lib/auth.tsx` — existing maintenance sequence includes pending consumables-media cleanup.
+- `src/lib/localMediaHousekeeping.ts` — v2 queue, draft and cleanup storage keys are protected-reference sources.
+- `src/lib/localMediaHousekeeping.test.ts` — v2 key recognition regression.
+- `docs/change-release-ledger.md` — this release unit.
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Local state: may process already queued local cleanup tasks; it does not upload, synchronize or alter production data.
+- Related units: FR-004 and existing `cleaningConsumablesDraft` cleanup queue behavior; separate from CRL-20260801-011.
+
+### Validation
+
+- `npm run test -- --runInBand --no-cache src/lib/localMediaHousekeeping.test.ts` — passed: 1 suite, 3 tests, including v2 queue/draft/cleanup keys.
+- `npm run check:ci` — passed: ledger 98/98, typecheck, lint 0 errors / 113 existing warnings, strict button audit, Jest 53 suites / 280 tests.
+- File deletion behavior on a device and authenticated app lifecycle — not run; must be validated before release because this unit participates in local file cleanup.
+
+### Risks / Release Notes
+
+- Local media removal is safety-sensitive: rollback only the listed maintenance/key-recognition hunks; do not delete local photos or drafts manually.
+- Sensitive-information review: no media, credentials, tokens, database URLs, logs or production data were added.
+- Git state: uncommitted and unstaged in a concurrent mobile worktree.
+
+## CRL-20260802-003 — 媒体读取与上传诊断回归
+
+- **Status:** pending-local
+- **Reconciliation state:** LOCAL_UNCOMMITTED_VERIFIED
+- **Reconciliation evidence:** R0 proves a distinct current source-worktree delta, but no business hunk is present in this clean ledger-only worktree.
+- **Updated:** 2026-08-02 Australia/Melbourne
+- **Request:** 为移动端台账审计归属现有媒体读取/上传错误及管理详情照片诊断测试。
+- **Outcome:** API 层继续把读取权限/网络错误交给调用方区分“读取失败”和“没有照片”；管理详情照片读取把权限与网络异常保留为可展示诊断，不伪装为空照片状态。
+
+### Files / Areas
+
+- `src/lib/api.test.ts` — media-read, upload diagnostic, retry and idempotency-error regressions.
+- `src/lib/managerDailyTaskPhotos.test.ts` — permission/network photo-read diagnostics.
+- `docs/change-release-ledger.md` — this release unit.
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Related units: FR-004 and the pre-existing media recovery implementation; separate from CRL-20260801-011.
+- Production data: none read, written, synchronized or changed.
+
+### Validation
+
+- `npm run test -- --runInBand --no-cache src/lib/api.test.ts src/lib/managerDailyTaskPhotos.test.ts` — passed: 2 suites, 8 tests.
+- `npm run check:ci` — passed: ledger 98/98, typecheck, lint 0 errors / 113 existing warnings, strict button audit, Jest 53 suites / 280 tests.
+- Device media reads — not run.
+
+### Risks / Release Notes
+
+- Tests do not authorize remote-media or production reads; use the existing authorized media path for any device acceptance.
+- Sensitive-information review: no tokens, credentials, database URLs, media content, local paths, sensitive logs or production data were added.
+- Git state: uncommitted and unstaged in a concurrent mobile worktree.
+
+## CRL-20260802-002 — 通知缓存冷启动恢复
+
+- **Status:** pending-local
+- **Reconciliation state:** LOCAL_UNCOMMITTED_VERIFIED
+- **Reconciliation evidence:** R0 proves a distinct current source-worktree delta, but no business hunk is present in this clean ledger-only worktree.
+- **Updated:** 2026-08-02 Australia/Melbourne
+- **Request:** 修复通知详情在本地缓存冷启动读取期间可能持续显示加载状态，确保延期检查冲突通知可稳定打开。
+- **Outcome:** 通知存储把并发初始化合并为同一 Promise，读取失败不会把存储永久标记为已初始化；详情页在读取失败后结束加载并显示既有错误态，而不是无限 loading。缓存可读时仍正常展示详情。
+
+### Implementation
+
+- **Previous behavior:** `initNoticesStore` 在异步读取完成前就设置已初始化标记；并发入口可能获得未完成状态，读取失败后也无法重试。详情页没有初始化失败兜底，可能持续显示加载指示器。
+- **New behavior:** 初始化完成后才设置已初始化状态；并发调用等待同一进行中的读取，失败后清理进行中 Promise 以允许下次重试。详情页捕获缓存初始化失败、刷新当前快照并结束加载。
+- **Key decisions:** 复用现有 AsyncStorage、通知快照和错误页；不新增 API、推送通道、存储键、重试队列或依赖。
+
+### Files / Areas
+
+- `src/lib/noticesStore.ts` — modified: 并发初始化合并与失败后重试。
+- `src/lib/noticesStore.test.ts` — modified: 并发读取仅一次、失败后可恢复的回归。
+- `src/screens/notices/NoticeDetailScreen.tsx` — modified: 缓存初始化失败不再永久 loading。
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — modified: 显式等待已发起缓存读取后断言冷启动详情，避免异步 effect 的错误超时。
+- `docs/change-release-ledger.md` — modified: 记录此独立移动端单元。
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Related units: root `CRL-20260801-011`、root `CRL-20260802-002`、mobile `CRL-20260802-001`；通知详情文件有并发 hunk，选择性发布必须逐 hunk 审核。
+- Production data: none read, written, synchronized or changed.
+
+### Validation
+
+- `npm run test -- --runInBand --no-cache src/lib/noticesStore.test.ts src/screens/notices/NoticeDetailScreen.test.tsx src/lib/noticeNavigation.test.ts` — passed: 3 suites, 19 tests.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors, 113 existing warnings.
+- `git diff --check` for the scoped source/tests — passed.
+- `npm run check:ci` and independent mobile ledger audit — passed: ledger 98/98, typecheck, lint 0 errors / 113 existing warnings, strict button audit, Jest 53 suites / 280 tests.
+- Device / push service / EAS build / production validation — not run.
+
+### Risks / Release Notes
+
+- The cold-start cached detail contract is covered locally, but it is not proof of an authenticated device push → inbox sync → detail navigation flow.
+- Rollback only this unit's store/detail/test hunks; do not delete notices, tasks, local photos or drafts.
+- Sensitive-information review: no tokens, credentials, database URLs, notification content from production, cookies, private keys, sensitive logs or production data were added.
+- Git state: independent mobile worktree has concurrent staged/unstaged changes; this unit is unstaged, uncommitted, unpushed and undeployed.
+
+## CRL-20260802-001 — 延期检查冲突通知仅查看详情
+
+- **Status:** pending-local
+- **Reconciliation state:** LOCAL_UNCOMMITTED_VERIFIED
+- **Reconciliation evidence:** R0 proves a distinct current source-worktree delta, but no business hunk is present in this clean ledger-only worktree.
+- **Updated:** 2026-08-02 Australia/Melbourne
+- **Request:** 延期检查冲突通知使用 `open_notice` 时，移动端必须只打开通知详情，不能从两个关联任务中任意路由第一条。
+- **Outcome:** `open_notice`、`open_property_day_notice` 和 `property_day` 统一为 notice-only。推送点击保留在通知收件箱/详情，详情页不显示“查看任务”；普通任务通知保留原有任务路由。
+
+### Implementation
+
+- **Previous behavior:** `RootNavigator` 与 `NoticeDetailScreen` 分别只处理房源当日通知；`open_notice` 仍会从 `task_ids` 选择第一个任务并路由。
+- **New behavior:** 两个入口复用无副作用的 `isNoticeOnlyAction`。延期检查冲突数据即使含两个任务 ID，也不会创建任务路由或显示任务按钮。
+- **Key decisions:** 不修改后端通知 payload、任务/权限逻辑、推送注册、存储结构或 API；仅统一已有 action 的客户端语义。
+
+### Files / Areas
+
+- `src/lib/noticeNavigation.ts` — added: notice-only action 判定。
+- `src/lib/noticeNavigation.test.ts` — added: conflict/property-day/普通任务 action 回归。
+- `src/navigation/RootNavigator.tsx` — modified: 推送响应不为 notice-only action 构建任务路由。
+- `src/screens/notices/NoticeDetailScreen.tsx` — modified: notice-only action 不显示“查看任务”。
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — modified: 延期检查冲突的多个任务 ID 停留通知详情。
+- `docs/change-release-ledger.md` — modified: 记录此独立移动端单元。
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Related units: root `CRL-20260802-002`、root FR-010、existing mobile `CRL-20260801-001`；与详情和导航文件的其他并发 hunk 必须分开暂存。
+
+### Validation
+
+- `npm run test -- --runInBand --no-cache src/lib/noticeNavigation.test.ts` — passed: 3 tests.
+- `npm run test -- --runInBand --no-cache src/screens/notices/NoticeDetailScreen.test.tsx` — partial: 新增延期冲突用例通过；既有持久化通知加载用例仍在 `ActivityIndicator` 失败。
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors, 113 existing warnings.
+- `npm run check:ci` and `python3 scripts/audit_change_release_ledger.py` — passed: ledger 98/98, typecheck, lint 0 errors / 113 existing warnings, strict button audit, Jest 53 suites / 280 tests.
+- Device / push service / EAS build / production validation — not run.
+
+### Risks / Release Notes
+
+- The persisted-notice loader failure was resolved by CRL-20260802-002; the combined local notification test set and the full independent-mobile `check:ci` now pass.
+- No production notification, task, local photo, queue, token, credential, database URL or other sensitive data was read or changed.
+- Rollback only this unit's helper/navigation/detail/test hunks; do not delete notices, tasks, media or local drafts.
+- Git state: nested mobile worktree has concurrent staged/unstaged changes; this unit is unstaged, uncommitted, unpushed and undeployed.
+
+## CRL-20260811-003 — 台账编号唯一性与已发布单元变更隔离（mobile governance）
+
+- **Status:** reconciled-ledger-only
+- **Reconciliation state:** LOCAL_LEDGER_ONLY
+- **Reconciliation evidence:** The prior local ledger names this unit, but R0 found no separately provable current source-worktree content delta.
+- **Updated:** 2026-08-11 Australia/Melbourne
+- **Request:** 与 root 配对更新台账规则，阻止重复 CRL 编号，以及在已发布单元下追加新的移动端行为。
+- **Outcome:** mobile 普通覆盖审计和精确发布报告均会拒绝重复编号，以及在 `pushed`、`merged` 或 `deployed` 证据后追加 `### Update` 行为变更；新的移动端修正必须单独建 CRL。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — 普通审计增加台账结构门禁，发布报告复用相同规则。
+- `scripts/tests/test_audit_change_release_ledger.py` — 覆盖重复编号和发布后行为更新的拒绝。
+- `docs/change-release-ledger.md` — 记录本独立 mobile 治理单元。
+
+### Impact / Dependencies
+
+- Runtime / API / database / migration / configuration: none.
+- Related root governance unit: root `CRL-20260811-003`; 两个仓库分别验证、提交和发布。
+
+### Validation
+
+- `python3 scripts/tests/test_audit_change_release_ledger.py` — passed: 11 tests, including duplicate-ID and published-CRL behavior-update rejection.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 108 changed files / 108 recorded files / Coverage PASS.
+- paired root auditor regression/audit — passed: 11 tests; 148 changed files / 148 recorded files / Coverage PASS.
+- scoped `git diff --check` — passed.
+
+### Release Attempts
+
+- None. This governance unit is uncommitted and not selected for commit or push.
+
+### Risks / Release Notes
+
+- The rule blocks ambiguous release evidence but does not alter existing business data, media, OTA, or deployed application behavior.
+- Sensitive-information review: no credentials, tokens, database URLs, private media, logs, or production data are added.
+
+## CRL-20260808-003 — 真机开发登录本地 API 连通修复（mobile）
+
+- **Status:** reconciled-ledger-only
+- **Reconciliation state:** LOCAL_LEDGER_ONLY
+- **Reconciliation evidence:** The prior local ledger names this unit, but R0 found no separately provable current source-worktree content delta.
+- **Updated:** 2026-08-08 Australia/Melbourne
+- **Request:** 开发环境移动端登录显示“网络超时，请检查网络”，要求改到可用。
+- **Outcome:** 真机开发会请求 Mac 的局域网 API 地址，不再把 `localhost` 解析为手机自身；本机后端继续使用现有 4002 端口。
+
+### Implementation
+
+- Previous behavior: 本地 Expo 环境覆盖 API 为回环地址；真机请求落到设备自身，登录在客户端 15 秒超时后失败。
+- New behavior: 本地覆盖改为当前开发主机的局域网 IPv4 地址；不修改移动端登录请求、认证、角色、缓存、后端业务或 EAS profile。
+- Key decisions: 仅修改被 Git 忽略的本机开发配置；不把局域网地址写入源码、EAS、Git 或本台账。
+
+### Files / Areas
+
+- `.env.local` — 本机开发 API 覆盖由回环地址调整为开发主机局域网地址（忽略文件，不纳入版本控制）。
+- `docs/change-release-ledger.md` — 记录本机开发连通性修复，不记录环境值。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies: none.
+- Config / environment: 仅当前开发机的 Expo 本地环境；重新加载 Metro 后生效。生产、TestFlight、preview 和 EAS profile 不受影响。
+- Protected behavior: 既有 `/auth/login`、token、`/auth/me`、权限和离线队列不变。
+- Related units: none.
+
+### Validation
+
+- Static configuration check — passed: local override is a private-LAN host, not a loopback host, and uses port 4002.
+- `GET /health` through the development host LAN address — passed: HTTP 200; no credentials or business writes.
+- `npm run start -- --clear --lan` — passed: Metro rebuilt its cache, loaded `.env.local`, and is serving the current project on the LAN Expo endpoint.
+- Real device login — pending: requires Expo reload and an actual physical-device attempt; not inferred from local checks.
+- Typecheck / lint / Jest — not run: no tracked mobile source or behavior changed.
+
+### Release Attempts
+
+- None. This is an ignored local development-environment repair; no staging, commit, push, PR, EAS build/OTA, deployment or production action is authorized.
+
+### Risks / Release Notes
+
+- The LAN address may change when the Mac changes networks; update only this ignored local file if it does.
+- The phone and Mac must be on the same LAN, and firewall policy must permit inbound TCP 4002.
+- Expo reported pre-existing package-version compatibility warnings during Metro startup; no dependency was changed for this narrow environment repair.
+- Rollback: restore the previous local override; no server, user, database, cache or media data is changed.
+- Sensitive-information review: no credentials, tokens, passwords, private keys, database URLs, device logs or environment values are stored in this ledger. The ignored `.env.local` file is not staged or committed.
+- Git state: mobile worktree was already extensively dirty; this unit adds no tracked application source change.
+
+## CRL-20260803-002 — 发布决策审计报告第二阶段
+
+- **Status:** reconciled-ledger-only
+- **Reconciliation state:** LOCAL_LEDGER_ONLY
+- **Reconciliation evidence:** The prior local ledger names this unit, but R0 found no separately provable current source-worktree content delta.
+- **Updated:** 2026-08-03 Australia/Melbourne
+- **Request:** 执行发布候选治理改造第二阶段：为独立 mobile 仓库增加只读精确 Release Attempt 报告、Markdown/JSON 输出和隔离 Git fixture 回归。
+- **Outcome:** mobile audit 现在支持 `--release-report --repo mobile --base --head --crl --format`。它只以 mobile 自己的 ledger 和 Git range 判断推送准入，不能把 root CRL、root 测试或 root report 误作 mobile 证据。
+
+### Implementation
+
+- **Previous behavior:** mobile audit 仅做当前工作区 path coverage，且 mobile AGENT 没有可执行的 exact range report 命令。
+- **New behavior:** 无参数 coverage audit 保持兼容；`--release-report` 读取指定 mobile CRL 的 Release Attempt，检查 `origin/Dev` base、range、文件范围、共享 hunk、生成物、candidate content commit、hash、验证、审查、授权与敏感类别，并输出 Markdown/JSON。candidate hash 排除 ledger bookkeeping，完整 range 仍覆盖 ledger。
+- **Key decisions:** 命令从不 fetch、改 ledger、stage、commit、push、PR、EAS、API 或生产数据。`GO` 仅表示指定 exact local range 的 push action 证据齐全；`BLOCKED` 与 `NOT VERIFIED` 均为非零退出。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — added: mobile exact attempt report、structured output、gate evaluation and legacy coverage compatibility.
+- `scripts/tests/test_audit_change_release_ledger.py` — added: mobile-local temporary Git fixture regression suite.
+- `AGENTS.md`、`docs/codex-release-review.md` — 补充 candidate content commit/audit head 自引用边界和 mobile report 命令。
+- `docs/change-release-ledger.md` — 记录本 mobile 第二阶段治理单元。
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Related units: depends on mobile `CRL-20260803-001`; paired with root `CRL-20260803-002`. Root evidence 必须明确记录为依赖 SHA，不能替代本仓库 report。
+- Production data: none read, written, synchronized or changed.
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed: 9 isolated Git fixture tests; legacy coverage sub-check passed with 0/0 in each fixture.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/audit_change_release_ledger.py` — passed: Changed files 100; Recorded changed files 100; Coverage PASS.
+- Scoped working-tree/index `git diff --check` for tracked Phase 1/2 mobile policy files — passed. Scoped trailing-whitespace scan, including new review/audit/test files, — passed: no findings.
+- Real candidate report against the mixed mobile worktree, fetch/worktree creation, independent release review, commit, push, PR, EAS, device and production validation — not run; no mobile business CRL was selected.
+
+### Release Attempts
+
+- None. This CRL implements report/tooling only; it has no selected mobile business attempt, base, candidate content commit, push authorization or remote evidence.
+
+### Risks / Release Notes
+
+- **Evidence boundary:** the report consumes local Git and ledger evidence only. It cannot fetch a remote, prove an unrecorded user decision, run EAS or verify real mobile/device behavior.
+- **Detection boundary:** configured generated/sensitive categories are a conservative gate, not a substitute for an independent review or secret-management control.
+- **Rollback:** revert only this CRL's mobile audit/test/policy hunks; do not alter existing business code, EAS state, remote branches or production data.
+- **Sensitive-information review:** no credentials, tokens, database URLs, cookies, private keys, sensitive logs, local caches or production data were added. Fixture tests use only a temporary `.env` path marker and do not print content.
+- **Git state:** uncommitted and unstaged. The independent mobile worktree contains pre-existing staged/unstaged/untracked concurrent changes; no broad staging is permitted.
+
+## CRL-20260803-001 — 发布决策契约第一阶段
+
+- **Status:** reconciled-ledger-only
+- **Reconciliation state:** LOCAL_LEDGER_ONLY
+- **Reconciliation evidence:** The prior local ledger names this unit, but R0 found no separately provable current source-worktree content delta.
+- **Updated:** 2026-08-03 Australia/Melbourne
+- **Request:** 执行发布候选治理改造第一阶段：为独立 mobile 仓库固化技术状态、用户授权、动作准入和独立审查契约，不实施审计报告脚本或业务发布。
+- **Outcome:** mobile 的 CRL 与 Release Attempt 现在明确分层；root 的状态、测试或审查不能替代 mobile 证据。只有指定 mobile commit 通过精确 range 审计且用户单独批准 push 后，attempt 才可称为 `push-ready`。
+
+### Implementation
+
+- **Previous behavior:** mobile 要求显式 push 授权，但没有完整定义 candidate、verified、committed 与授权/准入的独立状态，也没有独立的审查模板。
+- **New behavior:** mobile `AGENTS.md` 定义 Release Attempt、技术状态、授权和 `GO` / `BLOCKED` / `NOT VERIFIED`；新增独立审查模板，固定候选清单输出和 clean release worktree 规则。
+- **Key decisions:** mobile 是独立仓库；相关 root CRL/SHA 只能作为显式依赖记录。本阶段不改移动端业务、EAS、依赖、配置、API 或生产数据。
+
+### Files / Areas
+
+- `AGENTS.md` — 新增独立 mobile Release Decision Contract，更新现有 ledger 审计的边界说明。
+- `docs/codex-release-review.md` — added: mobile 独立 Release Attempt 审查模板。
+- `docs/change-release-ledger.md` — 记录本 mobile 治理单元。
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Related units: paired with root `CRL-20260803-001`; root `CRL-20260801-014` 仅为相关分支规则，不构成 mobile 发布证据。
+- Production data: none read, written, synchronized or changed.
+
+### Validation
+
+- Scoped working-tree and index `git diff --check` for the tracked Phase 1 mobile policy files — passed.
+- Scoped trailing-whitespace scan including the new untracked `docs/codex-release-review.md` — passed: no findings; `git diff --no-index --check /dev/null docs/codex-release-review.md` produced no whitespace diagnostic (its exit 1 only denotes a new file).
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/audit_change_release_ledger.py` — passed: Changed files 99; Recorded changed files 99; Coverage PASS. This existing audit checks worktree path coverage only, not the Phase 2 release report.
+- Independent review / commit / push / PR / EAS / device / production validation — not run; no Release Attempt has been created.
+
+### Release Attempts
+
+- None. This CRL creates policy and review-template prerequisites only; it has no fetched base, candidate patch, commit, selection, push approval, or remote evidence.
+
+### Risks / Release Notes
+
+- **Adoption risk:** the new contract is documentary until Phase 2 adds a read-only release report and fixture tests; it must not be described as automated enforcement yet.
+- **Compatibility:** existing CRL text is not backfilled. Historical `ready` or `pushed` text without an exact new Release Attempt remains `NOT VERIFIED` for a future release query.
+- **Rollback:** revert only this CRL's mobile AGENT/review/ledger hunks; do not alter existing mobile business code, EAS state, remote branches or production data.
+- **Sensitive-information review:** no credentials, tokens, database URLs, cookies, private keys, sensitive logs, local caches or production data were added.
+- **Git state:** uncommitted and unstaged. The independent mobile worktree contains pre-existing staged/unstaged/untracked concurrent changes; no broad staging is permitted.
+
+## CRL-20260811-001 — 移动端远端历史分支与重复 PR 清理
+
+- **Status:** reconciled-ledger-only
+- **Reconciliation state:** LOCAL_LEDGER_ONLY
+- **Reconciliation evidence:** The prior local ledger names this unit, but R0 found no separately provable current source-worktree content delta.
+- **Updated:** 2026-08-11 Australia/Melbourne
+- **Request:** 整理 `mz-cleaning-app-frontend` 的远端分支，仅保留正式分支与尚有未决代码的候选分支。
+- **Outcome:** 关闭重复的 PR #9，并删除 8 个已被 `Dev` 包含或无共同开发历史的远端分支；保留 `Dev`、`main` 和仍含未入库检查提交修复的 PR #11 分支。
+
+### Implementation
+
+- Previous behavior: 远端保留多个已合入 `Dev` 的历史 `codex/*` 分支、一个仅含旧 README 的 `Dev-app` 分支，以及一个重复的开放 PR。
+- New behavior: PR #9 已关闭；`Dev-app`、`codex/cleaning-media-integrity-20260731`、`codex/governance-ledger-mobile-20260729`、`codex/offline-assignment-consistency-20260731`、`codex/phase3-mobile-ci-merge-gates`、`codex/release-mzstay-1-0-25-20260730`、`codex/release-selected-20260801-mobile` 和 `codex/release-selected-mobile-20260805` 已从远端删除。
+- Key decisions: 不删除 `codex/checkin-inspection-stability-20260731`，因为其修复尚未进入 `Dev`；不执行合并、同步、本地分支删除、业务代码改动、部署或生产操作。
+
+### Files / Areas
+
+- GitHub PR #9 — closed without merge because its head commit was already contained in `Dev`.
+- Remote refs — deleted only after containment/orphan verification.
+- `docs/change-release-ledger.md` — records this repository-administration unit.
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies / production data: none.
+- Related candidate: PR #11 (`codex/checkin-inspection-stability-20260731`) requires a separate decision, clean `Dev`-based integration branch, ledger-conflict resolution and validation before any merge.
+
+### Validation
+
+- GitHub PR query — passed: PR #9 state changed from `open` to `closed` at 2026-08-11 12:19 AEST; it was not merged.
+- `git push origin --delete <eight exact branch names>` — passed.
+- `git ls-remote --heads origin` — passed: only `Dev@6539fb5`, `main@59e8059`, and `codex/checkin-inspection-stability-20260731@b67cd6e` remain.
+- Application tests/typecheck/lint/build — not run: no application code, dependency, configuration, or build output changed.
+
+### Release Attempts
+
+- None. This is remote repository administration, not a content release; no commit, push of content, PR merge, EAS update/build, deployment, or production write was performed.
+
+### Risks / Release Notes
+
+- Rollback: each deleted branch can be recreated from its previously verified tip SHA if later needed; no source history or merged `Dev` content was removed.
+- Sensitive-information review: no credentials, tokens, environment values, private media, logs or production records were added.
+- Git state: the shared mobile worktree was already extensively dirty and 53 commits behind `origin/Dev`; its existing changes were neither synchronized nor staged.
+
+## CRL-20260813-003 — 房源问题通知私有照片认证读取（mobile）
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-13 Australia/Melbourne
+- **Request:** 修复移动端信息中心“发现房源问题 / 维修”通知中的私有照片空白；`issue_reported` 的列表、详情和大图均走认证读取，不改变其他照片域或通知业务规则。
+- **Outcome:** `issue_reported` 现在和既有钥匙/临时通知一样，缩略图使用 `CleaningMediaImage`、大图使用 `CleaningMediaPreview`。私有 `maintenance/`、`mzapp/` 和 `cleaning/` 引用经认证代理读取，公开历史地址继续由现有媒体构造器兼容处理。
+
+### Implementation
+
+- Previous behavior: `noticePresentation` 已将 `issue_reported` 的照片投影到 `notice.images`，但通知列表、详情和预览只识别钥匙与临时通知为认证媒体，导致反馈私有键被原生 `Image` 直连并显示空白。
+- New behavior: 三个通知展示入口都将 `issue_reported` 纳入已有认证媒体分支；使用相同的缩略图和预览组件，保留组件的认证头、代理、缓存和 403/404 终态。
+- Key decisions: 不创建新的 viewer、URL 规则、客户端权限判断或反馈媒体 API；不改 `noticePresentation`、收件人、任务导航、上传/草稿、后端授权和 R2 策略。
+
+### Files / Areas
+
+- `src/screens/tabs/NoticesScreen.tsx` — `issue_reported` Inbox 缩略图走认证媒体组件。
+- `src/screens/tabs/NoticesScreen.test.tsx` — 私有 `maintenance/...` 问题通知缩略图回归。
+- `src/screens/notices/NoticeDetailScreen.tsx` — `issue_reported` 详情缩略图和大图走认证组件。
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — 私有问题通知的详情/预览回归，取代公共 URL 假阳性测试。
+- `docs/change-release-ledger.md` — 本 mobile 配对单元记录。
+
+### Impact / Dependencies
+
+- API / database / migration / configuration / storage: none. Reuses the existing authenticated `/cleaning-app/media/image` property-feedback path.
+- Notification governance: NTF-008 `issue_reported` event, policy, recipient set, Inbox, Badge, Push, navigation and read state are unchanged.
+- Dependency: paired root CRL-20260813-003 records the regression/surface contract. A deployed backend with the feedback-media association/authorization branch must precede any compatible OTA/build.
+- Excluded: Photo ID/visa, financial receipts, other notification kinds, shared media-helper changes, upload/queue changes, EAS build/OTA, deployment and production/device actions.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/screens/tabs/NoticesScreen.test.tsx src/screens/notices/NoticeDetailScreen.test.tsx` — passed: 2 suites / 10 tests; `issue_reported` private reference uses authenticated list/detail/preview components.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed with 0 errors and 109 existing warnings.
+- `npm run test:mzapp-media-visibility --prefix backend` (paired root dependency) — passed.
+- `npm run check:feature-registry` (root) — passed: 13 FRs / 176 test mappings.
+- `python3 /Users/zhishi/.codex/skills/.system/skill-creator/scripts/quick_validate.py .codex/skills/mz-mobile-photo-feature-rules` (root) and scoped `git diff --check` — passed.
+- `python3 scripts/audit_change_release_ledger.py` — blocked by pre-existing mobile ledger lineage drift: 18 remote CRLs are absent locally and 19 historical CRLs have immutable business-identity differences. No mobile release gate is green from this worktree.
+
+### Release Attempts
+
+- None. The user authorized implementation and local verification only; no staging, commit, push, PR, OTA/build, deployment, production write or real-account device verification is authorized or performed.
+
+### Risks / Release Notes
+
+- Risk: local proof cannot establish the current production backend version, historical object existence or real-role rendering. If the exact feedback record is deleted, ambiguous or unavailable, the authentication component must preserve the existing terminal state rather than reveal a private raw URL.
+- Rollback: revert only the `issue_reported` branches in the two notification screens and the paired regressions; do not restore raw private URL rendering.
+- Sensitive-information review: no credentials, tokens, private URLs, image bytes, production logs or production data are added.
+- Git state: shared mobile worktree was already extensively dirty; this unit is unstaged, uncommitted, unpushed, unpublished and not device-verified.
+
+## CRL-20260813-001 — 移动端钥匙照片通知认证读取
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-13 Australia/Melbourne
+- **Request:** 移动端信息中心的“钥匙照片已上传”通知列表和详情再次显示空白照片；按 MZ Media Incident 流程实施最小修复。
+- **Outcome:** 本地源码和定向回归已验证：仅将 `key_photo_uploaded` 的已关联 `cleaning/...` 媒体引用接入现有认证缩略图与预览组件；不改变通知生成、收件人、导航、媒体授权、R2 或数据。该单元仍受共享台账既有谱系冲突阻断，不能进入提交/发布门禁。
+
+### Implementation
+
+- Previous behavior: `noticePresentation` 已将钥匙照片引用投影到 `notice.images`，但通知列表、详情和预览对该 `kind` 仍使用原生 `Image` 直连私有引用，缺少 Bearer 与 `/cleaning-app/media/image` 认证代理上下文，结果为空白占位。
+- New behavior: `key_photo_uploaded` 与既有 `guest_luggage_updated` 一样使用 `CleaningMediaImage` 的 `thumbnail` 变体和 `CleaningMediaPreview` 的 `preview` 变体；其他通知类型继续使用原有渲染。
+- Key decisions: 复用既有通用清洁媒体组件与服务端精确关联/授权分支；不新增公开 URL、客户端权限判断、后端兼容分支或通知系统。
+
+### Files / Areas
+
+- `src/screens/tabs/NoticesScreen.tsx`, `src/screens/tabs/NoticesScreen.test.tsx` — 钥匙照片通知列表缩略图走认证组件并覆盖回归。
+- `src/screens/notices/NoticeDetailScreen.tsx`, `src/screens/notices/NoticeDetailScreen.test.tsx` — 钥匙照片详情缩略图/预览走认证组件并覆盖回归。
+- `docs/change-release-ledger.md` — 本移动端修复单元记录。
+
+### Impact / Dependencies
+
+- API / database / migration / configuration / R2 / production data: none. 继续使用已有认证 `/cleaning-app/media/image`、`cleaning_task_media` 精确关联和服务端授权。
+- Notification governance: 保持 `NTF-006` 的 `KEY_PHOTO_UPLOADED` 业务事件、服务端 Inbox 收件人、Badge/Push 与 `open_task` 语义不变；本次只修复已授权 Inbox 内的私有媒体读取。
+- Feature rule: 遵循 root `FR-004` 的清洁媒体私有代理缩略图/预览要求；本次不改变规则语义。
+- Excluded: 后端、`noticePresentation` 数据投影、媒体上传/关联、鉴权、对象存储、其他通知类型、EAS/原生构建和生产数据。
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/screens/tabs/NoticesScreen.test.tsx src/screens/notices/NoticeDetailScreen.test.tsx src/lib/cleaningMedia.test.ts` — passed: 3 suites / 21 tests; 覆盖钥匙照片列表缩略图、详情缩略图/预览和认证媒体 URL 生成。
+- `npm run typecheck` — passed.
+- `npm run lint` — passed with 0 errors and 109 existing warnings; 本单元文件没有新增 lint error。
+- `npm run check:buttons` — passed (`button-contract: no suspicious hard-coded button dimensions found`).
+- `git diff --check -- src/screens/tabs/NoticesScreen.tsx src/screens/tabs/NoticesScreen.test.tsx src/screens/notices/NoticeDetailScreen.tsx src/screens/notices/NoticeDetailScreen.test.tsx docs/change-release-ledger.md` — passed.
+- `npm run check:ci` — blocked at its first `check:ledger` step. 审计基于 fetched `origin/Dev@afb46f1dd4b87dc4ab575e50ec9eb3bb38b7fedb` 发现共享本地台账缺少 18 个远端 CRL，且 19 个既有 CRL 的不可变业务身份不一致；该历史台账漂移不由本单元引入。因 CI 未越过台账门禁，后续 typecheck/lint/button/Jest 已以上述命令独立通过。
+- No API/network/Push/device flow is exercised locally; no native build script is defined.
+
+### Release Attempts
+
+- None. 用户授权限于实现和本地验证；未授权 staging、commit、push、PR、OTA/build、部署或生产操作。
+
+### Risks / Release Notes
+
+- Risk: 服务端若未完成 `cleaning_task_media` 关联或当前用户无权读取，认证组件仍会安全地显示加载失败状态，而不会回退为原始私有 URL；需要后续真实设备验证该已授权路径。当前 release gate 还被本单元之外的共享台账谱系冲突阻断。
+- Rollback: 恢复两个界面对 `key_photo_uploaded` 的原生 `Image` 分支；无数据回滚。
+- Sensitive-information review: 不新增 token、凭据、`.env`、媒体原始链接、图片字节、生产日志或生产数据。
+- Git state: 共享 mobile 工作区在本单元开始前已有大量无关改动；本单元未暂存、未提交、未推送、未发布。
+
+## CRL-20260806-006 — 阳台清洁拍摄与管理详情动态展示（mobile）
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-06 Australia/Melbourne
+- **Request:** 清洁人员拍阳台照片，检查人员不拍；管理人员和客服在任务详情动态看到新增区域照片。
+- **Outcome:** 清洁自完成页新增“阳台（有阳台时拍摄，可选）”照片位；检查与补充页不再显示或提交阳台。管理/客服共用的任务详情根据完成照片接口实际返回的区域生成照片组，`completion_balcony` 会显示为“阳台”。
+
+### Implementation
+
+- Previous behavior: 检查页面、草稿和提交队列维护可选 `balcony`；清洁完成照片没有阳台位；管理详情只遍历写死的完成照片区域，所以新区域不会自动显示。
+- New behavior: 清洁完成照片状态、请求类型和 UI 增加可选 `balcony`，不进入八个必拍区域或完成阻塞条件。检查页面、草稿、队列和测试 fixture 删除阳台字段；管理详情按 API 返回的完成照片区域分组，保留旧遥控器区域合并规则。
+- Key decisions: 继续使用既有相机、离线草稿/上传队列、水印、大图预览、任务详情鉴权和 `ManagerDailyTask` 入口；不在客户端猜测房源是否有阳台。
+
+### Files / Areas
+
+- `src/lib/api.ts` — 清洁完成照片区域类型加入 `balcony`。
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — 清洁员可选阳台拍照位、读取状态和待上传快照支持。
+- `src/screens/tasks/InspectionPanelScreen.tsx`, `src/lib/inspectionPanelDraft.ts`, `src/lib/inspectionPanelSubmitQueue.ts` — 移除检查端阳台拍照、草稿和队列写入。
+- `src/lib/managerDailyTaskPhotos.ts`, `src/screens/tasks/ManagerDailyTaskScreen.tsx` — 动态归并完成照片区域并显示阳台标签。
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx`, `src/screens/tasks/InspectionPanelScreen.test.tsx`, `src/screens/tasks/InspectionCompleteScreen.test.tsx`, `src/lib/inspectionPanelSubmitQueue.test.ts`, `src/screens/tasks/ManagerDailyTaskScreen.test.ts` — 覆盖职责转移、可选语义和动态展示。
+- `docs/change-release-ledger.md` — 记录本 mobile 单元。
+
+### Impact / Dependencies
+
+- API: 使用配套 root `CRL-20260806-007` 的清洁完成照片 `balcony` schema；不新增 route、权限、数据库、配置或依赖。
+- Protected behavior: 原有五项检查照片、八个清洁完成必拍区域、任务状态、弱网队列、遥控器历史兼容和管理详情权限不变。
+- Production data / external sync: none.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/screens/tasks/CleaningSelfCompleteScreen.test.tsx src/screens/tasks/InspectionPanelScreen.test.tsx src/screens/tasks/InspectionCompleteScreen.test.tsx src/screens/tasks/ManagerDailyTaskScreen.test.ts` — passed: 4 suites / 44 tests.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors / 112 pre-existing warnings.
+- `npm run check:buttons` — passed.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 102 changed files / 102 recorded.
+- `git diff --check -- <current-task mobile paths>` — passed.
+
+### Release Attempts
+
+- None. No staging, commit, push, PR, EAS update/build, deployment or production write is authorized.
+
+### Risks / Release Notes
+
+- A compatible root deployment must precede or accompany the mobile build. The uncommitted `CRL-20260805-001` inspection-only implementation is superseded by this unit. Automated validation does not prove real iOS/Android camera, weak-network retries, deployed API, OTA/native build or production behavior.
+- Sensitive-information review: no credentials, tokens, database URLs, private-media bytes, production logs or production data were added.
+- Git state: shared mobile worktree is extensively dirty with unrelated changes; this unit is uncommitted.
+
+## CRL-20260806-004 — 维修执行人完成/未完成改走专用工作流（mobile）
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-08 Australia/Melbourne
+- **Request:** 维修任务上传照片后，执行人点击“标记完成 / 未完成”收到 `maintenance_workflow_action_required`；保留两个既有按钮文案并修复提交。维修“未完成”须填写原因，但照片可选。
+- **Outcome:** 保留“标记完成 / 未完成”两个按钮与既有输入；维修任务使用根后端的专用工作流，不再调用会被保护性拒绝的通用 `markWorkTask`。完成仍要求照片；未完成仅要求原因、可附照片。
+
+### Implementation
+
+- Previous behavior: `TaskDetailScreen` 对内部/外部维修与普通线下任务一样调用通用 `markWorkTask`；后端正确拒绝该绕过工作流的请求，且旧成功分支会把维修任务本地写成 `done`。
+- New behavior: 仅当根后端投影的 `maintenance_workflow.available_actions` 允许时，内部/外部维修分别调用 `executor_complete` 或 `executor_unfinished`。完成传递现有完工照片、备注和稳定操作 ID，成功后刷新任务并显示“等待审核”；未完成提交原因（照片可选）并刷新权威状态，任务不再被本地写成 `done`。
+- Protected behavior: 仅读取根后端下发的 `maintenance_workflow.available_actions` 决定按钮可用性；不在客户端自行判断维修权限或关闭状态。完成沿用已上传照片并刷新权威任务状态；未完成以原因作为唯一必填项。
+
+### Files / Areas
+
+- `src/lib/api.ts` — 增加维修工作流投影类型、专用请求和对应错误提示。
+- `src/screens/tasks/TaskDetailScreen.tsx` — 两个既有按钮保持文案和布局，仅替换维修请求路径、按钮可用性和提交后的刷新逻辑。
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — 覆盖内部完成和外部未完成均走专用接口、不会调用通用 mark，且未完成可无照片提交原因。
+- `docs/change-release-ledger.md` — modified: records this unit.
+
+### Impact / Dependencies
+
+- API: 消费根后端新增的可选 `maintenance_workflow` 字段，并调用既有 `/maintenance/workflow/:domain/:id/:action` 路由；普通任务仍使用原有 `markWorkTask`。
+- Database / migration / config / dependencies: none in the mobile repository.
+- Related root unit: `CRL-20260806-006`; FR-009. This mobile unit is not releaseable until the exact root/mobile pair completes Phase 4 integration validation.
+- Production data / external sync: none during implementation or validation.
+
+### Validation
+
+- `npm run test -- --runInBand --no-cache src/screens/tasks/TaskDetailScreen.test.tsx` — passed: 1 suite / 33 tests, including unfinished maintenance submission with a reason and no completion photos.
+- `npm run check:ci` — passed: 54 suites / 299 tests；typecheck passed；lint 0 errors / 112 existing warnings；严格按钮审计和移动台账审计通过（101/101）。
+- Root `npm run check:feature-registry` — passed: 13 FRs / 137 test mappings。
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors / 112 existing warnings.
+- `npm run check:ledger` — passed: 104 changed files / 104 recorded files.
+- `git diff --check -- <current-task paths>` — passed.
+
+### Release Attempts
+
+- None. No staging, commit, push, PR, EAS update/build, deployment or production write is authorized.
+
+### Risks / Release Notes
+
+- 必须与 root `CRL-20260806-006` 匹配发布，且服务端先于或同时于 App 可用；该 mobile 单元在完成 Phase 4 根/移动集成验证前不可单独发布。
+- 未运行 EAS/OTA/native build、真实 iOS/Android 操作、弱网、已部署 API 或生产验证；自动化通过不构成这些证据。
+- 敏感信息审查：未新增凭据、令牌、私有媒体字节、用户数据、数据库 URL 或生产日志。共享 mobile 工作树含其他未提交改动；本单元未暂存、未提交、未推送、未发布。
+
+## CRL-20260806-002 — 自完成补品上传失败弹窗诊断（mobile）
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-06 Australia/Melbourne
+- **Request:** Adawang 在 WSP3709B 补品拍照上传时只看到“权限不足”；继续定位可能原因，并让失败提示提供最小可用诊断。
+- **Outcome:** 自完成补品提交或重试收到终态失败时，弹窗除安全错误文案外还显示已持久化的失败阶段、错误码和可用的上传请求编号；本地照片、草稿、重试语义和服务器权限边界不变。
+
+### Implementation
+
+- Previous behavior: 页面内可保留同步诊断，但“重试提交消耗品”弹窗只显示例如“权限不足”，现场无法分辨是照片上传还是补品记录保存失败。
+- New behavior: 弹窗复用既有 `syncFailureDetail`，显示如“阶段：照片上传，代码：FORBIDDEN，编号：…”；若服务端在上传处理器之前拒绝请求而未生成上传编号，则只显示实际可得的阶段和错误码，不伪造编号。
+
+### Files / Areas
+
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — 终态补品同步失败弹窗带上持久化诊断。
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — 覆盖 403 重试弹窗显示阶段、错误码和请求编号。
+- `docs/change-release-ledger.md` — 本独立移动仓库变更记录。
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Protected behavior: 继续使用既有队列、`last_error_*` 草稿字段和安全错误文案；不发起额外重试、不上传媒体、不改变任务状态或权限。
+- Related units: FR-004；root `CRL-20260806-004` 仅更新对应的回归登记。
+- Production data / external sync: none during implementation or validation.
+
+### Validation
+
+- `npm run test -- --runInBand --no-cache src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — passed: 15 tests.
+- `npm run test -- --runInBand --no-cache src/lib/api.test.ts src/lib/cleaningConsumablesSubmitQueue.test.ts src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — passed: 3 suites / 43 tests.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors / 112 existing warnings.
+- `./node_modules/.bin/ts-node --transpile-only scripts/tests/test_cleaning_app_role_permission_overlays.ts` (in `backend`) — passed; static `cleaner` overlay retains media-upload and task-finish capabilities.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 100 changed files / 100 recorded.
+- EAS/native build, iOS/Android physical-device retry, weak-network, deployed API and production verification — not run.
+
+### Release Attempts
+
+- None. User authorized the implementation and production read-only diagnosis only; no staging, commit, push, PR, EAS update/build, deployment, production retry, permission change or task-data write is authorized.
+
+### Risks / Release Notes
+
+- The installed production app will keep its old generic alert until this JavaScript bundle is delivered through a verified compatible OTA or a new App build; that release action needs separate authorization.
+- A 403 emitted by authentication middleware before the upload handler may have no upload request ID. The client now reports this absence truthfully rather than inventing a correlation value.
+- Rollback: revert the alert diagnostic composition and its focused test; no local media, server data or R2 object is changed.
+- Sensitive-information review: no token, credential, database URL, private-media URL/bytes, account identifier or production log contents were added.
+- Git state: shared mobile worktree has extensive pre-existing staged and unstaged changes; this unit is uncommitted, unpushed and undeployed.
+
+## CRL-20260806-001 — 问题反馈历史按服务端 capability 操作（mobile）
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-06 Australia/Melbourne
+- **Request:** 所有登录用户可查看同房源历史反馈；原提交人只能编辑/撤回自己的反馈内容；admin 与线下经理可管理全部历史；移动端不得自行信任角色或 capability。
+- **Outcome:** 问题反馈历史列表不再把当前来源任务作为读取前提；每条记录的编辑、撤回、分类移动入口只由后端返回的 capability 决定。普通编辑请求不再携带状态、费用、完工照片或处理备注。
+
+### Implementation
+
+- Previous behavior: 客户端把本地 `admin` 角色作为删除/移动判断，所有可见记录都显示编辑入口，编辑表单可提交工作流字段，并把来源任务作为历史列表条件。
+- New behavior: `PropertyFeedback` 声明服务器 capability；屏幕只显示被明确授权的操作，普通编辑只提交后端白名单反馈字段，日用品状态和维修/深清的处理后照片/备注不再出现在历史编辑表单或 payload。
+
+### Files / Areas
+
+- `src/lib/api.ts` — capability 类型、历史查询参数和普通编辑请求白名单。
+- `src/screens/tasks/FeedbackFormScreen.tsx` — 依据 capability 显示操作，收窄编辑界面和请求。
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — 覆盖不再传来源任务和 capability 操作可见性。
+- `docs/change-release-ledger.md` — 本独立移动仓库变更记录。
+
+### Impact / Dependencies
+
+- API: 依赖配对 root `CRL-20260806-001` 的 `GET /mzapp/property-feedbacks` capability 与服务端强制鉴权；旧后端时操作入口会保持隐藏，不能以客户端回退绕过权限。
+- Protected behavior: 保持反馈创建、弱网续传、原始照片本地预览、认证媒体代理和工作任务来源传递不变。
+- Database / config / dependencies / production data: none.
+
+### Validation
+
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors / 112 pre-existing warnings.
+- `npm run check:buttons` — passed.
+- `npm run test -- --runInBand --no-cache src/screens/tasks/FeedbackFormScreen.test.tsx` — passed: 5 tests.
+- `npm run check:ci` — passed: mobile ledger 100/100 coverage, TypeScript, 0 lint errors / 112 existing warnings, strict button audit, 53 Jest suites / 294 tests.
+- EAS/native build, iOS simulator, Android emulator, physical device, weak-network, paired deployed API/R2 and production verification — not run.
+
+### Release Attempts
+
+- None. This mobile unit is uncommitted; no staging, commit, push, PR, EAS update/build, deployment or production authorization exists. It remains unreleaseable until paired root/mobile integration validation is completed.
+
+### Risks / Release Notes
+
+- Risk: source tests do not verify old installed clients against a newly deployed backend or actual capability refresh on a device.
+- Rollback: revert the capability UI conditions and request narrowing together with the paired root API; no local media, R2 object or business data is deleted.
+- Sensitive-information review: no credentials, tokens, `.env`, database URL, private-media bytes, caches or sensitive logs were added.
+- Git state: extensive unrelated mobile worktree changes are preserved; this unit is unstaged, uncommitted, unpushed and undeployed.
+
+## CRL-20260804-007 — 维修任务摘要与维修前照片展示（mobile）
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-04 Australia/Melbourne
+- **Request:** 移动端维修任务卡和详情出现 `[{"content":...}]` 原始字符，且维修前照片不显示。
+- **Outcome:** 缓存、服务端刷新和局部 patch 都在渲染前规范内部维修 JSON 摘要；详情新增只读“维修前照片”区，缩略图/大图通过现有认证媒体代理携带当前 `work_task_id` 读取。
+
+### Files / Areas
+
+- `src/lib/workTasksStore.ts`, `src/lib/workTasksStore.test.ts` — modified: 统一规范历史缓存、远端任务和实时 patch 的维修摘要。
+- `src/lib/cleaningMedia.ts`, `src/lib/cleaningMedia.test.ts` — modified: 受控传递 `work_task_id`，不改变其他媒体读取来源。
+- `src/components/CleaningMediaImage.tsx`, `src/components/CleaningMediaPreview.tsx` — modified: 缩略图和全屏预览传递该授权上下文。
+- `src/lib/api.ts` — modified: 声明服务端投影的 `maintenance_before_photo_urls`。
+- `src/screens/tasks/TaskDetailScreen.tsx`, `src/screens/tasks/TaskDetailScreen.test.tsx` — modified: 维修前照片只读区、预览授权上下文及展示回归测试。
+- `docs/change-release-ledger.md` — modified: records this unit.
+
+### Impact / Dependencies
+
+- API: 依赖配对 root `CRL-20260804-014` 返回维修前照片并安全验证 `work_task_id`。
+- Protected behavior: 保持 `available_actions`、任务状态、提交/重试、其他清洁媒体的 `source_task_id` 授权和本地缓存语义不变。
+- Database / dependencies / production data: none; no production API, media or database call made.
+
+### Validation
+
+- `npx jest src/lib/workTasksStore.test.ts src/lib/cleaningMedia.test.ts --runInBand` — passed: 13 tests.
+- `npm run check:ci` — passed: ledger coverage 100/100, typecheck, 0 lint errors / existing warnings, strict button audit and 53 suites / 289 tests.
+- Real device, weak-network, paired deployed API/R2 and production verification — not run.
+
+### Risks / Release State
+
+- The root API and mobile bundle must both be released; an older installed bundle or older API continues to lack one side of the projection.
+- Sensitive-information review: no credentials, tokens, `.env`, media bytes or sensitive logs added.
+- Git state: shared dirty mobile worktree; no staging, commit, push, EAS, deployment or production write.
+
+## CRL-20260804-006 — 问题反馈照片本地预览与完工续传（mobile）
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-04 Australia/Melbourne
+- **Request:** 问题反馈上传照片无法查看缩略图和放大图片；维修记录标记“已完成，一起提交完工信息”时报提交失败。
+- **Outcome:** 新上传照片在反馈记录尚未保存前，缩略图和全屏预览直接使用受保护的本地草稿副本；提交成功后删除该副本。维修/深清完成提交统一使用来源 `cleaning_tasks` ID，并把反馈创建、项目创建、完工提交的已完成步骤保存在草稿中，失败重试从缺失步骤继续，不重复创建反馈或项目。
+
+### Implementation
+
+- Previous behavior: 新照片上传后仅保存私有 `cleaning/...` 远端引用。该对象尚未关联任何已保存反馈记录，媒体代理会安全拒绝，因此缩略图和原图都不可见；完成流程则误将 `work_tasks.id` 作为 `source_task_id` 发送给反馈 API，导致来源解析失败，而且最后一步失败后会重新创建前置记录。
+- New behavior: 普通问题反馈上传先将压缩图片持久化到本地，再上传并保存远端引用与本地副本映射；缩略图和大图优先读取本地，已保存记录仍使用既有认证代理。完成流程使用任务 `source_id`，每次副作用后持久化反馈 ID 或项目 ID；服务端去重返回的 `existing_id` 也会继续进入缺失步骤，重试不会重复创建反馈或项目；用户仅看到安全、可操作的失败提示。
+- Key decisions: 不放开后端未登记私有对象读取，不更改媒体权限或 R2；继续使用现有上传、草稿、图片组件和反馈 API，不新增依赖或平行队列。
+
+### Files / Areas
+
+- `src/screens/tasks/FeedbackFormScreen.tsx` — modified: 本地预览映射、草稿恢复/清理、来源任务 ID、阶段检查点和续传提示。
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — modified: 覆盖本地缩略图、来源任务提交和末步失败重试不重复创建。
+- `src/components/CleaningMediaPreview.tsx` — modified: 支持本地文件作为缩略图和大图来源。
+- `src/components/CleaningMediaPreview.test.tsx` — modified: 覆盖本地缩略图/原图直接读取。
+- `src/lib/localMediaHousekeeping.ts` — modified: 扫描并保护反馈草稿目录与缓存键。
+- `src/lib/localMediaHousekeeping.test.ts` — modified: 覆盖反馈草稿缓存键受保护。
+- `docs/change-release-ledger.md` — modified: records this unit.
+
+### Impact / Dependencies
+
+- API: 继续调用现有上传、反馈创建、项目创建和完工 API；`source_task_id` 从工作任务来源 `cleaning_tasks` ID 传递。
+- Database / migration / config / dependencies: none.
+- Related units: paired root registry `CRL-20260804-006`; root/mobile `CRL-20260804-001`、`CRL-20260804-003`、`CRL-20260804-004`; FR-009.
+- Production data / external sync: no API, media or database call was made during local validation.
+
+### Validation
+
+- `npm test -- --runInBand src/screens/tasks/FeedbackFormScreen.test.tsx src/components/CleaningMediaPreview.test.tsx src/lib/localMediaHousekeeping.test.ts` — passed: 3 suites / 12 tests.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors / 112 existing warnings.
+- `npm run check:ci` — passed: ledger coverage 100/100, typecheck, lint 0 errors / 112 warnings, strict button audit and 53 Jest suites / 287 tests.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 100 changed files / 100 recorded / Coverage PASS.
+- EAS/native build, device test, deployed backend/R2 and production verification — not run.
+
+### Release Attempts
+
+- None. This mobile unit is uncommitted; the user has not selected it for commit or authorized a push.
+
+### Risks / Release Notes
+
+- Risk: only photos uploaded after installing this mobile fix have a local preview fallback; old unfinished drafts without a saved local copy rely on the authenticated remote media path. If the last completion request reaches the server but the app process dies before receiving the response, re-entering still resumes the saved project rather than creating duplicates, but a real device/network interruption test remains required.
+- Rollback: remove the local preview mapping/checkpoints and restore one-shot submit behavior; no backend, media object, task state or production data rollback is required.
+- Sensitive-information review: no credentials, tokens, `.env` contents, database URLs, cookies, private keys, media files or sensitive logs were added.
+- Git state: uncommitted in a shared dirty mobile worktree; no staging, commit, push, EAS, deployment or production write was performed.
+
+## CRL-20260804-005 — 问题反馈照片上传按钮等宽布局（mobile）
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-04 Australia/Melbourne
+- **Request:** 房源维修问题反馈中“拍照上传 / 相册选择”按钮靠左显示并留下大块空白。
+- **Outcome:** 现场照片的两个标准操作按钮使用现有 `AppButton` 等宽排列，各占可用行宽的一半并保持 12pt 间距、44pt 最小触控高度；按钮文字、拍照/相册处理器和上传行为不变。
+
+### Implementation
+
+- Previous behavior: 页面内 `Pressable` 按文字内容决定宽度，父容器允许换行，导致窄屏或放大字体时按钮靠左且布局不稳定。
+- New behavior: `UploadButtons` 复用已有 `AppButton`，按钮行使用等宽 `flex: 1` 和 `minWidth: 0` 的受控契约；审计脚本为该确切等宽按钮样式登记最小例外，不放宽其他页面。
+- Key decisions: 这是视觉/可用性修复，不改变照片权限、相机/相册请求、上传、草稿、API payload、任务状态或导航；不新增 FR。
+
+### Files / Areas
+
+- `src/screens/tasks/FeedbackFormScreen.tsx` — modified: 照片上传按钮改为现有 `AppButton` 等宽行。
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — modified: 覆盖两个上传按钮的等宽/最小触控尺寸契约。
+- `scripts/audit_button_contract.py` — modified: 为该精确 `AppButton` 等宽样式登记现有契约例外。
+- `docs/change-release-ledger.md` — modified: records this unit.
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Business behavior: unchanged; camera and library handlers remain the existing callbacks.
+- Related units: mobile `CRL-20260804-004` (historical feedback photo proxy); this layout unit can be reviewed separately but shares `FeedbackFormScreen.tsx` hunks with other uncommitted work.
+- Production data / external sync: none read, written, synchronized or changed.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/screens/tasks/FeedbackFormScreen.test.tsx` — passed: 1 suite / 3 tests, including equal-width 44pt upload buttons.
+- `./node_modules/.bin/eslint src/screens/tasks/FeedbackFormScreen.tsx src/screens/tasks/FeedbackFormScreen.test.tsx` — passed: 0 errors; 7 existing warnings in the screen.
+- `npm run check:buttons` — passed: no suspicious hard-coded button dimensions.
+- `npm run check:ci` — passed: ledger coverage 100/100, typecheck, lint 0 errors / 113 existing warnings, strict button audit and 53 Jest suites / 285 tests.
+
+### Release Attempts
+
+- None. This unit is uncommitted; the user has not selected it for commit or authorized a push.
+
+### Risks / Release Notes
+
+- Device check: iOS/Android narrow-screen and enlarged-font visual verification remains not run.
+- Rollback: restore the two local upload `Pressable` controls and remove this specific audit exception/test/ledger unit; no task, draft, media or backend data rollback is required.
+- Sensitive-information review: no credentials, tokens, `.env` contents, database URLs, cookies, private keys, media files or sensitive logs were added.
+- Git state: uncommitted in a shared dirty mobile worktree; no staging, commit, push, EAS, deployment or production write was performed.
+
+## CRL-20260804-004 — 历史问题反馈私有照片代理（mobile）
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-04 Australia/Melbourne
+- **Request:** 移动端问题反馈全屏预览仍显示“原图加载失败，点击重试”。
+- **Outcome:** 历史 `mzapp/` 反馈图片和现有 `cleaning/` 图片均通过带登录令牌、来源任务和图片规格的已有媒体代理读取；不再把私有 R2 URL 直接交给原生图片控件。
+
+### Implementation
+
+- Previous behavior: `cleaning/` 图片会带授权走代理，但旧 `mzapp/` 反馈图片作为直连 URL 交给全屏预览，私有对象无法取得原图。
+- New behavior: 媒体来源构造器识别 `mzapp/` key 或 R2 URL 中的 `mzapp/` 路径，并复用同一代理、token 和 `source_task_id`；无效路径遍历仍不走代理。
+- Key decisions: 没有新增上传、队列、按钮或本地媒体副本；服务端仍决定该对象是否属于反馈和当前人员是否可读取。
+
+### Files / Areas
+
+- `src/lib/cleaningMedia.ts` — modified: 私有反馈对象识别和认证代理 URL 构造。
+- `src/lib/cleaningMedia.test.ts` — modified: 覆盖旧 `mzapp/` URL/key、来源任务和无效 key。
+- `docs/change-release-ledger.md` — modified: records this unit.
+
+### Impact / Dependencies
+
+- API: 既有 `GET /cleaning-app/media/image` 读取历史 `mzapp/` 图片；必须配套 root `CRL-20260804-004` 的精确反馈记录和任务成员授权。
+- Database / migration / config / dependencies: none.
+- Related units: paired root `CRL-20260804-004`, root/mobile `CRL-20260804-001`, FR-009.
+- Production data / external sync: none read, written, synchronized or changed by the mobile implementation.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/lib/cleaningMedia.test.ts` — passed: 1 suite / 7 tests, including legacy `mzapp/` URL/key proxying with `source_task_id`.
+- `npm run typecheck` — passed.
+- `./node_modules/.bin/eslint src/lib/cleaningMedia.ts src/lib/cleaningMedia.test.ts` — passed: 0 errors or warnings in changed media files.
+- `npm run check:buttons` — passed: no suspicious hard-coded button dimensions.
+- `npm run check:ci` — passed: ledger coverage 100/100, typecheck, lint 0 errors / 113 existing warnings, strict button audit and 53 Jest suites / 285 tests.
+- Real device and paired deployed API/R2 verification — not run.
+
+### Release Attempts
+
+- None. This unit is uncommitted; the user has not selected it for commit or authorized a push.
+
+### Risks / Release Notes
+
+- Deployment dependency: both the mobile bundle and root media route must be deployed before an already-installed device can render historical private images.
+- Rollback: revert the listed media-source/test hunks together with paired root CRL-20260804-004; no local media, task state or remote object needs rollback.
+- Sensitive-information review: no credentials, tokens, `.env` contents, database URLs, cookies, private keys, media files, media URLs or sensitive logs were added.
+- Git state: uncommitted in a shared dirty mobile worktree; no staging, commit, push, EAS, deployment or production write was performed.
+
+## CRL-20260804-003 — 问题反馈历史错误提示与安全重试（mobile）
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-04 Australia/Melbourne
+- **Request:** 执行问题反馈报错解决方案，不能把 `column m.feedback_source does not exist` 等后端诊断直接显示给现场人员。
+- **Outcome:** 历史反馈加载失败时，页面显示统一的可操作提示与“重新加载”按钮；数据库、SQL 和服务端内部细节不再出现在移动端。重试继续使用当前任务来源、既有安全 API 和缓存策略。
+
+### Implementation
+
+- Previous behavior: 历史反馈请求失败后，页面直接渲染 `Error.message`，把 `property_feedbacks_failed` 和 PostgreSQL 列名暴露给用户，且没有就地重试入口。
+- New behavior: 页面将失败映射为通用提示，并用已有 `AppButton` 渲染 44pt 最小触控目标的重试按钮；重试复用 `refreshLists({ force: true })`，不改变任务来源、权限、草稿或提交状态。
+- Key decisions: 不在客户端解析数据库字段/权限原因，不吞掉缓存，且不新增离线队列或网络层。
+
+### Files / Areas
+
+- `src/screens/tasks/FeedbackFormScreen.tsx` — modified: 历史反馈友好错误提示和安全重试按钮。
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — modified: 覆盖内部错误隐藏和重试请求。
+- `docs/change-release-ledger.md` — modified: records this unit.
+
+### Impact / Dependencies
+
+- API: none; continues calling existing `GET /mzapp/property-feedbacks` with `source_task_id`.
+- Database / migration: requires paired root `CRL-20260804-003` and the controlled maintenance workflow migration to restore the backend source fields; mobile code does not migrate data.
+- Config / dependencies: none.
+- Related units: paired root `CRL-20260804-003`, root/mobile `CRL-20260804-001`, FR-009.
+- Production data / external sync: none read, written, synchronized or changed during implementation.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/screens/tasks/FeedbackFormScreen.test.tsx` — passed: 1 suite / 3 tests, including raw-error suppression and retry.
+- `npm run typecheck` — passed.
+- `./node_modules/.bin/eslint src/screens/tasks/FeedbackFormScreen.tsx src/screens/tasks/FeedbackFormScreen.test.tsx` — passed: 0 errors; 7 existing warnings in `FeedbackFormScreen.tsx`.
+- `npm run check:buttons` — passed: no suspicious hard-coded button dimensions.
+- `npm run check:ci` — passed: ledger 100/100, typecheck, lint (0 errors / 113 existing warnings), strict button audit and 53 Jest suites / 285 tests.
+- Real device and confirmed non-production API verification — pending target environment confirmation.
+
+### Release Attempts
+
+- None. This unit is uncommitted; the user has not selected it for commit or authorized a push.
+
+### Risks / Release Notes
+
+- User-visible state: a friendly retry message does not repair an unavailable backend or unapplied schema migration; cached historical entries remain subject to their existing cache policy.
+- Rollback: revert this screen/test/ledger unit with paired root `CRL-20260804-003`; no mobile data, task status or media object needs rollback.
+- Sensitive-information review: no credentials, tokens, `.env` contents, database URLs, cookies, private keys, media files, production data or sensitive logs were added.
+- Git state: uncommitted in a shared dirty mobile worktree; no staging, commit, push, EAS, deployment or production write was performed.
+
+## CRL-20260804-002 — 任务详情钥匙拍照真机异常如实诊断（mobile）
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-04 Australia/Melbourne
+- **Request:** 安卓真机在任务详情拍摄钥匙照片时显示“模拟器不支持相机拍照”；修复错误提示并保留安全诊断。
+- **Outcome:** 任务详情的钥匙拍照现在分别处理权限检查异常、权限未允许和相机启动异常。相机启动失败会提示检查系统相机和权限、提供“去设置”，只显示格式受限的错误代码；不会再误称模拟器。
+
+### Implementation
+
+- Previous behavior: `requestCameraPermissionsAsync()` 抛错被吞掉；随后任意 `launchCameraAsync()` 异常都会显示“模拟器不支持相机拍照”，真机无法区分权限、系统相机或原生模块问题。
+- New behavior: 权限 API 失败会停止流程并提示设置；未授权沿用设置入口；相机启动失败显示可操作的真机错误。仅允许字母、数字、点、下划线和连字符的短错误代码显示给用户；不显示原始原生错误文本。
+- Key decisions: 保持现有现场拍照、钥匙本地队列、上传与刷新语义；不提供相册回退，不更改服务端 action、媒体接口、任务状态或权限模型。
+
+### Files / Areas
+
+- `src/screens/tasks/TaskDetailScreen.tsx` — modified: keys-camera permission/launch exception handling and safe error-code formatting.
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — modified: covers camera-launch and permission-API exceptions, settings action, no simulator text and no queue enqueue.
+- `docs/change-release-ledger.md` — modified: records this unit.
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Related units: root FR-004 and root `CRL-20260804-002`; this cross-repository unit is not releaseable until the exact root/mobile pair completes its integration check.
+- Production data / external sync: none read, written, synchronized or changed.
+
+### Validation
+
+- `npm test -- --runInBand src/screens/tasks/TaskDetailScreen.test.tsx` — passed: 1 suite / 30 tests; new failure paths assert no queue enqueue.
+- `npm run typecheck` — passed.
+- `./node_modules/.bin/eslint src/screens/tasks/TaskDetailScreen.tsx src/screens/tasks/TaskDetailScreen.test.tsx` — passed: 0 errors; 3 existing Hook-dependency warnings in `TaskDetailScreen.tsx`.
+- `npm run check:ci` — passed: mobile ledger, typecheck, lint (0 errors / 113 existing warnings), strict button audit and 53 Jest suites / 284 tests.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 100 changed files, all recorded.
+- Root `python3 scripts/audit_feature_regression_registry.py` — passed: 12 FRs / 119 test mappings.
+
+### Release Attempts
+
+- None. This independent mobile unit is uncommitted; the user has not selected it for commit or authorized a push.
+
+### Risks / Release Notes
+
+- Native boundary: this JavaScript repair cannot add a permission to an already installed APK, repair a device camera app, or prove a device-specific native exception. No EAS/native build or Android device interaction ran.
+- Rollback: restore the two task-detail error branches and remove the two new tests together with root/mobile `CRL-20260804-002`; no backend or data rollback is required.
+- Sensitive-information review: no credentials, tokens, `.env` contents, database URLs, cookies, private keys, media files, production data or sensitive logs were added.
+- Git state: uncommitted in a shared dirty mobile worktree; no staging, commit, push, EAS, deployment or production write was performed.
+
+## CRL-20260804-001 — 问题反馈历史展示与照片任务授权（mobile）
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-04 Australia/Melbourne
+- **Request:** 移动端问题反馈文字/照片显示异常；清洁与检查人员均需看到同房源已报问题，避免重复上报。
+- **Outcome:** 问题反馈页（包括检查批次入口）会按当前任务来源加载并展示同房源历史反馈；历史卡片将问题文字与缩略图置于首行、操作按钮置于下一行，窄屏不再把中文标题挤成竖排。反馈照片和大图读取会携带当前任务来源，交由服务端验证任务成员关系。
+
+### Implementation
+
+- Previous behavior: 检查批次入口不加载或显示历史反馈；卡片在一行同时放标题、96px 缩略图和最多四个操作，窄屏会压缩标题；私有反馈照片没有把当前任务来源交给媒体代理。
+- New behavior: 清洁和检查任务均请求现有历史反馈 API，并提示先核对已报问题；缓存按登录用户隔离。反馈缩略图与大图使用现有安全媒体组件，携带 `source_task_id`；草稿照片仍不伪装成已提交反馈媒体。
+- Key decisions: 复用现有 `FeedbackFormScreen`、`CleaningMediaImage`/`Preview`、对象 key 和历史缓存，不新增本地队列、重复检测算法或客户端权限推导。服务端仍是唯一授权源。
+
+### Files / Areas
+
+- `src/screens/tasks/FeedbackFormScreen.tsx` — modified: 所有反馈入口可读历史、来源任务查询、窄屏卡片布局、可访问图标标签及历史照片预览。
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — modified: 清洁/检查角色在检查批次入口看到同房源历史问题。
+- `src/lib/api.ts` — modified: 历史反馈请求传递 `source_task_id`。
+- `src/lib/cleaningMedia.ts` and `src/lib/cleaningMedia.test.ts` — modified: 安全图片源可绑定当前任务来源并覆盖 URL 契约。
+- `src/components/CleaningMediaImage.tsx` and `src/components/CleaningMediaPreview.tsx` — modified: 将历史媒体来源传递给现有认证代理和缓存路径。
+- `docs/change-release-ledger.md` — modified: this unit.
+
+### Impact / Dependencies
+
+- API: calls `GET /mzapp/property-feedbacks` with `source_task_id`; feedback image reads add the same optional query parameter. Requires root `CRL-20260804-001` backend authorization change.
+- Database / migration / config / dependencies: none.
+- Related units: FR-009; root `CRL-20260804-001` (uncommitted companion). This cross-repository unit is not releaseable until the exact root/mobile pair completes its integration check.
+- Production data / external sync: none read, written, synchronized or changed during implementation.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/lib/cleaningMedia.test.ts src/screens/tasks/FeedbackFormScreen.test.tsx` — passed: 2 suites / 9 tests.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors; 113 existing warnings, including pre-existing warnings in `FeedbackFormScreen.tsx`.
+- `npm run check:ci` — passed: ledger 100/100, typecheck, lint, strict button audit and 53 Jest suites / 282 tests.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 100 changed files, all recorded.
+- `git diff --check` — passed.
+- Real iOS/Android screen widths, authenticated non-production API, EAS/native build and device validation — not run.
+
+### Release Attempts
+
+- None. This independent mobile unit is uncommitted; the user has not selected it for commit or authorized a push.
+
+### Risks / Release Notes
+
+- Compatibility: the paired backend requires a current source task for non-manager historical reads. Deploy this mobile change only with the paired root CRL.
+- Verification gap: no real device/remote request proves the rendered photo or task-authorized 403 boundary yet.
+- Rollback: revert the listed mobile files and this ledger entry together with root `CRL-20260804-001`; no local media, backend data or schema rollback is required.
+- Sensitive-information review: no credentials, tokens, `.env` contents, database URLs, cookies, private keys, media files, production data or sensitive logs were added.
+- Git state: uncommitted in a shared dirty mobile worktree; no staging, commit, push, EAS, deployment or production write was performed.
+
+## CRL-20260802-006 — 按钮合同审计已验证例外
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-02 Australia/Melbourne
+- **Request:** 继续完成移动端 `check:ci` 验证，处理静态按钮审计中的四个剩余提示。
+- **Outcome:** 经逐项检查，四项均已由现有共享组件满足触控合同：两个房号确认和任务动作的 `minWidth: 0` 是等宽 44pt 按钮行的布局约束；照片删除的 40pt 圆形仅为 `AppIconButton` 44x44 外层触控框内的视觉尺寸。审计器仅对这四个精确路径/样式/属性/数值组合登记合同例外，未改动任务、提交、导航、权限或媒体业务行为。
+
+### Files / Areas
+
+- `scripts/audit_button_contract.py` — 把四个已验证的共享按钮合同用法与遗留 UI 尺寸例外分开登记。
+- `docs/change-release-ledger.md` — this release unit.
+
+### Reviewed Sources (No Behavior Change)
+
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — `AppButton` 房号确认行，外层最小高度由共享组件提供。
+- `src/screens/tasks/InspectionPanelScreen.tsx` — `AppButton` 房号确认行，外层最小高度由共享组件提供。
+- `src/screens/tasks/TaskDetailScreen.tsx` — 任务动作继承 44pt 高度；照片删除使用 `AppIconButton` 44x44 外层触控框。
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Related units: existing shared `AppButton` / `AppIconButton` contract; separate from CRL-20260801-011 and its notification dependencies.
+- Production data: none read, written, synchronized or changed.
+
+### Validation
+
+- Review evidence: the two confirmation rows render `AppButton`; task actions retain `actionBtn.minHeight: 44`; the delete control renders `AppIconButton` with its 44x44 touch frame and a 40pt visual child.
+- `npm run check:ci` — passed: ledger 98/98, typecheck, lint 0 errors / 113 existing warnings, strict button audit, Jest 53 suites / 280 tests.
+- `git diff --check -- docs/change-release-ledger.md scripts/audit_button_contract.py` and corresponding cached diff check — passed.
+- Device interaction / iOS / Android / EAS — not run.
+
+### Risks / Release Notes
+
+- The exceptions are intentionally exact; a different path, style name, property or value still fails strict audit.
+- This static verification is not device-size evidence. Real-device font-scale and narrow-width checks remain unrun.
+- Sensitive-information review: no credentials, tokens, database URLs, media, logs or production data were added.
+- Git state: uncommitted and unstaged in a concurrent mobile worktree; the audit script already contains unrelated staged work, so any eventual staging must select only this hunk.
+
+## CRL-20260801-009 — 清洁补品缺纸镜后确认与待同步防重复提交
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-01 20:52 AEST
+- **Request:** 清洁人员将卷纸标记为不足、确认已检查镜后后，补品提交反复出现确认弹窗而无法继续；按最小方案修复。
+- **Outcome:** 镜后确认保存到当前本机草稿并绑定缺纸项目；待同步重进不再重复确认，页面明确等待自动同步并阻止重复提交。
+
+### Implementation
+
+- Previous behavior: 镜后确认只保存在一次点击 Promise；提交未立即完成时，后续点击重新弹出确认。
+- New behavior: 草稿持久化 `toilet_paper_mirror_check`；缺纸项目变化会失效。`waiting_sync` 显示等待状态，`failed`/`blocked` 显示失败原因并恢复已有队列的重试入口。
+- Key decisions: 不新增 API、数据库、依赖、队列或直传路径；仍由现有补品队列执行上传和业务保存。
+
+### Files / Areas
+
+- `src/lib/cleaningConsumablesDraft.ts` — 本地确认字段的归一化和 patch 合并。
+- `src/screens/tasks/SuppliesFormScreen.tsx` — 确认、草稿恢复、同步和重试状态展示。
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — 页面回归。
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — 草稿更新保留确认回归。
+- `docs/change-release-ledger.md` — 当前独立移动端 release unit。
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none。
+- Related units: root `CRL-20260801-009`, FR-004, and root `CRL-20260801-008` shared draft-file hunks.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/screens/tasks/SuppliesFormScreen.test.tsx src/lib/cleaningConsumablesSubmitQueue.test.ts` — passed: 2 suites, 35 tests.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors, 113 pre-existing warnings.
+- `npm run check:buttons` — not passed: four existing findings outside this unit, with no finding in `SuppliesFormScreen.tsx`.
+- Root `npm run check:fast` — passed: root ledger/FR audit, backend build/contracts, frontend tests and mobile typecheck.
+- `python3 scripts/audit_change_release_ledger.py` — not passed: 9 pre-existing/unattributed files outside this unit remain uncovered; do not claim full independent-mobile worktree coverage.
+- `git diff --check` — passed.
+- Android real device / EAS build / OTA or store publication — not run.
+
+### Risks / Release Notes
+
+- Existing local drafts/photos are retained; rollback restores only this unit's hunks and must not delete them.
+- Governance: this unit is ready for review, but selective release remains blocked by the independent-mobile worktree's nine pre-existing/unattributed ledger files.
+- Sensitive-information review: no tokens, credentials, database URLs, media content, local paths, cookies, private keys, sensitive logs or production data were added.
+- Git state: independent mobile worktree has concurrent staged/unstaged changes; this unit is unstaged, uncommitted, unpushed and undeployed.
+
+## CRL-20260801-002 — 清洁照片上传失败诊断与本地恢复
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-01 Australia/Melbourne
+- **Request:** 为清洁人员卡住的照片上传展示实际失败阶段/编号，并保留现有本地照片可直接重试。
+- **Outcome:** 照片上传失败现在持久化阶段、错误码和上传编号；自完成页面显示这些诊断，失败媒体仍保留 `file://` URI 和原有队列，网络恢复或“重试上传”继续复用原照片。
+
+### Files / Areas
+
+- `src/lib/api.ts` — 清洁照片请求附带诊断编号，并读取服务端失败编号。
+- `src/lib/cleaningConsumablesDraft.ts`、`src/lib/cleaningConsumablesSubmitQueue.ts` — 持久化上传/业务保存失败阶段和编号；不改变媒体删除条件。
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — 显示“阶段 / 代码 / 编号”，避免把未完成上传误说成已联网成功。
+- `src/lib/api.test.ts`、`src/lib/cleaningConsumablesSubmitQueue.test.ts`、`src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — 请求编号、诊断保存、页面显示和本地照片保留回归。
+
+### Impact / Dependencies
+
+- API: existing `/cleaning-app/upload` response accepts/returns `upload_request_id`; must ship with root `CRL-20260801-008` for server correlation.
+- Database / config / dependencies: none.
+- Related units: root `CRL-20260801-008`, FR-004, and the existing local-first completion-photo queue.
+
+### Validation
+
+- `npm run test -- --runInBand --no-cache src/lib/api.test.ts src/lib/cleaningConsumablesSubmitQueue.test.ts src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — passed: 3 suites, 42 tests.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors, 113 pre-existing warnings.
+- Device/EAS/production validation — not run; no user photo or production task was modified.
+
+### Risks / Release Notes
+
+- Existing local photos are neither migrated nor deleted. Old failed drafts without a prior diagnostic will show details after the next retry attempt.
+- Rollback: restore only this unit's source/test hunks; do not delete local draft files.
+- Sensitive-information review: no token, credentials, database URL, media content, local path or production data was added.
+- Git state: nested mobile worktree has concurrent staged/unstaged changes; this unit is unstaged, uncommitted, unpushed and undeployed.
+
+## CRL-20260801-001 — 房源当日临时通知安全入口
+
+- **Status:** blocked
+- **Reconciliation state:** LOCAL_ATTRIBUTION_BLOCKED
+- **Reconciliation evidence:** Current source paths overlap multiple CRL candidates; R0 cannot safely assign the delta without fabricating historical ownership.
+- **Updated:** 2026-08-01 Australia/Melbourne
+- **Request:** 房源当日临时通知应留在通知详情，不应从多个相关任务中任意打开第一条任务。
+- **Outcome:** 带 `scope: property_day` 或 `open_property_day_notice` 的通知在推送点击和通知详情中都不再路由到任务，使用者可查看该房源当天的照片和说明。
+
+### Implementation
+
+- `src/navigation/RootNavigator.tsx` — modified: property-day push response跳过 task route 解析。
+- `src/screens/notices/NoticeDetailScreen.tsx` — modified: property-day detail 不显示“查看任务”。
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — modified: 覆盖多个 task ID 时仍停留通知详情。
+- `docs/change-release-ledger.md` — modified: 记录本独立移动端单元；关联 root `CRL-20260801-005`。
+
+### Impact / Dependencies
+
+- API / database / migration / dependencies: none；依赖 root payload 提供 `scope: property_day`。
+- Rollback: 移除 property-day 路由拦截和对应测试；不触碰同文件其他并发改动。
+
+### Validation
+
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors, 113 existing warnings.
+- `npm test -- --runInBand --no-cache src/screens/notices/NoticeDetailScreen.test.tsx` — partial: property-day test passed; existing persisted-notice loading case failed in the shared worktree.
+- `python3 scripts/audit_change_release_ledger.py` — blocked by 9 pre-existing uncovered files outside this unit (`.env.example` and unrelated account/contact/API files); this unit's three mobile paths and its ledger entry are recorded.
+- Device / push service / EAS build: not run.
+
+### Risks / Release Notes
+
+- Old backend payloads without property-day scope keep their existing task routing.
+- No secrets, tokens, credentials, database URLs, user data or production records were added or read.
+- Git state: nested mobile worktree has pre-existing concurrent changes; this unit is unstaged, uncommitted, unpushed and undeployed.
+
+
 ## CRL-20260812-009 — Root/mobile PR 范围审计与配对分支 CI 修复
 
-- **Status:** ready
+- **Status:** merged-dev
 - **Updated:** 2026-08-12 Australia/Melbourne
 - **Request:** 修复 mobile PR #24 与配对 root PR #303 的合并门禁失败：CI 的 `--base/--head` PR 范围调用被审计器误拒绝，导致质量作业在参数解析阶段退出。
 - **Outcome:** 移动端审计器恢复只读 `base...head` PR 覆盖审计；`--release-report` 仍保留给带 repository/CRL/候选证据的严格 Release Attempt。
@@ -78,7 +1596,7 @@
 
 ## CRL-20260812-005 — 日用品任务标签中文化（mobile）
 
-- **Status:** ready
+- **Status:** merged-dev
 - **Updated:** 2026-08-12 Australia/Melbourne
 - **Request:** 任务列表和任务详情不得向用户展示内部 `daily_necessities` 枚举。
 - **Outcome:** 两处任务类型标签都显示“日用品”；任务标题、API 原始字段、状态、权限和路由不变。
@@ -147,7 +1665,7 @@
 
 ## CRL-20260812-004 — 任务完成操作按钮等宽（mobile）
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-08-12 Australia/Melbourne
 - **Request:** 日用品和同类任务的完成/未完成操作应等宽；检查完成页底部双按钮也应保持同一布局契约。
 - **Outcome:** 并排操作采用 `flex: 1`、`flexGrow: 1`、`flexShrink: 1`、`flexBasis: 0` 与 `minWidth: 0`；检查完成页在窄屏堆叠为全宽按钮。
@@ -185,7 +1703,7 @@
 
 ## CRL-20260812-003 — 远端台账身份不可变门禁（mobile governance）
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-08-12 Australia/Melbourne
 - **Request:** 解决共享移动端工作区台账不能安全发布的问题，并禁止本地历史记录覆盖 `origin/Dev` 业务身份。
 - **Outcome:** 审计要求本地台账保留远端全部 CRL 与不可变业务字段；干净候选以已抓取的远端基线独立通过审计。
@@ -205,13 +1723,43 @@
 - Runtime / API / database / migration / configuration / production data: none.
 - Paired unit: root `CRL-20260812-003`.
 
+### Reconciliation Receipt — 2026-08-14
+
+- **Authorized scope:** Stage 3 Mobile Ledger-only Reconciliation. Only this ledger was edited in a clean detached worktree based on `origin/Dev@afb46f1dd4b87dc4ab575e50ec9eb3bb38b7fedb`.
+- **Source integrity:** the original mobile worktree was read-only. Its normalized porcelain fingerprint was `0393bdcc020355cba835b1c1079bcd36207aa01440fb24adfb43b275322475ac`; its untracked-file-list fingerprint was `49340ce1bffe04c976a358a2d61f57eab170d3d4dd61d7b247c537219be24440`. Both matched before and after R0 collection.
+- **Canonical remote units:** the 18 CRLs present on current `origin/Dev` but absent from the prior local ledger are retained here with their remote immutable business identity unchanged.
+- **Canonical remote IDs restored by this baseline:** CRL-20260729-003, CRL-20260729-004, CRL-20260730-001, CRL-20260730-002, CRL-20260731-005, CRL-20260731-007, CRL-20260731-008, CRL-20260805-005, CRL-20260805-006, CRL-20260809-001, CRL-20260809-002, CRL-20260810-001, CRL-20260811-004, CRL-20260811-007, CRL-20260811-008, CRL-20260811-009, CRL-20260812-007, CRL-20260812-009.
+- **Git state matrix:** 23 remote CRLs have an existing content commit that is an ancestor of current `origin/Dev` and are marked `merged-dev`: CRL-20260725-023, CRL-20260729-003, CRL-20260729-004, CRL-20260731-007, CRL-20260803-003, CRL-20260805-001, CRL-20260805-002, CRL-20260805-003, CRL-20260805-005, CRL-20260805-006, CRL-20260807-001, CRL-20260807-002, CRL-20260808-006, CRL-20260809-002, CRL-20260810-001, CRL-20260811-004, CRL-20260811-005, CRL-20260811-006, CRL-20260811-007, CRL-20260811-008, CRL-20260811-009, CRL-20260812-005, CRL-20260812-009.
+- **Unmerged commit:** CRL-20260809-001 has content commit `614dbd11545895488fc001138d30e2c63d970748` on documented local branches, but that commit is not an ancestor of current `origin/Dev` or `origin/main`; it is marked `committed-local-branch`, not Pending.
+- **Evidence boundary:** the remaining 44 remote CRLs have no verified mobile content-commit evidence in the current ledger and are marked `not-verified`. Current `origin/main@59e8059cc8117f433bbff1739a17650c646d4144` does not contain this mobile ledger; no current-ledger content commit was verified as an `origin/main` ancestor. This is not a claim that their business behavior is absent from main.
+- **Identity conflicts:** all 19 local/remote identity conflicts retain their remote canonical identity. Two source-only local deltas were independently proven and re-identified as CRL-20260814-001 and CRL-20260814-002; the remaining 17 local variants are `LOCAL_CONFLICT_ATTRIBUTION_BLOCKED` and do not receive new CRL numbers.
+- **Blocked conflict IDs:** CRL-20260729-001, CRL-20260731-001, CRL-20260803-003, CRL-20260805-001, CRL-20260805-002, CRL-20260805-003, CRL-20260807-002, CRL-20260808-002, CRL-20260808-006, CRL-20260809-004, CRL-20260811-005, CRL-20260811-006, CRL-20260812-001, CRL-20260812-002, CRL-20260812-003, CRL-20260812-004, CRL-20260812-005.
+- **Local-only matrix:** 11 non-conflicting local-only CRLs are `LOCAL_UNCOMMITTED_VERIFIED`; 5 are `LOCAL_LEDGER_ONLY`; 17 are `LOCAL_ATTRIBUTION_BLOCKED`. Only the verified group, plus the two separately re-identified conflict continuations, belongs in the final Pending / local-only list.
+- **No migration or release action:** no source, test, Registry, Skill, configuration, or original-worktree file was changed. No `git add`, commit, push, PR, deployment, or OTA action was performed.
+
 ### Validation
 
 - Candidate validation in progress: ledger regression, compile and exact coverage audit are run before commit.
 
 ### Release Attempts
 
-- None yet. User selected this unit for a joint commit candidate; push remains unapproved until exact commit SHA is presented.
+#### RA-20260814-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260812-003` (Mobile Ledger Finalization)
+- Intended action: `commit`
+- Branch: `codex/mobile-ledger-finalization-20260814`
+- Base: `origin/Dev@afb46f1dd4b87dc4ab575e50ec9eb3bb38b7fedb`; fetched at `2026-08-14 13:20 AEST`
+- Candidate patch SHA-256: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` (empty non-ledger content diff; this is a ledger-only candidate)
+- Commit SHA: `8e04e375548d65d9e2a48927ea6d619bda290b3d` (candidate content commit; descendant of the recorded base).
+- Dependencies: none.
+- Required validation: `PASS`; evidence: R0 classification confirms `35 = 13 + 5 + 17`, `git diff --check` passed, and the mobile ledger audit returned Coverage PASS.
+- Shared-hunk review: `PASS`; the user explicitly selected the complete Mobile Ledger Finalization as one ledger-only reconciliation scope. The independently reviewed exact range contains no runtime hunk, and every changed hunk is a status, classification, identity-receipt, or Release Attempt record in `docs/change-release-ledger.md`.
+- Generated-file review: not applicable; no generated file is in the candidate.
+- Technical state: `committed`
+- User authorization: `selected-for-commit`; evidence: 2026-08-14 instruction to finalize the ledger-only reconciliation candidate.
+- Independent review: `GO for commit`; evidence: independent read-only review completed after correcting the Release Attempt's CRL placement; no P0/P1/P2 findings remain.
+- Action conclusion: `GO`; completed action: selected ledger-only commit created. The post-commit exact report verified the base, range, remote lineage, non-ledger fingerprint, generated-file and sensitive-information gates; its push gates remain `NOT VERIFIED` pending a separate exact push authorization.
 
 ### Risks / Release Notes
 
@@ -220,7 +1768,7 @@
 
 ## CRL-20260812-002 — 反馈照片本地持久化、续传与私有预览收口（mobile）
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-08-12 Australia/Melbourne
 - **Request:** 反馈照片在上传或业务保存失败后必须保留本地可重试证据，私有预览不应交给系统浏览器。
 - **Outcome:** 照片先以 JPEG 本地草稿保存；提交时携带稳定 `task_id` / `media_id` 上传，远端对象成功但业务保存失败仍保留本地副本，业务保存成功后才清理。
@@ -258,7 +1806,7 @@
 
 ## CRL-20260812-001 — 日终交接照片本地预览与精确认证读取（mobile）
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-08-12 Australia/Melbourne
 - **Request:** 修复日终照片上传后但业务未保存时的无权限预览；已保存照片必须携带精确 owner/date 读取上下文。
 - **Outcome:** 新照片先持久化为本地草稿，本地 URI 优先于待关联远端引用；业务成功前不删除本地副本，已关联远端照片才进入认证代理。
@@ -297,7 +1845,7 @@
 
 ## CRL-20260812-007 — 当天任务临时通知保存前本地预览（mobile）
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-08-12 Australia/Melbourne
 - **Request:** 临时通知在管理端选择照片后仍显示红叉/无权限；修复保存前本地预览，但不得放宽私有照片读取授权。
 - **Outcome:** 候选实现保留每张刚上传照片的本地 URI 与远端引用；缩略图/预览在保存前只使用本地 URI，保存成功后清除本地预览并向既有认证代理传递已保存 notice ID。
@@ -343,7 +1891,7 @@
 
 ## CRL-20260812-006 — 当天任务临时通知照片认证读取（mobile）
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-08-12 Australia/Melbourne
 - **Request:** 修复移动端当天任务临时通知的已保存照片无法显示或原图预览失败。
 - **Outcome:** 源码修复完成：临时通知卡片的缩略图和原图预览向既有认证媒体代理传递同一个通知记录上下文；管理每日任务也传入登录 token。
@@ -390,7 +1938,7 @@
 
 ## CRL-20260811-009 — 线下任务历史公共基址照片认证读取（mobile）
 
-- **Status:** committed
+- **Status:** merged-dev
 - **Updated:** 2026-08-12 Australia/Melbourne
 - **Request:** 修复线下任务顶部「任务照片」的历史 HTTPS 引用直连对象而无法查看；本次只选择 mobile/root `CRL-20260811-009` 提交。
 - **Outcome:** 仅 `cleaning_offline_tasks` 顶部任务照片会为历史 HTTPS 引用显式设置 offline 认证读取标记。缩略图与预览均携带同一 `work_task_id` 请求既有代理；非 offline 来源及任务处理照片不在本 CRL 范围。
@@ -451,7 +1999,7 @@
 
 ## CRL-20260811-008 — 稳定检查面板全量回归超时（mobile）
 
-- **Status:** ready
+- **Status:** merged-dev
 - **Updated:** 2026-08-11 Australia/Melbourne
 - **Request:** GitHub Full Regression 的检查面板首个页面渲染测试超出 Jest 默认 5 秒；用户授权按最小方案修复。
 - **Outcome:** 为该测试保留完整页面断言，同时给异步等待设置 5 秒边界、给测试整体设置 10 秒边界；不改检查页运行时代码。
@@ -509,7 +2057,7 @@
 
 ## CRL-20260811-004 — 修复交付状态与完成声明强制边界（mobile governance）
 
-- **Status:** candidate
+- **Status:** merged-dev
 - **Updated:** 2026-08-11 Australia/Melbourne
 - **Request:** 防止本地已修复、已测试、已提交、已推送、已合并、已部署或已通过 OTA/真机验证被混为一谈，导致移动端修复被误报为已交付。
 - **Outcome:** 独立 mobile 仓库现在与 root 使用同一套交付状态规则：实现、测试、提交、推送、合并、后端部署、OTA 和设备验证必须逐项以实际证据报告；未执行阶段必须明确为未执行。
@@ -541,7 +2089,7 @@
 
 ## CRL-20260811-005 — 反馈表单布局与来源任务提交修复（mobile）
 
-- **Status:** candidate
+- **Status:** merged-dev
 - **Updated:** 2026-08-11 Australia/Melbourne
 - **Request:** 修复反馈卡片窄屏中文逐字竖排、现场照片“拍照上传/相册选择”不居中，以及维修反馈将工作任务 ID 错作来源任务 ID 提交的问题。
 - **Outcome:** 历史反馈卡片把缩略图/文字与四个操作按钮分为两行，缩略图可随可用宽度收缩；现场照片两个按钮等宽且整组居中。所有反馈提交只使用 `task.source_id`，缺失来源时停止提交；批量反馈保留服务端对每一条记录返回的具体失败原因。
@@ -631,7 +2179,7 @@
 
 ## CRL-20260811-006 — 已完成线下任务补充完成记录照片（mobile）
 
-- **Status:** candidate
+- **Status:** merged-dev
 - **Updated:** 2026-08-11 Australia/Melbourne
 - **Request:** 已完成线下任务的“任务处理”照片不得只留在页面内存；需要明确、受权限控制地保存为完成记录，维修任务不受影响。
 - **Outcome:** 客户端仅在服务端 `available_actions` 包含 `append_completion_photo` 时显示“补充拍照/补充相册”。远端上传成功后，先按任务和当前用户持久化“待保存”引用，再请求追加完成记录；若业务保存失败，照片不显示为已保存，但保留跨页面的“重试保存已上传照片”动作，不会重新上传。缩略图和预览都传同一 `work_task_id`；没有服务端删除 action 时隐藏已完成照片的删除入口。无动作时入口保持隐藏，通用“标记完成”保持禁用；维修任务继续使用既有专用流程。
@@ -671,7 +2219,7 @@
 
 ## CRL-20260811-007 — 线下任务缩略图失败原因可见（mobile）
 
-- **Status:** candidate
+- **Status:** merged-dev
 - **Updated:** 2026-08-11 Australia/Melbourne
 - **Request:** 线下任务私有照片读取失败时不能只显示空灰框；需要区分权限、对象缺失和可重试读取失败，以便继续追踪实际服务端根因。
 - **Outcome:** 缩略图组件保留认证媒体加载的失败分类：403/404 显示明确终态原因且不重试；网络、超时或 5xx 显示“点击重试”。不暴露私有 R2 URL、token 或原始请求内容。
@@ -707,7 +2255,7 @@
 
 ## CRL-20260731-007 — 检查照片上传进度不重载草稿
 
-- **Status:** candidate
+- **Status:** merged-dev
 - **Updated:** 2026-08-11 12:43 AEST
 - **Request:** 将 PR #11 中的检查照片上传进度稳定性修复正确合入当前 `Dev`。
 - **Outcome:** 队列进度事件仅更新当前批次状态与错误展示；完整草稿只在初始加载或明确重试时读取，过期异步读取不会回写界面。
@@ -784,7 +2332,7 @@
 
 ## CRL-20260731-005 — 纯入住检查不再错误要求清洁提交
 
-- **Status:** candidate
+- **Status:** not-verified
 - **Updated:** 2026-08-11 12:43 AEST
 - **Request:** 将 PR #11 中纯入住检查被旧本地字段错误阻断的修复正确合入当前 `Dev`。
 - **Outcome:** 客户端不再将遗留 `cleaning_submission_ready=false` 作为本地否决条件；仅遵从服务端 `submit_inspection` action 的明确禁用原因。
@@ -822,7 +2370,7 @@
 
 ## CRL-20260810-001 — 线下任务照片稳定引用与终态读取边界（mobile）
 
-- **Status:** candidate
+- **Status:** merged-dev
 - **Updated:** 2026-08-10 00:55 AEST
 - **Request:** 将原本与 mobile TestFlight 诊断冲突的离线任务照片客户端部分重新编号，随 root `CRL-20260809-001` 发布。
 - **Outcome:** 上传响应保留兼容 URL 并读取 `remoteReference`；线下任务优先保存稳定服务端引用。当前 `r2://` 引用带 `work_task_id` 走认证 proxy，权限/缺失响应不再重试，网络/服务暂不可用仍可由用户重试。
@@ -889,7 +2437,7 @@
 
 ## CRL-20260809-004 — 内部维修详情缓存前照片回填（mobile）
 
-- **Status:** candidate
+- **Status:** not-verified
 - **Updated:** 2026-08-10 00:55 AEST
 - **Request:** 已有 `property_maintenance` 缓存缺少维修前照片字段时，详情只刷新一次并显示服务端回填结果。
 - **Outcome:** 同一任务/用户/列表视图只刷新一次现有任务列表；成功后显示维修前照片，失败仍保留可用缓存。
@@ -926,7 +2474,7 @@
 
 ## CRL-20260809-002 — 新建可复现的 TestFlight iOS OTA 基线（mobile）
 
-- **Status:** ready
+- **Status:** merged-dev
 - **Updated:** 2026-08-09 01:07 AEST
 - **Request:** 用户授权基于当前已合并的 `Dev` 新建 iOS 外部 TestFlight 原生基线包，使维修任务修复可由精确源码交付，并为后续 OTA 建立可验证的 runtime。
 - **Outcome:** iOS 应用版本设置为 1.0.26、build number 设置为 27；该原生构建将从当前候选源码生成新的 fingerprint，并直接包含已合并的维修照片预览、提交状态和完成/未完成等宽按钮修复。
@@ -1005,7 +2553,7 @@
 
 ## CRL-20260809-001 — 诊断 TestFlight OTA runtime 基线不匹配（mobile）
 
-- **Status:** blocked
+- **Status:** committed-local-branch
 - **Updated:** 2026-08-09 00:52 AEST
 - **Request:** 在已合并的维修任务移动端修复上发布外部 TestFlight OTA；先修复当前 `Dev` 与已安装 TestFlight 基线的 runtime 不匹配。
 - **Outcome:** 已确认当前 `Dev` 无法可靠地复现已安装 TestFlight 二进制的 runtime；未发布不可接收的 OTA，也未保留任何业务或版本配置改动。
@@ -1066,7 +2614,7 @@
 
 ## CRL-20260808-001 — 维修完工照片本地预览与安全关联（mobile）
 
-- **Status:** candidate; selected-for-commit.
+- **Status:** not-verified
 - **Outcome:** 完工照片先持久化为按“任务 + 执行人”归属的本地草稿并立即预览；只有专用动作已保存远端引用且任务回读确认关联后才清理本地文件。
 - **Files / Areas:** `src/lib/maintenanceCompletionPhotoDraft.ts`, `src/lib/maintenanceCompletionPhotoDraft.test.ts`, `src/lib/localMediaDrafts.ts`, `src/lib/api.ts`, `src/components/CleaningMediaImage.tsx`, `src/components/CleaningMediaPreview.tsx`, `src/screens/tasks/TaskDetailScreen.tsx`.
 - `src/lib/maintenanceCompletionPhotoDraft.ts` — 本地草稿归属、状态与安全清理。
@@ -1087,7 +2635,7 @@
 
 ## CRL-20260808-002 — 维修提交后的状态收口与完成/未完成按钮等宽（mobile）
 
-- **Status:** candidate; selected-for-commit.
+- **Status:** not-verified
 - **Outcome:** 专用回执把当前任务缓存收口为 `pending_review` 并清除执行动作；受派执行人显示“已完成”、其他角色显示“待审核”；完成/未完成两个按钮在宽屏等宽、窄屏满宽。
 - **Files / Areas:** `src/screens/tasks/TaskDetailScreen.tsx`, `src/screens/tasks/TaskDetailScreen.test.tsx`, `src/lib/workTasksStore.ts`, `src/lib/workTasksStore.test.ts`, `src/lib/taskVisualTheme.ts`, `src/lib/taskVisualTheme.test.ts`, `src/screens/tabs/TasksScreen.tsx`, `scripts/audit_button_contract.py`.
 - **Validation:** `npm run check:ci` passed: ledger audit, typecheck, lint (0 errors / 113 warnings), strict button-contract audit and 53 Jest suites / 256 tests; targeted suite includes the maintenance equal-width control test.
@@ -1106,7 +2654,7 @@
 
 ## CRL-20260808-006 — 历史网页维修照片的认证代理展示（mobile）
 
-- **Status:** candidate; selected-for-commit.
+- **Status:** merged-dev
 - **Outcome:** 历史 `completion_photo_urls` 纳入反馈详情的后照片；`maintenance/` 引用、缩略图和大图都携带当前任务上下文经认证代理读取，不提供浏览器直链。
 - **Files / Areas:** `src/lib/cleaningMedia.ts`, `src/lib/cleaningMedia.test.ts`, `src/lib/api.ts`, `src/components/CleaningMediaImage.tsx`, `src/components/CleaningMediaPreview.tsx`, `src/screens/tasks/FeedbackFormScreen.tsx`, `src/screens/tasks/FeedbackFormScreen.test.tsx`.
 - **Validation:** targeted private-media tests, typecheck, strict button audit and `npm run check:ci` passed.
@@ -1143,7 +2691,7 @@
 
 ## CRL-20260807-002 — CI 台账测试无缓存执行（mobile）
 
-- **Status:** committed
+- **Status:** merged-dev
 - **Updated:** 2026-08-07 Australia/Melbourne
 - **Request:** 修复 PR #15 合并前 CI 的非交互质量门失败。
 - **Outcome:** 台账审计单测不再在工作树生成 Python 字节码缓存，后续台账覆盖检查不会把该测试产物误判为未登记改动。
@@ -1202,7 +2750,7 @@
 
 ## CRL-20260807-001 — 移动端 PR 台账范围审计兼容（mobile）
 
-- **Status:** ready
+- **Status:** merged-dev
 - **Updated:** 2026-08-07 Australia/Melbourne
 - **Request:** PR #15 的 “Audit pull request Ledger range” 失败，参数 `--base`、`--head` 被错误要求必须使用 Release Attempt 模式。
 - **Outcome:** `--base` 与 `--head` 在非 Release Attempt 模式下执行只读 `base...head` 台账覆盖与空白检查；`--repo`、`--crl` 仍只允许 Release Attempt 模式，避免弱化精确发布审计。
@@ -1242,7 +2790,7 @@
 
 ## CRL-20260731-001 — MZStay 外部 TestFlight OTA 原生基线（mobile）
 
-- **Status:** candidate
+- **Status:** not-verified
 - **Updated:** 2026-08-07 Australia/Melbourne
 - **Outcome:** 增加 `expo-updates`、`fingerprint` runtime、启动时检查更新，以及 `preview` / `testflight` / `production` channel。外部 TestFlight 用户只有安装新的 iOS 原生基线后才能接收兼容 OTA。
 
@@ -1262,7 +2810,7 @@
 
 ## CRL-20260803-003 — 移动端精确 Release Attempt 重建（mobile）
 
-- **Status:** candidate
+- **Status:** merged-dev
 - **Updated:** 2026-08-07 Australia/Melbourne
 - **Outcome:** 不再从混合工作区推断发布范围；此干净候选以最新 `origin/Dev` 为 base，并新增可读、只读的 exact base...head Release Attempt 审计器与回归测试。
 
@@ -1300,7 +2848,7 @@
 
 ## CRL-20260805-003 — 入住检查退房动作类型保护（mobile）
 
-- **Status:** ready
+- **Status:** merged-dev
 - **Updated:** 2026-08-05 Australia/Melbourne
 - **Request:** 入住检查不得显示“标记已退房”。
 - **Outcome:** 客户端隐藏不匹配的旧缓存退房动作；合并卡只在有真实退房来源时保留该动作并提交来源 ID。
@@ -1388,7 +2936,7 @@
 
 ## CRL-20260805-002 — “全部”管理与“我的”执行入口分流（mobile）
 
-- **Status:** ready
+- **Status:** merged-dev
 - **Updated:** 2026-08-05 Australia/Melbourne
 - **Request:** “全部”进入管理详情，“我的”进入执行详情。
 - **Outcome:** 管理详情跳转仅在 `view === 'all'` 使用；“我的”保持既有任务执行导航。
@@ -1473,7 +3021,7 @@
 
 ## CRL-20260805-001 — 检查与补充新增可选阳台照片（mobile）
 
-- **Status:** ready
+- **Status:** merged-dev
 - **Updated:** 2026-08-05 Australia/Melbourne
 - **Request:** 检查面板新增可选阳台照片，最多三张，不能阻止没有阳台的任务提交。
 - **Outcome:** 阳台进入既有照片草稿、上传队列和同步回看；验证仍只要求原五个必拍区域。
@@ -1560,7 +3108,7 @@
 
 ## CRL-20260805-006 — 钥匙照片异步测试并行 CI 时限
 
-- **Status:** candidate
+- **Status:** merged-dev
 - **Updated:** 2026-08-05 Australia/Melbourne
 - **Request:** 修复 GitHub 并行完整 Jest 中，钥匙照片入队、同步和任务刷新测试超过默认 5 秒而超时的问题。
 - **Outcome:** 仅该异步 UI 测试拥有明确的 15 秒执行上限；它仍必须验证入队、同步和任务投影刷新，生产上传、离线队列、任务状态及全局 Jest 超时均不变。
@@ -1621,7 +3169,7 @@
 
 ## CRL-20260805-005 — 钥匙照片同步回归测试稳定性修复
 
-- **Status:** candidate
+- **Status:** merged-dev
 - **Updated:** 2026-08-05 Australia/Melbourne
 - **Request:** 修复 root PR 的 Fast/Full Regression 在检出 mobile `Dev` 后，`TaskDetailScreen` 钥匙照片测试偶发超过 Jest 默认 5 秒而失败的问题。
 - **Outcome:** 测试直接验证上传按钮触发的入队、队列同步和任务投影刷新，不再轮询仅用于用户反馈的弹窗调用；生产端钥匙照片上传、离线队列和任务状态逻辑均不改动。
@@ -1681,7 +3229,7 @@
 
 ## CRL-20260731-008 — 管理端清洁照片多图展示与重试
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-31 Australia/Melbourne
 - **ID allocation:** 2026-07-31 Australia/Melbourne — 从 `CRL-20260731-001` 重编号为 `CRL-20260731-008`，与根仓库媒体单元保持配对；范围、验证与发布状态不变。
 - **Request:** 管理端清洁任务只显示第一张照片，其余照片灰色或不可见。
@@ -1717,7 +3265,7 @@
 
 ## CRL-20260730-001 — 稳定任务页异步 UI 回归测试
 
-- **Status:** pushed
+- **Status:** not-verified
 - **Updated:** 2026-07-30 Australia/Melbourne
 - **Request:** 在不降低 mobile `check:fast`、`check:full` 或 `check:ci` 质量门槛的前提下，修复 CI 中两个移动端业务屏幕测试的失败。
 - **Outcome:** 任务页的既有折叠、展开和复制反馈断言保持不变；仅为完整异步 UI 场景显式设置 10 秒测试上限，避免 `--detectOpenHandles` 或较慢 CI 因 Jest 默认 5 秒而误报。该测试级 UI 稳定性不直接对应现有 FR，页面、API、权限、任务数据和质量脚本不变。
@@ -1750,7 +3298,7 @@
 
 ## CRL-20260730-002 — 稳定检查问题照片追加重试测试
 
-- **Status:** pushed
+- **Status:** not-verified
 - **Updated:** 2026-07-30 Australia/Melbourne
 - **Request:** 在不降低 mobile `check:fast`、`check:full` 或 `check:ci` 质量门槛的前提下，修复 CI 中两个移动端业务屏幕测试的失败。
 - **Outcome:** FR-005 的检查后问题照片追加断言保持不变；第二次异步追加仍须成功、且不得重新上传已确认照片。仅将该等待窗口设为 5 秒并将该测试总上限设为 10 秒，以容纳慢速 CI mock 调度。
@@ -1783,7 +3331,7 @@
 
 ## CRL-20260729-004 — 移动端 PR 精确范围 Ledger 审计
 
-- **Status:** in-progress
+- **Status:** merged-dev
 - **Updated:** 2026-07-29 Australia/Melbourne
 - **Request:** 修复独立移动端仓库的 PR 范围 Ledger 审计：精确 base/head、三点 diff、whitespace 检查和无回退失败语义。
 - **Outcome:** 移动端 Ledger 审计支持 `--base/--head` 严格范围；CI 在 PR 中完整 fetch 后传入 GitHub payload 的两端 SHA。审计在 ref 缺失、fetch 不完整、Git diff 错误或 whitespace 问题时非零退出，并将 rename 的旧/新路径及删除路径纳入 Ledger 覆盖。
@@ -1828,7 +3376,7 @@
 
 ## CRL-20260729-003 — 移动端质量命令层级
 
-- **Status:** pushed
+- **Status:** merged-dev
 - **Updated:** 2026-07-29 Australia/Melbourne
 - **Request:** Phase 2：建立移动端 `check:fast`、`check:full`、`check:ci`、`check:release` 的稳定语义，并与根仓库质量命令兼容。
 - **Outcome:** 移动端 Fast 运行 Ledger、typecheck、lint、严格按钮审计和三项高价值 action/store/status Jest；Full 直接继承 Fast 后执行全量 Jest；CI 非交互调用 Full；Release 复用 Full，不擅自执行 EAS、真机、migration 或生产 smoke。
@@ -1864,7 +3412,7 @@
 
 ## CRL-20260729-001 — 移动端质量防护独立基线
 
-- **Status:** pushed
+- **Status:** not-verified
 - **Updated:** 2026-07-29 Australia/Melbourne
 - **Request:** 固化独立移动端仓库的 Agent 规则、CI、质量入口、按钮审计和台账审计，使干净 clone/worktree 不依赖父仓库未提交文件。
 - **Outcome:** 移动端拥有自己的 `AGENTS.md`、Node 版本、GitHub Actions 质量 workflow、`check:ci`、按钮审计和 Ledger 审计；干净候选 worktree 可独立执行完整质量命令。跨仓库功能仍需引用根仓库 FR/CRL 并等待后续精确组合验证。
@@ -1909,7 +3457,7 @@
 
 ## CRL-20260729-002 — 已选跨仓库发布单元的移动端映射
 
-- **Status:** pushed
+- **Status:** not-verified
 - **Updated:** 2026-07-29 Australia/Melbourne
 - **Request:** 用户选择推送已本地提交的 CRL-20260725-023、CRL-20260725-002，以及根仓库台账标记 ready 的 31 个单元到 `Dev`；后续明确纳入 CRL-20260724-002、CRL-20260724-003、CRL-20260729-009、CRL-20260724-010、CRL-20260725-004、CRL-20260725-005、CRL-20260725-010、CRL-20260725-011、CRL-20260725-012、CRL-20260725-016、CRL-20260725-017、CRL-20260725-021、CRL-20260724-012。
 - **Outcome:** 本记录只将所选 CRL 的移动端文件显式映射到独立仓库台账，以便在保留并发改动和暂存内容的情况下进行候选提交审计；本次补入任务表单照片读取、浴室检查照片、检查后待挂钥匙、短幂等 ID、媒体预览变体、任务内容展示、小缩略图网格和退房状态优先级依赖。业务规则、完整跨层说明和测试映射以根仓库 `docs/change-release-ledger.md` 为准。
@@ -2016,7 +3564,7 @@
 
 ## CRL-20260725-023 — 普通清洁员隐藏挂钥匙视频
 
-- **Status:** ready
+- **Status:** merged-dev
 - **Updated:** 2026-07-25 22:56 Australia/Melbourne
 - **Request:** 清洁人员不需要看到挂钥匙视频；检查员、兼任检查员和管理角色保持查看能力。
 - **Outcome:** 任务详情按角色隐藏普通 cleaner 的挂钥匙视频；后端 root repo 同步过滤 `/mzapp/work-tasks` 的视频字段，客户端保留防御性判断。
@@ -2058,7 +3606,7 @@
 
 ## CRL-20260725-021 — 修复检查与补品保存的超长幂等 ID失败
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 18:31 Australia/Melbourne
 - **Request:** 检查与补品照片上传成功后，保存业务照片记录因 `String must contain at most 120 character(s)` 失败；需要保留照片并支持重试。
 - **Outcome:** 移动端改用不依赖完整任务 ID的短 `submit_id`；历史本地队列中的超长 ID会自动迁移；重试时跳过已成功的媒体上传，只执行失败的业务保存步骤。
@@ -2100,7 +3648,7 @@
 
 ## CRL-20260725-020 — 检查页补品加载态与读取失败防止误判为空
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 Australia/Melbourne
 - **Request:** 检查人员打开检查页时，缺少护发素等补充项不应在异步读取完成前被显示为“没有待补充项”；读取失败时应能识别并重试。
 - **Outcome:** 补充项区域增加独立加载态；补品接口使用 settled 结果识别失败来源；加载失败时显示“补充项读取失败”和重试入口，成功读取后才显示空状态或缺失项目。
@@ -2142,7 +3690,7 @@
 
 ## CRL-20260725-019 — 检查照片本机就绪后才允许视频并支持客人到达豁免
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 17:52 Australia/Melbourne
 - **Request:** 普通检查任务必须先完成检查与补充照片并成功保存到本机，才允许拍摄/上传视频；弱网下仍可分别排队重试；客人已到达且急需入住时允许明确跳过房间检查照片。
 - **Outcome:** 完成页在普通任务照片批次未就绪时禁用视频入口；本机照片完整但尚未同步时允许继续拍视频并保持任务未完成；客人到达确认的空照片批次通过现有同步队列提交显式豁免。
@@ -2188,7 +3736,7 @@
 
 ## CRL-20260725-018 — 检查人员补充项新增入口区分本次与下次退房
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 17:28 Australia/Melbourne
 - **Request:** 移动端检查人员在“消耗品补充”区域需要分别使用“添加其他要补充项”和“添加下次要补充项”两个入口。
 - **Outcome:** 检查页显示两个独立入口；“其他要补充项”沿用现有待处理流程，“下次要补充项”加入后直接记录为 `carry_forward`，继续复用原有补品提交队列和后端状态。
@@ -2229,7 +3777,7 @@
 
 ## CRL-20260725-017 — 修复退房标记覆盖清洁与检查进行状态
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 17:08 Australia/Melbourne
 - **Request:** 清洁人员开始任务后客服页面应显示“进行中”；登记补品后客服和检查人员页面不能回退为“已退房”。
 - **Outcome:** 移动端合并任务和每日任务详情优先显示进行中、待检查等真实流程状态，退房标记仅用于未开始任务。
@@ -2274,7 +3822,7 @@
 
 ## CRL-20260725-016 — 检查人员任务同步显示客服标记的退房状态
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 15:27 Australia/Melbourne
 - **Request:** 客服标记房源已退房后，相关检查人员任务应显示“已退房”，不能继续显示“已分配”。
 - **Outcome:** 移动端检查任务状态组件读取服务端同步的 `checked_out_at`，在任务未完成且非进行中时显示“已退房”。
@@ -2311,7 +3859,7 @@
 
 ## CRL-20260725-015 — 已挂钥匙任务保留单一完成状态并支持只读查看检查照片
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 15:09 Australia/Melbourne
 - **Request:** 检查照片已同步完成后，已挂钥匙任务不应重复显示两个“任务已完成”按钮；检查人员仍需能进入查看之前拍的照片。
 - **Outcome:** 完成态检查入口显示为“查看检查照片”，进入后从服务端加载已同步照片，并以只读方式展示；上传、编辑和再次提交入口保持关闭。
@@ -2359,7 +3907,7 @@
 
 ## CRL-20260725-014 — 任务详情钥匙照片与钥匙视频统一媒体尺寸
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 Australia/Melbourne
 - **Request:** 上方钥匙照片要跟下方执行人上传的视频一样宽度高度显示。
 - **Outcome:** 钥匙照片改为与钥匙视频相同的全宽、`moderateScale(220)` 高媒体容器，保持图片 `contain` 展示；上传、删除、预览和任务状态逻辑不变。
@@ -2402,7 +3950,7 @@
 
 ## CRL-20260725-013 — 检查面板客厅提示与同步状态位置调整
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 Australia/Melbourne
 - **Request:** 第一张房间照片卡改为拍客厅整体；同步/状态更新信息移动到第 5 部分下方。
 - **Outcome:** 客厅卡显示“建议拍客厅整体”，沙发卡继续显示“建议拍沙发表面”；同步状态、失败步骤、本地媒体摘要和冻结提示统一显示在“5. 标记已完成”之后。
@@ -2445,7 +3993,7 @@
 
 ## CRL-20260725-012 — 浴室整体照片上限调整为三张
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 Australia/Melbourne
 - **Request:** 浴室整体照片卡片从最多 1 张调整为最多 3 张。
 - **Outcome:** 移动端浴室卡片允许拍摄 3 张，显示 `3/3` 后停止添加；后端接口限制由 root 仓库同步调整。
@@ -2490,7 +4038,7 @@
 
 ## CRL-20260725-011 — 检查提交后待挂钥匙状态与刷新稳定性修复
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 Australia/Melbourne
 - **Request:** 检查人员提交检查照片后，任务不应在未拍钥匙视频前标记完成；重新进入检查完成页不能闪屏，并且仍可查看照片、上传钥匙视频。
 - **Outcome:** 普通检查的 `inspected` 作为等待钥匙视频的中间状态；重复绑定相同检查任务不再触发本地队列刷新循环；实时任务状态继续显示为待挂钥匙；浴室照片门槛由根仓库后端同步支持。
@@ -2538,7 +4086,7 @@
 
 ## CRL-20260725-008 — 检查照片新增浴室整体区域
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 Australia/Melbourne
 - **Request:** 检查与补充页增加浴室整体照片，并把客厅提示改为“需要拍沙发表面”。
 - **Outcome:** 房间检查照片增加“浴室 / 需要拍浴室整体”卡片，最多拍 1 张；缺少浴室照片时不能提交必拍检查照片；客厅提示已更新。
@@ -2589,7 +4137,7 @@
 
 ## CRL-20260725-007 — 检查人员点击“已补充”自动打开相机
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 Australia/Melbourne
 - **Request:** 检查人员点击补品项“已补充”时要弹出相机，明确引导现场拍摄补货照片。
 - **Outcome:** “已补充”现在先打开相机；只有拍照成功后才标记 `restocked` 并保存补货照片，取消拍摄不会写入无照片的已补充状态。
@@ -2633,7 +4181,7 @@
 
 ## CRL-20260725-006 — 任务详情操作按钮统一高度
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 Australia/Melbourne
 - **Request:** 任务详情页的删除钥匙照片、钥匙/补品记录和房源问题反馈按钮高度不一致，需要统一视觉尺寸。
 - **Outcome:** 任务操作按钮统一使用 48 的最小高度和一致的垂直内边距；横向等宽、全宽布局、禁用状态和点击行为保持不变。
@@ -2676,7 +4224,7 @@
 
 ## CRL-20260725-005 — 移动端任务照片预览加速与加载态优化
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 Australia/Melbourne
 - **Request:** 移动端任务照片点击放大后等待时间过长，期间显示纯黑，需要优化加载速度和预览反馈。
 - **Outcome:** 清洁媒体代理支持缩略图/预览图变体；所有任务照片全屏预览先显示小图，再异步加载预览图；失败时保留小图并支持重试；页面内照片统一请求缩略图。
@@ -2731,7 +4279,7 @@
 
 ## CRL-20260725-004 — 移动端任务照片统一小图并排展示
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 Australia/Melbourne
 - **Request:** 所有角色任务照片页面不要直接展示大图；页面内统一显示小缩略图，可点击查看大图，并尽量并排排列，减少纵向占用。
 - **Outcome:** 补品记录、清洁自完成、检查面板、任务详情、每日清洁、日终交接、问题反馈和行李提醒中的页面内照片统一为约 96×96 缩略图；每日清洁的完成照片改为带名称的横向网格；原有点击全屏预览、删除、上传和离线媒体逻辑保持不变。
@@ -2782,7 +4330,7 @@
 
 ## CRL-20260725-003 — 移动端完成/补品按钮直接显示完成文案
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 Australia/Melbourne
 - **Request:** 移动端任务完成或补品已记录时，按钮直接变灰并修改按钮文案，不额外增加状态描述。
 - **Outcome:** 完成类按钮直接显示“任务已完成”并使用灰色样式；补品类按钮直接显示“补品已记录”并使用灰色样式；移除任务详情中额外的补品记录状态行，同时保留补品只读查看入口。
@@ -2824,7 +4372,7 @@
 
 ## CRL-20260725-002 — 已完成补品任务只读查看
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 Australia/Melbourne
 - **Request:** 任务详情中“任务已完成”不应作为补品按钮内部副文案；已完成任务仍需进入补品记录查看已拍照片，不能弹出“暂不可操作”。
 - **Outcome:** 完成状态改为按钮上方独立标签；“补品记录”在已完成状态下可进入只读页面查看照片，隐藏拍照和提交入口，并禁用删除、修改操作。
@@ -2870,7 +4418,7 @@
 
 ## CRL-20260725-001 — 明确补品照片上传状态
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-25 Australia/Melbourne
 - **Request:** 清洁人员在补品记录页面看到了照片，但无法判断照片是否已上传；底部按钮仍显示可提交，上传与离线同步状态不清楚。
 - **Outcome:** 页面明确区分“待上传”“待同步”和“已上传并同步”；提交按钮按状态显示“上传并保存”“上传并保存中…”或“重试上传”。
@@ -2912,7 +4460,7 @@
 
 ## CRL-20260724-014 — 修复厨房照片连续拍摄卡住
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-24 Australia/Melbourne
 - **Request:** 补品记录页面拍摄厨房照片时，第一张完成后仍持续显示“拍照中…”，无法稳定拍摄剩余项目。
 - **Outcome:** 厨房照片按钮一次点击只处理一个待拍项目；拍完、取消或本地保存失败后立即解除加载状态，下一次点击继续处理下一个待拍项目。
@@ -2954,7 +4502,7 @@
 
 ## CRL-20260724-013 — 移除任务详情页补品照片读取
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-24 Australia/Melbourne
 - **Request:** 用户确认任务详情页不需要显示补品/房间照片，只在进入补品消耗页面时加载照片，以减少重复访问后端和数据库。
 - **Outcome:** 任务详情页不再显示“补品填报 / 房间照片”，也不再调用表单照片接口；补品消耗页面继续保留补品照片、场景照片、本地草稿和提交链路。
@@ -2997,7 +4545,7 @@
 
 ## CRL-20260724-012 — 维修/深清/补日用品任务显示具体内容
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-24 Australia/Melbourne
 - **Request:** 移动端维修、深度清洁和补日用品任务不能明确看到任务内容，补日用品任务只显示数量。
 - **Outcome:** 任务卡片和任务详情显示补日用品具体物品名、数量和备注，同时保留维修/深清原有内容。
@@ -3022,7 +4570,7 @@
 
 ## CRL-20260724-011 — 移动端任务操作按钮布局优化
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-24 Australia/Melbourne
 - **Request:** 移动端上传钥匙照片后，任务详情页的“钥匙已记录”和“补品填报”按钮不应占据过宽的半行，需要优化按钮 UI。
 - **Outcome:** “钥匙已记录/钥匙待同步”和“补品填报/补品记录”按钮在同一行均匀分配宽度并保持较低高度；“房源问题反馈”保持下一行整宽入口。
@@ -3077,7 +4625,7 @@
 
 ## CRL-20260724-010 — 任务详情展示补品填报照片与弱网状态
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-24 Australia/Melbourne
 - **Request:** 移动端各角色重新打开清洁/检查任务时，能够在任务详情中直接查看补品填报、房间检查和问题照片；本地草稿、上传队列和远端记录需稳定关联并去重。
 - **Scope:** 任务详情照片展示、服务端聚合读取、本地草稿/队列合并、远端优先去重、同步状态和分层重试；不改上传队列协议或生产数据。
@@ -3105,7 +4653,7 @@
 
 ## CRL-20260724-009 — 修复移动端周末日期卡片裁切
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-24 Australia/Melbourne
 - **Request:** 移动端如果今天是周五、周六或周日，日期栏要完整显示当天日期卡，不要只显示一半。
 - **Outcome:** `TasksScreen` 在 `today` 模式下，周五、周六、周日都会自动把日期栏定位到本周末，当前日期卡完整可见；周一至周四仍保持左侧定位。
@@ -3150,7 +4698,7 @@
 
 ## CRL-20260724-008 — 修复移动端任务照片全屏预览黑屏
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-24 Australia/Melbourne
 - **Request:** 移动端查看任务照片时，全屏预览显示黑屏，需要检查并修复。
 - **Outcome:** `/mzapp/upload` 返回的 `mzapp/...` 照片继续使用其可访问的原始媒体地址；只有路径属于 `cleaning/` 的清洁媒体才进入 cleaning 专用图片代理。任务详情照片点击预览不再因代理返回 403 而只显示黑色遮罩。
@@ -3195,7 +4743,7 @@
 
 ## CRL-20260722-001 — 仅改密码任务禁止错误标记回退
 
-- **Status:** ready
+- **Status:** not-verified
 - **Updated:** 2026-07-23 15:10 AEST
 - **Request:** 用户要求仅改密码任务只走 `upload_access_video`，清洁任务没有有效动作时禁止回退到通用“标记完成”界面。
 - **Outcome:** 清洁任务动作数组为空时显示刷新提示，不再显示通用拍照上传和标记完成控件。
@@ -3238,7 +4786,7 @@
 
 ## CRL-20260720-006 — 移动端屏幕测试、安全区与独立质量门禁
 
-- **Status:** in-progress
+- **Status:** not-verified
 - **Updated:** 2026-07-23 15:10 AEST
 - **Request:** 对最新 `Dev` 分支补齐主要页面屏幕级 Jest，替换两个页面的原生 `SafeAreaView`，并准备可复现依赖安装与 CI typecheck/lint 环境。
 - **Outcome:** 已新增检查面板、清洁完成、补品填报、房源反馈四个屏幕级测试；任务中心和通知页改用 `react-native-safe-area-context`；独立 CI 固定 Node 20.19.4 并使用 `npm ci`。
