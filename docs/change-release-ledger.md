@@ -66,13 +66,13 @@
 - Branch: `codex/p1-ntf01-ntf02`
 - Base: `origin/Dev@7ecdbf5114a61ecf951efde194d0a56eeccc2982`; fetched 2026-08-15 Australia/Melbourne.
 - Candidate patch SHA-256: `3f256dbe7be01a7b3a9839636f10fc0872cc208037ee9d071545dc603fd112b5`, excluding `docs/change-release-ledger.md`.
-- Candidate content commit: not committed.
+- Commit SHA: `d52658c020deb50c8602d9154058cfd932aac264` (candidate content commit; exact audit head follows in the range report).
 - Dependencies: `root/CRL-20260814-003` provides the paired P1-NTF-01 exact-association authorization; P1-NTF-02 reuses the already-deployed task-media authorization contract without Root source changes.
 - Required validation: `PASS` — focused Mobile Jest, typecheck, lint, ledger coverage audit, whitespace check and exact staged pre-commit audit passed.
 - Independent review: `GO` for this commit action only.
-- Technical state: `verified`.
+- Technical state: `committed`.
 - User authorization: `selected-for-commit`.
-- Action conclusion: `GO` for the selected commit action only.
+- Action conclusion: `GO` — selected content commit created locally; push remains unauthorized.
 
 ### Risks / Release Notes
 
