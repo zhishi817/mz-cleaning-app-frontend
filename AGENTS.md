@@ -34,6 +34,14 @@ This repository is independent from the root MZ Property System repository. Do n
 
 ### Release Decision Contract
 
+### Legacy Freeze And Layered Ledger Gates
+
+- `LEGACY_FROZEN_WORKSPACE` is a snapshot boundary, not a date rule: it covers every staged, unstaged, and untracked delta that existed in the original Root or Mobile worktree at the recorded freeze snapshot. Do not infer an unresolved hunk's creation date, restore it, or assign it retroactively to a CRL.
+- Preserve a frozen workspace as source evidence only. It is never a candidate or release source. A later request to ship one historical business change requires a new CRL and a fresh, hunk-scoped extraction into a clean `origin/Dev` worktree.
+- A canonical CRL identity is repository-qualified: `root/CRL-YYYYMMDD-NNN` or `mobile/CRL-YYYYMMDD-NNN`. IDs may repeat across repositories, but a report, scope, dependency, or Release Attempt must never use a bare ID when the repository boundary matters.
+- Before a content commit, run the local gate in the candidate repository: `python3 scripts/audit_change_release_ledger.py --pre-commit --repo <root|mobile> --crl <CRL-ID>`. It blocks untracked files, paths outside the selected CRLs, missing/mismatched repository identities, and staged hunks not listed in each selected CRL's `### Staged Commit Scope`.
+- The PR gate is an exact committed-range check, not a historical-worktree check: `--release-report --repo <root|mobile> --base <base> --head <head> --crl <CRL-ID>`. It must verify canonical identity, selected paths/hunks, candidate content receipt, exact Git ancestry/state, and sensitive/generated-file evidence. It must not claim visibility into a separate Legacy frozen workspace.
+
 - This mobile repository is independent. A root CRL, root branch, root review, or root test is never mobile release evidence unless this ledger records the exact related root CRL/SHA as a dependency.
 - A CRL describes an implementation change. A **Release Attempt** records one exact release attempt and must bind repository, selected CRLs, target action, base ref/SHA and fetch time, candidate patch SHA-256, candidate content commit SHA when one exists, branch, dependencies, review/validation evidence, authorization, and remote evidence. The report command, not a self-referential ledger line, records the exact audit `head` SHA.
 - Keep these facts separate:
