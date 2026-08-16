@@ -82,6 +82,25 @@
 - Independent review: GO; evidence: independent read-only review of this exact base, candidate fingerprint, staged scope, complete diff and validation found no P0/P1 and approved the commit action only.
 - Action conclusion: GO; blockers: none for the authorized local commit action.
 
+#### RA-20260817-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260816-006`
+- Selected CRL identities: `mobile/CRL-20260816-006`
+- Intended action: `push`
+- Branch: `codex/p1-ntf02-key-photo-event-20260817`
+- Base: `origin/Dev@8c24fe612c8d74b42c1c015b1437bd035818651f`; fetched at `2026-08-17 01:19:52 AEST`.
+- Candidate patch SHA-256: `380fc997f53e17c3795338cdc32eceb10f71037a00e54b312c49dfb862dea3a8` excluding `docs/change-release-ledger.md`.
+- Commit SHA: `39e7a196c0e9be13229dc8606bc4daceb2be3054`; ledger receipt head pending.
+- Dependencies: Root authenticated media route and exact association are already deployed reuse-only; no Root candidate travels with this attempt.
+- Required validation: PASS; evidence: targeted 48-test media/notice regression, typecheck and `check:fast` passed.
+- Shared-hunk review: PASS; evidence: all non-ledger hunks are owned by this CRL and no shared media dependency is modified.
+- Generated-file review: not applicable; no generated paths are in the candidate.
+- Technical state: `committed`
+- User authorization: `not-selected`; evidence: user authorized creation of this ledger receipt only on 2026-08-17; exact final push head must be confirmed after the receipt commit exists.
+- Independent review: NOT VERIFIED; evidence: prior push review found no code defect but correctly blocked because this push attempt did not yet exist.
+- Action conclusion: NOT VERIFIED; blockers: final exact-head push authorization and independent push review for this attempt are pending.
+
 ### Risks / Release Notes
 
 - This source repair cannot prove a historical object exists or that an authorized role can read it on a device; those remain post-release verification gates.
