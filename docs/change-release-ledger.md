@@ -84,6 +84,25 @@
 - Independent review: GO — independent read-only review re-ran the declared six Jest suites (55 passing tests), verified the exact staged scope and found no P0/P1/P2; verdict is limited to this commit action.
 - Action conclusion: GO — candidate content commit was created locally; push remains unauthorized.
 
+#### RA-20260816-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260816-002`, `CRL-20260816-003`, `CRL-20260816-004`
+- Selected CRL identities: `mobile/CRL-20260816-002`, `mobile/CRL-20260816-003`, `mobile/CRL-20260816-004`
+- Intended action: `push`; target: `origin/codex/p1-ntf-03-05-media-20260816`.
+- Branch: `codex/p1-ntf-03-05-media-20260816`
+- Base: `origin/Dev@aa50085f7dc5e6ceb2dfafd72b44f68a55e92ab3`; fetched at `2026-08-16 21:21:58 AEST` and unchanged.
+- Candidate patch SHA-256: `1817f9bd51ac773465cb0713b9ca98e187246bef50572378cef1167e2d306b35` excluding `docs/change-release-ledger.md`.
+- Commit SHA: `7251ae2e7c05b199527bcf7a285518457ffbe178`; candidate content commit; current audit head is `8a347448859dc93b37597d2e9a7d47c520fb77f1`.
+- Dependencies: current Root private-media proxy is reuse-only; no Root candidate is included.
+- Required validation: PASS — exact committed-range report for the commit attempt passed; 6 target Jest suites / 55 tests, TypeScript, lint (0 errors; 109 existing warnings), diff check and hunk scope passed.
+- Shared-hunk review: PASS — 26 selected non-ledger hunks only; no unselected CRL file is in the exact committed range.
+- Generated-file review: not applicable — TypeScript source, tests and Markdown only.
+- Technical state: committed.
+- User authorization: not-selected — the prior push approval was bound to `8a347448859dc93b37597d2e9a7d47c520fb77f1`; this ledger receipt will create a new head that requires a new exact push authorization.
+- Independent review: GO — independent read-only review approved pushing the exact pre-receipt head `8a347448859dc93b37597d2e9a7d47c520fb77f1`; no P0/P1/P2 was found.
+- Action conclusion: NOT VERIFIED — record the push-review receipt, then request authorization for its new exact head.
+
 ### Risks / Release Notes
 
 - Source validation cannot prove deployed API, historical object presence, OTA compatibility or real-device rendering.
@@ -277,6 +296,25 @@
 - Independent review: GO — independent read-only review re-ran the declared six Jest suites (55 passing tests), verified the exact staged scope and found no P0/P1/P2; verdict is limited to this commit action.
 - Action conclusion: GO — candidate content commit was created locally; push remains unauthorized.
 
+#### RA-20260816-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260816-002`, `CRL-20260816-003`, `CRL-20260816-004`
+- Selected CRL identities: `mobile/CRL-20260816-002`, `mobile/CRL-20260816-003`, `mobile/CRL-20260816-004`
+- Intended action: `push`; target: `origin/codex/p1-ntf-03-05-media-20260816`.
+- Branch: `codex/p1-ntf-03-05-media-20260816`
+- Base: `origin/Dev@aa50085f7dc5e6ceb2dfafd72b44f68a55e92ab3`; fetched at `2026-08-16 21:21:58 AEST` and unchanged.
+- Candidate patch SHA-256: `1817f9bd51ac773465cb0713b9ca98e187246bef50572378cef1167e2d306b35` excluding `docs/change-release-ledger.md`.
+- Commit SHA: `7251ae2e7c05b199527bcf7a285518457ffbe178`; candidate content commit; current audit head is `8a347448859dc93b37597d2e9a7d47c520fb77f1`.
+- Dependencies: current Root private-media proxy is reuse-only; no Root candidate is included.
+- Required validation: PASS — exact committed-range report for the commit attempt passed; 6 target Jest suites / 55 tests, TypeScript, lint (0 errors; 109 existing warnings), diff check and hunk scope passed.
+- Shared-hunk review: PASS — 26 selected non-ledger hunks only; no unselected CRL file is in the exact committed range.
+- Generated-file review: not applicable — TypeScript source, tests and Markdown only.
+- Technical state: committed.
+- User authorization: not-selected — the prior push approval was bound to `8a347448859dc93b37597d2e9a7d47c520fb77f1`; this ledger receipt will create a new head that requires a new exact push authorization.
+- Independent review: GO — independent read-only review approved pushing the exact pre-receipt head `8a347448859dc93b37597d2e9a7d47c520fb77f1`; no P0/P1/P2 was found.
+- Action conclusion: NOT VERIFIED — record the push-review receipt, then request authorization for its new exact head.
+
 ### Risks / Release Notes
 
 - Historical rows without a photo reference cannot be repaired by rendering; deployed API and real-device proof remain outstanding.
@@ -378,6 +416,25 @@
 - User authorization: selected-for-commit — user said “提交” after the three exact mobile CRLs were reported.
 - Independent review: GO — independent read-only review re-ran the declared six Jest suites (55 passing tests), verified the exact staged scope and found no P0/P1/P2; verdict is limited to this commit action.
 - Action conclusion: GO — candidate content commit was created locally; push remains unauthorized.
+
+#### RA-20260816-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260816-002`, `CRL-20260816-003`, `CRL-20260816-004`
+- Selected CRL identities: `mobile/CRL-20260816-002`, `mobile/CRL-20260816-003`, `mobile/CRL-20260816-004`
+- Intended action: `push`; target: `origin/codex/p1-ntf-03-05-media-20260816`.
+- Branch: `codex/p1-ntf-03-05-media-20260816`
+- Base: `origin/Dev@aa50085f7dc5e6ceb2dfafd72b44f68a55e92ab3`; fetched at `2026-08-16 21:21:58 AEST` and unchanged.
+- Candidate patch SHA-256: `1817f9bd51ac773465cb0713b9ca98e187246bef50572378cef1167e2d306b35` excluding `docs/change-release-ledger.md`.
+- Commit SHA: `7251ae2e7c05b199527bcf7a285518457ffbe178`; candidate content commit; current audit head is `8a347448859dc93b37597d2e9a7d47c520fb77f1`.
+- Dependencies: current Root private-media proxy is reuse-only; no Root candidate is included.
+- Required validation: PASS — exact committed-range report for the commit attempt passed; 6 target Jest suites / 55 tests, TypeScript, lint (0 errors; 109 existing warnings), diff check and hunk scope passed.
+- Shared-hunk review: PASS — 26 selected non-ledger hunks only; no unselected CRL file is in the exact committed range.
+- Generated-file review: not applicable — TypeScript source, tests and Markdown only.
+- Technical state: committed.
+- User authorization: not-selected — the prior push approval was bound to `8a347448859dc93b37597d2e9a7d47c520fb77f1`; this ledger receipt will create a new head that requires a new exact push authorization.
+- Independent review: GO — independent read-only review approved pushing the exact pre-receipt head `8a347448859dc93b37597d2e9a7d47c520fb77f1`; no P0/P1/P2 was found.
+- Action conclusion: NOT VERIFIED — record the push-review receipt, then request authorization for its new exact head.
 
 ### Risks / Release Notes
 
