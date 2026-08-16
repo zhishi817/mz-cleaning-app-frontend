@@ -32,4 +32,3 @@ test('parses legacy announcement text into headings, paragraphs, and lists', () 
   expect(companyContentBody(content)).toContain('关于照片上传')
   expect(companyContentSummary(content, '公司公告')).toContain('使用 App 的公告')
 })
-
