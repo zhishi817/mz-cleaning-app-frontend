@@ -1,6 +1,6 @@
 # MZStay EAS Update 发布手册
 
-本手册只适用于已安装新的 OTA 基线包的用户。旧的 TestFlight 或 App Store 构建没有 `expo-updates`，不会接收 OTA。
+本手册适用于具有 EAS Update 基线的构建。当前外部 TestFlight `1.0.26 (26)` 是有效 OTA 基线，目标 runtime 固定为 `e5f4cc520509f2b64df725bf8eef5a9a42dc0e8a`。
 
 ## Channel 边界
 
@@ -26,20 +26,37 @@
 
 本步骤会创建云端构建和 TestFlight 发行物，必须在获得单独发布授权后执行。
 
-## 日常 JS OTA 发布
+## Build 26 的受控日常 JS OTA 发布
 
-仅在下列改动完成代码审查与自动化验证后执行：React/TypeScript、样式、翻译、图片资源及不依赖新原生代码的小型修复。
+不要根据当前 `app.json` 的 `runtimeVersion.policy=fingerprint` 推断 Build 26 不能接收 OTA。该配置是新原生基线的默认策略；Build 26 的安装时 runtime 是上述固定值。
 
-1. 先发布到外部测试 channel：
+只允许已完成代码审查与自动化验证的 React/TypeScript、样式、翻译和不依赖新原生代码的小型修复。必须在干净、最新 `origin/Dev` 的隔离工作树中先运行：
 
-   ```bash
-   npx eas-cli@latest update --channel testflight --environment production --message "简明的改动说明"
-   ```
+```bash
+node scripts/testflight_build26_ota.mjs --check
+```
 
-   `--channel` 只决定安装包从哪里取 update；它不会选择 JS bundle 的环境变量。`--environment production` 是强制项，确保外部 TestFlight bundle 使用 production API 配置，不能省略或替换为当前开发 shell 的环境。
+该检查会：
 
-2. 测试者彻底关闭并重新启动 TestFlight App；非 development build 会在启动时后台下载更新，通常在后续一次启动应用。记录构建号、EAS update ID、目标 channel、目标 environment、操作、预期/实际、iOS 设备和网络环境。
-3. 验证通过后，以同一已审代码发布到正式 channel：
+- 固定比较 Build 26 兼容基线 `195b9e8...HEAD`；
+- 先刷新远端并要求 `HEAD` 正好等于最新 `origin/Dev`；
+- 只允许 `src/`、`docs/` 和 `scripts/` 变更；
+- 阻断 `app.json`、`eas.json`、依赖/lockfile、`ios/`、`android/`、插件与原生资源改动；
+- 确认静止状态仍为 `runtimeVersion.policy=fingerprint`。
+
+通过后、取得该次外部发布授权才可执行：
+
+```bash
+node scripts/testflight_build26_ota.mjs --publish --message "简明的改动说明"
+```
+
+发布脚本只在发布子进程期间临时将隔离工作树的 runtime 绑定为 Build 26 runtime；成功、失败或 EAS 命令报错后都会逐字节恢复 `app.json`。它显式使用 `testflight` channel 和 `production` environment，并要求 EAS 回执确认目标 runtime 与 update group。这个临时覆盖不得提交。
+
+`--channel` 只决定安装包从哪里取 update；它不会选择 JS bundle 的环境变量。`--environment production` 是强制项，确保外部 TestFlight bundle 使用 production API 配置，不能省略或替换为当前开发 shell 的环境。
+
+测试者彻底关闭并重新启动 TestFlight App；非 development build 会在启动时后台下载更新，通常在后续一次启动应用。记录构建号、EAS update ID、目标 channel、目标 environment、操作、预期/实际、iOS 设备和网络环境。
+
+验证通过后，以同一已审代码发布到正式 channel：
 
    ```bash
    npx eas-cli@latest update --channel production --environment production --message "与 TestFlight 验证一致的改动说明"
@@ -54,7 +71,7 @@
 - runtimeVersion 改变，或任何更新不再与现有构建的 native runtime 兼容。
 - Apple 审核应看到的重大功能、隐私或业务流程变化。
 
-这些改动先构建新的 `testflight` 基线包，并遵循适用的 Apple TestFlight/App Review 流程；不要以 OTA 绕过审核。
+这些改动先构建新的 `testflight` 基线包，并遵循适用的 Apple TestFlight/App Review 流程；不要以 OTA 绕过审核。Build 26 合同检查出现阻断时，不能通过手工覆盖或修改脚本绕过。
 
 ## 回滚与故障处理
 
