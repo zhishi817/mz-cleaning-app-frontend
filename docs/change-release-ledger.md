@@ -74,15 +74,15 @@
 - Branch: `codex/p1-ntf-03-05-media-20260816`
 - Base: `origin/Dev@aa50085f7dc5e6ceb2dfafd72b44f68a55e92ab3`; fetched at `2026-08-16 15:19:53 AEST`.
 - Candidate patch SHA-256: `1817f9bd51ac773465cb0713b9ca98e187246bef50572378cef1167e2d306b35` excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed.
+- Commit SHA: `7251ae2e7c05b199527bcf7a285518457ffbe178`; candidate content commit.
 - Dependencies: current Root private-media proxy is reuse-only; no Root candidate is included.
 - Required validation: PASS — 6 target Jest suites / 55 tests, TypeScript, lint (0 errors; 109 existing warnings), diff check and current ledger coverage passed.
 - Shared-hunk review: PASS — all 26 non-ledger hunks are explicitly declared for this user-selected combined candidate; no unselected CRL files are staged.
 - Generated-file review: not applicable — TypeScript source, tests and Markdown only.
-- Technical state: verified.
+- Technical state: committed.
 - User authorization: selected-for-commit — user said “提交” after the three exact mobile CRLs were reported.
 - Independent review: GO — independent read-only review re-ran the declared six Jest suites (55 passing tests), verified the exact staged scope and found no P0/P1/P2; verdict is limited to this commit action.
-- Action conclusion: GO — selected candidate is verified for local content commit only.
+- Action conclusion: GO — candidate content commit was created locally; push remains unauthorized.
 
 ### Risks / Release Notes
 
@@ -267,15 +267,15 @@
 - Branch: `codex/p1-ntf-03-05-media-20260816`
 - Base: `origin/Dev@aa50085f7dc5e6ceb2dfafd72b44f68a55e92ab3`; fetched at `2026-08-16 15:19:53 AEST`.
 - Candidate patch SHA-256: `1817f9bd51ac773465cb0713b9ca98e187246bef50572378cef1167e2d306b35` excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed.
+- Commit SHA: `7251ae2e7c05b199527bcf7a285518457ffbe178`; candidate content commit.
 - Dependencies: current Root private-media proxy is reuse-only; no Root candidate is included.
 - Required validation: PASS — 6 target Jest suites / 55 tests, TypeScript, lint (0 errors; 109 existing warnings), diff check and current ledger coverage passed.
 - Shared-hunk review: PASS — all 26 non-ledger hunks are explicitly declared for this user-selected combined candidate; no unselected CRL files are staged.
 - Generated-file review: not applicable — TypeScript source, tests and Markdown only.
-- Technical state: verified.
+- Technical state: committed.
 - User authorization: selected-for-commit — user said “提交” after the three exact mobile CRLs were reported.
 - Independent review: GO — independent read-only review re-ran the declared six Jest suites (55 passing tests), verified the exact staged scope and found no P0/P1/P2; verdict is limited to this commit action.
-- Action conclusion: GO — selected candidate is verified for local content commit only.
+- Action conclusion: GO — candidate content commit was created locally; push remains unauthorized.
 
 ### Risks / Release Notes
 
@@ -369,15 +369,15 @@
 - Branch: `codex/p1-ntf-03-05-media-20260816`
 - Base: `origin/Dev@aa50085f7dc5e6ceb2dfafd72b44f68a55e92ab3`; fetched at `2026-08-16 15:19:53 AEST`.
 - Candidate patch SHA-256: `1817f9bd51ac773465cb0713b9ca98e187246bef50572378cef1167e2d306b35` excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed.
+- Commit SHA: `7251ae2e7c05b199527bcf7a285518457ffbe178`; candidate content commit.
 - Dependencies: current Root private-media proxy is reuse-only; no Root candidate is included.
 - Required validation: PASS — 6 target Jest suites / 55 tests, TypeScript, lint (0 errors; 109 existing warnings), diff check and current ledger coverage passed.
 - Shared-hunk review: PASS — all 26 non-ledger hunks are explicitly declared for this user-selected combined candidate; no unselected CRL files are staged.
 - Generated-file review: not applicable — TypeScript source, tests and Markdown only.
-- Technical state: verified.
+- Technical state: committed.
 - User authorization: selected-for-commit — user said “提交” after the three exact mobile CRLs were reported.
 - Independent review: GO — independent read-only review re-ran the declared six Jest suites (55 passing tests), verified the exact staged scope and found no P0/P1/P2; verdict is limited to this commit action.
-- Action conclusion: GO — selected candidate is verified for local content commit only.
+- Action conclusion: GO — candidate content commit was created locally; push remains unauthorized.
 
 ### Risks / Release Notes
 
