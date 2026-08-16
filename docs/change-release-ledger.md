@@ -5181,7 +5181,7 @@
 
 - **Repository:** `mobile`
 - **Status:** ready
-- **Updated:** 2026-08-16 14:29 AEST
+- **Updated:** 2026-08-16 14:31 AEST
 - **Request:** 修复 Mobile quality 在 PR Ledger range audit 阶段报出 `Git command failed.` 的问题。
 - **Outcome:** `main...Dev` 的 PR 差异不再因 `src/lib/companyContent.test.ts` 文件末尾空白行而使 `git diff --check` 返回失败；账本审计可继续到覆盖检查。
 
@@ -5227,15 +5227,15 @@
 - Branch: `codex/fix-mobile-ci-whitespace-20260816`
 - Base: `origin/Dev@195b9e8ae26a13a9f9e604dd2cb4bb8eb8dda3e0`; fetched at `2026-08-16 14:11 AEST`
 - Candidate patch SHA-256: `1a69f3f78b5c6d0dcb76aa50ac254242cbd4d31c2b792e6722a5936360bb6412` excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed.
+- Commit SHA: `aa02d04b1b7fad0eaa6596ba44939fe87648abf1`; candidate content commit.
 - Dependencies: none.
 - Required validation: PASS — `npm run check:ci` completed successfully; lint has 109 pre-existing warnings and zero errors.
 - Shared-hunk review: PASS — one declared non-ledger hunk matches the staged source deletion; the ledger hunk is confined to this CRL section.
 - Generated-file review: not applicable — source test and Markdown ledger only.
-- Technical state: verified.
+- Technical state: committed.
 - User authorization: selected-for-commit — user said “推送” after being shown only `mobile/CRL-20260816-001`.
 - Independent review: GO — independent read-only pre-commit review on 2026-08-16 found no P0/P1; verdict applies only to this exact candidate commit.
-- Action conclusion: GO — commit only; a post-commit exact range audit and a new commit-bound user authorization remain required before push.
+- Action conclusion: GO — candidate content commit created; a post-commit exact range audit and a new commit-bound user authorization remain required before push.
 
 ### Risks / Release Notes
 
@@ -5243,4 +5243,4 @@
 - Governance P2: `origin/Dev` does not yet version `docs/codex-release-review.md`; the reviewer used the original worktree's procedure only as read-only instructions. Template restoration is out of scope for this CI fix.
 - Rollback: restore the final blank line if necessary, though doing so will reproduce the CI failure.
 - Sensitive-information review: no secrets, credentials, tokens, `.env` values, private URLs, caches, logs, or production data are added.
-- Git state: uncommitted candidate on `codex/fix-mobile-ci-whitespace-20260816`, based on `origin/Dev@195b9e8ae26a13a9f9e604dd2cb4bb8eb8dda3e0`; not pushed, no PR, deployment/OTA, or device verification.
+- Git state: candidate content commit `aa02d04b1b7fad0eaa6596ba44939fe87648abf1` on `codex/fix-mobile-ci-whitespace-20260816`, based on `origin/Dev@195b9e8ae26a13a9f9e604dd2cb4bb8eb8dda3e0`; not pushed, no PR, deployment/OTA, or device verification.
