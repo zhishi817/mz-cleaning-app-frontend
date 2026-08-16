@@ -1,5 +1,96 @@
 # Change Release Ledger
 
+## CRL-20260816-004 — P1-NTF-05 线下任务完成通知认证媒体渲染（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready
+- **Updated:** 2026-08-16 Australia/Melbourne
+- **Request:** 修复 `work_task_completed` 的离线任务完成通知私有照片读取失败。
+- **Outcome:** 仅完整 `cleaning_offline_tasks:<id>` 上下文通过认证组件展示；无效上下文失败关闭。
+
+### Implementation
+
+- Previous behavior: 列表、详情和大图直接读取私有 URL，缺少认证和精确工作任务上下文。
+- New behavior: 使用 `CleaningMediaImage` / `CleaningMediaPreview` 并传递相同的 `accessWorkTaskId` 与 offline 标记。
+- Key decisions: 不改变后端代理、R2、收件人、Inbox、Badge 或 Push；非离线 `work_task_completed` 不属于本修复。
+
+### Files / Areas
+
+- `src/screens/tabs/NoticesScreen.tsx`, `src/screens/notices/NoticeDetailScreen.tsx` — 离线任务完成通知三入口认证读取。
+- `src/screens/tabs/NoticesScreen.test.tsx`, `src/screens/notices/NoticeDetailScreen.test.tsx` — 正向和失败关闭回归。
+- `docs/feature-regression-registry.md` — P1-NTF-05 不变量与发布验证边界。
+- `docs/change-release-ledger.md` — P1-NTF-05 发布证据。
+
+### Impact / Dependencies
+
+- API / database / config / storage / production data: none; reuse current `/cleaning-app/media/image`, `work_tasks.photo_urls` / `completion_photo_urls` exact association and authorization.
+- Dependencies: Root private-media contract on `origin/Dev` is reuse-only. This CRL is independently selectable with `mobile/CRL-20260816-002` and `mobile/CRL-20260816-003`.
+
+### Validation
+
+- Individual candidate: targeted presentation/list/detail 24 tests, media component 26 tests, typecheck, lint, ledger and diff checks passed.
+- Integrated candidate: 6 targeted Jest suites / 55 tests, TypeScript and lint passed; lint has 0 errors and 109 pre-existing warnings. `git diff --check` passed; `python3 scripts/audit_change_release_ledger.py` passed with 6 changed files and 6 recorded files.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared — this is the user-selected combined commit for `mobile/CRL-20260816-002`, `mobile/CRL-20260816-003` and `mobile/CRL-20260816-004`; the source hunk contexts are shared across the three units.
+- **Untracked review:** none; the clean candidate contains no untracked paths after the selected registry file was staged.
+- `docs/feature-regression-registry.md` — SHA-256: `c2e685ce8b28ea1e2734141aa5f88fd1fd3b9e9f2ae31e7c68d9133833bc4a73`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `1c3ac94fc2e32d407e55669e67dca1e379fb85319717eabc561641357212c248`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `2c3206e81384f1cbd7732186c2118803aa7d1edcb2c09bd69c9df772607f92c5`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `7694c38cdbd1b1d1fbbeb0fec71302ab6385acd291ab91cde28c6b22784af37d`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `818647c6f0bbb446fbc9477536f9c2b8b999a2374cb0ea9b8984a20271acc380`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `a09f84300ef59bc88befcc8d552ffb7307000887c41fbc764639ff9bfd092f8d`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `cf348d77f624d1f69c20d64650d180812e07ebafc11abf5b3a26c7342c7620d8`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `e51e862b25880cbdd2e0aeb9a214dc421809152a6475f57b8a2122fc16bb3cb5`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `f2a854ceb18971cb801088b45b00ac5522e0face8b07988e20e2268a837e3d7d`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `f49da7cb5f1f18e7401a7379c5f23f8965e914e21daf8f5096e7f15684e53fe9`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `2b5e54cbe287f5d4ea0b6c9e842fc414d56ca815bb69a01620bbb90501f90ecd`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `7c678c12db307cc6c1eaa70ceaaf287b362a5ea004f2bcc32531c63efb1d0962`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `7f48cc3995cb8044605dc9b5958b464c66005ac1bfdbacb0ffffcd8bfbdea768`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `8628bb7cd58d7573d1f8dc53b85ccd2e682cea3e4484aa9adf9ae92df21ec98b`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `99f3a1428dd0cd8c51a4067779836bda881e7cf7cbdbd5e1f16121edb341f70b`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `c264b2cfb93c801db5ebc6c1562a1f90172d96efc4cd7daa4884524c45e984a1`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `e0f7a82be031a23273b30b9064d8a4682cadd2501b8a1241e914305f81b5f032`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `e2827e5079db0b94fd1df81f24858c7b0a197b43f8946fb96ea463e2fd0aa38d`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `76c95b5a60f0b4d977f8dfdff52d1e5ec2c76ef2308615a620739be3a4ae71a9`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `d053d3e9802813019e53b90f8bbc20fd7286cde5abb227b9b962f51b4c21832e`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `f0ac8ab4a4a0fcff6a3feda036f24088009add935a16a4aa3650f2ba6af071f3`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `03fcfa1388b51387c6429aaacbe4e1e2040bc6ff861aea2e0915d710f8899e35`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `6dcacdff647859bb16ba997376ece9777e7bd1ce77b59f30f55c31920e39943a`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `ae10a84e1d38f5faa2c077b55de23ca9f4cabfbb7900c75339183c3b9f5fad77`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `c6cd6a3afec3acea4958e7bd1e0e398b9abbdea96a56f107db11c591a644c6f1`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `d95d5ea1e1a54b0782658a9bc149815faef3152f9e2caee4c79d8a5e45ffe488`
+
+### Release Attempts
+
+#### RA-20260816-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260816-002`, `CRL-20260816-003`, `CRL-20260816-004`
+- Selected CRL identities: `mobile/CRL-20260816-002`, `mobile/CRL-20260816-003`, `mobile/CRL-20260816-004`
+- Intended action: `commit`
+- Branch: `codex/p1-ntf-03-05-media-20260816`
+- Base: `origin/Dev@aa50085f7dc5e6ceb2dfafd72b44f68a55e92ab3`; fetched at `2026-08-16 15:19:53 AEST`.
+- Candidate patch SHA-256: `1817f9bd51ac773465cb0713b9ca98e187246bef50572378cef1167e2d306b35` excluding `docs/change-release-ledger.md`.
+- Commit SHA: not committed.
+- Dependencies: current Root private-media proxy is reuse-only; no Root candidate is included.
+- Required validation: PASS — 6 target Jest suites / 55 tests, TypeScript, lint (0 errors; 109 existing warnings), diff check and current ledger coverage passed.
+- Shared-hunk review: PASS — all 26 non-ledger hunks are explicitly declared for this user-selected combined candidate; no unselected CRL files are staged.
+- Generated-file review: not applicable — TypeScript source, tests and Markdown only.
+- Technical state: verified.
+- User authorization: selected-for-commit — user said “提交” after the three exact mobile CRLs were reported.
+- Independent review: GO — independent read-only review re-ran the declared six Jest suites (55 passing tests), verified the exact staged scope and found no P0/P1/P2; verdict is limited to this commit action.
+- Action conclusion: GO — selected candidate is verified for local content commit only.
+
+### Risks / Release Notes
+
+- Source validation cannot prove deployed API, historical object presence, OTA compatibility or real-device rendering.
+- Git state: uncommitted integration candidate; not pushed, no PR, deployment/OTA or device verification.
+
+
+
 ## CRL-20260815-001 — P1-NTF-02 挂钥匙通知认证媒体渲染（mobile）
 
 - **Repository:** `mobile`
@@ -102,6 +193,95 @@
 - Sensitive-information review: no credentials, tokens, private URLs, media bytes, logs, caches or production data are added.
 - Git state: candidate worktree only; not committed, not pushed, no PR, not deployed, no OTA and no device verification.
 
+## CRL-20260816-003 — P1-NTF-04 房源问题通知认证媒体渲染（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready
+- **Updated:** 2026-08-16 Australia/Melbourne
+- **Request:** 修复 `issue_reported` 通知私有问题照片读取失败。
+- **Outcome:** 列表、详情和大图走认证媒体；任务关联问题传合法 `task_id`，普通房源反馈复用无任务上下文的既有反馈授权。
+
+### Implementation
+
+- Previous behavior: 通知入口直接渲染私有 URL。
+- New behavior: `issue_reported` 通过 `CleaningMediaImage` / `CleaningMediaPreview` 读取，不新增权限。
+- Key decisions: 不改后端代理、R2、收件人、Inbox、Badge 或 Push；保留精确关联、跨来源冲突拒绝和服务端角色授权。
+
+### Files / Areas
+
+- `src/screens/tabs/NoticesScreen.tsx`, `src/screens/notices/NoticeDetailScreen.tsx` — 问题反馈三入口认证读取。
+- `src/screens/tabs/NoticesScreen.test.tsx`, `src/screens/notices/NoticeDetailScreen.test.tsx` — 房源反馈与任务关联问题回归。
+- `docs/feature-regression-registry.md` — P1-NTF-04 不变量与发布验证边界。
+- `docs/change-release-ledger.md` — P1-NTF-04 发布证据。
+
+### Impact / Dependencies
+
+- API / database / config / storage / production data: none; reuse current `/cleaning-app/media/image` property-feedback and `cleaning_task_media` authorization branches.
+- Dependencies: `mobile/CRL-20260622-015` provided payload semantics; `mobile/CRL-20260815-001` established the renderer pattern. Both are reuse-only.
+
+### Validation
+
+- Individual candidate: targeted presentation/list/detail 23 tests, typecheck, lint, ledger and diff checks passed.
+- Integrated candidate: shared 6 targeted Jest suites / 55 tests, TypeScript, lint and diff checks passed; `python3 scripts/audit_change_release_ledger.py` passed with 6 changed files and 6 recorded files.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared — this is the user-selected combined commit for `mobile/CRL-20260816-002`, `mobile/CRL-20260816-003` and `mobile/CRL-20260816-004`; the source hunk contexts are shared across the three units.
+- **Untracked review:** none; the clean candidate contains no untracked paths after the selected registry file was staged.
+- `docs/feature-regression-registry.md` — SHA-256: `c2e685ce8b28ea1e2734141aa5f88fd1fd3b9e9f2ae31e7c68d9133833bc4a73`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `1c3ac94fc2e32d407e55669e67dca1e379fb85319717eabc561641357212c248`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `2c3206e81384f1cbd7732186c2118803aa7d1edcb2c09bd69c9df772607f92c5`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `7694c38cdbd1b1d1fbbeb0fec71302ab6385acd291ab91cde28c6b22784af37d`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `818647c6f0bbb446fbc9477536f9c2b8b999a2374cb0ea9b8984a20271acc380`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `a09f84300ef59bc88befcc8d552ffb7307000887c41fbc764639ff9bfd092f8d`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `cf348d77f624d1f69c20d64650d180812e07ebafc11abf5b3a26c7342c7620d8`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `e51e862b25880cbdd2e0aeb9a214dc421809152a6475f57b8a2122fc16bb3cb5`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `f2a854ceb18971cb801088b45b00ac5522e0face8b07988e20e2268a837e3d7d`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `f49da7cb5f1f18e7401a7379c5f23f8965e914e21daf8f5096e7f15684e53fe9`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `2b5e54cbe287f5d4ea0b6c9e842fc414d56ca815bb69a01620bbb90501f90ecd`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `7c678c12db307cc6c1eaa70ceaaf287b362a5ea004f2bcc32531c63efb1d0962`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `7f48cc3995cb8044605dc9b5958b464c66005ac1bfdbacb0ffffcd8bfbdea768`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `8628bb7cd58d7573d1f8dc53b85ccd2e682cea3e4484aa9adf9ae92df21ec98b`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `99f3a1428dd0cd8c51a4067779836bda881e7cf7cbdbd5e1f16121edb341f70b`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `c264b2cfb93c801db5ebc6c1562a1f90172d96efc4cd7daa4884524c45e984a1`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `e0f7a82be031a23273b30b9064d8a4682cadd2501b8a1241e914305f81b5f032`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `e2827e5079db0b94fd1df81f24858c7b0a197b43f8946fb96ea463e2fd0aa38d`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `76c95b5a60f0b4d977f8dfdff52d1e5ec2c76ef2308615a620739be3a4ae71a9`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `d053d3e9802813019e53b90f8bbc20fd7286cde5abb227b9b962f51b4c21832e`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `f0ac8ab4a4a0fcff6a3feda036f24088009add935a16a4aa3650f2ba6af071f3`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `03fcfa1388b51387c6429aaacbe4e1e2040bc6ff861aea2e0915d710f8899e35`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `6dcacdff647859bb16ba997376ece9777e7bd1ce77b59f30f55c31920e39943a`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `ae10a84e1d38f5faa2c077b55de23ca9f4cabfbb7900c75339183c3b9f5fad77`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `c6cd6a3afec3acea4958e7bd1e0e398b9abbdea96a56f107db11c591a644c6f1`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `d95d5ea1e1a54b0782658a9bc149815faef3152f9e2caee4c79d8a5e45ffe488`
+
+### Release Attempts
+
+#### RA-20260816-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260816-002`, `CRL-20260816-003`, `CRL-20260816-004`
+- Selected CRL identities: `mobile/CRL-20260816-002`, `mobile/CRL-20260816-003`, `mobile/CRL-20260816-004`
+- Intended action: `commit`
+- Branch: `codex/p1-ntf-03-05-media-20260816`
+- Base: `origin/Dev@aa50085f7dc5e6ceb2dfafd72b44f68a55e92ab3`; fetched at `2026-08-16 15:19:53 AEST`.
+- Candidate patch SHA-256: `1817f9bd51ac773465cb0713b9ca98e187246bef50572378cef1167e2d306b35` excluding `docs/change-release-ledger.md`.
+- Commit SHA: not committed.
+- Dependencies: current Root private-media proxy is reuse-only; no Root candidate is included.
+- Required validation: PASS — 6 target Jest suites / 55 tests, TypeScript, lint (0 errors; 109 existing warnings), diff check and current ledger coverage passed.
+- Shared-hunk review: PASS — all 26 non-ledger hunks are explicitly declared for this user-selected combined candidate; no unselected CRL files are staged.
+- Generated-file review: not applicable — TypeScript source, tests and Markdown only.
+- Technical state: verified.
+- User authorization: selected-for-commit — user said “提交” after the three exact mobile CRLs were reported.
+- Independent review: GO — independent read-only review re-ran the declared six Jest suites (55 passing tests), verified the exact staged scope and found no P0/P1/P2; verdict is limited to this commit action.
+- Action conclusion: GO — selected candidate is verified for local content commit only.
+
+### Risks / Release Notes
+
+- Historical rows without a photo reference cannot be repaired by rendering; deployed API and real-device proof remain outstanding.
+- Git state: uncommitted integration candidate; not pushed, no PR, deployment/OTA or device verification.
+
 ## CRL-20260814-001 — 维修完工照片本地草稿与安全关联补充（mobile）
 
 - **Status:** pending-local
@@ -114,6 +294,96 @@
 - **Validation:** R0 content comparison and unique-path attribution completed. No business test was run because no business code was migrated.
 - **Release state:** not selected; not committed; not pushed; no PR; not deployed; no OTA; device verification not run.
 - **Risk / dependency:** 原 mobile 工作树仍是唯一源证据。任何恢复必须在单独 R1 授权中冻结 CRL、基线、语义、路径和 hunk allowlist。
+
+## CRL-20260816-002 — P1-NTF-03 补货通知认证媒体渲染（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready
+- **Updated:** 2026-08-16 Australia/Melbourne
+- **Request:** 修复 `consumables_submitted` 与 `consumables_updated` 私有补货照片读取失败。
+- **Outcome:** 同一 Inbox `task_id` 传给列表、详情与大图；缺失、空值或非字符串 ID 不渲染且不请求私有原始 URL。
+
+### Implementation
+
+- Previous behavior: 补货通知直接渲染 `cleaning/...` 私有引用。
+- New behavior: 补货三入口使用 `CleaningMediaImage` / `CleaningMediaPreview` 的 `accessTaskId`。
+- Key decisions: 不改后端、R2、数据表、收件人、Inbox、Badge、Push 或共享 viewer；保留服务端精确关联、歧义拒绝与角色授权。
+
+### Files / Areas
+
+- `src/screens/tabs/NoticesScreen.tsx`, `src/screens/notices/NoticeDetailScreen.tsx` — 补货三入口认证读取。
+- `src/screens/tabs/NoticesScreen.test.tsx`, `src/screens/notices/NoticeDetailScreen.test.tsx` — 正向与失败关闭回归。
+- `docs/feature-regression-registry.md` — P1-NTF-03 不变量与发布验证边界。
+- `docs/change-release-ledger.md` — P1-NTF-03 发布证据。
+
+### Impact / Dependencies
+
+- API / database / config / storage / production data: none; reuse current `/cleaning-app/media/image`, consumables and task-media exact association / authorization.
+- Dependencies: `mobile/CRL-20260815-001` renderer pattern and current Root proxy are reuse-only.
+
+### Validation
+
+- Individual candidate: targeted presentation/list/detail 24 tests, typecheck, lint, ledger and diff checks passed.
+- Integrated candidate: shared 6 targeted Jest suites / 55 tests, TypeScript, lint and diff checks passed; `python3 scripts/audit_change_release_ledger.py` passed with 6 changed files and 6 recorded files.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared — this is the user-selected combined commit for `mobile/CRL-20260816-002`, `mobile/CRL-20260816-003` and `mobile/CRL-20260816-004`; the source hunk contexts are shared across the three units.
+- **Untracked review:** none; the clean candidate contains no untracked paths after the selected registry file was staged.
+- `docs/feature-regression-registry.md` — SHA-256: `c2e685ce8b28ea1e2734141aa5f88fd1fd3b9e9f2ae31e7c68d9133833bc4a73`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `1c3ac94fc2e32d407e55669e67dca1e379fb85319717eabc561641357212c248`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `2c3206e81384f1cbd7732186c2118803aa7d1edcb2c09bd69c9df772607f92c5`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `7694c38cdbd1b1d1fbbeb0fec71302ab6385acd291ab91cde28c6b22784af37d`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `818647c6f0bbb446fbc9477536f9c2b8b999a2374cb0ea9b8984a20271acc380`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `a09f84300ef59bc88befcc8d552ffb7307000887c41fbc764639ff9bfd092f8d`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `cf348d77f624d1f69c20d64650d180812e07ebafc11abf5b3a26c7342c7620d8`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `e51e862b25880cbdd2e0aeb9a214dc421809152a6475f57b8a2122fc16bb3cb5`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `f2a854ceb18971cb801088b45b00ac5522e0face8b07988e20e2268a837e3d7d`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `f49da7cb5f1f18e7401a7379c5f23f8965e914e21daf8f5096e7f15684e53fe9`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `2b5e54cbe287f5d4ea0b6c9e842fc414d56ca815bb69a01620bbb90501f90ecd`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `7c678c12db307cc6c1eaa70ceaaf287b362a5ea004f2bcc32531c63efb1d0962`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `7f48cc3995cb8044605dc9b5958b464c66005ac1bfdbacb0ffffcd8bfbdea768`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `8628bb7cd58d7573d1f8dc53b85ccd2e682cea3e4484aa9adf9ae92df21ec98b`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `99f3a1428dd0cd8c51a4067779836bda881e7cf7cbdbd5e1f16121edb341f70b`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `c264b2cfb93c801db5ebc6c1562a1f90172d96efc4cd7daa4884524c45e984a1`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `e0f7a82be031a23273b30b9064d8a4682cadd2501b8a1241e914305f81b5f032`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `e2827e5079db0b94fd1df81f24858c7b0a197b43f8946fb96ea463e2fd0aa38d`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `76c95b5a60f0b4d977f8dfdff52d1e5ec2c76ef2308615a620739be3a4ae71a9`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `d053d3e9802813019e53b90f8bbc20fd7286cde5abb227b9b962f51b4c21832e`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `f0ac8ab4a4a0fcff6a3feda036f24088009add935a16a4aa3650f2ba6af071f3`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `03fcfa1388b51387c6429aaacbe4e1e2040bc6ff861aea2e0915d710f8899e35`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `6dcacdff647859bb16ba997376ece9777e7bd1ce77b59f30f55c31920e39943a`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `ae10a84e1d38f5faa2c077b55de23ca9f4cabfbb7900c75339183c3b9f5fad77`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `c6cd6a3afec3acea4958e7bd1e0e398b9abbdea96a56f107db11c591a644c6f1`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `d95d5ea1e1a54b0782658a9bc149815faef3152f9e2caee4c79d8a5e45ffe488`
+
+### Release Attempts
+
+#### RA-20260816-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260816-002`, `CRL-20260816-003`, `CRL-20260816-004`
+- Selected CRL identities: `mobile/CRL-20260816-002`, `mobile/CRL-20260816-003`, `mobile/CRL-20260816-004`
+- Intended action: `commit`
+- Branch: `codex/p1-ntf-03-05-media-20260816`
+- Base: `origin/Dev@aa50085f7dc5e6ceb2dfafd72b44f68a55e92ab3`; fetched at `2026-08-16 15:19:53 AEST`.
+- Candidate patch SHA-256: `1817f9bd51ac773465cb0713b9ca98e187246bef50572378cef1167e2d306b35` excluding `docs/change-release-ledger.md`.
+- Commit SHA: not committed.
+- Dependencies: current Root private-media proxy is reuse-only; no Root candidate is included.
+- Required validation: PASS — 6 target Jest suites / 55 tests, TypeScript, lint (0 errors; 109 existing warnings), diff check and current ledger coverage passed.
+- Shared-hunk review: PASS — all 26 non-ledger hunks are explicitly declared for this user-selected combined candidate; no unselected CRL files are staged.
+- Generated-file review: not applicable — TypeScript source, tests and Markdown only.
+- Technical state: verified.
+- User authorization: selected-for-commit — user said “提交” after the three exact mobile CRLs were reported.
+- Independent review: GO — independent read-only review re-ran the declared six Jest suites (55 passing tests), verified the exact staged scope and found no P0/P1/P2; verdict is limited to this commit action.
+- Action conclusion: GO — selected candidate is verified for local content commit only.
+
+### Risks / Release Notes
+
+- Historical Inbox rows without valid task IDs deliberately suppress private media; source tests cannot prove historical object availability or device rendering.
+- Sensitive-information review: no credentials, tokens, `.env` values, media bytes, production data or logs are added.
+- Git state: uncommitted integration candidate; not pushed, no PR, deployment/OTA or device verification.
 
 ## CRL-20260814-002 — 当天任务临时通知照片本地草稿与认证读取补充（mobile）
 

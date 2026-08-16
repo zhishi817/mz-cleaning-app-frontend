@@ -1,6 +1,6 @@
 import React from 'react'
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
-import { Alert, Image } from 'react-native'
+import { Alert } from 'react-native'
 import { I18nProvider } from '../../lib/i18n'
 import { initNoticesStore, upsertNotices } from '../../lib/noticesStore'
 import NoticeDetailScreen from './NoticeDetailScreen'
@@ -28,19 +28,33 @@ jest.mock('../../lib/authStorage', () => ({
 jest.mock('../../components/CleaningMediaImage', () => {
   const mockReact = require('react')
   const mockView = require('react-native').View
-  return (props: any) => mockReact.createElement(mockView, {
-    testID: props.testID || 'cleaning-media-image',
-    accessibilityLabel: JSON.stringify({ guestLuggageId: props.guestLuggageId || null, accessTaskId: props.accessTaskId || null }),
-  })
+  return (props: any) => {
+    const mediaContext: any = { guestLuggageId: props.guestLuggageId || null, accessTaskId: props.accessTaskId || null }
+    if (props.accessWorkTaskId || props.offlineWorkTaskMedia) {
+      mediaContext.accessWorkTaskId = props.accessWorkTaskId || null
+      mediaContext.offlineWorkTaskMedia = Boolean(props.offlineWorkTaskMedia)
+    }
+    return mockReact.createElement(mockView, {
+      testID: props.testID || 'cleaning-media-image',
+      accessibilityLabel: JSON.stringify(mediaContext),
+    })
+  }
 })
 
 jest.mock('../../components/CleaningMediaPreview', () => {
   const mockReact = require('react')
   const mockView = require('react-native').View
-  return (props: any) => mockReact.createElement(mockView, {
-    testID: props.testID || 'cleaning-media-preview',
-    accessibilityLabel: JSON.stringify({ guestLuggageId: props.guestLuggageId || null, accessTaskId: props.accessTaskId || null }),
-  })
+  return (props: any) => {
+    const mediaContext: any = { guestLuggageId: props.guestLuggageId || null, accessTaskId: props.accessTaskId || null }
+    if (props.accessWorkTaskId || props.offlineWorkTaskMedia) {
+      mediaContext.accessWorkTaskId = props.accessWorkTaskId || null
+      mediaContext.offlineWorkTaskMedia = Boolean(props.offlineWorkTaskMedia)
+    }
+    return mockReact.createElement(mockView, {
+      testID: props.testID || 'cleaning-media-preview',
+      accessibilityLabel: JSON.stringify(mediaContext),
+    })
+  }
 })
 
 test('loads an available notice before deciding the detail is missing', async () => {
@@ -75,7 +89,7 @@ test('loads an available notice before deciding the detail is missing', async ()
   })
 })
 
-test('issue notice detail shows property code and photos', async () => {
+test('property-feedback issue detail and preview use authenticated media without task context', async () => {
   await initNoticesStore()
   await upsertNotices([
     {
@@ -91,7 +105,7 @@ test('issue notice detail shows property code and photos', async () => {
         property_code: 'Docklands CW209',
         issue_title: '维修',
         issue_detail: '射灯坏一个',
-        photo_urls: ['https://example.com/issue-1.jpg'],
+        photo_urls: ['cleaning/feedback-issue-1.jpg'],
       },
     },
   ], { replace: true })
@@ -99,7 +113,7 @@ test('issue notice detail shows property code and photos', async () => {
   const ui = render(
     <I18nProvider>
       <NoticeDetailScreen
-        navigation={{ setOptions: jest.fn(), canGoBack: () => true, goBack: jest.fn() } as any}
+        navigation={{ setOptions: jest.fn(), canGoBack: () => true, goBack: jest.fn(), navigate: jest.fn() } as any}
         route={{ key: 'notice', name: 'NoticeDetail', params: { id: 'issue-1' } } as any}
       />
     </I18nProvider>,
@@ -109,8 +123,50 @@ test('issue notice detail shows property code and photos', async () => {
     expect(ui.getByText('Docklands CW209 · 发现房源问题')).toBeTruthy()
     expect(ui.getByText('房源')).toBeTruthy()
     expect(ui.getByText('Docklands CW209')).toBeTruthy()
-    expect(ui.UNSAFE_getAllByType(Image).length).toBeGreaterThan(0)
+    expect(ui.getByTestId('issue-reported-notice-image')).toBeTruthy()
   })
+  expect(JSON.parse(ui.getByTestId('issue-reported-notice-image').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: null })
+
+  fireEvent.press(ui.getByTestId('issue-reported-notice-image'))
+  await waitFor(() => expect(ui.getByTestId('issue-reported-notice-preview')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('issue-reported-notice-preview').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: null })
+})
+
+test('task-bound issue detail and preview preserve the Inbox task context', async () => {
+  await initNoticesStore()
+  await upsertNotices([
+    {
+      id: 'task-issue-1',
+      type: 'update',
+      title: 'TEST01 · 房源问题反馈',
+      summary: '收到新的问题反馈：浴室漏水',
+      content: '收到新的问题反馈：浴室漏水',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      unread: true,
+      data: {
+        kind: 'issue_reported',
+        task_id: 'cleaning-task-1',
+        issue_title: '浴室漏水',
+        photo_url: 'cleaning/task-issue-1.jpg',
+      },
+    },
+  ], { replace: true })
+
+  const ui = render(
+    <I18nProvider>
+      <NoticeDetailScreen
+        navigation={{ setOptions: jest.fn(), canGoBack: () => true, goBack: jest.fn(), navigate: jest.fn() } as any}
+        route={{ key: 'task-issue', name: 'NoticeDetail', params: { id: 'task-issue-1' } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByTestId('issue-reported-notice-image')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('issue-reported-notice-image').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
+
+  fireEvent.press(ui.getByTestId('issue-reported-notice-image'))
+  await waitFor(() => expect(ui.getByTestId('issue-reported-notice-preview')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('issue-reported-notice-preview').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
 })
 
 test('temporary-notice detail and preview preserve the saved notice id', async () => {
@@ -216,6 +272,76 @@ test('keys-hung detail does not render or open private media without a string ta
   await waitFor(() => expect(ui.getByText('房间已挂钥匙')).toBeTruthy())
   expect(ui.queryByTestId('keys-hung-notice-image')).toBeNull()
   expect(ui.queryByTestId('keys-hung-notice-preview')).toBeNull()
+})
+
+test('consumables detail and preview keep the Inbox task id for authenticated media reads', async () => {
+  await initNoticesStore()
+  await upsertNotices([{
+    id: 'consumables-1', type: 'update', title: 'TEST01 · 清洁已完成', summary: '待补货：卷纸 x1', content: '待补货：卷纸 x1', createdAt: '2026-08-16T00:00:00.000Z', unread: true,
+    data: { kind: 'consumables_submitted', task_id: 'cleaning-task-1', photo_urls: ['cleaning/consumables-photo.jpg'] },
+  }], { replace: true })
+
+  const ui = render(
+    <I18nProvider><NoticeDetailScreen navigation={{ setOptions: jest.fn(), canGoBack: () => true, goBack: jest.fn(), navigate: jest.fn() } as any} route={{ key: 'consumables', name: 'NoticeDetail', params: { id: 'consumables-1' } } as any} /></I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByTestId('consumables-notice-image')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('consumables-notice-image').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
+  fireEvent.press(ui.getByTestId('consumables-notice-image'))
+  await waitFor(() => expect(ui.getByTestId('consumables-notice-preview')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('consumables-notice-preview').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
+})
+
+test('consumables detail fails closed without a string task id', async () => {
+  await initNoticesStore()
+  await upsertNotices([{
+    id: 'consumables-missing-task-id', type: 'update', title: 'TEST02 · 补品记录已更新', summary: '待补货：卷纸 x1', content: '待补货：卷纸 x1', createdAt: '2026-08-16T00:00:00.000Z', unread: true,
+    data: { kind: 'consumables_updated', task_id: { id: 'cleaning-task-1' }, photo_urls: ['cleaning/consumables-photo.jpg'] },
+  }], { replace: true })
+
+  const ui = render(
+    <I18nProvider><NoticeDetailScreen navigation={{ setOptions: jest.fn(), canGoBack: () => true, goBack: jest.fn(), navigate: jest.fn() } as any} route={{ key: 'consumables-missing-task-id', name: 'NoticeDetail', params: { id: 'consumables-missing-task-id' } } as any} /></I18nProvider>,
+  )
+  await waitFor(() => expect(ui.getByText('补品记录已更新')).toBeTruthy())
+  expect(ui.queryByTestId('consumables-notice-image')).toBeNull()
+  expect(ui.queryByTestId('consumables-notice-preview')).toBeNull()
+})
+
+test('offline work-task completion detail and preview keep the exact Inbox work task id', async () => {
+  await initNoticesStore()
+  await upsertNotices([{
+    id: 'offline-work-task-completed-1', type: 'update', title: '收 202 密码盒，7988 · 线下任务已完成', summary: '收取密码盒', content: '收取密码盒', createdAt: '2026-08-16T07:55:00.000Z', unread: true,
+    data: { kind: 'work_task_completed', task_id: 'cleaning_offline_tasks:offline-task-1', photo_urls: ['https://legacy-media.r2.dev/mzapp/offline-completion.jpg'] },
+  }], { replace: true })
+
+  const ui = render(
+    <I18nProvider><NoticeDetailScreen navigation={{ setOptions: jest.fn(), canGoBack: () => true, goBack: jest.fn(), navigate: jest.fn() } as any} route={{ key: 'offline-work-task-completed', name: 'NoticeDetail', params: { id: 'offline-work-task-completed-1' } } as any} /></I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByTestId('offline-work-task-completed-notice-image')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('offline-work-task-completed-notice-image').props.accessibilityLabel)).toEqual({
+    guestLuggageId: null, accessTaskId: null, accessWorkTaskId: 'cleaning_offline_tasks:offline-task-1', offlineWorkTaskMedia: true,
+  })
+  fireEvent.press(ui.getByTestId('offline-work-task-completed-notice-image'))
+  await waitFor(() => expect(ui.getByTestId('offline-work-task-completed-notice-preview')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('offline-work-task-completed-notice-preview').props.accessibilityLabel)).toEqual({
+    guestLuggageId: null, accessTaskId: null, accessWorkTaskId: 'cleaning_offline_tasks:offline-task-1', offlineWorkTaskMedia: true,
+  })
+})
+
+test('offline work-task completion detail fails closed without an exact offline work-task id', async () => {
+  await initNoticesStore()
+  await upsertNotices([{
+    id: 'offline-work-task-completed-missing-id', type: 'update', title: '收 202 密码盒，7988 · 线下任务已完成', summary: '收取密码盒', content: '收取密码盒', createdAt: '2026-08-16T07:55:00.000Z', unread: true,
+    data: { kind: 'work_task_completed', task_id: 'work-task-1', photo_urls: ['https://legacy-media.r2.dev/mzapp/offline-completion.jpg'] },
+  }], { replace: true })
+
+  const ui = render(
+    <I18nProvider><NoticeDetailScreen navigation={{ setOptions: jest.fn(), canGoBack: () => true, goBack: jest.fn(), navigate: jest.fn() } as any} route={{ key: 'offline-work-task-completed-missing-id', name: 'NoticeDetail', params: { id: 'offline-work-task-completed-missing-id' } } as any} /></I18nProvider>,
+  )
+  await waitFor(() => expect(ui.getByText('线下任务已完成')).toBeTruthy())
+  expect(ui.queryByTestId('offline-work-task-completed-notice-image')).toBeNull()
+  expect(ui.queryByTestId('offline-work-task-completed-notice-preview')).toBeNull()
 })
 
 test('temporary-notice detail does not render or open private media when the notice id is missing', async () => {

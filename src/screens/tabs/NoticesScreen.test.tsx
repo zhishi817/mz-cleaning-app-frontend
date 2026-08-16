@@ -57,10 +57,17 @@ jest.mock('../../lib/noticesStore', () => ({
 jest.mock('../../components/CleaningMediaImage', () => {
   const mockReact = require('react')
   const mockView = require('react-native').View
-  return (props: any) => mockReact.createElement(mockView, {
-    testID: props.testID || 'cleaning-media-image',
-    accessibilityLabel: JSON.stringify({ guestLuggageId: props.guestLuggageId || null, accessTaskId: props.accessTaskId || null }),
-  })
+  return (props: any) => {
+    const mediaContext: any = { guestLuggageId: props.guestLuggageId || null, accessTaskId: props.accessTaskId || null }
+    if (props.accessWorkTaskId || props.offlineWorkTaskMedia) {
+      mediaContext.accessWorkTaskId = props.accessWorkTaskId || null
+      mediaContext.offlineWorkTaskMedia = Boolean(props.offlineWorkTaskMedia)
+    }
+    return mockReact.createElement(mockView, {
+      testID: props.testID || 'cleaning-media-image',
+      accessibilityLabel: JSON.stringify(mediaContext),
+    })
+  }
 })
 
 jest.mock('../../lib/roles', () => ({
@@ -181,6 +188,49 @@ test('keys-hung thumbnail keeps the Inbox task id for authenticated media reads'
   mockNoticeItems = []
 })
 
+test('consumables thumbnail keeps the Inbox task id for authenticated media reads', async () => {
+  mockNoticeItems = [{
+    id: 'consumables-1',
+    type: 'update',
+    title: 'TEST01 · 清洁已完成',
+    summary: '待补货：卷纸 x1',
+    content: '待补货：卷纸 x1',
+    createdAt: '2026-08-16T00:00:00.000Z',
+    images: ['cleaning/consumables-photo.jpg'],
+    data: { kind: 'consumables_submitted', task_id: 'cleaning-task-1', photo_urls: ['cleaning/consumables-photo.jpg'] },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+  await waitFor(() => expect(ui.getByTestId('consumables-notice-thumbnail')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('consumables-notice-thumbnail').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
+  mockNoticeItems = []
+})
+
+test('issue-reported thumbnails keep optional task context and never use the raw image renderer', async () => {
+  mockNoticeItems = [
+    {
+      id: 'property-issue-1', type: 'update', title: 'TEST01 · 发现房源问题', summary: '漏水', content: '漏水', createdAt: '2026-08-16T00:00:00.000Z',
+      images: ['cleaning/property-issue.jpg'], data: { kind: 'issue_reported', photo_urls: ['cleaning/property-issue.jpg'] },
+    },
+    {
+      id: 'task-issue-1', type: 'update', title: 'TEST02 · 发现房源问题', summary: '漏水', content: '漏水', createdAt: '2026-08-16T00:01:00.000Z',
+      images: ['cleaning/task-issue.jpg'], data: { kind: 'issue_reported', task_id: 'cleaning-task-1', photo_urls: ['cleaning/task-issue.jpg'] },
+    },
+  ]
+
+  const ui = renderScreen()
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+  await waitFor(() => expect(ui.getAllByTestId('issue-reported-notice-thumbnail')).toHaveLength(2))
+  expect(ui.getAllByTestId('issue-reported-notice-thumbnail').map((node) => JSON.parse(node.props.accessibilityLabel))).toEqual([
+    { guestLuggageId: null, accessTaskId: null },
+    { guestLuggageId: null, accessTaskId: 'cleaning-task-1' },
+  ])
+  mockNoticeItems = []
+})
+
 test('keys-hung thumbnail does not render private media without a string task id', async () => {
   mockNoticeItems = [{
     id: 'keys-hung-missing-task-id',
@@ -205,6 +255,46 @@ test('keys-hung thumbnail does not render private media without a string task id
 
   await waitFor(() => expect(ui.getByText('房间已挂钥匙')).toBeTruthy())
   expect(ui.queryByTestId('keys-hung-notice-thumbnail')).toBeNull()
+  mockNoticeItems = []
+})
+
+test('consumables thumbnail fails closed without a string task id', async () => {
+  mockNoticeItems = [{
+    id: 'consumables-missing-task-id', type: 'update', title: 'TEST02 · 补品记录已更新', summary: '待补货：卷纸 x1', content: '待补货：卷纸 x1', createdAt: '2026-08-16T00:00:00.000Z',
+    images: ['cleaning/consumables-photo.jpg'], data: { kind: 'consumables_updated', task_id: { id: 'cleaning-task-1' }, photo_urls: ['cleaning/consumables-photo.jpg'] },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+  await waitFor(() => expect(ui.getAllByText('补品记录已更新').length).toBeGreaterThan(0))
+  expect(ui.queryByTestId('consumables-notice-thumbnail')).toBeNull()
+  mockNoticeItems = []
+})
+
+test('offline work-task completion thumbnail keeps the exact Inbox work task id and fails closed otherwise', async () => {
+  mockNoticeItems = [{
+    id: 'offline-work-task-completed-1', type: 'update', title: '收 202 密码盒，7988 · 线下任务已完成', summary: '收取密码盒', content: '收取密码盒', createdAt: '2026-08-16T07:55:00.000Z',
+    images: ['https://legacy-media.r2.dev/mzapp/offline-completion.jpg'],
+    data: { kind: 'work_task_completed', task_id: 'cleaning_offline_tasks:offline-task-1', photo_urls: ['https://legacy-media.r2.dev/mzapp/offline-completion.jpg'] },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+  await waitFor(() => expect(ui.getByTestId('offline-work-task-completed-notice-thumbnail')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('offline-work-task-completed-notice-thumbnail').props.accessibilityLabel)).toEqual({
+    guestLuggageId: null, accessTaskId: null, accessWorkTaskId: 'cleaning_offline_tasks:offline-task-1', offlineWorkTaskMedia: true,
+  })
+  mockNoticeItems = [{
+    id: 'offline-work-task-completed-missing-id', type: 'update', title: '收 202 密码盒，7988 · 线下任务已完成', summary: '收取密码盒', content: '收取密码盒', createdAt: '2026-08-16T07:56:00.000Z',
+    images: ['https://legacy-media.r2.dev/mzapp/offline-completion.jpg'],
+    data: { kind: 'work_task_completed', task_id: 'work-task-1', photo_urls: ['https://legacy-media.r2.dev/mzapp/offline-completion.jpg'] },
+  }]
+  const invalidUi = renderScreen()
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+  await waitFor(() => expect(invalidUi.getByText('线下任务已完成')).toBeTruthy())
+  expect(invalidUi.queryByTestId('offline-work-task-completed-notice-thumbnail')).toBeNull()
   mockNoticeItems = []
 })
 

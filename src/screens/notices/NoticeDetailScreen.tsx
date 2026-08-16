@@ -105,6 +105,13 @@ function pickTaskRouteIdFromNoticeData(data0: any) {
   return ''
 }
 
+function offlineWorkTaskIdFromNoticeData(data: any): string | null {
+  const taskId = normalizeCleaningTaskNoticeId(data?.task_id)
+  const prefix = 'cleaning_offline_tasks:'
+  if (!taskId || !taskId.startsWith(prefix) || !taskId.slice(prefix.length).trim()) return null
+  return taskId
+}
+
 export default function NoticeDetailScreen(props: Props) {
   const { t } = useI18n()
   const id = props.route.params.id
@@ -204,11 +211,23 @@ export default function NoticeDetailScreen(props: Props) {
   const targetUserName = String((notice as any)?.data?.target_user_name || '').trim()
   const canOpenDayEnd = action === 'open_day_end_handover' && !!targetDate
   const noticeData = (rawNotice as any)?.data || (notice as any)?.data || {}
-  const isGuestLuggageNotice = String((noticeData as any)?.kind || '').trim() === 'guest_luggage_updated'
+  const noticeKind = String((noticeData as any)?.kind || '').trim()
+  const isGuestLuggageNotice = noticeKind === 'guest_luggage_updated'
   const guestLuggageId = isGuestLuggageNotice ? normalizeGuestLuggageNoticeId((noticeData as any)?.guest_luggage_id) : null
-  const isKeysHungNotice = String((noticeData as any)?.kind || '').trim() === 'keys_hung'
+  const isKeysHungNotice = noticeKind === 'keys_hung'
   const keysHungTaskId = isKeysHungNotice ? normalizeCleaningTaskNoticeId((noticeData as any)?.task_id) : null
-  const displayImages = (isGuestLuggageNotice && !guestLuggageId) || (isKeysHungNotice && !keysHungTaskId) ? [] : imgs
+  const isConsumablesNotice = noticeKind === 'consumables_submitted' || noticeKind === 'consumables_updated'
+  const consumablesTaskId = isConsumablesNotice ? normalizeCleaningTaskNoticeId((noticeData as any)?.task_id) : null
+  const isIssueReportedNotice = noticeKind === 'issue_reported'
+  const issueReportedTaskId = isIssueReportedNotice ? normalizeCleaningTaskNoticeId((noticeData as any)?.task_id) : null
+  const isOfflineWorkTaskCompletionNotice = noticeKind === 'work_task_completed'
+  const offlineWorkTaskId = isOfflineWorkTaskCompletionNotice ? offlineWorkTaskIdFromNoticeData(noticeData) : null
+  const displayImages = (isGuestLuggageNotice && !guestLuggageId)
+    || (isKeysHungNotice && !keysHungTaskId)
+    || (isConsumablesNotice && !consumablesTaskId)
+    || (isOfflineWorkTaskCompletionNotice && !offlineWorkTaskId)
+    ? []
+    : imgs
   const taskRouteId = pickTaskRouteIdFromNoticeData(noticeData)
   const canOpenTask = !!taskRouteId && !canOpenDayEnd
 
@@ -305,7 +324,19 @@ export default function NoticeDetailScreen(props: Props) {
                       ? mediaToken
                         ? <CleaningMediaImage testID="keys-hung-notice-image" token={mediaToken} remoteReference={u} accessTaskId={keysHungTaskId} variant="thumbnail" style={styles.image} />
                         : <View style={styles.image} />
-                    : <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.image} />}
+                      : isConsumablesNotice
+                        ? mediaToken
+                          ? <CleaningMediaImage testID="consumables-notice-image" token={mediaToken} remoteReference={u} accessTaskId={consumablesTaskId} variant="thumbnail" style={styles.image} />
+                          : <View style={styles.image} />
+                        : isIssueReportedNotice
+                          ? mediaToken
+                            ? <CleaningMediaImage testID="issue-reported-notice-image" token={mediaToken} remoteReference={u} accessTaskId={issueReportedTaskId} variant="thumbnail" style={styles.image} />
+                            : <View style={styles.image} />
+                          : isOfflineWorkTaskCompletionNotice
+                            ? mediaToken
+                              ? <CleaningMediaImage testID="offline-work-task-completed-notice-image" token={mediaToken} remoteReference={u} accessWorkTaskId={offlineWorkTaskId} offlineWorkTaskMedia variant="thumbnail" style={styles.image} />
+                              : <View style={styles.image} />
+                            : <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.image} />}
                 </Pressable>
               ))}
             </View>
@@ -360,7 +391,19 @@ export default function NoticeDetailScreen(props: Props) {
                       ? mediaToken
                         ? <CleaningMediaImage testID="keys-hung-notice-image" token={mediaToken} remoteReference={u} accessTaskId={keysHungTaskId} variant="thumbnail" style={styles.image} />
                         : <View style={styles.image} />
-                    : <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.image} />}
+                      : isConsumablesNotice
+                        ? mediaToken
+                          ? <CleaningMediaImage testID="consumables-notice-image" token={mediaToken} remoteReference={u} accessTaskId={consumablesTaskId} variant="thumbnail" style={styles.image} />
+                          : <View style={styles.image} />
+                        : isIssueReportedNotice
+                          ? mediaToken
+                            ? <CleaningMediaImage testID="issue-reported-notice-image" token={mediaToken} remoteReference={u} accessTaskId={issueReportedTaskId} variant="thumbnail" style={styles.image} />
+                            : <View style={styles.image} />
+                          : isOfflineWorkTaskCompletionNotice
+                            ? mediaToken
+                              ? <CleaningMediaImage testID="offline-work-task-completed-notice-image" token={mediaToken} remoteReference={u} accessWorkTaskId={offlineWorkTaskId} offlineWorkTaskMedia variant="thumbnail" style={styles.image} />
+                              : <View style={styles.image} />
+                            : <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.image} />}
                 </Pressable>
               ))}
             </View>
@@ -388,7 +431,7 @@ export default function NoticeDetailScreen(props: Props) {
           <View style={styles.viewerTopRow} pointerEvents="none">
             <Text style={styles.viewerCloseText}>点击任意位置关闭</Text>
           </View>
-          {viewerUrl && ((!isGuestLuggageNotice || guestLuggageId) && (!isKeysHungNotice || keysHungTaskId)) ? (
+          {viewerUrl && ((!isGuestLuggageNotice || guestLuggageId) && (!isKeysHungNotice || keysHungTaskId) && (!isConsumablesNotice || consumablesTaskId) && (!isOfflineWorkTaskCompletionNotice || offlineWorkTaskId)) ? (
             <View style={{ flex: 1 }} pointerEvents="none">
               {isGuestLuggageNotice
                 ? mediaToken
@@ -398,7 +441,19 @@ export default function NoticeDetailScreen(props: Props) {
                   ? mediaToken
                     ? <CleaningMediaPreview testID="keys-hung-notice-preview" token={mediaToken} reference={viewerUrl} accessTaskId={keysHungTaskId} style={styles.viewerImg} />
                     : <View style={styles.viewerImg} />
-                : <Image source={{ uri: toAbsoluteUrl(viewerUrl) }} style={styles.viewerImg} resizeMode="contain" />}
+                  : isConsumablesNotice
+                    ? mediaToken
+                      ? <CleaningMediaPreview testID="consumables-notice-preview" token={mediaToken} reference={viewerUrl} accessTaskId={consumablesTaskId} style={styles.viewerImg} />
+                      : <View style={styles.viewerImg} />
+                    : isIssueReportedNotice
+                      ? mediaToken
+                        ? <CleaningMediaPreview testID="issue-reported-notice-preview" token={mediaToken} reference={viewerUrl} accessTaskId={issueReportedTaskId} style={styles.viewerImg} />
+                        : <View style={styles.viewerImg} />
+                      : isOfflineWorkTaskCompletionNotice
+                        ? mediaToken
+                          ? <CleaningMediaPreview testID="offline-work-task-completed-notice-preview" token={mediaToken} reference={viewerUrl} accessWorkTaskId={offlineWorkTaskId} offlineWorkTaskMedia style={styles.viewerImg} />
+                          : <View style={styles.viewerImg} />
+                        : <Image source={{ uri: toAbsoluteUrl(viewerUrl) }} style={styles.viewerImg} resizeMode="contain" />}
             </View>
           ) : null}
         </Pressable>

@@ -103,6 +103,13 @@ function typeMeta(type: Notice['type']) {
   return { bg: '#F3F4F6', fg: '#374151' }
 }
 
+function offlineWorkTaskIdFromNoticeData(data: any): string | null {
+  const taskId = normalizeCleaningTaskNoticeId(data?.task_id)
+  const prefix = 'cleaning_offline_tasks:'
+  if (!taskId || !taskId.startsWith(prefix) || !taskId.slice(prefix.length).trim()) return null
+  return taskId
+}
+
 function taskStatusLabel(task: WorkTask) {
   const s = String(task.status || '').trim()
   return s || 'unknown'
@@ -799,10 +806,17 @@ export default function NoticesScreen(props: Props) {
     const unread = !!getNoticesSnapshot().unreadIds[notice.id]
     const icon = notice.type === 'update' ? 'megaphone-outline' : notice.type === 'key' ? 'key-outline' : 'clipboard-outline'
     const img = notice.images[0] || null
-    const isGuestLuggageNotice = String((notice as any)?.data?.kind || '').trim() === 'guest_luggage_updated'
+    const noticeKind = String((notice as any)?.data?.kind || '').trim()
+    const isGuestLuggageNotice = noticeKind === 'guest_luggage_updated'
     const guestLuggageId = isGuestLuggageNotice ? normalizeGuestLuggageNoticeId((notice as any)?.data?.guest_luggage_id) : null
-    const isKeysHungNotice = String((notice as any)?.data?.kind || '').trim() === 'keys_hung'
+    const isKeysHungNotice = noticeKind === 'keys_hung'
     const keysHungTaskId = isKeysHungNotice ? normalizeCleaningTaskNoticeId((notice as any)?.data?.task_id) : null
+    const isConsumablesNotice = noticeKind === 'consumables_submitted' || noticeKind === 'consumables_updated'
+    const consumablesTaskId = isConsumablesNotice ? normalizeCleaningTaskNoticeId((notice as any)?.data?.task_id) : null
+    const isIssueReportedNotice = noticeKind === 'issue_reported'
+    const issueReportedTaskId = isIssueReportedNotice ? normalizeCleaningTaskNoticeId((notice as any)?.data?.task_id) : null
+    const isOfflineWorkTaskCompletionNotice = noticeKind === 'work_task_completed'
+    const offlineWorkTaskId = isOfflineWorkTaskCompletionNotice ? offlineWorkTaskIdFromNoticeData((notice as any)?.data) : null
     return (
       <Pressable
         onPress={() => {
@@ -830,7 +844,17 @@ export default function NoticesScreen(props: Props) {
             ? keysHungTaskId
               ? <CleaningMediaImage testID="keys-hung-notice-thumbnail" token={token} remoteReference={img} accessTaskId={keysHungTaskId} variant="thumbnail" style={styles.noticeThumb} />
               : null
-          : <Image source={{ uri: img }} style={styles.noticeThumb} />) : null}
+            : isConsumablesNotice
+              ? consumablesTaskId
+                ? <CleaningMediaImage testID="consumables-notice-thumbnail" token={token} remoteReference={img} accessTaskId={consumablesTaskId} variant="thumbnail" style={styles.noticeThumb} />
+                : null
+              : isIssueReportedNotice
+                ? <CleaningMediaImage testID="issue-reported-notice-thumbnail" token={token} remoteReference={img} accessTaskId={issueReportedTaskId} variant="thumbnail" style={styles.noticeThumb} />
+                : isOfflineWorkTaskCompletionNotice
+                  ? offlineWorkTaskId
+                    ? <CleaningMediaImage testID="offline-work-task-completed-notice-thumbnail" token={token} remoteReference={img} accessWorkTaskId={offlineWorkTaskId} offlineWorkTaskMedia variant="thumbnail" style={styles.noticeThumb} />
+                    : null
+                  : <Image source={{ uri: img }} style={styles.noticeThumb} />) : null}
         <View style={styles.noticeRight}>
           <View style={styles.noticeTimeRow}>
             <Text style={styles.noticeTime}>{formatTime(notice.createdAt).split(' ')[1]}</Text>
