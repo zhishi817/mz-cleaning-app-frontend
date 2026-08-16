@@ -64,15 +64,34 @@
 - Branch: `codex/build26-ota-runtime-contract-20260816`
 - Base: `origin/Dev@77dacca0c96e07162bdbc314766acdfc7ddeb5c0`; fetched at `2026-08-16 22:36:01 AEST`.
 - Candidate patch SHA-256: `a768b3c2c0533da0e2794b995ba32095b07e962bf93b6ae5cacc1bcde334deb2` excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed.
+- Commit SHA: `6483ec75996ee88a8fcad64fd8c2f0550a4b2f17`; candidate content commit.
 - Dependencies: Build 26 OTA runtime contract only; no Root candidate and no native/production change are included.
 - Required validation: PASS — 5 dedicated Node tests, TypeScript, lint (0 errors; 109 existing warnings), `npm run check:ci` (56 Jest suites / 314 tests), diff check and ledger coverage passed.
-- Shared-hunk review: not applicable — all ten non-ledger hunks belong only to this selected CRL.
+- Shared-hunk review: PASS — the ten non-ledger hunk fingerprints are unique to this selected CRL; the `docs/eas-update-release-runbook.md` change is limited to its Build 26 contract section, and the ledger hunk is limited to this CRL entry.
 - Generated-file review: not applicable — Node scripts, tests and Markdown only.
-- Technical state: verified.
+- Technical state: committed.
 - User authorization: selected-for-commit — user requested `提交mobile/CRL-20260816-005`.
 - Independent review: GO — independent read-only review verified the exact base, staged four-file scope, candidate patch fingerprint, ten hunk fingerprints, test evidence, fail-closed release behavior, no secret/production-write risk and no unrelated file; verdict is limited to this local commit action.
-- Action conclusion: GO — candidate may be committed locally; push, PR, merge, OTA publication and device verification remain unauthorized.
+- Action conclusion: GO — candidate content was committed locally; a separate push attempt follows.
+
+#### RA-20260816-005
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260816-005`
+- Selected CRL identities: `mobile/CRL-20260816-005`
+- Intended action: `push`
+- Branch: `codex/build26-ota-runtime-contract-20260816`
+- Base: `origin/Dev@77dacca0c96e07162bdbc314766acdfc7ddeb5c0`; fetched at `2026-08-16 22:44:49 AEST`.
+- Candidate patch SHA-256: `a768b3c2c0533da0e2794b995ba32095b07e962bf93b6ae5cacc1bcde334deb2` excluding `docs/change-release-ledger.md`.
+- Commit SHA: `6483ec75996ee88a8fcad64fd8c2f0550a4b2f17`; candidate content commit.
+- Dependencies: Build 26 OTA runtime contract only; no Root candidate and no native/production change are included.
+- Required validation: PASS — 5 dedicated Node tests, TypeScript, lint (0 errors; 109 existing warnings), `npm run check:ci` (56 Jest suites / 314 tests), diff check and ledger coverage passed.
+- Shared-hunk review: PASS — the ten non-ledger hunk fingerprints are unique to this selected CRL; the `docs/eas-update-release-runbook.md` change is limited to its Build 26 contract section, and the ledger hunk is limited to this CRL entry.
+- Generated-file review: not applicable — Node scripts, tests and Markdown only.
+- Technical state: committed.
+- User authorization: approved-for-push — user said `推送` after the exact candidate commit and branch were reported.
+- Independent review: GO — independent read-only push review verified the exact base, candidate content commit, staged receipt-only scope, patch fingerprint, ten hunk fingerprints, test evidence, no secret/generated-file issue and no production-write risk; verdict is limited to this branch push.
+- Action conclusion: GO — receipt may be committed, then the exact clean range must pass `--release-report` before push.
 
 ### Risks / Release Notes
 
