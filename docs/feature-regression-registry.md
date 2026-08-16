@@ -1,5 +1,19 @@
 # Feature Regression Registry
 
+## FR-P1-NTF-02 — 钥匙照片通知私有媒体认证读取
+
+- **Status:** active
+- **Maintenance scope:** `mobile`
+- **Last reviewed:** 2026-08-16 Australia/Melbourne
+- **Business outcome:** 后端实际发送的 `key_photo_uploaded` 与既有 `keys_hung` 均从同一 Inbox `task_id` 进入认证媒体读取；列表缩略图、详情缩略图与大图传递同一任务上下文。缺失或非字符串 ID 时不渲染私有媒体，也不回退裸 URL。
+- **Related CRLs:** `mobile/CRL-20260816-006`; supersedes the incorrect incident mapping in `mobile/CRL-20260815-001`; historical source evidence `mobile/CRL-20260813-001`.
+
+### Test-to-invariant mapping
+
+- `src/screens/tabs/NoticesScreen.test.tsx` — `key_photo_uploaded` 与 `keys_hung` 都保留合法 `task_id`，无效 ID 失败关闭。
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — 两种 key 通知的详情和 viewer 都使用相同认证上下文，且无效 ID 不渲染私有媒体。
+- Root `/cleaning-app/media/image` — 既有精确关联与授权复用，不在本单元修改。
+
 ## FR-P1-NTF-03 — 补货通知私有照片认证读取
 
 - **Status:** active

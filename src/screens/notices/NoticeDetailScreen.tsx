@@ -214,8 +214,8 @@ export default function NoticeDetailScreen(props: Props) {
   const noticeKind = String((noticeData as any)?.kind || '').trim()
   const isGuestLuggageNotice = noticeKind === 'guest_luggage_updated'
   const guestLuggageId = isGuestLuggageNotice ? normalizeGuestLuggageNoticeId((noticeData as any)?.guest_luggage_id) : null
-  const isKeysHungNotice = noticeKind === 'keys_hung'
-  const keysHungTaskId = isKeysHungNotice ? normalizeCleaningTaskNoticeId((noticeData as any)?.task_id) : null
+  const isKeyMediaNotice = noticeKind === 'key_photo_uploaded' || noticeKind === 'keys_hung'
+  const keyMediaTaskId = isKeyMediaNotice ? normalizeCleaningTaskNoticeId((noticeData as any)?.task_id) : null
   const isConsumablesNotice = noticeKind === 'consumables_submitted' || noticeKind === 'consumables_updated'
   const consumablesTaskId = isConsumablesNotice ? normalizeCleaningTaskNoticeId((noticeData as any)?.task_id) : null
   const isIssueReportedNotice = noticeKind === 'issue_reported'
@@ -223,7 +223,7 @@ export default function NoticeDetailScreen(props: Props) {
   const isOfflineWorkTaskCompletionNotice = noticeKind === 'work_task_completed'
   const offlineWorkTaskId = isOfflineWorkTaskCompletionNotice ? offlineWorkTaskIdFromNoticeData(noticeData) : null
   const displayImages = (isGuestLuggageNotice && !guestLuggageId)
-    || (isKeysHungNotice && !keysHungTaskId)
+    || (isKeyMediaNotice && !keyMediaTaskId)
     || (isConsumablesNotice && !consumablesTaskId)
     || (isOfflineWorkTaskCompletionNotice && !offlineWorkTaskId)
     ? []
@@ -320,9 +320,9 @@ export default function NoticeDetailScreen(props: Props) {
                     ? mediaToken
                       ? <CleaningMediaImage testID="guest-luggage-notice-image" token={mediaToken} remoteReference={u} guestLuggageId={guestLuggageId} variant="thumbnail" style={styles.image} />
                       : <View style={styles.image} />
-                    : isKeysHungNotice
+                    : isKeyMediaNotice
                       ? mediaToken
-                        ? <CleaningMediaImage testID="keys-hung-notice-image" token={mediaToken} remoteReference={u} accessTaskId={keysHungTaskId} variant="thumbnail" style={styles.image} />
+                        ? <CleaningMediaImage testID="key-media-notice-image" token={mediaToken} remoteReference={u} accessTaskId={keyMediaTaskId} variant="thumbnail" style={styles.image} />
                         : <View style={styles.image} />
                       : isConsumablesNotice
                         ? mediaToken
@@ -387,9 +387,9 @@ export default function NoticeDetailScreen(props: Props) {
                     ? mediaToken
                       ? <CleaningMediaImage testID="guest-luggage-notice-image" token={mediaToken} remoteReference={u} guestLuggageId={guestLuggageId} variant="thumbnail" style={styles.image} />
                       : <View style={styles.image} />
-                    : isKeysHungNotice
+                    : isKeyMediaNotice
                       ? mediaToken
-                        ? <CleaningMediaImage testID="keys-hung-notice-image" token={mediaToken} remoteReference={u} accessTaskId={keysHungTaskId} variant="thumbnail" style={styles.image} />
+                        ? <CleaningMediaImage testID="key-media-notice-image" token={mediaToken} remoteReference={u} accessTaskId={keyMediaTaskId} variant="thumbnail" style={styles.image} />
                         : <View style={styles.image} />
                       : isConsumablesNotice
                         ? mediaToken
@@ -431,15 +431,15 @@ export default function NoticeDetailScreen(props: Props) {
           <View style={styles.viewerTopRow} pointerEvents="none">
             <Text style={styles.viewerCloseText}>点击任意位置关闭</Text>
           </View>
-          {viewerUrl && ((!isGuestLuggageNotice || guestLuggageId) && (!isKeysHungNotice || keysHungTaskId) && (!isConsumablesNotice || consumablesTaskId) && (!isOfflineWorkTaskCompletionNotice || offlineWorkTaskId)) ? (
+          {viewerUrl && ((!isGuestLuggageNotice || guestLuggageId) && (!isKeyMediaNotice || keyMediaTaskId) && (!isConsumablesNotice || consumablesTaskId) && (!isOfflineWorkTaskCompletionNotice || offlineWorkTaskId)) ? (
             <View style={{ flex: 1 }} pointerEvents="none">
               {isGuestLuggageNotice
                 ? mediaToken
                   ? <CleaningMediaPreview testID="guest-luggage-notice-preview" token={mediaToken} reference={viewerUrl} guestLuggageId={guestLuggageId} style={styles.viewerImg} />
                   : <View style={styles.viewerImg} />
-                : isKeysHungNotice
+                : isKeyMediaNotice
                   ? mediaToken
-                    ? <CleaningMediaPreview testID="keys-hung-notice-preview" token={mediaToken} reference={viewerUrl} accessTaskId={keysHungTaskId} style={styles.viewerImg} />
+                    ? <CleaningMediaPreview testID="key-media-notice-preview" token={mediaToken} reference={viewerUrl} accessTaskId={keyMediaTaskId} style={styles.viewerImg} />
                     : <View style={styles.viewerImg} />
                   : isConsumablesNotice
                     ? mediaToken
