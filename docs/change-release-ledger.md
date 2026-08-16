@@ -1,5 +1,86 @@
 # Change Release Ledger
 
+## CRL-20260816-005 — Build 26 TestFlight OTA 运行时合同门禁（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready
+- **Updated:** 2026-08-16 Australia/Melbourne
+- **Request:** 消除 Build 26 TestFlight OTA 因 `runtimeVersion.policy=fingerprint` 与历史安装 runtime 不同而反复误判为必须新建 Build 的人工发布问题。
+- **Outcome:** 使用一个受控脚本在隔离最新 Dev 工作树中验证 Build 26 兼容范围、仅在 EAS 发布子进程期间临时绑定历史 runtime，并在正常或失败退出后恢复 `app.json`；原生/依赖配置变化一律失败关闭。
+
+### Implementation
+
+- Previous behavior: 发布人或自动化需要手动修改 `app.json` runtime，且普通发布手册把当前 fingerprint 与已安装 Build 26 runtime 混为同一个兼容性结论。
+- New behavior: `scripts/testflight_build26_ota.mjs --check` 验证 `origin/Dev`、干净工作树、兼容基线与允许文件范围；`--publish --message` 才会临时绑定 Build 26 runtime、明确 iOS/TestFlight/production 发布，并校验 EAS 回执。默认不会发布。
+- Key decisions: 常驻 `app.json` 仍保持 `runtimeVersion.policy=fingerprint`；不把历史 runtime 覆盖提交；任何 `app.json`、`eas.json`、依赖/lockfile、原生目录、插件或原生资源变化都需要新 Build 或单独兼容性评审。
+
+### Files / Areas
+
+- `scripts/testflight_build26_ota.mjs` — Build 26 OTA 合同、失败关闭预检、可逆 runtime 绑定与 EAS 回执核验。
+- `scripts/tests/test_testflight_build26_ota.mjs` — 允许/阻断范围、临时绑定恢复、显式发布授权和回执边界回归。
+- `docs/eas-update-release-runbook.md` — 将 Build 26 的受控命令列为唯一 TestFlight OTA 路径。
+- `docs/change-release-ledger.md` — 本发布工具单元记录。
+
+### Impact / Dependencies
+
+- App/API/database/production data: none.
+- Runtime: Build 26 的 `e5f4cc520509f2b64df725bf8eef5a9a42dc0e8a` 仅在隔离发布子进程内使用；常驻 fingerprint 策略不变。
+- Dependencies: existing `npx eas-cli@latest`; no new package dependency.
+- Related units: `mobile/CRL-20260814-004`, `mobile/CRL-20260815-001`, `mobile/CRL-20260816-002`, `mobile/CRL-20260816-003`, `mobile/CRL-20260816-004`.
+
+### Validation
+
+- `node --test scripts/tests/test_testflight_build26_ota.mjs && node --check scripts/testflight_build26_ota.mjs` — passed: 5 tests; covers allowed/blocked path classification, required resting fingerprint policy, exact `app.json` restoration after a simulated publish failure, opt-in publish arguments and EAS receipt boundary.
+- `npx eslint scripts/testflight_build26_ota.mjs scripts/tests/test_testflight_build26_ota.mjs` — passed: 0 errors.
+- `node scripts/testflight_build26_ota.mjs --check` in this uncommitted candidate — failed closed as expected: refuses a dirty worktree before any remote fetch or EAS action.
+- `npm run check:ci` — passed: 25 ledger-audit tests, TypeScript, lint (0 errors; 109 pre-existing warnings), button audit, and 56 Jest suites / 314 tests.
+- `git diff --check` and `python3 scripts/audit_change_release_ledger.py` — passed: 4 changed files, all recorded.
+- EAS OTA publication / server receipt / Build 26 download and real-device verification: not run.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared — this is the user-selected commit for `mobile/CRL-20260816-005` only.
+- **Untracked review:** none; the three new script/test paths are deliberately staged, and no untracked path remains.
+- `docs/eas-update-release-runbook.md` — SHA-256: `072e9a6913ccaab6bddebabacf000799ef6413b857d081781bade48f4714712d`
+- `docs/eas-update-release-runbook.md` — SHA-256: `09425887db8bb10468c1eaf6b8cb8d7ab42d5d2adace7e7fcec74242621431ff`
+- `docs/eas-update-release-runbook.md` — SHA-256: `0ed1723b30645b40031d318aca2ad38a4cd73fc3fbf35e25979b06ee5c238b86`
+- `docs/eas-update-release-runbook.md` — SHA-256: `3d8f4284715c1ddbf9cd71401d556e84a677b419979918ba70b72bca97b3d54a`
+- `docs/eas-update-release-runbook.md` — SHA-256: `40bd930dd005e9654e2feccb78990b64674c99f486a0489294b46e1ee7b24831`
+- `docs/eas-update-release-runbook.md` — SHA-256: `94ed706c211a25c5e2c541a2f6bd676f23c3cf94155fc524f30d146c434bf137`
+- `docs/eas-update-release-runbook.md` — SHA-256: `9fa8f6dbbcedf958491791e840ff4a37f4656955babc13ba143ccbd64d5a52ab`
+- `docs/eas-update-release-runbook.md` — SHA-256: `f2fec7dd29d393fa892efd10f015ec7a9b68a68c23f801048eda3666d269c376`
+- `scripts/testflight_build26_ota.mjs` — SHA-256: `e65991428a084dbc373a4f5b56d24152669cc6d6b8425781bfb516fa7f8213b3`
+- `scripts/tests/test_testflight_build26_ota.mjs` — SHA-256: `0d82a51fc0a677779fb4d09c4192edffaf2b7ddae402b525425b945f9d269136`
+
+### Release Attempts
+
+#### RA-20260816-004
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260816-005`
+- Selected CRL identities: `mobile/CRL-20260816-005`
+- Intended action: `commit`
+- Branch: `codex/build26-ota-runtime-contract-20260816`
+- Base: `origin/Dev@77dacca0c96e07162bdbc314766acdfc7ddeb5c0`; fetched at `2026-08-16 22:36:01 AEST`.
+- Candidate patch SHA-256: `a768b3c2c0533da0e2794b995ba32095b07e962bf93b6ae5cacc1bcde334deb2` excluding `docs/change-release-ledger.md`.
+- Commit SHA: not committed.
+- Dependencies: Build 26 OTA runtime contract only; no Root candidate and no native/production change are included.
+- Required validation: PASS — 5 dedicated Node tests, TypeScript, lint (0 errors; 109 existing warnings), `npm run check:ci` (56 Jest suites / 314 tests), diff check and ledger coverage passed.
+- Shared-hunk review: not applicable — all ten non-ledger hunks belong only to this selected CRL.
+- Generated-file review: not applicable — Node scripts, tests and Markdown only.
+- Technical state: verified.
+- User authorization: selected-for-commit — user requested `提交mobile/CRL-20260816-005`.
+- Independent review: GO — independent read-only review verified the exact base, staged four-file scope, candidate patch fingerprint, ten hunk fingerprints, test evidence, fail-closed release behavior, no secret/production-write risk and no unrelated file; verdict is limited to this local commit action.
+- Action conclusion: GO — candidate may be committed locally; push, PR, merge, OTA publication and device verification remain unauthorized.
+
+### Risks / Release Notes
+
+- The wrapper restores `app.json` after ordinary command failure; it must only run inside a disposable, clean release worktree so an interrupted local process cannot affect a developer workspace.
+- A successful EAS publication remains separate from Build 26 download/restart and role/device verification.
+- Sensitive-information review: no secrets, credentials, tokens, `.env` values, private URLs, caches, logs or production data are stored.
+- Git state: local candidate only; not committed, not pushed, no PR, not merged, no EAS OTA published and no device verification.
+
 ## CRL-20260816-004 — P1-NTF-05 线下任务完成通知认证媒体渲染（mobile）
 
 - **Repository:** `mobile`
