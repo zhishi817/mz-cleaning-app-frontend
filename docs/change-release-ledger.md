@@ -3,7 +3,7 @@
 ## CRL-20260816-006 — P1-NTF-02 钥匙照片通知真实事件认证读取（mobile）
 
 - **Repository:** `mobile`
-- **Status:** ready (source fixed; local regression passed)
+- **Status:** committed (local source and validation evidence)
 - **Updated:** 2026-08-17 Australia/Melbourne
 - **Request:** 修复仍显示灰图的“钥匙照片已上传”通知。生产事件实际使用 `key_photo_uploaded`，不得只修复不同语义的 `keys_hung`。
 - **Outcome:** `key_photo_uploaded` 和保留兼容的 `keys_hung` 均从同一 Inbox `task_id` 进入既有认证媒体组件；列表、详情与大图使用同一任务上下文。缺失、空白或非字符串任务 ID 时不渲染、不请求私有媒体，也不退回裸 URL。
@@ -72,12 +72,12 @@
 - Branch: `codex/p1-ntf02-key-photo-event-20260817`
 - Base: `origin/Dev@8c24fe612c8d74b42c1c015b1437bd035818651f`; fetched at `2026-08-17 01:07:40 AEST`.
 - Candidate patch SHA-256: `380fc997f53e17c3795338cdc32eceb10f71037a00e54b312c49dfb862dea3a8` excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed.
+- Commit SHA: `39e7a196c0e9be13229dc8606bc4daceb2be3054`.
 - Dependencies: Root authenticated media route and exact association are already deployed reuse-only; no Root candidate travels with this attempt.
 - Required validation: PASS; evidence: targeted 48-test media/notice regression, typecheck and `check:fast` passed.
 - Shared-hunk review: PASS; evidence: all staged non-ledger hunks are owned by this CRL and no shared media dependency is modified.
 - Generated-file review: not applicable; no generated paths are staged.
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: user instructed “提交” on 2026-08-17.
 - Independent review: GO; evidence: independent read-only review of this exact base, candidate fingerprint, staged scope, complete diff and validation found no P0/P1 and approved the commit action only.
 - Action conclusion: GO; blockers: none for the authorized local commit action.
@@ -87,7 +87,7 @@
 - This source repair cannot prove a historical object exists or that an authorized role can read it on a device; those remain post-release verification gates.
 - Rollback: revert only the two `key_photo_uploaded` page-classification branches and their tests; do not restore raw private URL rendering.
 - Sensitive-information review: no credentials, tokens, private URLs, media bytes, production logs or production data are added.
-- Git state: uncommitted, not pushed, no PR, not merged, not deployed, no OTA published and no device verification.
+- Git state: content commit `39e7a196c0e9be13229dc8606bc4daceb2be3054` is local on `codex/p1-ntf02-key-photo-event-20260817`; this ledger receipt is pending commit. Not pushed, no PR, not merged, not deployed, no OTA published and no device verification.
 
 ## CRL-20260816-005 — Build 26 TestFlight OTA 运行时合同门禁（mobile）
 
