@@ -1,9 +1,10 @@
 import React from 'react'
 import { Alert, StyleSheet } from 'react-native'
-import { fireEvent, render, waitFor } from '@testing-library/react-native'
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 
 let mockQueueItems: any[] = []
+let mockInspectionPanelQueueListener: (() => void) | null = null
 const mockSnapshot: any = {
   items: [
     {
@@ -89,7 +90,12 @@ jest.mock('../../lib/inspectionPanelSubmitQueue', () => ({
     reason: batch?.snapshot ? null : '请先提交本页检查与补充，确保照片已保存到本机。',
     skipInspectionPhotos: batch?.snapshot?.room_photo_requirement === 'guest_arrival_confirmed',
   })),
-  subscribeInspectionPanelSubmitQueue: jest.fn(() => () => {}),
+  subscribeInspectionPanelSubmitQueue: jest.fn((listener: () => void) => {
+    mockInspectionPanelQueueListener = listener
+    return () => {
+      if (mockInspectionPanelQueueListener === listener) mockInspectionPanelQueueListener = null
+    }
+  }),
 }))
 
 jest.mock('../../lib/inspectionMediaQueue', () => ({
@@ -108,6 +114,7 @@ jest.mock('../../lib/workTasksStore', () => ({
 
 beforeEach(() => {
   jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+	  mockInspectionPanelQueueListener = null
 	  const queue = require('../../lib/inspectionPanelSubmitQueue')
 	  ;(queue.getInspectionPanelBatch as jest.Mock).mockResolvedValue(null)
 	  mockQueueItems = [
@@ -136,6 +143,118 @@ beforeEach(() => {
     },
 	  ]
 	})
+
+test('inspection queue event refreshes silently without restoring the blocking validation state', async () => {
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  ;(queue.getInspectionPanelBatch as jest.Mock).mockResolvedValue({
+    status: 'synced',
+    snapshot: readyInspectionSnapshot(),
+  })
+  mockSnapshot.items[0].title = 'X 检查后挂钥匙'
+  mockSnapshot.items[0].inspection_scope = 'inspect_and_hang'
+  mockSnapshot.items[0].available_actions = [{ id: 'upload_access_video', enabled: true, target: 'InspectionComplete' }]
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
+  const InspectionCompleteScreen = require('./InspectionCompleteScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <InspectionCompleteScreen
+        navigation={navigation as any}
+        route={{ key: 'inspection-complete-silent-refresh', name: 'InspectionComplete', params: { taskId: 'w1' } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByText('检查与补充已同步完成。')).toBeTruthy())
+  expect(mockInspectionPanelQueueListener).toEqual(expect.any(Function))
+
+  await act(async () => {
+    mockInspectionPanelQueueListener?.()
+  })
+
+  await waitFor(() => expect(queue.getInspectionPanelBatch).toHaveBeenCalledTimes(2))
+  expect(ui.queryByText(/正在校验检查与补充状态/)).toBeNull()
+  expect(ui.queryByText('加载中...')).toBeNull()
+})
+
+test('replacement video is queued before the old pending local video is removed', async () => {
+  const imagePicker = require('expo-image-picker')
+  const mediaQueue = require('../../lib/inspectionMediaQueue')
+  mockQueueItems = [{
+    id: 'q-old',
+    task_id: 'ct1',
+    kind: 'lockbox_video',
+    local_uri: 'file:///private/old.mov',
+    uploaded_url: '',
+    business_saved: false,
+    upload_status: 'pending',
+    created_at: '2026-08-17T00:00:00.000Z',
+  }]
+  ;(imagePicker.launchCameraAsync as jest.Mock).mockResolvedValueOnce({
+    canceled: false,
+    assets: [{ uri: 'file:///private/new.mov', fileName: 'new.mov', mimeType: 'video/quicktime' }],
+  })
+  ;(mediaQueue.enqueueInspectionMediaItem as jest.Mock).mockClear().mockResolvedValueOnce({
+    id: 'q-new', task_id: 'ct1', kind: 'lockbox_video', local_uri: 'file:///private/queued-new.mov', upload_status: 'pending', business_saved: false,
+  })
+  ;(mediaQueue.removeInspectionMediaItem as jest.Mock).mockClear().mockResolvedValueOnce(undefined)
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
+  const InspectionCompleteScreen = require('./InspectionCompleteScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <InspectionCompleteScreen
+        navigation={navigation as any}
+        route={{ key: 'inspection-complete-replace-video', name: 'InspectionComplete', params: { taskId: 'w1', skipInspectionPhotos: true } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByTestId('inspection-complete-upload-video')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('inspection-complete-upload-video'))
+
+  await waitFor(() => expect(mediaQueue.removeInspectionMediaItem).toHaveBeenCalledWith('q-old'))
+  expect(mediaQueue.enqueueInspectionMediaItem.mock.invocationCallOrder[0]).toBeLessThan(mediaQueue.removeInspectionMediaItem.mock.invocationCallOrder[0])
+})
+
+test('failed replacement enqueue keeps the old pending local video', async () => {
+  const imagePicker = require('expo-image-picker')
+  const mediaQueue = require('../../lib/inspectionMediaQueue')
+  mockQueueItems = [{
+    id: 'q-old',
+    task_id: 'ct1',
+    kind: 'lockbox_video',
+    local_uri: 'file:///private/old.mov',
+    uploaded_url: '',
+    business_saved: false,
+    upload_status: 'pending',
+    created_at: '2026-08-17T00:00:00.000Z',
+  }]
+  ;(imagePicker.launchCameraAsync as jest.Mock).mockResolvedValueOnce({
+    canceled: false,
+    assets: [{ uri: 'file:///private/new.mov', fileName: 'new.mov', mimeType: 'video/quicktime' }],
+  })
+  ;(mediaQueue.enqueueInspectionMediaItem as jest.Mock).mockClear().mockRejectedValueOnce(new Error('新视频本机保存失败'))
+  ;(mediaQueue.removeInspectionMediaItem as jest.Mock).mockClear()
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
+  const InspectionCompleteScreen = require('./InspectionCompleteScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <InspectionCompleteScreen
+        navigation={navigation as any}
+        route={{ key: 'inspection-complete-replace-video-failed', name: 'InspectionComplete', params: { taskId: 'w1', skipInspectionPhotos: true } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByTestId('inspection-complete-upload-video')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('inspection-complete-upload-video'))
+
+  await waitFor(() => expect(mediaQueue.enqueueInspectionMediaItem).toHaveBeenCalled())
+  expect(mediaQueue.removeInspectionMediaItem).not.toHaveBeenCalled()
+  expect(Alert.alert).toHaveBeenCalledWith(expect.any(String), '新视频本机保存失败')
+})
 
 test('password-only access video completion does not require inspection panel batch', async () => {
   const api = require('../../lib/api')
