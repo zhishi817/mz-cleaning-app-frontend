@@ -79,6 +79,25 @@
 - Independent review: GO; evidence: independent read-only review of the exact base, candidate fingerprint, staged scope, full diff and validation found no P0/P1; it accepted one P2 about a retained old queue item after cleanup failure and approved the commit action only.
 - Action conclusion: GO; blockers: none for the authorized local commit action.
 
+#### RA-20260817-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260817-001`
+- Selected CRL identities: `mobile/CRL-20260817-001`
+- Intended action: `push`
+- Branch: `codex/hang-key-video-20260817`
+- Base: `origin/Dev@0b7249e8e9c25054fa711d79caeacec21dd6ecbe`; refetched at `2026-08-17 17:13:15 AEST`.
+- Candidate patch SHA-256: `d40cd071ce8de23966afeb030a165f263b084408767f5b1e2665e8dbe974d3e6` excluding `docs/change-release-ledger.md`.
+- Commit SHA: `269a485c5d91c1edf6bdc84d751a3095218bc1fe`; audit head will be emitted by the final exact range report.
+- Dependencies: paired `root/CRL-20260817-001` provides FR-004 registration only; no backend deployment dependency.
+- Required validation: PASS; evidence: prior exact range report, clean-candidate 11-test screen regression and diff check; the same source hunks previously passed mobile typecheck/lint without an error.
+- Shared-hunk review: PASS; evidence: the exact range contains only declared screen/test hunks and ledger receipts; no unselected content hunk is present.
+- Generated-file review: not applicable; no generated path is in the exact range.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: after the exact root/mobile branch and commit SHAs were reported, the user instructed “推送” on 2026-08-17.
+- Independent review: GO; evidence: independent read-only final push review rechecked the refetched base, exact range, candidate content commit, fingerprint, scope, validation and sensitive/generated-file evidence; it approved only this branch push.
+- Action conclusion: GO; blockers: none for the authorized branch push after the final exact range report passes.
+
 ### Risks / Release Notes
 
 - Risk: local tests prove the ordering and render contract, but do not prove real-device camera/library behavior or an OTA on the installed runtime.
