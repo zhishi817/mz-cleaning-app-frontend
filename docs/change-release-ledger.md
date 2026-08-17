@@ -6177,17 +6177,17 @@
 - Branch: `codex/p1-fdb-fin-20260817-final-v2`; target: `Dev`.
 - Base: `origin/Dev@e285ad7679c913a0ca8fbe3b41b410542f143bc4`; refetched 2026-08-17.
 - Candidate patch SHA-256: `e314e0c3221de37349274e4daa8b1b7ea41fc8cb58c7af9882c5e0adfb376c8d`, excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed.
+- Commit SHA: `fdfe57c685dde4288433268110bfe901419cdcda`; candidate content commit.
 - Dependencies: paired root CRLs `002` through `007`; both repositories must travel together.
 - Required validation: PASS — targeted mobile media tests, shared reader tests, typecheck/lint/static raw-URL audit and paired Root evidence recorded for the isolated candidate.
 - Current isolated-candidate recheck: TypeScript is NOT VERIFIED in this worktree because it intentionally has no `node_modules` and no dependency installation is authorized; the unchanged mobile source-test evidence remains recorded above.
 - Shared-hunk review: PASS — registry identity hunks are intentionally shared with their original unpushed source units under this exact selected range.
 - Generated-file / secret review: PASS — no generated files, credentials, private bytes, logs or production data are staged.
-- Technical state: `verified`.
+- Technical state: `committed`.
 - User authorization: `selected-for-commit`; evidence: user explicitly authorized replacement of unpushed CRL-002 through CRL-004 scope evidence with corrected CRL-005 through CRL-007 follow-ups.
 - Independent review: GO for commit — final independent read-only review verified the exact base, candidate fingerprint, full staged range, authenticated readers, registry mappings and scoped evidence.
 - Prior blocked attempt: `RA-20260817-003` was independently NO-GO for push because of incorrect CRL mappings, incomplete media contract registration and request-time schema bootstrap; it remains preserved as source evidence on the prior recovery branch and is superseded here rather than erased.
-- Action conclusion: `GO` for local commit only; push, PR, merge, deployment, OTA, production writes and device verification remain unapproved.
+- Action conclusion: `GO` — candidate content committed locally; push, PR, merge, deployment, OTA, production writes and device verification remain unapproved.
 
 ### Risks / Release Notes
 
