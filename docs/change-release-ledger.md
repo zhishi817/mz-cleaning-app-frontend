@@ -6175,7 +6175,7 @@
 - Selected CRL identities: `mobile/CRL-20260817-002, mobile/CRL-20260817-003, mobile/CRL-20260817-004, mobile/CRL-20260817-005, mobile/CRL-20260817-006, mobile/CRL-20260817-007`.
 - Intended action: `commit`.
 - Branch: `codex/p1-fdb-fin-20260817-final-v2`; target: `Dev`.
-- Base: `origin/Dev@e285ad7679c913a0ca8fbe3b41b410542f143bc4`; refetched 2026-08-17.
+- Base: `origin/Dev@e285ad7679c913a0ca8fbe3b41b410542f143bc4`; fetched at `2026-08-18T00:08:41+1000`.
 - Candidate patch SHA-256: `e314e0c3221de37349274e4daa8b1b7ea41fc8cb58c7af9882c5e0adfb376c8d`, excluding `docs/change-release-ledger.md`.
 - Commit SHA: `fdfe57c685dde4288433268110bfe901419cdcda`; candidate content commit.
 - Dependencies: paired root CRLs `002` through `007`; both repositories must travel together.
