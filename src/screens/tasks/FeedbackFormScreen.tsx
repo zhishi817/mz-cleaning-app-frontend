@@ -815,7 +815,13 @@ export default function FeedbackFormScreen(props: Props) {
             return status !== 'resolved' && status !== 'replaced' && status !== 'no_action'
           }),
         )
-        const nextResolved = uniqFeedbacks((Array.isArray(resolvedList) ? resolvedList : []).filter((x) => x.kind !== 'daily_necessities'))
+        const nextResolved = uniqFeedbacks([
+          ...(Array.isArray(resolvedList) ? resolvedList : []).filter((x) => x.kind !== 'daily_necessities'),
+          ...(Array.isArray(dailyList) ? dailyList : []).filter((x) => {
+            const status = String(x?.status || '').trim()
+            return status === 'replaced' || status === 'no_action'
+          }),
+        ])
         setPending(nextPending)
         setResolved(nextResolved)
         const nextCache = { pending: nextPending, resolved: nextResolved, updated_at: Date.now() }
@@ -2385,7 +2391,7 @@ export default function FeedbackFormScreen(props: Props) {
                     <View style={styles.historySectionHead}>
                       <View style={styles.historySectionTextWrap}>
                         <Text style={styles.historySectionTitle}>已完成待复核</Text>
-                        <Text style={styles.historySectionSubtitle}>已提交完工信息，等待后续复核确认。</Text>
+                        <Text style={styles.historySectionSubtitle}>已提交完工或日用品处理信息，等待后续复核确认。</Text>
                       </View>
                       <View style={styles.historySectionHeadActions}>
                         <View style={styles.historySectionCount}>
@@ -2443,6 +2449,12 @@ export default function FeedbackFormScreen(props: Props) {
                   <>
                     <Text style={styles.label}>原始反馈照片</Text>
                     <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} urls={normalizeUrls(detailItem?.media_urls)} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} />
+                  </>
+                ) : null}
+                {detailItem?.kind === 'daily_necessities' && normalizeUrls(detailItem?.repair_photo_urls).length ? (
+                  <>
+                    <Text style={styles.label}>更换后照片</Text>
+                    <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} urls={normalizeUrls(detailItem?.repair_photo_urls)} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} />
                   </>
                 ) : null}
 
