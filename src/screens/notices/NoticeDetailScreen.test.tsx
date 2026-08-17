@@ -233,12 +233,48 @@ test('keys-hung detail and preview keep the Inbox task id for authenticated medi
     </I18nProvider>,
   )
 
-  await waitFor(() => expect(ui.getByTestId('keys-hung-notice-image')).toBeTruthy())
-  expect(JSON.parse(ui.getByTestId('keys-hung-notice-image').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
+  await waitFor(() => expect(ui.getByTestId('key-media-notice-image')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('key-media-notice-image').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
 
-  fireEvent.press(ui.getByTestId('keys-hung-notice-image'))
-  await waitFor(() => expect(ui.getByTestId('keys-hung-notice-preview')).toBeTruthy())
-  expect(JSON.parse(ui.getByTestId('keys-hung-notice-preview').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
+  fireEvent.press(ui.getByTestId('key-media-notice-image'))
+  await waitFor(() => expect(ui.getByTestId('key-media-notice-preview')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('key-media-notice-preview').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
+})
+
+test('key-photo-uploaded detail and preview keep the Inbox task id for authenticated media reads', async () => {
+  await initNoticesStore()
+  await upsertNotices([
+    {
+      id: 'key-photo-uploaded-1',
+      type: 'key',
+      title: 'TEST01 · 钥匙照片已上传',
+      summary: '清洁员已上传钥匙照片',
+      content: '清洁员已上传钥匙照片',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      unread: true,
+      data: {
+        kind: 'key_photo_uploaded',
+        task_id: 'cleaning-task-1',
+        photo_url: 'cleaning/key-photo.jpg',
+      },
+    },
+  ], { replace: true })
+
+  const ui = render(
+    <I18nProvider>
+      <NoticeDetailScreen
+        navigation={{ setOptions: jest.fn(), canGoBack: () => true, goBack: jest.fn(), navigate: jest.fn() } as any}
+        route={{ key: 'key-photo-uploaded', name: 'NoticeDetail', params: { id: 'key-photo-uploaded-1' } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByTestId('key-media-notice-image')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('key-media-notice-image').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
+
+  fireEvent.press(ui.getByTestId('key-media-notice-image'))
+  await waitFor(() => expect(ui.getByTestId('key-media-notice-preview')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('key-media-notice-preview').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
 })
 
 test('keys-hung detail does not render or open private media without a string task id', async () => {
@@ -270,8 +306,41 @@ test('keys-hung detail does not render or open private media without a string ta
   )
 
   await waitFor(() => expect(ui.getByText('房间已挂钥匙')).toBeTruthy())
-  expect(ui.queryByTestId('keys-hung-notice-image')).toBeNull()
-  expect(ui.queryByTestId('keys-hung-notice-preview')).toBeNull()
+  expect(ui.queryByTestId('key-media-notice-image')).toBeNull()
+  expect(ui.queryByTestId('key-media-notice-preview')).toBeNull()
+})
+
+test('key-photo-uploaded detail fails closed without a string task id', async () => {
+  await initNoticesStore()
+  await upsertNotices([
+    {
+      id: 'key-photo-uploaded-missing-task-id',
+      type: 'key',
+      title: 'TEST02 · 钥匙照片已上传',
+      summary: '清洁员已上传钥匙照片',
+      content: '清洁员已上传钥匙照片',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      unread: true,
+      data: {
+        kind: 'key_photo_uploaded',
+        task_id: { id: 'cleaning-task-1' },
+        photo_url: 'cleaning/key-photo.jpg',
+      },
+    },
+  ], { replace: true })
+
+  const ui = render(
+    <I18nProvider>
+      <NoticeDetailScreen
+        navigation={{ setOptions: jest.fn(), canGoBack: () => true, goBack: jest.fn(), navigate: jest.fn() } as any}
+        route={{ key: 'key-photo-uploaded-missing-task-id', name: 'NoticeDetail', params: { id: 'key-photo-uploaded-missing-task-id' } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByText('钥匙照片已上传')).toBeTruthy())
+  expect(ui.queryByTestId('key-media-notice-image')).toBeNull()
+  expect(ui.queryByTestId('key-media-notice-preview')).toBeNull()
 })
 
 test('consumables detail and preview keep the Inbox task id for authenticated media reads', async () => {

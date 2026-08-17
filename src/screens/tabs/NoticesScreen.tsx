@@ -809,8 +809,8 @@ export default function NoticesScreen(props: Props) {
     const noticeKind = String((notice as any)?.data?.kind || '').trim()
     const isGuestLuggageNotice = noticeKind === 'guest_luggage_updated'
     const guestLuggageId = isGuestLuggageNotice ? normalizeGuestLuggageNoticeId((notice as any)?.data?.guest_luggage_id) : null
-    const isKeysHungNotice = noticeKind === 'keys_hung'
-    const keysHungTaskId = isKeysHungNotice ? normalizeCleaningTaskNoticeId((notice as any)?.data?.task_id) : null
+    const isKeyMediaNotice = noticeKind === 'key_photo_uploaded' || noticeKind === 'keys_hung'
+    const keyMediaTaskId = isKeyMediaNotice ? normalizeCleaningTaskNoticeId((notice as any)?.data?.task_id) : null
     const isConsumablesNotice = noticeKind === 'consumables_submitted' || noticeKind === 'consumables_updated'
     const consumablesTaskId = isConsumablesNotice ? normalizeCleaningTaskNoticeId((notice as any)?.data?.task_id) : null
     const isIssueReportedNotice = noticeKind === 'issue_reported'
@@ -840,9 +840,9 @@ export default function NoticesScreen(props: Props) {
           ? guestLuggageId
             ? <CleaningMediaImage testID="guest-luggage-notice-thumbnail" token={token} remoteReference={img} guestLuggageId={guestLuggageId} variant="thumbnail" style={styles.noticeThumb} />
             : null
-          : isKeysHungNotice
-            ? keysHungTaskId
-              ? <CleaningMediaImage testID="keys-hung-notice-thumbnail" token={token} remoteReference={img} accessTaskId={keysHungTaskId} variant="thumbnail" style={styles.noticeThumb} />
+          : isKeyMediaNotice
+            ? keyMediaTaskId
+              ? <CleaningMediaImage testID="key-media-notice-thumbnail" token={token} remoteReference={img} accessTaskId={keyMediaTaskId} variant="thumbnail" style={styles.noticeThumb} />
               : null
             : isConsumablesNotice
               ? consumablesTaskId

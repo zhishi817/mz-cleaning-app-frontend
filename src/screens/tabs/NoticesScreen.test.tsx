@@ -183,8 +183,35 @@ test('keys-hung thumbnail keeps the Inbox task id for authenticated media reads'
     await Promise.resolve()
   })
 
-  await waitFor(() => expect(ui.getByTestId('keys-hung-notice-thumbnail')).toBeTruthy())
-  expect(JSON.parse(ui.getByTestId('keys-hung-notice-thumbnail').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
+  await waitFor(() => expect(ui.getByTestId('key-media-notice-thumbnail')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('key-media-notice-thumbnail').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
+  mockNoticeItems = []
+})
+
+test('key-photo-uploaded thumbnail keeps the Inbox task id for authenticated media reads', async () => {
+  mockNoticeItems = [{
+    id: 'key-photo-uploaded-1',
+    type: 'key',
+    title: 'TEST01 · 钥匙照片已上传',
+    summary: '清洁员已上传钥匙照片',
+    content: '清洁员已上传钥匙照片',
+    createdAt: '2026-08-16T00:00:00.000Z',
+    images: ['cleaning/key-photo.jpg'],
+    data: {
+      kind: 'key_photo_uploaded',
+      task_id: 'cleaning-task-1',
+      photo_url: 'cleaning/key-photo.jpg',
+    },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  await waitFor(() => expect(ui.getByTestId('key-media-notice-thumbnail')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('key-media-notice-thumbnail').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
   mockNoticeItems = []
 })
 
@@ -254,7 +281,34 @@ test('keys-hung thumbnail does not render private media without a string task id
   })
 
   await waitFor(() => expect(ui.getByText('房间已挂钥匙')).toBeTruthy())
-  expect(ui.queryByTestId('keys-hung-notice-thumbnail')).toBeNull()
+  expect(ui.queryByTestId('key-media-notice-thumbnail')).toBeNull()
+  mockNoticeItems = []
+})
+
+test('key-photo-uploaded thumbnail fails closed without a string task id', async () => {
+  mockNoticeItems = [{
+    id: 'key-photo-uploaded-missing-task-id',
+    type: 'key',
+    title: 'TEST02 · 钥匙照片已上传',
+    summary: '清洁员已上传钥匙照片',
+    content: '清洁员已上传钥匙照片',
+    createdAt: '2026-08-16T00:00:00.000Z',
+    images: ['cleaning/key-photo.jpg'],
+    data: {
+      kind: 'key_photo_uploaded',
+      task_id: { id: 'cleaning-task-1' },
+      photo_url: 'cleaning/key-photo.jpg',
+    },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  await waitFor(() => expect(ui.getAllByText('钥匙照片已上传').length).toBeGreaterThan(0))
+  expect(ui.queryByTestId('key-media-notice-thumbnail')).toBeNull()
   mockNoticeItems = []
 })
 

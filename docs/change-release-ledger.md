@@ -1,5 +1,113 @@
 # Change Release Ledger
 
+## CRL-20260816-006 — P1-NTF-02 钥匙照片通知真实事件认证读取（mobile）
+
+- **Repository:** `mobile`
+- **Status:** committed (local source and validation evidence)
+- **Updated:** 2026-08-17 Australia/Melbourne
+- **Request:** 修复仍显示灰图的“钥匙照片已上传”通知。生产事件实际使用 `key_photo_uploaded`，不得只修复不同语义的 `keys_hung`。
+- **Outcome:** `key_photo_uploaded` 和保留兼容的 `keys_hung` 均从同一 Inbox `task_id` 进入既有认证媒体组件；列表、详情与大图使用同一任务上下文。缺失、空白或非字符串任务 ID 时不渲染、不请求私有媒体，也不退回裸 URL。
+
+### Implementation
+
+- Previous behavior: `mobile/CRL-20260815-001` 仅将 `keys_hung` 分类为任务私有媒体；生产后端“钥匙照片已上传”事件的真实 `kind` 为 `key_photo_uploaded`，因此仍落入原生 `Image` 直接加载私有引用而显示灰图。
+- New behavior: 页面级 key 媒体分类同时覆盖 `key_photo_uploaded` 与 `keys_hung`，复用 `CleaningMediaImage` / `CleaningMediaPreview` 并传入经过严格规范化的 Inbox `task_id`。
+- Key decisions: 不改 Root、通知生成、收件人、Inbox、Badge、Push、R2、对象关联、权限、共享媒体组件或私有媒体代理；保留 `keys_hung` 回归，防止“房间已挂钥匙”路径倒退。
+
+### Files / Areas
+
+- `src/screens/tabs/NoticesScreen.tsx`, `src/screens/notices/NoticeDetailScreen.tsx` — 真实钥匙照片事件在列表、详情和大图走认证读取。
+- `src/screens/tabs/NoticesScreen.test.tsx`, `src/screens/notices/NoticeDetailScreen.test.tsx` — `key_photo_uploaded` 正向任务上下文与无效 ID 失败关闭回归，并保留 `keys_hung` 回归。
+- `docs/feature-regression-registry.md` — P1-NTF-02 的真实事件类型与三入口不变量。
+- `docs/change-release-ledger.md` — 本独立跟进修复单元。
+
+### Impact / Dependencies
+
+- API / database / config / R2 / production data: none; 复用 Root 已部署的 `KEY_PHOTO_UPLOADED` 载荷、`/cleaning-app/media/image`、`cleaning_task_media` 精确关联及 `canViewMzappRecordedCleaningMedia`。
+- Shared dependencies: none modified. `CleaningMediaImage`、`CleaningMediaPreview` 与认证代理为共享依赖但仅复用；本修复停在通知页面分类边界。
+- Related units: supersedes the incorrect mapping in `mobile/CRL-20260815-001`; historical source record `mobile/CRL-20260813-001`; Root is reuse-only.
+
+### Validation
+
+- `npm ci` — passed in the isolated candidate worktree using the locked dependency graph. The install reported 40 existing dependency audit advisories (2 low, 13 moderate, 23 high, 2 critical); no audit fix or tracked dependency change was made.
+- `npm test -- --runInBand --no-cache src/lib/noticePresentation.test.ts src/lib/cleaningMedia.test.ts src/screens/tabs/NoticesScreen.test.tsx src/screens/notices/NoticeDetailScreen.test.tsx` — passed: 4 suites / 48 tests, including authenticated list/detail/viewer reads for both `key_photo_uploaded` and `keys_hung`, plus invalid task-ID fail-closed cases.
+- `npm run typecheck` — passed.
+- Targeted ESLint on the four changed screen/test files — passed with 0 errors. It reports 3 pre-existing React hook dependency warnings in `NoticesScreen.tsx`; no changed-line error was introduced.
+- `npm run check:fast` — passed: ledger-range audit (25 tests), current ledger coverage, typecheck, full lint (0 errors / 109 warnings), strict button contract, and 3 fast suites / 18 tests.
+- Feature-regression registry audit — NOT AVAILABLE: current Mobile Dev has no registry-audit script. The new registry entry was manually reviewed for CRL scope, exact event kinds, and test mapping.
+- `python3 scripts/audit_change_release_ledger.py` and `git diff --check` — passed before commit preparation; rerun after staging this release-attempt evidence.
+- Commit, push, PR, merge, deployment, OTA and device verification: not run.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared for selected `mobile/CRL-20260816-006` only.
+- **Untracked review:** none; candidate branch `codex/p1-ntf02-key-photo-event-20260817` starts from clean `origin/Dev@8c24fe612c8d74b42c1c015b1437bd035818651f`.
+- `docs/feature-regression-registry.md` — SHA-256: `24224c54ef9a4cdccc549a27b2ae4b71ed1aebe96c56576fe665e65db7104714`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `0f17a1aa9ac55a437040967f0a620e7632ddb28ce7b65e27a9d7790877d0d847`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `8c3a525a4032da187ce4e7f849ae2917d6d37c340c670ba1ab038e535f116528`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `d8624de73eff4d839b4f563fc78baf4a234d7cb437c4c3192431e4d52a651bbb`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `070e5af5ed58f5d0587104f92cd549d56aaa60cd81227593ed9b979bee21cbd1`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `4b7f6e6621842dc19d6135b4edfa08ac3aefb5138116302cebe87c42e8299b5a`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `4f25205c00c5d485db4fad4556239cff9e59fdafabf8eb5046d11693eb8f7f54`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `69fde8570752cb8dfc0dd3c6c90fd555cf660310946a2da861666e4cefb63366`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `754310d462b804e37f1eb2cd405e2ce0b98266521a858665522617eafcd80424`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `7ea7863724a3d3b8b1976cb72405a687716004955d131296c3f8857c754f49bd`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `9614215b5b39648b9146a9b197700c4bea1809d687eeb326cd0f5704521b9814`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `b58e9e12ace2e4c018adcf1907dea4842fdfe84b158e6672a251331cf17d5edd`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `bdae177cf9e565cdc8f4f934028cfd67ea2bee78b3354edfe08f6f6f54360950`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `063445c2e77d5ff635c654ddf25f1efeaa05d33f992f0e9e309b4c35e0e06d97`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `34b97fca8cf3517f7398611b246bd42633060df639349a82a424a6388ecd77fe`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `9ae60fa220f3d29943dcd5006ed54fa0825c0ec546a8b91a2558bbfff21ff314`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `cb60907246046fa59675da7e469caa0c4a579b803d011c6c979779c4b30bc38f`
+
+### Release Attempts
+
+#### RA-20260817-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260816-006`
+- Selected CRL identities: `mobile/CRL-20260816-006`
+- Intended action: `commit`
+- Branch: `codex/p1-ntf02-key-photo-event-20260817`
+- Base: `origin/Dev@8c24fe612c8d74b42c1c015b1437bd035818651f`; fetched at `2026-08-17 01:07:40 AEST`.
+- Candidate patch SHA-256: `380fc997f53e17c3795338cdc32eceb10f71037a00e54b312c49dfb862dea3a8` excluding `docs/change-release-ledger.md`.
+- Commit SHA: `39e7a196c0e9be13229dc8606bc4daceb2be3054`.
+- Dependencies: Root authenticated media route and exact association are already deployed reuse-only; no Root candidate travels with this attempt.
+- Required validation: PASS; evidence: targeted 48-test media/notice regression, typecheck and `check:fast` passed.
+- Shared-hunk review: PASS; evidence: all staged non-ledger hunks are owned by this CRL and no shared media dependency is modified.
+- Generated-file review: not applicable; no generated paths are staged.
+- Technical state: `committed`
+- User authorization: `selected-for-commit`; evidence: user instructed “提交” on 2026-08-17.
+- Independent review: GO; evidence: independent read-only review of this exact base, candidate fingerprint, staged scope, complete diff and validation found no P0/P1 and approved the commit action only.
+- Action conclusion: GO; blockers: none for the authorized local commit action.
+
+#### RA-20260817-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260816-006`
+- Selected CRL identities: `mobile/CRL-20260816-006`
+- Intended action: `push`
+- Branch: `codex/p1-ntf02-key-photo-event-20260817`
+- Base: `origin/Dev@8c24fe612c8d74b42c1c015b1437bd035818651f`; fetched at `2026-08-17 01:19:52 AEST`.
+- Candidate patch SHA-256: `380fc997f53e17c3795338cdc32eceb10f71037a00e54b312c49dfb862dea3a8` excluding `docs/change-release-ledger.md`.
+- Commit SHA: `39e7a196c0e9be13229dc8606bc4daceb2be3054`; final ledger receipt head will be range-audited before push.
+- Dependencies: Root authenticated media route and exact association are already deployed reuse-only; no Root candidate travels with this attempt.
+- Required validation: PASS; evidence: targeted 48-test media/notice regression, typecheck and `check:fast` passed.
+- Shared-hunk review: PASS; evidence: all non-ledger hunks are owned by this CRL and no shared media dependency is modified.
+- Generated-file review: not applicable; no generated paths are in the candidate.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: user explicitly confirmed on 2026-08-17 the `mobile` business candidate `39e7a196c0e9be13229dc8606bc4daceb2be3054` on branch `codex/p1-ntf02-key-photo-event-20260817` to `origin` only.
+- Independent review: GO; evidence: independent read-only final push review rechecked this RA, the fetched base, candidate content commit, non-ledger fingerprint, exact scope, tests and sensitive/generated-file risk; it approved only the final branch push after this ledger receipt is committed and range-audited.
+- Action conclusion: GO; blockers: none for the authorized branch push after the final exact range report passes.
+
+### Risks / Release Notes
+
+- This source repair cannot prove a historical object exists or that an authorized role can read it on a device; those remain post-release verification gates.
+- Rollback: revert only the two `key_photo_uploaded` page-classification branches and their tests; do not restore raw private URL rendering.
+- Sensitive-information review: no credentials, tokens, private URLs, media bytes, production logs or production data are added.
+- Git state: content commit `39e7a196c0e9be13229dc8606bc4daceb2be3054` is local on `codex/p1-ntf02-key-photo-event-20260817`; this ledger receipt is pending commit. Not pushed, no PR, not merged, not deployed, no OTA published and no device verification.
+
 ## CRL-20260816-005 — Build 26 TestFlight OTA 运行时合同门禁（mobile）
 
 - **Repository:** `mobile`
