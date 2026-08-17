@@ -1,5 +1,112 @@
 # Change Release Ledger
 
+## CRL-20260817-001 — 挂钥匙视频静默刷新与本地保留（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready (clean candidate validated and independently approved for local commit)
+- **Updated:** 2026-08-17 Australia/Melbourne
+- **Request:** 修复移动端挂钥匙/标记已完成页面在后台检查队列事件后反复显示“正在校验”，并防止重拍时新视频尚未成功保存到本机便删除旧的待上传视频。
+- **Outcome:** 初次进入仍使用阻塞校验；全局检查队列与导航焦点事件只静默更新当前校验数据，不再触发可见加载态。重拍先成功创建新视频队列项，再尽力清理旧的未业务保存副本；新入队失败时旧本地视频不受影响。
+
+### Implementation
+
+- Previous behavior: 任意检查队列事件都调用会重置 `loading/validationReady` 的刷新函数，已打开页面反复切回“校验中”；重拍在调用本机入队前删除旧视频，入队失败会造成旧视频不可恢复。
+- New behavior: 刷新以 generation 防止旧请求覆盖新数据，并且只有首屏刷新显示阻塞状态；替换顺序为“新队列项持久化 → 更新页面引用 → 清理旧队列项”。旧项清理异常不会把已成功入队的新视频误报为失败。
+- Key decisions: 不更改 `inspectionMediaQueue` 的上传、保留期、私有副本、业务保存或清理策略；不加入新的队列、后台接口、存储格式或客户端权限规则。
+
+### Files / Areas
+
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — 队列/焦点静默刷新与重拍视频安全替换顺序。
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — 队列刷新不闪屏、新旧视频入队/清理顺序及失败保留回归。
+- `docs/change-release-ledger.md` — 本 mobile 变更单元与提交尝试记录。
+- Paired root `root/CRL-20260817-001` records the FR-004 regression mapping only.
+
+### Impact / Dependencies
+
+- API / database / migration / configuration / storage policy / production data: none.
+- Reuses the existing inspection media queue, its local private-copy persistence and delayed housekeeping; no raw URL or media authorization path changes.
+- Related units: `root/CRL-20260817-001`.
+- Excluded: 检查照片/补品业务门槛、后台 worker、保留期、删除接口、EAS build/OTA、部署及生产数据操作。
+
+### Validation
+
+- `NODE_PATH=<shared installed dependencies> .../.bin/jest --runInBand --no-cache src/screens/tasks/InspectionCompleteScreen.test.tsx` — passed in this clean candidate: 1 suite / 11 tests, including the new silent-refresh and failed-replacement retention cases.
+- `npm run typecheck` and `npm run lint` — passed in the original workspace on the same modified refresh/replacement hunks before extraction; lint completed with 0 errors and 109 existing warnings. The clean candidate has no `node_modules`; no dependency install was performed without separate authorization.
+- Candidate `git diff --check` and initial staged `git diff --cached --check` — passed.
+- Root paired `npm run check:feature-registry` — passed in its clean candidate: 11 FRs / 128 mappings; 70 mobile mappings intentionally deferred by the root-only audit.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; clean candidate branch `codex/hang-key-video-20260817` starts from `origin/Dev@0b7249e8e9c25054fa711d79caeacec21dd6ecbe`.
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `5f4d22f88f069c788c806d9752107ff2a60c68f0768de0709b510ba48efd45c9`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `a6c6f6a5a13d2d7e037acd8f8b78ee2712c372e3516eabfcea9be64d6e03ba2c`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `bc776a98f0b83c5345fea50d3d06f37f06dd47edc44c924f55eb87cd7533884a`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `c7306d8782604f25c73ab11d2f68ada67e1d2ed888d7cf94254b292c093b4df3`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `e148691d6066f0bad31b4d652f9e310928d1cc474da54fde9dbc692a8e74c65a`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `00ad151fa62f62a521e78a2d19863555f2b09ca9e0bc019f07a2e628d1a30033`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `05ef59577ebdf9333613ba36ac368d772bf702e92f4d46d095ae2e0310865605`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `127b0c581919741ed7f9aacfb6ddf47092610aad50077b56660f0804d8d57a16`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `1eef3c96ddb260039566d5c87f856848269fa70f2fa45d789e6a0bfe4b4e44f4`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `31a221c243b36827d86482658d6bc0528b10b5803d05ce55b81617b81c78c241`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `3f4e32a46a56c87a5d13f01b3a1564b30a978a4168ba393c1352ea06a9361bd5`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `7029005def0ba4d67c0a4641f4d4776ebd591fae5419a5121d5d39ca82fb5d62`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `82ab3e06e0ffaf5dcee5279c88c06007a98ab77c5f012adc7286ce4bbef29641`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `ace5a8366adf92ccaa0efc698d1864a5aa1c517d1bd5a11fbd298a4dff7d6400`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `bdf382c2a61c7e42398125ca0dd56372345da5b54deb1ba5b6708374094b575e`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `c6fc1ca8b2da62cae2fe6e06c70183777911a1ddfbfa8eb9b55a68addd578945`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `f81980c4c2d4e3e9f689b867f6a4b7c65db701b417a0cc93459249d525fb0e55`
+
+### Release Attempts
+
+#### RA-20260817-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260817-001`
+- Selected CRL identities: `mobile/CRL-20260817-001`
+- Intended action: `commit`
+- Branch: `codex/hang-key-video-20260817`
+- Base: `origin/Dev@0b7249e8e9c25054fa711d79caeacec21dd6ecbe`; fetched at `2026-08-17 16:55:27 AEST`.
+- Candidate patch SHA-256: `d40cd071ce8de23966afeb030a165f263b084408767f5b1e2665e8dbe974d3e6` excluding `docs/change-release-ledger.md`.
+- Commit SHA: `269a485c5d91c1edf6bdc84d751a3095218bc1fe`.
+- Dependencies: paired `root/CRL-20260817-001` provides FR-004 registration only; no backend deployment dependency.
+- Required validation: PASS; evidence: clean-candidate 11-test screen regression and diff check; the same source hunks previously passed mobile typecheck/lint without an error.
+- Shared-hunk review: PASS; evidence: only the 17 declared screen/test textual hunks are staged in a clean mobile candidate; no unselected content hunk is staged.
+- Generated-file review: not applicable; no generated path is staged.
+- Technical state: `committed`
+- User authorization: `selected-for-commit`; evidence: user selected `mobile/CRL-20260817-001` and instructed “先提交这个” on 2026-08-17.
+- Independent review: GO; evidence: independent read-only review of the exact base, candidate fingerprint, staged scope, full diff and validation found no P0/P1; it accepted one P2 about a retained old queue item after cleanup failure and approved the commit action only.
+- Action conclusion: GO; blockers: none for the authorized local commit action.
+
+#### RA-20260817-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260817-001`
+- Selected CRL identities: `mobile/CRL-20260817-001`
+- Intended action: `push`
+- Branch: `codex/hang-key-video-20260817`
+- Base: `origin/Dev@0b7249e8e9c25054fa711d79caeacec21dd6ecbe`; refetched at `2026-08-17 17:13:15 AEST`.
+- Candidate patch SHA-256: `d40cd071ce8de23966afeb030a165f263b084408767f5b1e2665e8dbe974d3e6` excluding `docs/change-release-ledger.md`.
+- Commit SHA: `269a485c5d91c1edf6bdc84d751a3095218bc1fe`; audit head will be emitted by the final exact range report.
+- Dependencies: paired `root/CRL-20260817-001` provides FR-004 registration only; no backend deployment dependency.
+- Required validation: PASS; evidence: prior exact range report, clean-candidate 11-test screen regression and diff check; the same source hunks previously passed mobile typecheck/lint without an error.
+- Shared-hunk review: PASS; evidence: the exact range contains only declared screen/test hunks and ledger receipts; no unselected content hunk is present.
+- Generated-file review: not applicable; no generated path is in the exact range.
+- Technical state: `pushed`
+- Remote push evidence: `origin/codex/hang-key-video-20260817` accepted the exact audited head `e939986018bff4d5a73d5c79b5ba4c71fd25af82` at `2026-08-17 17:15:25 AEST`.
+- User authorization: `approved-for-push`; evidence: after the exact root/mobile branch and commit SHAs were reported, the user instructed “推送” on 2026-08-17.
+- Independent review: GO; evidence: independent read-only final push review rechecked the refetched base, exact range, candidate content commit, fingerprint, scope, validation and sensitive/generated-file evidence; it approved only this branch push.
+- Action conclusion: GO; blockers: none for the authorized branch push after the final exact range report passes.
+
+### Risks / Release Notes
+
+- Risk: local tests prove the ordering and render contract, but do not prove real-device camera/library behavior or an OTA on the installed runtime.
+- Rollback: revert only the two refresh/replacement hunks and their screen tests; do not restore pre-enqueue deletion.
+- Accepted P2: if old-item cleanup fails after the new video is safely queued, the old item can remain retryable and may produce a duplicate business-save attempt. It cannot delete the new video or violate this unit's old-video-retention invariant.
+- Sensitive-information review: no credentials, tokens, private URLs, media bytes, logs or production records are added.
+- Git state: candidate branch only; not committed, pushed, published or device-verified.
+
 ## CRL-20260816-006 — P1-NTF-02 钥匙照片通知真实事件认证读取（mobile）
 
 - **Repository:** `mobile`

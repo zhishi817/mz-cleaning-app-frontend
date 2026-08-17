@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
@@ -107,6 +107,7 @@ export default function InspectionCompleteScreen(props: Props) {
     reason: '请先完成检查与补充照片。',
     skipInspectionPhotos: false,
   })
+  const refreshGenerationRef = useRef(0)
 
   const task = useMemo(() => getWorkTasksSnapshot().items.find(x => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
   const serverActions = Array.isArray((task as any)?.available_actions) ? (((task as any).available_actions || []) as any[]) : null
@@ -142,11 +143,15 @@ export default function InspectionCompleteScreen(props: Props) {
     const latest = items.sort((a, b) => b.created_at.localeCompare(a.created_at))[0] || null
     setLockboxItem(latest)
   }, [cleaningTaskId])
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options?: { blocking?: boolean }) => {
     if (!cleaningTaskId) return
+    const generation = ++refreshGenerationRef.current
+    const blocking = options?.blocking === true
     try {
-      setLoading(true)
-      setValidationReady(false)
+      if (blocking) {
+        setLoading(true)
+        setValidationReady(false)
+      }
       const needs: string[] = []
       if (!isPasswordOnlyInspection && inspectionPanelSourceId) {
         await bindInspectionPanelCleaningTaskId({
@@ -161,6 +166,7 @@ export default function InspectionCompleteScreen(props: Props) {
       const videoReadiness = isPasswordOnlyInspection
         ? { ready: true, reason: null, skipInspectionPhotos: true }
         : getInspectionPanelVideoReadiness(batch)
+      if (generation !== refreshGenerationRef.current) return
       setPanelBatchStatus(status)
       setPanelBatchError(batch?.last_error || null)
       setPanelVideoReadiness(videoReadiness)
@@ -168,12 +174,12 @@ export default function InspectionCompleteScreen(props: Props) {
       setMissing(needs)
       setValidationReady(true)
     } finally {
-      setLoading(false)
+      if (blocking) setLoading(false)
     }
   }, [cleaningTaskId, inspectionPanelSourceId, isPasswordOnlyInspection, props.route.params.taskId, task])
 
   useEffect(() => {
-    refresh()
+    void refresh({ blocking: true })
   }, [refresh])
 
   useEffect(() => {
@@ -206,7 +212,7 @@ export default function InspectionCompleteScreen(props: Props) {
     const nav: any = props.navigation as any
     if (!nav || typeof nav.addListener !== 'function') return
     const unsub = nav.addListener('focus', () => {
-      refresh()
+      void refresh()
     })
     return unsub
   }, [props.navigation, refresh])
@@ -239,10 +245,6 @@ export default function InspectionCompleteScreen(props: Props) {
       if (!uri) return
       const name = String(a.fileName || uri.split('/').pop() || `lockbox-${Date.now()}.mov`)
       const mimeType = String(a.mimeType || 'video/quicktime')
-      if (lockboxItem && !lockboxItem.business_saved) {
-        await removeInspectionMediaItem(lockboxItem.id)
-      }
-      setLockboxDeleted(false)
       const queued = await enqueueInspectionMediaItem({
         task_id: cleaningTaskId,
         kind: 'lockbox_video',
@@ -251,7 +253,15 @@ export default function InspectionCompleteScreen(props: Props) {
         mime_type: mimeType,
         meta: {},
       })
+      setLockboxDeleted(false)
       setLockboxItem(queued)
+      if (lockboxItem && !lockboxItem.business_saved) {
+        try {
+          await removeInspectionMediaItem(lockboxItem.id)
+        } catch {
+          // 新视频已安全入队；保留旧副本交给既有队列/延迟清理机制处理。
+        }
+      }
       Alert.alert(t('common_ok'), '视频已保存到本机，正在上传并保存任务记录；如果保存失败，可点击完成重试。')
       void processInspectionMediaQueue(token)
     } catch (e: any) {
