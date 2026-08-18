@@ -6189,6 +6189,26 @@
 - Prior blocked attempt: `RA-20260817-003` was independently NO-GO for push because of incorrect CRL mappings, incomplete media contract registration and request-time schema bootstrap; it remains preserved as source evidence on the prior recovery branch and is superseded here rather than erased.
 - Action conclusion: `GO` — candidate content committed locally; push, PR, merge, deployment, OTA, production writes and device verification remain unapproved.
 
+#### RA-20260818-001
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260817-002`, `CRL-20260817-003`, `CRL-20260817-004`, `CRL-20260817-005`, `CRL-20260817-006`, `CRL-20260817-007`.
+- Selected CRL identities: `mobile/CRL-20260817-002, mobile/CRL-20260817-003, mobile/CRL-20260817-004, mobile/CRL-20260817-005, mobile/CRL-20260817-006, mobile/CRL-20260817-007`.
+- Intended action: `push`.
+- Branch: `codex/p1-fdb-fin-20260817-final-v2`; target: `Dev`.
+- Base: `origin/Dev@e285ad7679c913a0ca8fbe3b41b410542f143bc4`; fetched at `2026-08-18T00:08:41+1000`.
+- Candidate patch SHA-256: `e314e0c3221de37349274e4daa8b1b7ea41fc8cb58c7af9882c5e0adfb376c8d`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `fdfe57c685dde4288433268110bfe901419cdcda`; candidate content commit.
+- Pre-push receipt parent: `1b341abc7d0bbfb329817cc362dceec4fbb1876f`.
+- Dependencies: paired root CRLs `002` through `007`; both repositories must travel together.
+- Required validation: PASS — exact `base...pre-push receipt parent` release report passed with selected paths, 41 hunk fingerprints, clean worktree and no sensitive/generated files.
+- Shared-hunk review: PASS — unchanged from the committed candidate range.
+- Generated-file / secret review: PASS — no generated files, credentials, private bytes, logs or production data are selected.
+- Technical state: `committed`.
+- User authorization: pending final commit-bound confirmation; user authorized pushing the exact pre-push receipt parent shown above, and must confirm the final receipt head after this entry is committed.
+- Independent review: GO for push-attempt receipt commit — independent read-only review verified the exact base, branch, content commit, staged ledger-only scope and absence of nonledger or sensitive changes; this does not authorize `git push`.
+- Action conclusion: `NOT VERIFIED` pending final receipt, push review and final commit-bound confirmation.
+
 ### Risks / Release Notes
 
 - Source/local tests do not prove OTA delivery, historical object availability or device rendering.
