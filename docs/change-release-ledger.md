@@ -67,7 +67,7 @@
 - Commit SHA: `5c04cb02edb04263bf583ec0a3cd3a1aced95050`; candidate content commit created locally on `codex/maintenance-android-baseline-20260819` after the independent review and passing pre-commit gate.
 - Dependencies: deployed `mobile/CRL-20260806-004` client workflow and `root/CRL-20260806-006` backend workflow.
 - Required validation: PASS — focused Jest 37 tests, typecheck, lint with no errors, button audit, config assertion, diff check and current-worktree ledger audit are recorded above.
-- Shared-hunk review: not applicable — all changed source/config/test files are exclusive to this unit; ledger hunk is this unit's own record.
+- Shared-hunk review: PASS — the independent review and pre-commit gate matched all five selected non-ledger hunk fingerprints. Historical CRLs list these four files, but no unselected hunk is present in the exact `origin/Dev...5c04cb02` candidate range.
 - Generated-file / secret review: PASS — no generated files, credentials, private URLs, media bytes, production logs or production data are in the candidate.
 - Technical state: `committed`.
 - User authorization: `selected-for-commit`; evidence: user authorized the repair delivery and confirmed direct APK installation on 2026-08-19.
