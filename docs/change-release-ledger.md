@@ -64,12 +64,12 @@
 - Branch: `codex/maintenance-android-baseline-20260819`; target: `Dev`.
 - Base: `origin/Dev@d420d0790142cd4bd560efdf7428ed5e7c2a2727`; fetched at `2026-08-19T13:07:16+10:00`.
 - Candidate patch SHA-256: `1e3e58ae39cf53aa43fe38b75fb8cf563483edc3e95f36683919a61e8d607f4b`, excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed; candidate content commit will be recorded only after the content commit exists.
+- Commit SHA: `5c04cb02edb04263bf583ec0a3cd3a1aced95050`; candidate content commit created locally on `codex/maintenance-android-baseline-20260819` after the independent review and passing pre-commit gate.
 - Dependencies: deployed `mobile/CRL-20260806-004` client workflow and `root/CRL-20260806-006` backend workflow.
 - Required validation: PASS — focused Jest 37 tests, typecheck, lint with no errors, button audit, config assertion, diff check and current-worktree ledger audit are recorded above.
 - Shared-hunk review: not applicable — all changed source/config/test files are exclusive to this unit; ledger hunk is this unit's own record.
 - Generated-file / secret review: PASS — no generated files, credentials, private URLs, media bytes, production logs or production data are in the candidate.
-- Technical state: `candidate`.
+- Technical state: `committed`.
 - User authorization: `selected-for-commit`; evidence: user authorized the repair delivery and confirmed direct APK installation on 2026-08-19.
 - Independent review: GO for `commit` — independent read-only review of `RA-20260819-001` rechecked the full staged diff, base, non-ledger candidate fingerprint, exact staged scope, pre-commit gate, dedicated maintenance action semantics and sensitive-information boundary; no P0/P1 findings.
 - Action conclusion: `GO` for local commit only. Push, PR, merge, EAS build, APK distribution and device verification require separate authorization and evidence.
