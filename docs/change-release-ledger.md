@@ -74,6 +74,25 @@
 - Independent review: GO for `commit` — independent read-only review of `RA-20260819-001` rechecked the full staged diff, base, non-ledger candidate fingerprint, exact staged scope, pre-commit gate, dedicated maintenance action semantics and sensitive-information boundary; no P0/P1 findings.
 - Action conclusion: `GO` for local commit only. Push, PR, merge, EAS build, APK distribution and device verification require separate authorization and evidence.
 
+#### RA-20260819-002
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260819-001`.
+- Selected CRL identities: `mobile/CRL-20260819-001`.
+- Intended action: `push`.
+- Branch: `codex/maintenance-android-baseline-20260819`; target: `Dev`.
+- Base: `origin/Dev@d420d0790142cd4bd560efdf7428ed5e7c2a2727`; fetched at `2026-08-19T13:23:24+10:00`.
+- Candidate patch SHA-256: `1e3e58ae39cf53aa43fe38b75fb8cf563483edc3e95f36683919a61e8d607f4b`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `5c04cb02edb04263bf583ec0a3cd3a1aced95050`; content commit remains an ancestor of the current ledger-receipt head.
+- Dependencies: deployed `mobile/CRL-20260806-004` client workflow and `root/CRL-20260806-006` backend workflow.
+- Required validation: PASS — focused Jest 37 tests, typecheck, lint with no errors, button audit, config assertion, pre-commit gates, and the prior exact-range report are recorded above; pre-push reviewer independently reran the 37 focused tests.
+- Shared-hunk review: PASS — the reviewed five non-ledger hunk fingerprints match this candidate; historical CRLs listing these files add no hunk to this range.
+- Generated-file / secret review: PASS — exact range contains no generated files, credentials, private URLs, media bytes, production logs or production data.
+- Technical state: `committed`.
+- User authorization: `approved-for-push`; evidence: user explicitly authorized the requested push of `mobile` branch `codex/maintenance-android-baseline-20260819` after the recorded local commit and range head on 2026-08-19.
+- Independent review: GO for `push` — independent read-only review rechecked the exact source range, candidate fingerprint, branch, base freshness, staged receipt, dedicated maintenance workflow semantics and secret/production-write boundary. Its initial process-only NO-GO was resolved by recording this review and correcting the base field to `fetched at`; no P0/P1 code or security finding remains.
+- Action conclusion: `GO` for push after the final exact-range report passes. APK build, APK distribution and device verification remain separate actions.
+
 ### Risks / Release Notes
 
 - A local source/test result does not put the fix on Android devices. New Android build and chosen distribution path remain required.
