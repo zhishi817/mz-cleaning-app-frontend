@@ -6205,7 +6205,7 @@
 - Shared-hunk review: PASS — unchanged from the committed candidate range.
 - Generated-file / secret review: PASS — no generated files, credentials, private bytes, logs or production data are selected.
 - Technical state: `committed`.
-- User authorization: pending final commit-bound confirmation; user authorized pushing the exact pre-push receipt parent shown above, and must confirm the final receipt head after this entry is committed.
+- User authorization: approved-for-push — user confirmed `codex/p1-fdb-fin-20260817-final-v2@92887157a0bf88f6b0f06a76e093455e43e6d55e` on 2026-08-19; final receipt-head confirmation remains required before the network push.
 - Independent review: GO for push-attempt receipt commit — independent read-only review verified the exact base, branch, content commit, staged ledger-only scope and absence of nonledger or sensitive changes; this does not authorize `git push`.
 - Action conclusion: `NOT VERIFIED` pending final receipt, push review and final commit-bound confirmation.
 
