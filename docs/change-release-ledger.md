@@ -69,7 +69,7 @@
 - Required validation: PASS — focused Jest 37 tests, typecheck, lint with no errors, button audit, config assertion, diff check and current-worktree ledger audit are recorded above.
 - Shared-hunk review: PASS — the independent review and pre-commit gate matched all five selected non-ledger hunk fingerprints. Historical CRLs list these four files, but no unselected hunk is present in the exact `origin/Dev...5c04cb02` candidate range.
 - Generated-file / secret review: PASS — no generated files, credentials, private URLs, media bytes, production logs or production data are in the candidate.
-- Technical state: `pushed`.
+- Technical state: `committed`.
 - User authorization: `selected-for-commit`; evidence: user authorized the repair delivery and confirmed direct APK installation on 2026-08-19.
 - Independent review: GO for `commit` — independent read-only review of `RA-20260819-001` rechecked the full staged diff, base, non-ledger candidate fingerprint, exact staged scope, pre-commit gate, dedicated maintenance action semantics and sensitive-information boundary; no P0/P1 findings.
 - Action conclusion: `GO` for local commit only. Push, PR, merge, EAS build, APK distribution and device verification require separate authorization and evidence.
@@ -88,7 +88,7 @@
 - Required validation: PASS — focused Jest 37 tests, typecheck, lint with no errors, button audit, config assertion, pre-commit gates, and the prior exact-range report are recorded above; pre-push reviewer independently reran the 37 focused tests.
 - Shared-hunk review: PASS — the reviewed five non-ledger hunk fingerprints match this candidate; historical CRLs listing these files add no hunk to this range.
 - Generated-file / secret review: PASS — exact range contains no generated files, credentials, private URLs, media bytes, production logs or production data.
-- Technical state: `committed`.
+- Technical state: `pushed`.
 - User authorization: `approved-for-push`; evidence: user explicitly authorized the requested push of `mobile` branch `codex/maintenance-android-baseline-20260819` after the recorded local commit and range head on 2026-08-19.
 - Independent review: GO for `push` — independent read-only review rechecked the exact source range, candidate fingerprint, branch, base freshness, staged receipt, dedicated maintenance workflow semantics and secret/production-write boundary. Its initial process-only NO-GO was resolved by recording this review and correcting the base field to `fetched at`; no P0/P1 code or security finding remains.
 - Action conclusion: `GO` — branch push succeeded at `2026-08-19T13:27:31+10:00`; remote `origin/codex/maintenance-android-baseline-20260819` resolved to `b56a90466b377b52170e697807de00735874efc8`. PR, Dev merge, APK build, APK distribution and device verification remain separate actions.
