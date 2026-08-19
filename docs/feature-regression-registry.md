@@ -1,5 +1,24 @@
 # Feature Regression Registry
 
+## FR-MNT-001 — 维修执行人专用工作流提交
+
+- **Status:** active
+- **Maintenance scope:** `mobile`; paired Root maintenance workflow is already deployed.
+- **Last reviewed:** 2026-08-19 Australia/Melbourne
+- **Business outcome:** 已分派的内部维修（`property_maintenance`）执行人点击“标记完成 / 未完成”必须调用专用维修工作流；完成动作携带已保存的完工照片并进入待审核，客户端不得回退通用 `/mzapp/work-tasks/:id/mark` 或本地关闭任务。
+- **Related CRLs:** `mobile/CRL-20260819-001`; prior behavior source `mobile/CRL-20260806-004`; paired root workflow `root/CRL-20260806-006`.
+
+### Test-to-invariant mapping
+
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — 内部维修“标记完成”向 `submitMaintenanceExecutorAction` 传递 `executor_complete`、来源记录 ID 与已上传完工照片，且不调用通用 `markWorkTask`。
+- Root `/maintenance/workflow/:domain/:id/:action` — 服务端仅允许被分派执行人的专用动作，完成后返回 `pending_review`；通用 mark 对维修来源保持保护性拒绝。
+
+### Delivery boundary
+
+- 最新 Android 已安装包早于该专用客户端动作，且 runtime fingerprint 与当前源码不兼容；必须发布新的 Android 原生包。production 通道没有可用 Android OTA，不能以 iOS TestFlight 更新替代。
+- EAS 构建、APK/AAB 分发、真实 Android 执行人回归与生产任务验证另需显式发布及设备验证授权。
+- 外部维修来源继续复用同一现有专用路由，但不在本次截图复现和新增 mobile 回归断言范围内。
+
 ## FR-P1-FDB-03 — 日用品更换前后私有照片认证读取
 
 - **Status:** active

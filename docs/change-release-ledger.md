@@ -1,5 +1,105 @@
 # Change Release Ledger
 
+## CRL-20260819-001 — Android 维修执行工作流原生交付基线（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready; local commit candidate independently reviewed
+- **Updated:** 2026-08-19 13:12 Australia/Melbourne
+- **Request:** Android 执行人在维修任务上传完工照片后点击“标记完成”仍调用通用任务接口并收到 `maintenance_workflow_action_required`；让 Android 获得已经合入的专用维修工作流。
+- **Outcome:** Android 版本号提升到 27，下一次 Android 原生包将包含当前 `origin/Dev` 的 `executor_complete` / `executor_unfinished` 客户端路由。完成动作不再落到通用 mark；当前已安装包因 runtime 不兼容不能通过 OTA 补救。
+
+### Implementation
+
+- Previous behavior: 最新可用 Android 包在维修专用动作合入前构建；production 通道没有 Android 更新，因此设备继续发送通用 `/mzapp/work-tasks/:id/mark`。
+- New behavior: `app.json` 为下一 Android 原生包使用高于已安装包的 `versionCode: 27`；新增回归断言确保维修完成调用专用工作流且不调用通用 mark。
+- Key decisions: 保持 `runtimeVersion.policy: fingerprint`，不手工伪造 runtime 兼容性；不改变后端权限、任务状态机、R2、照片关联或任意生产任务数据。
+
+### Files / Areas
+
+- `app.json` — Android `versionCode` 从 25 提升至 27，允许新包替换现有 Android 安装。
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — 覆盖维修完成走专用接口、隔离通用 mark。
+- `docs/feature-regression-registry.md` — 登记维修执行人专用提交与 Android 原生交付边界。
+- `docs/change-release-ledger.md` — 本独立 mobile 发布单元及证据边界。
+
+### Impact / Dependencies
+
+- API: 复用已部署的 `POST /maintenance/workflow/:domain/:id/:action`；无认证路由探测返回 401，证明请求在业务写入前被认证拦截。
+- Database / migration / R2 / task data: none.
+- Config: Android native version metadata changes; EAS fingerprint 与当前 Android 安装包不兼容，因此需要新的 Android 原生 build，不能发布不可接收的 OTA。
+- Dependencies: none.
+- Related units: prior mobile route source `mobile/CRL-20260806-004`; paired backend workflow `root/CRL-20260806-006`.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/lib/maintenanceCompletionPhotoDraft.test.ts src/screens/tasks/TaskDetailScreen.test.tsx` — passed in this candidate: 2 suites / 37 tests, including the new dedicated-route/no-generic-mark assertion.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors; 109 pre-existing warnings outside this unit.
+- `npm run check:buttons` — passed: no suspicious hard-coded button dimensions; 27 documented legacy exceptions excluded.
+- JSON config assertion — passed: Android `versionCode` is 27 while app version remains 1.0.26 and runtime policy remains fingerprint.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 4 changed files / 4 recorded files.
+- `git diff --check` — passed.
+- `POST /maintenance/workflow/internal/route-probe/executor_complete` without credentials — passed route-existence probe: 401; no account, task ID or write action was used.
+- Android runtime compatibility — failed for direct OTA by design: latest installed Android build runtime differs from current `origin/Dev` fingerprint; a new native build is required.
+- `npm run check:feature-registry` — not available in the mobile package; the mobile registry entry was reviewed with its mapped focused Jest assertion instead.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared; exact staged candidate is limited to this single mobile unit.
+- **Untracked review:** none; isolated candidate contains no untracked files.
+- `app.json` — SHA-256: `b017473dae6b9fc858c9ee53f50a3af42d440a88f6131ada2897cb1503d4683f`
+- `docs/feature-regression-registry.md` — SHA-256: `acfe0e2c2ba99b330d08f681ccc0ba8fbfbb4795f7afd69e7cd16bd390c86738`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `6edaf69a3b00f7b3205e0cbf061ff4ff205c9e7c82347802372a5dab65db79d0`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `8a5c4048bd62cce8c7a51d6caf28b78f8c6b341fcf4baf48681e5e7eb9e13baa`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `e5b4efd8cacb3a9b0ee5e5c29497c72b2a24fc03a44b28d74689cddfb8b20765`
+
+### Release Attempts
+
+#### RA-20260819-001
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260819-001`.
+- Selected CRL identities: `mobile/CRL-20260819-001`.
+- Intended action: `commit`.
+- Branch: `codex/maintenance-android-baseline-20260819`; target: `Dev`.
+- Base: `origin/Dev@d420d0790142cd4bd560efdf7428ed5e7c2a2727`; fetched at `2026-08-19T13:07:16+10:00`.
+- Candidate patch SHA-256: `1e3e58ae39cf53aa43fe38b75fb8cf563483edc3e95f36683919a61e8d607f4b`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `5c04cb02edb04263bf583ec0a3cd3a1aced95050`; candidate content commit created locally on `codex/maintenance-android-baseline-20260819` after the independent review and passing pre-commit gate.
+- Dependencies: deployed `mobile/CRL-20260806-004` client workflow and `root/CRL-20260806-006` backend workflow.
+- Required validation: PASS — focused Jest 37 tests, typecheck, lint with no errors, button audit, config assertion, diff check and current-worktree ledger audit are recorded above.
+- Shared-hunk review: PASS — the independent review and pre-commit gate matched all five selected non-ledger hunk fingerprints. Historical CRLs list these four files, but no unselected hunk is present in the exact `origin/Dev...5c04cb02` candidate range.
+- Generated-file / secret review: PASS — no generated files, credentials, private URLs, media bytes, production logs or production data are in the candidate.
+- Technical state: `committed`.
+- User authorization: `selected-for-commit`; evidence: user authorized the repair delivery and confirmed direct APK installation on 2026-08-19.
+- Independent review: GO for `commit` — independent read-only review of `RA-20260819-001` rechecked the full staged diff, base, non-ledger candidate fingerprint, exact staged scope, pre-commit gate, dedicated maintenance action semantics and sensitive-information boundary; no P0/P1 findings.
+- Action conclusion: `GO` for local commit only. Push, PR, merge, EAS build, APK distribution and device verification require separate authorization and evidence.
+
+#### RA-20260819-002
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260819-001`.
+- Selected CRL identities: `mobile/CRL-20260819-001`.
+- Intended action: `push`.
+- Branch: `codex/maintenance-android-baseline-20260819`; target: `Dev`.
+- Base: `origin/Dev@d420d0790142cd4bd560efdf7428ed5e7c2a2727`; fetched at `2026-08-19T13:23:24+10:00`.
+- Candidate patch SHA-256: `1e3e58ae39cf53aa43fe38b75fb8cf563483edc3e95f36683919a61e8d607f4b`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `5c04cb02edb04263bf583ec0a3cd3a1aced95050`; content commit remains an ancestor of the current ledger-receipt head.
+- Dependencies: deployed `mobile/CRL-20260806-004` client workflow and `root/CRL-20260806-006` backend workflow.
+- Required validation: PASS — focused Jest 37 tests, typecheck, lint with no errors, button audit, config assertion, pre-commit gates, and the prior exact-range report are recorded above; pre-push reviewer independently reran the 37 focused tests.
+- Shared-hunk review: PASS — the reviewed five non-ledger hunk fingerprints match this candidate; historical CRLs listing these files add no hunk to this range.
+- Generated-file / secret review: PASS — exact range contains no generated files, credentials, private URLs, media bytes, production logs or production data.
+- Technical state: `pushed`.
+- User authorization: `approved-for-push`; evidence: user explicitly authorized the requested push of `mobile` branch `codex/maintenance-android-baseline-20260819` after the recorded local commit and range head on 2026-08-19.
+- Independent review: GO for `push` — independent read-only review rechecked the exact source range, candidate fingerprint, branch, base freshness, staged receipt, dedicated maintenance workflow semantics and secret/production-write boundary. Its initial process-only NO-GO was resolved by recording this review and correcting the base field to `fetched at`; no P0/P1 code or security finding remains.
+- Action conclusion: `GO` — branch push succeeded at `2026-08-19T13:27:31+10:00`; remote `origin/codex/maintenance-android-baseline-20260819` resolved to `b56a90466b377b52170e697807de00735874efc8`. PR, Dev merge, APK build, APK distribution and device verification remain separate actions.
+
+### Risks / Release Notes
+
+- A local source/test result does not put the fix on Android devices. New Android build and chosen distribution path remain required.
+- Rollback: revert this unit's version-code, regression test and documentation changes; do not attempt to force an OTA to the incompatible prior runtime.
+- Sensitive-information review: no credentials, tokens, private URLs, media bytes, database URLs, production records or logs are added.
+- Git state: uncommitted in an isolated detached worktree.
+
 ## CRL-20260817-004 — P1-FIN-01 报销凭证认证图片读取与草稿预览边界（mobile）
 
 - **Repository:** mobile
