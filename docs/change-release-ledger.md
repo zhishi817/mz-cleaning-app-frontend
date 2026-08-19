@@ -233,14 +233,15 @@
 - Branch: `codex/android-sdk54-runtime-alignment-20260819`; target: `Dev`.
 - Base: `origin/Dev@49c97ce88bd6a604b0bc2e6a85ac755faeefd0ab`; fetched on 2026-08-19 before this isolated candidate was created.
 - Candidate patch SHA-256: `32d7bf0e657fe4c122a04f769fdb298b40523114ef822c0e7948ceb32292fc3c`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `69b9b1dac1f8c48392c999d41dd1685058f43948`; candidate content commit created locally on `codex/android-sdk54-runtime-alignment-20260819` after the independent review and passing pre-commit gate.
 - Dependencies: merged `mobile/CRL-20260819-001`; no backend, schema, R2 or production-data dependency.
 - Required validation: PASS — Expo Doctor 18/18, local Android fingerprint generation, focused maintenance 37 tests, `npm run check:full` (57 suites / 328 tests), current-worktree ledger coverage and `git diff --check` are recorded above.
 - Shared-hunk review: PASS — all manifest and lockfile zero-context hunk fingerprints listed in this staged scope are selected; the ledger is the required receipt.
 - Generated-file / secret review: PASS — exact candidate contains only dependency metadata and ledger receipt; no credentials, private URLs, media bytes, production logs or production data.
-- Technical state: `candidate`.
+- Technical state: `committed`.
 - User authorization: `selected-for-commit`; evidence: user explicitly authorized this SDK 54 alignment repair on 2026-08-19.
 - Independent review: GO for `commit` — independent read-only review rechecked the complete staged diff, base, 178-hunk scope, non-ledger candidate fingerprint, Expo SDK 54 dependency graph, validation evidence and secret/production-write boundary; no P0/P1 finding.
-- Action conclusion: `GO` for local commit only. Push, PR, merge, replacement APK build, distribution and device verification require separate authorization and evidence.
+- Action conclusion: `GO` — local content commit created. Push, PR, merge, replacement APK build, distribution and device verification require separate authorization and evidence.
 
 ### Risks / Release Notes
 
