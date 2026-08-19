@@ -1,5 +1,274 @@
 # Change Release Ledger
 
+## CRL-20260819-002 — Android SDK 54 原生依赖与运行时指纹对齐（mobile）
+
+- **Repository:** `mobile`
+- **Status:** verified candidate; selected for commit
+- **Updated:** 2026-08-19 Australia/Melbourne
+- **Request:** 已合入 `Dev` 的 Android `production-apk` 构建在 `Configure expo-updates` 阶段失败；对齐 Expo SDK 54 原生依赖并重新生成内部 APK。
+- **Outcome:** 本地 Expo SDK 54 依赖图和 fingerprint 输入已通过诊断；替换 Android 内部 APK 仍须以云端实际构建成功为证据。不改变维修、照片、权限、任务状态或生产数据行为。
+
+### Implementation
+
+- Previous behavior: EAS build `8c639fef-de9b-4898-85a8-0253dae8f7bc` 计算出与本地不同的 runtime fingerprint 后失败；Expo Doctor 同时报告缺失原生 peer、重复 native module 与 SDK 54 版本漂移。
+- New behavior: 将受 Expo SDK 54 约束的依赖和 lockfile 对齐，并补齐 Expo Doctor 报告的直接 peer（`expo-font`、`react-native-worklets`），使云端使用锁定的相同依赖图重新计算 runtime。
+- Key decisions: 只使用 Expo SDK 54 建议的版本，不加入业务依赖或改变 `runtimeVersion.policy: fingerprint`；移除了对齐工具写入但非 peer 修复所需的空 `expo-font` config plugin；保留 Android `versionCode: 27`，失败构建未产生可安装包。
+
+### Files / Areas
+
+- `package.json` — modified: 对齐 Expo SDK 54 原生依赖（含 Expo、notifications、updates、NetInfo、Jest/ESLint 配置）并声明所需 peer。
+- `package-lock.json` — modified: 锁定与 `package.json` 一致的依赖图。
+- `docs/change-release-ledger.md` — modified: 本独立 mobile 修复单元、构建失败诊断和验证证据。
+
+### Impact / Dependencies
+
+- API / database / R2 / task data: none.
+- Config: Expo native dependency graph and runtime fingerprint only; EAS profile, channel and production API selection remain unchanged.
+- Dependencies: Expo SDK 54 compatibility matrix; linked delivery fix `mobile/CRL-20260819-001` is already merged into `Dev`.
+- Feature regression registry: no change — no business workflow, API contract, role, state transition or media lifecycle behavior changes; existing `FR-MNT-001` remains the relevant task-flow protection.
+
+### Validation
+
+- EAS build log diagnosis — passed: exact failure is local/EAS runtime fingerprint mismatch; Expo Doctor found missing `expo-font` and `react-native-worklets`, duplicate `expo-constants`, and SDK 54 package drift.
+- `npx expo-doctor` — passed: 18/18 checks after the final minimal dependency change.
+- Android fingerprint generation — passed locally: `production-apk` produces `fff20dbaed4a12f7076d91dee7bfbe1be03cf337`; remote parity and APK availability remain unverified until a new EAS build completes.
+- `npm run typecheck` — passed.
+- Focused maintenance regression — passed: 2 suites / 37 tests.
+- `npm run lint` — passed: 0 errors / 528 warnings. The aligned `eslint-config-expo` exposes existing warning-level style findings; no unrelated source was auto-fixed in this unit.
+- `npm run check:full` — passed: ledger tests, typecheck, lint, button contract, fast regression, and all Jest suites (57 suites / 328 tests).
+- Replacement APK build, distribution and real-device verification — not run yet.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared; exact staged candidate is limited to this single mobile dependency-alignment unit.
+- **Untracked review:** none; isolated candidate has no untracked files.
+- `package-lock.json` — SHA-256: `00389e4a74e9b5b8326e8a709a14644a6f7044c1d64a2aab21ba0dec921ea014`
+- `package-lock.json` — SHA-256: `0064e4e1856c93a13f5d6e751e0aeaf516f164c77bc9be43a29493148d3a5c29`
+- `package-lock.json` — SHA-256: `02308a641ae18575468629552ebb25dacbc4ec39a61d8fe77d90f1b71187ceed`
+- `package-lock.json` — SHA-256: `03421035f75b5579f9b10e237eab7bd7cede57ddf5410dd064bc7e262e40c33f`
+- `package-lock.json` — SHA-256: `0413262ffd6c8bc2bb9495a74fd22cd775a1a5ee49d98ffcc6170d0710d1c854`
+- `package-lock.json` — SHA-256: `046c737b23f61c0b228372f1586330a2ceb1f7cc1ba161ae0f94e6cbb0ecca60`
+- `package-lock.json` — SHA-256: `04c78bb12bf96bb611f27b4ac1922a07ebdc216d131b93a5f5a9562964af49e0`
+- `package-lock.json` — SHA-256: `04d12c777fc6c06611c6b94cbeeef9c21f0856955e84ada81c10ce1000ebb0c4`
+- `package-lock.json` — SHA-256: `05820132907588549c28ff41b12fb7be64e8b7ccc524bb9970f4262e41e2d69e`
+- `package-lock.json` — SHA-256: `062ff755a13a337d60b15b15fa9220464f79502a792c4f78df6cbc182707f963`
+- `package-lock.json` — SHA-256: `07dd252a856e766156759f563618ffe88c21957d1abbf02e99e52805f755c613`
+- `package-lock.json` — SHA-256: `0a1afaaf5a4b11de99eb79526e341324c4ae756a0d4b49563fe705c245ba2322`
+- `package-lock.json` — SHA-256: `0e1e09a8809ba15f31cd548761a6c6109c1eadcbf95b8ee2726b5674f9b6dc95`
+- `package-lock.json` — SHA-256: `0eb9965891d1148ccb0cbb5f23690723e094602f7f09fa7979ca8065922d9b67`
+- `package-lock.json` — SHA-256: `1006b76bcc8c50a067f6b430d5c9c13a218bd83c3c6034ccf385a3e66ec0636e`
+- `package-lock.json` — SHA-256: `1498ef6f5f1f3e19817e10b9a0eb7966a01447fa7481584f21b874068e68df21`
+- `package-lock.json` — SHA-256: `194d69878771cd8db9531aa70eebfbf21e033aa557a77d0cd98577eac35f3f29`
+- `package-lock.json` — SHA-256: `1ba8e005b2b0e1843766e3edb87e9072c877bf70cfb32aa7cf23d06bb28703b1`
+- `package-lock.json` — SHA-256: `1ff3cb326fd1a833fd2d78e8b3c8cc7b861b04300136b774a472abf689b76af7`
+- `package-lock.json` — SHA-256: `221e6d45fb3c5b591d20a7b71ad5c744eaaed3e980063297540287ddd6559ed2`
+- `package-lock.json` — SHA-256: `2505b76ad1df0cf599c0766e81c0adfa62a38a61ea964af331e26407654b4d8e`
+- `package-lock.json` — SHA-256: `2974e26faf772344fd2c93d3bfe08f5b8c404b0b4de9ed8f40d146fe7a192ea3`
+- `package-lock.json` — SHA-256: `2b91b4f5488163865544e265e618824ad31d5d96f6ce31b5cae0921835ead669`
+- `package-lock.json` — SHA-256: `2ddad2a257d1456e9f2e88699e91d43d06abdb34b622d178026672f263c7c51b`
+- `package-lock.json` — SHA-256: `2e96a5caee87f915dee89a107f7d31c22bb01da237d8c10ab539902cdec523ea`
+- `package-lock.json` — SHA-256: `2ed64a1fd6461f439ba7dc85095ac0d01092abf67b5efc6c704b6a37dd456ad1`
+- `package-lock.json` — SHA-256: `2f2b032501211973de0404fb8b7b096f4ee1a2528e36ff1b810e4c76c1ea8705`
+- `package-lock.json` — SHA-256: `2fef13ed197390ce3e3877777ce5c7fd79cd32d2b3069facd6fafa4c6346232c`
+- `package-lock.json` — SHA-256: `30c394583429665a9cae59b8fda5b300c8e4a42013534e57661d401cb531e930`
+- `package-lock.json` — SHA-256: `3121b9c025995c79c9c1486b156687173cc5c24c3bad5f488236cc686d319517`
+- `package-lock.json` — SHA-256: `3392ee2f94794572d57db58da62b5c80097ab0809898e70d5e48e81fc3092d26`
+- `package-lock.json` — SHA-256: `383c915ada51f2be06e5a8b55d2fedad6507ed865367affb647d1108833f8744`
+- `package-lock.json` — SHA-256: `3848e0d812a7c08cc1f0b009cb0500cb91e17944f828b8500ec5d8a6b87db8bf`
+- `package-lock.json` — SHA-256: `38e2a50ad7f91687128730a0f7129a517b3dc3dd5b7a73ce3d23733a32844eb6`
+- `package-lock.json` — SHA-256: `392b78e1f8fa88f07e061f16dba6c57c43b2c0378aa284e0b539d21763c8309a`
+- `package-lock.json` — SHA-256: `3964513b9cb9f538afe93b6dd208387c61a47ddf85ac952f4e8902ed7bf7b560`
+- `package-lock.json` — SHA-256: `3a5d9808e474beee7c769da272d8d162ff82dd82c8309e02466070b851638b7a`
+- `package-lock.json` — SHA-256: `3a891a4747016a70438cf6bf0d75b51b6462443cced0ae299ec3a45c370e214f`
+- `package-lock.json` — SHA-256: `3ca13b5bd73cb9405ae7004178b4fd660b56f91de973d37f486390da3c8d4e7a`
+- `package-lock.json` — SHA-256: `3d38a5dfb7b08298744ae03c5d79dbe3f849da86c6bdaac3f254530b9804c3d1`
+- `package-lock.json` — SHA-256: `3d8bc4bb1f93c8f28030538822e2fdf49f470c5298f4a891e926288af84215a8`
+- `package-lock.json` — SHA-256: `409413ee8d50e5b4829043f49e230a076550940e318b8c8e7b5c6843d41895a8`
+- `package-lock.json` — SHA-256: `41f77589c3daee6cbeb5d9427e57df7b180a625246136d189b0042607e914013`
+- `package-lock.json` — SHA-256: `423835a90cf23ba0a680b2623c0640925b03de6d5aac22ccb48face8f188ca29`
+- `package-lock.json` — SHA-256: `4256241fa9791c5805766d542df127bc9ca71ce66a32a054c51695323c2bdf97`
+- `package-lock.json` — SHA-256: `444dc8277620729525585f9f10e8489a9d63529cd0801eff6e1ab81754486057`
+- `package-lock.json` — SHA-256: `45709c9cc9729ecd4a58a46b359d1d5ae4c1c3802f44dd325450cfc7ea34e59f`
+- `package-lock.json` — SHA-256: `45bc7042ad1507bc02c1937026860ac344a4b4739f57321f83c4b62966af5c28`
+- `package-lock.json` — SHA-256: `465c2165f72067e26389ad7b18d7530d4eb98ed206b43906ee7637eb8d5bee26`
+- `package-lock.json` — SHA-256: `475b0d6f27c080c4c0aae55d684e8b2601dec04dd980eb3c2b4f24dfc299e0bf`
+- `package-lock.json` — SHA-256: `47c1bb5004dfff2dd1423e9aca65114a2585276c518df03590163b421ea40e9d`
+- `package-lock.json` — SHA-256: `488c4475c680c481f50e6b840db861069a4462d0fa0e3bc9675246cb717d14f4`
+- `package-lock.json` — SHA-256: `4898bfcb30e33bc4ab2062a09a4a43500138e80f2f1e47b9f547d480d53023f4`
+- `package-lock.json` — SHA-256: `4938f3d96c4284d3081f68ef88cf6afaeccb6f23a79a5b01c722d15313f5a55e`
+- `package-lock.json` — SHA-256: `4a74322503fb4ff27d9f8f1db06bd7f766e1c56b080f66d1305afd2f5e1893c3`
+- `package-lock.json` — SHA-256: `4e79e414a280ca4c796bbc08fe884fc2d27be0eb6f3e8fd25a26ecc930bc388a`
+- `package-lock.json` — SHA-256: `4f4322558fd8e0ffe3a84923242a3b8c3eb659531b894b10fc7aa2dc47c2a921`
+- `package-lock.json` — SHA-256: `50435328c5afa73d35e3ba6a8d9b6a59e2dd76d5089917adf4230acf973865ff`
+- `package-lock.json` — SHA-256: `50bb01ca159717cc22cad02c7146a44eb5abe366a824754340ed69e3f46dd673`
+- `package-lock.json` — SHA-256: `50e2266973efd91f4376f50aafe73a99744ac5f11be0f8e68ecf0d56bdc8c008`
+- `package-lock.json` — SHA-256: `53abbe7c7a60a5f260cba4e2f06db9aeca3e575e3aced35802525b9c3db4895a`
+- `package-lock.json` — SHA-256: `589242b2a273ef8ade7063a0d280c77e1c7ad2e26bba2f917d2fe41c2605ec16`
+- `package-lock.json` — SHA-256: `5a06bfcc4c4366e1d7b0c3c8e7028f86b8a5ed525af87fc618b76491d76c6da6`
+- `package-lock.json` — SHA-256: `5aef64109dc164f8a2ab32b03b93d17d50703e327e16092b1acf26f22da02a6b`
+- `package-lock.json` — SHA-256: `5b8cf3938c3463e7f9223cb2725fc643343a0782df3f6d41805880db6dc3b02e`
+- `package-lock.json` — SHA-256: `5e676efd79e809bc84b9a91bb3eeea79d72c02c64f47eb6b7e11aac54187618c`
+- `package-lock.json` — SHA-256: `5fc393800c3fe31bfdb3044316e5d2a0fc694055b4efdd296634ef846e1b6264`
+- `package-lock.json` — SHA-256: `61cac3d2ced8e227800fa60f378503e774f4520966ca619e9896d8d1376af3fe`
+- `package-lock.json` — SHA-256: `621054a45f2717fd42f2bce29ed95709326046c5f12bab31282f318a36bc0884`
+- `package-lock.json` — SHA-256: `62b576dcf1ee51727bf092c6424c694656a9809fe9aedc3293bf533213edab09`
+- `package-lock.json` — SHA-256: `6379538969471c25a28fb292d3300db6eea99530ba62c2d12e1455d9391e0672`
+- `package-lock.json` — SHA-256: `63ca6ef29da4c1ac235e1a143eb5f0aeb5aabbb6ac27d190ed84c42f5e94b754`
+- `package-lock.json` — SHA-256: `649dcc3e0aaff25020805b361ccce33aed1fc66095a603d24062a522e42af371`
+- `package-lock.json` — SHA-256: `6729ba851f3d44287045cc7c07a3c267d9722a344f2d10abff0276c1812c9d19`
+- `package-lock.json` — SHA-256: `67d52ef81f1063d170dc352518014be7c7493c25e619703c8837088c8d0fb155`
+- `package-lock.json` — SHA-256: `688804f9f6f298fc1d464cd1b2d57f9f53418cff7b1274a5588867b5fbc2bc08`
+- `package-lock.json` — SHA-256: `6b18fc1b9cdd0a7162a630dfa610099c37464e5b4663fe43953894fa5093b5b3`
+- `package-lock.json` — SHA-256: `6d20bb038a7325c723057b3f159933c05c7fc507d773e73c4093834e4b39c9e9`
+- `package-lock.json` — SHA-256: `70e47173c3a1f5555146e42405c957cf567a08c30f447554ba5bde9a0a2897da`
+- `package-lock.json` — SHA-256: `716fdb7501ece435e67e5903dd02af13a4b1b551617212e22295ee0e983f298a`
+- `package-lock.json` — SHA-256: `77ab547c831db20f20c06f35f3d417bce28318134d7e47c3e216a906e4435c87`
+- `package-lock.json` — SHA-256: `781a0be9ff3d5ff1d2fccfd51f8bf0a27a99e0277fa574f711737fdac885514c`
+- `package-lock.json` — SHA-256: `78d325f32a1865fe50070623370562412be50f860cbfac16f0b536ecaeedc1b4`
+- `package-lock.json` — SHA-256: `799409dffa37608d528f03cd1e5521edb42057abda7249af1dd8462ba47f87ba`
+- `package-lock.json` — SHA-256: `7997b150b3d3e0458bf7c7619767fb39eadf32fcdc791c45d7826025f3f3132b`
+- `package-lock.json` — SHA-256: `7e342a449349463036e52444ce41ef4abbf92b1c9ceccd6080e0d4498e7590fd`
+- `package-lock.json` — SHA-256: `80e68a1fa210f2f4e6c191e795e920cbaf893a7829c45fbfb487577ff1acc7ec`
+- `package-lock.json` — SHA-256: `826bd37ebd59411806545590a9032bd0be2bec65d0960d09bb7baa33a6842c92`
+- `package-lock.json` — SHA-256: `84e116c3625e5b75453c91548a729d05f398c91619600c6b879569021f0727a9`
+- `package-lock.json` — SHA-256: `85734ea20a113d2aff3b67382d6511f3af332e64402652e2d2d92552503af185`
+- `package-lock.json` — SHA-256: `88332cc334fe5786f735db9283912317adb435c61060f06890d5cdda433bd8cf`
+- `package-lock.json` — SHA-256: `89a7971a5c883ee82412680f411be66ec37d48a9654080799dba6d34004f59b9`
+- `package-lock.json` — SHA-256: `8a11b4e56acf60788099910f18eff2e55d83cd763507fec4c6a667f89f4eec09`
+- `package-lock.json` — SHA-256: `8b08ee898fc0eb0bb9b4a033a847608b294c1f6986002072a9b539f7b6a4f20a`
+- `package-lock.json` — SHA-256: `8be1a107fdd5864b9b7a13fbfad7b565d8593399aaa99b7f5fbbe4a385542d89`
+- `package-lock.json` — SHA-256: `8c178b0b96b39303eeadff9ea933d4bd4dd62ab73200a6b0591a84469afc449e`
+- `package-lock.json` — SHA-256: `903ae2060b4a57b37e34c8c279322d352b2d2da0cd0433cd1f7bcc8eeaffae8f`
+- `package-lock.json` — SHA-256: `905db0fa5074bf4676cf445d05d55f160ead359cca170b19386942c0d809d7fe`
+- `package-lock.json` — SHA-256: `915bc623628983c682df5b4b3235693bab016e4224711ac5db784900694a9e63`
+- `package-lock.json` — SHA-256: `9314da78f69e3c70c681d3b35c973dbd7d8b4c264b9775c843d143a5d93a24d5`
+- `package-lock.json` — SHA-256: `9385ae8e1e25a7d3d2a953d7d6d7155666c33140de349623740f3795e5b2edc1`
+- `package-lock.json` — SHA-256: `940267116c1ec5c42c3c4722cd5f183dce68a3d63090d8bdaac5b51273229c7a`
+- `package-lock.json` — SHA-256: `94cb16f9fae7e4fded9892c6148d276ef0722291e22a283159f0dd98d903012b`
+- `package-lock.json` — SHA-256: `952ae6037b1081f4b0c026640bc5a9e8e439a9ef40aaf8776dd3e7b469beda2f`
+- `package-lock.json` — SHA-256: `9902064bc83844aa818bd382779f4a3d002dbc41e2617c72bda4be54735efa32`
+- `package-lock.json` — SHA-256: `997594d8edb809876c9202428cc66af4c4e78564a53e990e3458a4e81b8d050a`
+- `package-lock.json` — SHA-256: `9c0b78eceece927b898001dedcc504498a2bef4707ce89c0b1048465b3b1a4b6`
+- `package-lock.json` — SHA-256: `9c3740aff8a3ab7ec8d2e3fae45687e7da0dffa5bf3890fe66452d4823722324`
+- `package-lock.json` — SHA-256: `9ecf941c941db8d7b882ae18612f162f46ffcaf781c11d597b0f08bf9161a76c`
+- `package-lock.json` — SHA-256: `9f7f3d60ecb32f17ee6d8c0699186d9fed376464589376369bb3cbed8fe0f6cd`
+- `package-lock.json` — SHA-256: `9faa408b35f2fa972840edcefaaa6ff4c968962c89d07baf0f8f2b913e55f292`
+- `package-lock.json` — SHA-256: `a17dafb7b17b63c383faaa16f86872cd6d450df30480e98653799a072fc01930`
+- `package-lock.json` — SHA-256: `a1bae57f0bb0a54ac552ef466c1c6b3d973341ae0eaa6cdd624aa8413b257d96`
+- `package-lock.json` — SHA-256: `a3443e2bfa45c876590286aeb277e7e297d3597e89d1bece7b91842f1b631fd7`
+- `package-lock.json` — SHA-256: `a48daef57f3248ba99db351eb976602130b6ff65f94e1259ef60004bd122db0a`
+- `package-lock.json` — SHA-256: `a52b76aa1c69d47c8990713b2fca9c8a6869b9e2a47aca01bd9595fca56f2731`
+- `package-lock.json` — SHA-256: `a66da5ab1d3b27832d34b1624973d9b3afd06b4c62b31e96d381c6b7f56672f0`
+- `package-lock.json` — SHA-256: `a722e124624848c4e3808ed3f08a75b2e29cfe6e65f5fb6dc71f2e863061cf14`
+- `package-lock.json` — SHA-256: `aaceb80a3e9cf02bb5bddae58d6d32d8a8abb084f5937549400a09baeaa46fa1`
+- `package-lock.json` — SHA-256: `aae0d3d34f37d971db8af7ba44871a76ec6a128e99c0b14a77853c134f0a81c4`
+- `package-lock.json` — SHA-256: `acc8363be126a867e00ef45b5d09de8ba2c17e9c6ba3fd7c749bd3fb153b7513`
+- `package-lock.json` — SHA-256: `b36ccb6c8b5fbe6a751a3fff08a5eb00eefd2ccb9003e396303f61088ec15536`
+- `package-lock.json` — SHA-256: `b4514ee0414facead142d154d0ab7b85a87c76ba482c79bb695849e1485461c7`
+- `package-lock.json` — SHA-256: `b485017c7723b1f78a14175fc53ce5b88eaffd6b4de9a198fa88bb14995fa66e`
+- `package-lock.json` — SHA-256: `b82a373fdfa79ec55c3984e912bde195b4b0280ec6fa807b9faf0e5dd8cc398f`
+- `package-lock.json` — SHA-256: `b98bd606434a0ea0d0e23c23fa92d7c6a2ea53f002dd63ba9b860f6a7e5c17ed`
+- `package-lock.json` — SHA-256: `b9cad251ae351ba0c603ed546aa94c10b941aa99ae28f3ee6b6f65c28b3a701e`
+- `package-lock.json` — SHA-256: `befa2a4b8e0de4d141083719fe9a7c52ea1ef9ea485fff5005be752ecd84c73f`
+- `package-lock.json` — SHA-256: `bffb05cca8630ce8aa6c4160a4c4a8939e1e941682ebcaf2773d426c721a5d30`
+- `package-lock.json` — SHA-256: `c1ae62d60bd8862171ee8de8a2bca97026aa34ed1336d588dafa18979ed36379`
+- `package-lock.json` — SHA-256: `c33d1e453a2b3c2b88141126267b0df1e4579906fa5cf46e1ae6a0eb49f95243`
+- `package-lock.json` — SHA-256: `c3fea84309a8bfba29dece3c57daa1528e2671297f43ec1298a005cfaf1bcbd9`
+- `package-lock.json` — SHA-256: `c8f226206f77515f48d4248fb6bcdb017048b255f5c6276805a7f264d652e674`
+- `package-lock.json` — SHA-256: `c92db2970190a844e7ed084c66409b95bcee43d700c6164c399dcf17edd639e2`
+- `package-lock.json` — SHA-256: `cbec431875b7d270362f96cd77bba35bddddf7fa7c40dc544fe44abb4b348169`
+- `package-lock.json` — SHA-256: `cd591f0a6e480d88aeb7856cb59b2ecf729006367e0c4420c8fa4af3040a726d`
+- `package-lock.json` — SHA-256: `cdfe9cac00ba477ce03cefa650f93a8241964e91fe3cc4d99311987f4511c6f6`
+- `package-lock.json` — SHA-256: `d2fc98128239ba12b76ffbbbd6900fa5fabdf15cb7c169ff234a7cf7f8cc3dd0`
+- `package-lock.json` — SHA-256: `d3c005d802ec3e78d34e59b7d894f5c92c942957a5359d92b0d0c7550fee13b2`
+- `package-lock.json` — SHA-256: `d5f66fd37f7d37bdfad682acda200b94532fb018705c7ff365291b3eb8ec4e83`
+- `package-lock.json` — SHA-256: `d79709272f27c90622874ad08aad40ddfb0392d4fa544af770d9366e0ca87644`
+- `package-lock.json` — SHA-256: `d86674178aec2b68582020105c51b262781b6018fedc9a8863a038944fd7f263`
+- `package-lock.json` — SHA-256: `da1bebcc2eaca0b201da8e2f1fc9266e54e2f6083f628d38d2896a73ea2d613a`
+- `package-lock.json` — SHA-256: `dbf78d720c6c66ecbc3432969c9afdba63712ea154344bb1edbb2b29c169f10f`
+- `package-lock.json` — SHA-256: `dc6cccf0bf4a488cc3b365bf792b14800a97846820dccd0c8798c1311fa8aa68`
+- `package-lock.json` — SHA-256: `dcdca72622bb12d76c8e4f8177a69c15bfe9727c368521efdb7c521b38f21de3`
+- `package-lock.json` — SHA-256: `ddd2946721f27c9b84cca41157cbbd205d276dcd88f91fbcf117d38559cf8f97`
+- `package-lock.json` — SHA-256: `e0224277fb9ee891998e94d5d7e5f15464584b87c3a24a4c4eaa885af6705251`
+- `package-lock.json` — SHA-256: `e0bb292c8393510545c0de3b1badd9e87db8485bfad19445b9b3196e0f191c10`
+- `package-lock.json` — SHA-256: `e0c86ddbb1f535065e70c8b1634c3a5d28e6652d161df09fa0f075709794cee6`
+- `package-lock.json` — SHA-256: `e4222c8aa175ae7a184e545ab691a7771bc05b92dc234e2b6ffb92052b89b619`
+- `package-lock.json` — SHA-256: `e5f85e56d60eb3713a5745ac82025280c2b4bfc639b6e13e86554128cfab33ef`
+- `package-lock.json` — SHA-256: `e740019db1b702ba9c11604b271e4092dfc710c00127727d40f0e6d703c1485f`
+- `package-lock.json` — SHA-256: `e8e4760112ecca64cdde57c6244e497df74bcd692a66fe81d68621e4ff177568`
+- `package-lock.json` — SHA-256: `eb317996cc84156af6efa8f80f8957b784b862f86470372f867a19c788b36d66`
+- `package-lock.json` — SHA-256: `eb490cdb49ff029d638be5f1ca135289dfc40232e1227b9e4399c5e2e34b8cc2`
+- `package-lock.json` — SHA-256: `eb4a7d69f08d727c37ffbc2f50a2ee5b2002c954e3eccfb8b99e7fcd15cb74b4`
+- `package-lock.json` — SHA-256: `eb830d8c73868e365b6a6175d0a415cc30ece7b31107da75e8ba2221ac727c1d`
+- `package-lock.json` — SHA-256: `ebb67fdbb19dc7e2500ae4bffdd703f7d23c6430ebfa2a73f69eafc901f9cba1`
+- `package-lock.json` — SHA-256: `ed0fdca932404cb009a9c75bfbb98411e449be95e2541d485f0636da4c90d7c7`
+- `package-lock.json` — SHA-256: `ed12a3cd90b74f17cf0e7f938bae9eefbb5c9d14f8cb4bde71fcd34769966d47`
+- `package-lock.json` — SHA-256: `ed22093baa0708af07940aa4131e430fdbb174db6b1ee7ce4acf65ae7ae4bd4c`
+- `package-lock.json` — SHA-256: `efbb335b7e0575e39cfcd35995b9bab91adcfbca2d460020ebb4837aa9431920`
+- `package-lock.json` — SHA-256: `efbcaadad9b9bc5289b0fb022a3ff3e2b4612b5ced6a1c473ccd3da31cebbb3a`
+- `package-lock.json` — SHA-256: `efcb1432e242c67d9a9b1d4afda8a4a48704551fdbce9a1c3f6495558dfa4cc1`
+- `package-lock.json` — SHA-256: `f194a62eef4fc4bcc7092f75c2f76a1c7b11aee55bf67c3eaaf6879ec34fb917`
+- `package-lock.json` — SHA-256: `f237c054d92c9ba07e9c019b2a498654e7bde6adadf04f0990a268be5b7ec93b`
+- `package-lock.json` — SHA-256: `f74cb848976cc33538975de8ff98d8401d27f709a3f11530c6cdb0b10e52c972`
+- `package-lock.json` — SHA-256: `f8e6028986269a1be4e0c53cd4e5885eab2093686f92de3e5affff6dbac6eee9`
+- `package-lock.json` — SHA-256: `fc84859e16459e5aa4d711bc6c592299bcfb27124bd0ffe9711c09cfdb60121d`
+- `package.json` — SHA-256: `1854d434284f81919bf3eb748f381132ae4dcd0e91cd75e2979f628e5569bdfa`
+- `package.json` — SHA-256: `2649a5e87f8c913adba4dc255d604c45d4c42b695ced3e89c713782c96cd1c37`
+- `package.json` — SHA-256: `28aa1bc10b03a59168fa31dcb2176ecce3f94a5201c09f2330a30a437e5f7020`
+- `package.json` — SHA-256: `8c75714c960d9f1e5907f2693974abef642f19fd6c53bc35ade9493638bd9d36`
+- `package.json` — SHA-256: `98491d17a22407349b36759efd0aefac7bcf1fd48e09c09103b03ca654e3ab4a`
+- `package.json` — SHA-256: `c49282f7342d5e1f914f862413ab397af67ee7d3838ba5b08abd1b3d26b3b4dd`
+- `package.json` — SHA-256: `ceab74dc7adbabe6968b5da7e0e72a7df8658947c2f15e592121a0c0f25dd5ee`
+- `package.json` — SHA-256: `f229d7208b92d92db972893c688468959d7cc69eb6a88bb961d95e847858c8e2`
+
+### Release Attempts
+
+#### RA-20260819-003
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260819-002`.
+- Selected CRL identities: `mobile/CRL-20260819-002`.
+- Intended action: `commit`.
+- Branch: `codex/android-sdk54-runtime-alignment-20260819`; target: `Dev`.
+- Base: `origin/Dev@49c97ce88bd6a604b0bc2e6a85ac755faeefd0ab`; fetched on 2026-08-19 before this isolated candidate was created.
+- Candidate patch SHA-256: `32d7bf0e657fe4c122a04f769fdb298b40523114ef822c0e7948ceb32292fc3c`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `69b9b1dac1f8c48392c999d41dd1685058f43948`; candidate content commit created locally on `codex/android-sdk54-runtime-alignment-20260819` after the independent review and passing pre-commit gate.
+- Dependencies: merged `mobile/CRL-20260819-001`; no backend, schema, R2 or production-data dependency.
+- Required validation: PASS — Expo Doctor 18/18, local Android fingerprint generation, focused maintenance 37 tests, `npm run check:full` (57 suites / 328 tests), current-worktree ledger coverage and `git diff --check` are recorded above.
+- Shared-hunk review: PASS — all manifest and lockfile zero-context hunk fingerprints listed in this staged scope are selected; the ledger is the required receipt.
+- Generated-file / secret review: PASS — exact candidate contains only dependency metadata and ledger receipt; no credentials, private URLs, media bytes, production logs or production data.
+- Technical state: `committed`.
+- User authorization: `selected-for-commit`; evidence: user explicitly authorized this SDK 54 alignment repair on 2026-08-19.
+- Independent review: GO for `commit` — independent read-only review rechecked the complete staged diff, base, 178-hunk scope, non-ledger candidate fingerprint, Expo SDK 54 dependency graph, validation evidence and secret/production-write boundary; no P0/P1 finding.
+- Action conclusion: `GO` — local content commit created. Push, PR, merge, replacement APK build, distribution and device verification require separate authorization and evidence.
+
+#### RA-20260819-004
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260819-002`.
+- Selected CRL identities: `mobile/CRL-20260819-002`.
+- Intended action: `push`.
+- Branch: `codex/android-sdk54-runtime-alignment-20260819`; target: `Dev`.
+- Base: `origin/Dev@49c97ce88bd6a604b0bc2e6a85ac755faeefd0ab`; fetched at `2026-08-19T15:01:27+10:00`.
+- Candidate patch SHA-256: `32d7bf0e657fe4c122a04f769fdb298b40523114ef822c0e7948ceb32292fc3c`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `69b9b1dac1f8c48392c999d41dd1685058f43948`; content commit is an ancestor of the current ledger-receipt head.
+- Dependencies: merged `mobile/CRL-20260819-001`; no backend, schema, R2 or production-data dependency.
+- Required validation: PASS — Expo Doctor 18/18, local Android fingerprint generation, focused maintenance 37 tests, `npm run check:full` (57 suites / 328 tests), pre-commit gate and secret review.
+- Shared-hunk review: PASS — exact candidate scope is the recorded 178 manifest/lockfile hunks; ledger receipts add no business content.
+- Generated-file / secret review: PASS — exact candidate contains no generated artifacts, credentials, private URLs, media bytes, production logs or production data.
+- Technical state: `committed`.
+- User authorization: `not-selected`; push requires approval of this exact branch and range head after the independent push review.
+- Independent review: GO for `push` — independent read-only review rechecked the fresh base, exact committed range, candidate content commit, 178-hunk scope, Expo SDK 54 dependency resolution, validation evidence and secret/production-write boundary; no P0/P1/P2 finding.
+- Action conclusion: `NOT VERIFIED` — exact-range audit is pending the committed review receipt, and push itself additionally requires explicit user authorization.
+
+### Risks / Release Notes
+
+- Native dependency alignment can expose incompatible direct API usage; local diagnostics and full regression pass, but the replacement EAS Android build is still required to prove cloud fingerprint parity.
+- Sensitive-information review: no credentials, URLs, media bytes, production records or logs are added.
+- Rollback: revert this unit's dependency manifest and lockfile together; do not alter the prior successful maintenance delivery unit.
+- Git state: exact candidate staged in an isolated clean mobile worktree; not committed.
+
 ## CRL-20260819-001 — Android 维修执行工作流原生交付基线（mobile）
 
 - **Repository:** `mobile`
