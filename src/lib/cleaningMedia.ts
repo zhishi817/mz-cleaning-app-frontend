@@ -18,7 +18,7 @@ export function normalizeCleaningObjectKey(value: any) {
 function normalizePrivateFeedbackObjectKey(value: any) {
   const key = cleanText(value).replace(/^\/+/, '')
   if (normalizeCleaningObjectKey(key)) return key
-  if (!key.startsWith('mzapp/') && !key.startsWith('maintenance/')) return ''
+  if (!key.startsWith('mzapp/') && !key.startsWith('maintenance/') && !key.startsWith('deep-cleaning/') && !key.startsWith('deep-cleaning-upload/') && !key.startsWith('inventory/')) return ''
   if (key.includes('..') || key.includes('\\') || /[?#]/.test(key)) return ''
   return key
 }
@@ -75,7 +75,7 @@ function isLegacyPrivateR2Url(value: string) {
   if (!/^https?:\/\//i.test(value)) return false
   try {
     const pathname = new URL(value).pathname
-    return pathname.includes('/cleaning/') || pathname.includes('/mzapp/') || pathname.includes('/maintenance/')
+    return pathname.includes('/cleaning/') || pathname.includes('/mzapp/') || pathname.includes('/maintenance/') || pathname.includes('/deep-cleaning/') || pathname.includes('/deep-cleaning-upload/') || pathname.includes('/inventory/')
   } catch {
     return false
   }

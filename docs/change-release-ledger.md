@@ -1,5 +1,101 @@
 # Change Release Ledger
 
+## CRL-20260817-004 — P1-FIN-01 报销凭证认证图片读取与草稿预览边界（mobile）
+
+- **Repository:** mobile
+- **Status:** ready; source fixed and combined local regression passed
+- **Updated:** 2026-08-17 Australia/Melbourne
+- **Request:** 修复已保存报销凭证直接读取私有 URL 的问题。
+- **Outcome:** 已保存凭证使用 receiptId 和 imageId bearer 认证 source；仅未提交草稿使用当前设备 URI，绝不回退私有 URL。
+
+### Implementation
+
+- 已保存凭证使用 receiptId 和 imageId bearer 认证 source；仅未提交草稿使用当前设备 URI，绝不回退私有 URL。
+
+### Files / Areas
+
+- `src/lib/api.ts`
+- `src/lib/expenseReceiptMedia.ts`
+- `src/lib/expenseReceiptMedia.test.ts`
+- `src/screens/me/ExpenseCenterScreen.tsx`
+- `docs/feature-regression-registry.md`
+- `docs/change-release-ledger.md`
+
+### Impact / Dependencies
+
+- 配对 root/CRL-20260817-004；不复用 cleaning proxy，不改 schema、R2 ACL 或原生配置。
+
+### Validation
+
+- Combined targeted media regression: 3 suites / 29 tests passed; shared-reader regression: 10 suites / 114 tests passed.
+- npm run typecheck, npm run lint, git diff --check and the combined ledger gate are recorded separately.
+
+### Staged Commit Scope
+
+- **Repository:** mobile
+- **Status:** prepared.
+- **Untracked review:** none; the clean candidate has no untracked files after exact staging.
+- `docs/feature-regression-registry.md` — SHA-256: `41d34bbe3132899ae8a80ab1ec5c992ebe2b6cfb6bdd98e0e8d8c13e895db5bf`
+- `src/lib/api.ts` — SHA-256: `5768a9fefb51dfe5db3f9c913982a5c0857106a3c28546b6105732685016a0a4`
+- `src/lib/expenseReceiptMedia.test.ts` — SHA-256: `4836a9131ce8188ad808c42f1ec705921a86af32104620230c237c2c69dde46e`
+- `src/lib/expenseReceiptMedia.ts` — SHA-256: `3f4fbcfa94ba4b60e9f47b541e8875145e061f7f64905bfa1aa320c7542dfadf`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `bb219ecbde6faed94cf9cab219de36525576ac85c2fcbd578655015584fb9b61`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `4a850ec17e6a290192ba9353253ee7fe14adf383ee51b6ce2bd74a2a8d59c899`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `18e178d6f0acc56f07bc55e55d16f07ea51a865ccd229d25e1ed1225ba7837aa`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `a3714b54f365021bf06d01f055df256f5c85a84d4664ed768f4df16c5bd2b0ab`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `6148327974aa8281b63397f983b8c04364f13104e746c9479e86715627f72c21`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `22b61a62587e41b5842b9fa3ca755af032732a719fc31732005df67a81c609bc`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `45882e9882dce7183a59f7b1c201acbf6d17543c6ccac2c7d7c53cc572cf438c`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `49888785d348401acc7087cdb45431997801b6c247f75a1c75dbd8a9bb3bb349`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `e6d64ec4c72ffbbe1d947aa562176a5ca342c1176e97a340abed1669aa182805`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `a6da86726450a9127c9081dd73de026946033a477fd9b0aeb68a319958727506`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `f6f23c0abe751cbd773d62e1b3abf635452f39558011617a3a1a590e7e05bc6f`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `8d57c80924732274bba4532408a31117e18340fb13cb7c2620aa67b75d927f6f`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `87e53a118804777e3a7b487500518011e8df86fa984c80ff0813cba48282e7ca`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `f1e5309f57e6738ac051eece2dcb6d2bdc978aae0fcaec3247029962593ff215`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `ddd38a29d14194cd64a85534658d7df013fc72c0fdf863d0cfdf5252d9ed71bb`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `5f82161b65b867e82f02d3377ed9de1d77d1648e8b887fc625196b0beb9ebd17`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `ae72ad63bba111d6ec9008e8652bb9a3f369dd97c1c42a68e0a9d17d68663d65`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `b70f802019c2e83f82e0c27f1955b2fff00f8ba8f4e7df93f6e4a270436dc18d`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `565617dbde5e25b01ae97c853b63e0abba9ece5f28a78adfc72152f271f488e7`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `dfdde1e35ee44ea33f76f05622ca4b580bf2932997c95fbd252073e255958a31`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `ad66ed05283d24b7f6fd814717f5e32a6b955416eab2093f4a8083069b03ec4e`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `39b5ba3cae02b8d4f7e9faa419d4e39782d50c20b6966be5c26d60d9ebd3730c`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `8fbcecb36deda5f5e8d863badcb1dab359b3de5e664f8539151bbbf41e7f2c59`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `3ef154ae2b2de053c56146476df337b1af5da26df49f437134604bec5882046b`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `0b6b1a7fd21b72eadbed9e32b78b19da5749f4b0599fcf51d57bef41f25fcd2f`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `a4c2c4e4417d6448238d9328622a98606b5e5ccd63820d3399ee9b044d1519c7`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `5b1d28ce10de38a29622ae5755a0b521a02f930e53a2d1c58acebce9ae300ff9`
+- `src/screens/me/ExpenseCenterScreen.tsx` — SHA-256: `5d77a1bcd33aadf33a2bc3adda4a3366be9ca8c93510120a5df7d6cccbf7aab7`
+
+### Release Attempts
+
+#### RA-20260817-002
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260817-002`, `CRL-20260817-003`, `CRL-20260817-004`.
+- Selected CRL identities: `mobile/CRL-20260817-002, mobile/CRL-20260817-003, mobile/CRL-20260817-004`.
+- Intended action: `commit`.
+- Branch: `codex/p1-fdb-fin-20260817-recovery`; target: `Dev`.
+- Base: `origin/Dev@e285ad7679c913a0ca8fbe3b41b410542f143bc4`; fetched at `2026-08-17T15:15:48+10:00`.
+- Candidate patch SHA-256: `d8b1adb8762a0842587c2dd35e2677675a1ec21738c07fc82a4a861451749542`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: not committed; candidate content commit will be recorded only after the content commit exists.
+- Dependencies: paired `root/CRL-20260817-002`, `root/CRL-20260817-003` and `root/CRL-20260817-004`; root and mobile candidates must travel together.
+- Required validation: PASS — targeted mobile media suites (29 tests), typecheck, lint, raw-private-URL audit, feature-registry and combined pre-commit gate passed on the latest Dev candidate.
+- Shared-hunk review: PASS — deep-cleaning/inventory reader normalization stays exact-source scoped; finance uses a dedicated receipt reader.
+- Generated-file / secret review: PASS — temporary dependency link was removed; no generated files, credentials, private media bytes, production logs or production data are staged.
+- Technical state: `verified`.
+- User authorization: `selected-for-commit`; evidence: user authorized the latest-Dev recovery after the stale-base stop.
+- Independent review: GO for `commit` — independent read-only review rechecked the latest-Dev base, candidate fingerprint, CRL identity recovery, scoped diff, validation evidence and secret/production-write boundary.
+- Action conclusion: `GO` for local commit only; push, PR, merge, deployment, OTA and device verification require separate authorization and evidence.
+
+### Risks / Release Notes
+
+- Recovery evidence: former unpushed candidate used colliding local IDs; this new canonical unit was rebuilt from `origin/Dev@e285ad7679c913a0ca8fbe3b41b410542f143bc4`.
+
+- Source and local regressions do not prove historical object availability or release/runtime behavior.
+- Sensitive-information review: no credentials, private URLs, media bytes, production logs or production data are recorded.
+
 ## CRL-20260817-001 — 挂钥匙视频静默刷新与本地保留（mobile）
 
 - **Repository:** `mobile`
@@ -106,6 +202,76 @@
 - Accepted P2: if old-item cleanup fails after the new video is safely queued, the old item can remain retryable and may produce a duplicate business-save attempt. It cannot delete the new video or violate this unit's old-video-retention invariant.
 - Sensitive-information review: no credentials, tokens, private URLs, media bytes, logs or production records are added.
 - Git state: candidate branch only; not committed, pushed, published or device-verified.
+
+## CRL-20260817-003 — P1-FDB-03 日用品更换前后私有照片认证读取（mobile）
+
+- **Repository:** mobile
+- **Status:** ready; source fixed and combined local regression passed
+- **Updated:** 2026-08-17 Australia/Melbourne
+- **Request:** 修复日用品更换前后照片在历史反馈中的认证读取和展示。
+- **Outcome:** inventory 私有引用通过认证媒体代理；完成的日用品记录保留前后照片，缺少上下文时失败关闭。
+
+### Implementation
+
+- inventory 私有引用通过认证媒体代理；完成的日用品记录保留前后照片，缺少上下文时失败关闭。
+
+### Files / Areas
+
+- `src/lib/cleaningMedia.ts`
+- `src/screens/tasks/FeedbackFormScreen.tsx`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx`
+- `docs/feature-regression-registry.md`
+- `docs/change-release-ledger.md`
+
+### Impact / Dependencies
+
+- 配对 root/CRL-20260817-003；不改角色、R2 ACL、通知或原生配置。
+
+### Validation
+
+- Combined targeted media regression: 3 suites / 29 tests passed; shared-reader regression: 10 suites / 114 tests passed.
+- npm run typecheck, npm run lint, git diff --check and the combined ledger gate are recorded separately.
+
+### Staged Commit Scope
+
+- **Repository:** mobile
+- **Status:** prepared.
+- **Untracked review:** none; the clean candidate has no untracked files after exact staging.
+- `docs/feature-regression-registry.md` — SHA-256: `8cca22975fab8886f5bc929af2026b2b724feca471a100c2ece6535f8111594a`
+- `src/lib/cleaningMedia.ts` — SHA-256: `75fb22d22858b6bae8d6c2fc8fd3a9cc2510cb2aa82f81a511fe61ccf5664aa5`
+- `src/lib/cleaningMedia.ts` — SHA-256: `25f6d8df2ec0b703c965c893fde7c6b6170cdf86c8737a0b5ce5206414b3229f`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `5c37c5cc64581fdb3793d0b5859053bb9d56e6c324d903cf44419fecbb14a656`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `480d9ee317027e7775f7103947acd44a92f33362e72c96fd51efdc17b130085c`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `37a989f12e31ccbda07f20aa7b46d161fed7228c02f5cdfd947796e7a2203c8c`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `b474bb1d42ddd8f12c2b22749dc53356fd2291610c0b50239726603317842343`
+
+### Release Attempts
+
+#### RA-20260817-002
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260817-002`, `CRL-20260817-003`, `CRL-20260817-004`.
+- Selected CRL identities: `mobile/CRL-20260817-002, mobile/CRL-20260817-003, mobile/CRL-20260817-004`.
+- Intended action: `commit`.
+- Branch: `codex/p1-fdb-fin-20260817-recovery`; target: `Dev`.
+- Base: `origin/Dev@e285ad7679c913a0ca8fbe3b41b410542f143bc4`; fetched at `2026-08-17T15:15:48+10:00`.
+- Candidate patch SHA-256: `d8b1adb8762a0842587c2dd35e2677675a1ec21738c07fc82a4a861451749542`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: not committed; candidate content commit will be recorded only after the content commit exists.
+- Dependencies: paired `root/CRL-20260817-002`, `root/CRL-20260817-003` and `root/CRL-20260817-004`; root and mobile candidates must travel together.
+- Required validation: PASS — targeted mobile media suites (29 tests), typecheck, lint, raw-private-URL audit, feature-registry and combined pre-commit gate passed on the latest Dev candidate.
+- Shared-hunk review: PASS — deep-cleaning/inventory reader normalization stays exact-source scoped; finance uses a dedicated receipt reader.
+- Generated-file / secret review: PASS — temporary dependency link was removed; no generated files, credentials, private media bytes, production logs or production data are staged.
+- Technical state: `verified`.
+- User authorization: `selected-for-commit`; evidence: user authorized the latest-Dev recovery after the stale-base stop.
+- Independent review: GO for `commit` — independent read-only review rechecked the latest-Dev base, candidate fingerprint, CRL identity recovery, scoped diff, validation evidence and secret/production-write boundary.
+- Action conclusion: `GO` for local commit only; push, PR, merge, deployment, OTA and device verification require separate authorization and evidence.
+
+### Risks / Release Notes
+
+- Recovery evidence: former unpushed candidate used colliding local IDs; this new canonical unit was rebuilt from `origin/Dev@e285ad7679c913a0ca8fbe3b41b410542f143bc4`.
+
+- Source and local regressions do not prove historical object availability or release/runtime behavior.
+- Sensitive-information review: no credentials, private URLs, media bytes, production logs or production data are recorded.
 
 ## CRL-20260816-006 — P1-NTF-02 钥匙照片通知真实事件认证读取（mobile）
 
@@ -214,6 +380,72 @@
 - Rollback: revert only the two `key_photo_uploaded` page-classification branches and their tests; do not restore raw private URL rendering.
 - Sensitive-information review: no credentials, tokens, private URLs, media bytes, production logs or production data are added.
 - Git state: content commit `39e7a196c0e9be13229dc8606bc4daceb2be3054` is local on `codex/p1-ntf02-key-photo-event-20260817`; this ledger receipt is pending commit. Not pushed, no PR, not merged, not deployed, no OTA published and no device verification.
+
+## CRL-20260817-002 — P1-FDB-02 历史深清反馈私有照片认证读取（mobile）
+
+- **Repository:** mobile
+- **Status:** ready; source fixed and combined local regression passed
+- **Updated:** 2026-08-17 Australia/Melbourne
+- **Request:** 修复历史深清反馈照片未进入认证读取的移动端路径。
+- **Outcome:** deep-cleaning 及 deep-cleaning-upload 只经现有认证媒体代理读取，并保留当前任务上下文；不回退私有 URL。
+
+### Implementation
+
+- deep-cleaning 及 deep-cleaning-upload 只经现有认证媒体代理读取，并保留当前任务上下文；不回退私有 URL。
+
+### Files / Areas
+
+- `src/lib/cleaningMedia.ts`
+- `src/lib/cleaningMedia.test.ts`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx`
+- `docs/change-release-ledger.md`
+
+### Impact / Dependencies
+
+- 配对 root/CRL-20260817-002；不改角色、R2 ACL、通知或原生配置。
+
+### Validation
+
+- Combined targeted media regression: 3 suites / 29 tests passed; shared-reader regression: 10 suites / 114 tests passed.
+- npm run typecheck, npm run lint, git diff --check and the combined ledger gate are recorded separately.
+
+### Staged Commit Scope
+
+- **Repository:** mobile
+- **Status:** prepared.
+- **Untracked review:** none; the clean candidate has no untracked files after exact staging.
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `a687c020edc03b838b12117e14259d38b453942ce5eb87be5af5d1239204fb68`
+- `src/lib/cleaningMedia.ts` — SHA-256: `75fb22d22858b6bae8d6c2fc8fd3a9cc2510cb2aa82f81a511fe61ccf5664aa5`
+- `src/lib/cleaningMedia.ts` — SHA-256: `25f6d8df2ec0b703c965c893fde7c6b6170cdf86c8737a0b5ce5206414b3229f`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `b6dff5d78f81c57c6c401909bbec72ad582968aa10b7db8501e9b1b255ef177b`
+
+### Release Attempts
+
+#### RA-20260817-002
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260817-002`, `CRL-20260817-003`, `CRL-20260817-004`.
+- Selected CRL identities: `mobile/CRL-20260817-002, mobile/CRL-20260817-003, mobile/CRL-20260817-004`.
+- Intended action: `commit`.
+- Branch: `codex/p1-fdb-fin-20260817-recovery`; target: `Dev`.
+- Base: `origin/Dev@e285ad7679c913a0ca8fbe3b41b410542f143bc4`; fetched at `2026-08-17T15:15:48+10:00`.
+- Candidate patch SHA-256: `d8b1adb8762a0842587c2dd35e2677675a1ec21738c07fc82a4a861451749542`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: not committed; candidate content commit will be recorded only after the content commit exists.
+- Dependencies: paired `root/CRL-20260817-002`, `root/CRL-20260817-003` and `root/CRL-20260817-004`; root and mobile candidates must travel together.
+- Required validation: PASS — targeted mobile media suites (29 tests), typecheck, lint, raw-private-URL audit, feature-registry and combined pre-commit gate passed on the latest Dev candidate.
+- Shared-hunk review: PASS — deep-cleaning/inventory reader normalization stays exact-source scoped; finance uses a dedicated receipt reader.
+- Generated-file / secret review: PASS — temporary dependency link was removed; no generated files, credentials, private media bytes, production logs or production data are staged.
+- Technical state: `verified`.
+- User authorization: `selected-for-commit`; evidence: user authorized the latest-Dev recovery after the stale-base stop.
+- Independent review: GO for `commit` — independent read-only review rechecked the latest-Dev base, candidate fingerprint, CRL identity recovery, scoped diff, validation evidence and secret/production-write boundary.
+- Action conclusion: `GO` for local commit only; push, PR, merge, deployment, OTA and device verification require separate authorization and evidence.
+
+### Risks / Release Notes
+
+- Recovery evidence: former unpushed candidate used colliding local IDs; this new canonical unit was rebuilt from `origin/Dev@e285ad7679c913a0ca8fbe3b41b410542f143bc4`.
+
+- Source and local regressions do not prove historical object availability or release/runtime behavior.
+- Sensitive-information review: no credentials, private URLs, media bytes, production logs or production data are recorded.
 
 ## CRL-20260816-005 — Build 26 TestFlight OTA 运行时合同门禁（mobile）
 
@@ -5591,6 +5823,47 @@
 - Sensitive-information review: 未记录密码、token、cookie、私钥、数据库 URL、`.env` 内容或敏感日志。
 - Git state: uncommitted；未执行 stage、commit、push 或发布。
 
+## CRL-20260817-005 — P1-FDB-02 规范回归编号校正（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready; candidate prepared for combined local commit
+- **Updated:** 2026-08-17 Australia/Melbourne
+- **Request:** 修正历史深清反馈私有媒体的 Root/Mobile CRL 交叉引用。
+- **Outcome:** FR-P1-FDB-02 明确关联 `root/mobile CRL-20260817-002`；不改变认证读取或界面行为。
+
+### Implementation
+
+- The corrected identity shares one staged registry hunk with the related original FDB units; no runtime mobile code changes in this follow-up.
+
+### Files / Areas
+
+- `docs/feature-regression-registry.md` — FDB-02 paired CRL identity.
+- `docs/change-release-ledger.md` — scope evidence.
+
+### Impact / Dependencies
+
+- Paired unit: `root/CRL-20260817-005`; original source unit: `root/mobile CRL-20260817-002`.
+- API / storage / authorization / native runtime / production data: none.
+
+### Validation
+
+- Registry, ledger and diff checks passed in the isolated replacement candidate.
+
+### Staged Commit Scope
+
+- **Repository:** mobile
+- **Status:** prepared.
+- **Untracked review:** none; clean isolated candidate.
+- `docs/feature-regression-registry.md` — SHA-256: `8cca22975fab8886f5bc929af2026b2b724feca471a100c2ece6535f8111594a`
+
+### Release Attempts
+
+- None independently recorded; the exact paired combined attempt is recorded under mobile/CRL-20260817-007.
+
+### Risks / Release Notes
+
+- Governance reconciliation only; it does not prove OTA or device rendering.
+
 ## CRL-20260814-003 — Mobile Legacy 冻结边界与分层台账门禁
 
 - **Repository:** `mobile`
@@ -5726,6 +5999,47 @@
 
 - `package.json` 的质量 scripts hunk、`.nvmrc` 和 `.github/workflows/quality.yml` 从这个长期未完成的屏幕测试单元中拆出，由 `CRL-20260729-001` 单独治理、验证和选择性提交。
 - 本单元保留屏幕测试和 SafeArea 业务/UI 范围；不得因为治理文件的提交而把这些未完成页面改动混入发布。
+## CRL-20260817-006 — P1-FDB-03 规范回归编号校正（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready; candidate prepared for combined local commit
+- **Updated:** 2026-08-17 Australia/Melbourne
+- **Request:** 修正日用品前后照片保护规则的 Root/Mobile CRL 交叉引用。
+- **Outcome:** FR-P1-FDB-03 明确关联 `root/mobile CRL-20260817-003`；不修改认证读取或界面行为。
+
+### Implementation
+
+- The corrected identity shares one staged registry hunk with the related original FDB units; no runtime mobile code changes in this follow-up.
+
+### Files / Areas
+
+- `docs/feature-regression-registry.md` — FDB-03 paired CRL identity.
+- `docs/change-release-ledger.md` — scope evidence.
+
+### Impact / Dependencies
+
+- Paired unit: `root/CRL-20260817-006`; original source unit: `root/mobile CRL-20260817-003`.
+- API / storage / authorization / native runtime / production data: none.
+
+### Validation
+
+- Registry, ledger and diff checks passed in the isolated replacement candidate.
+
+### Staged Commit Scope
+
+- **Repository:** mobile
+- **Status:** prepared.
+- **Untracked review:** none; clean isolated candidate.
+- `docs/feature-regression-registry.md` — SHA-256: `8cca22975fab8886f5bc929af2026b2b724feca471a100c2ece6535f8111594a`
+
+### Release Attempts
+
+- None independently recorded; the exact paired combined attempt is recorded under mobile/CRL-20260817-007.
+
+### Risks / Release Notes
+
+- Governance reconciliation only; it does not prove OTA or device rendering.
+
 ## CRL-20260814-004 — P1-NTF-01 Legacy Recovery：当天临时通知认证媒体渲染（mobile）
 
 - **Repository:** `mobile`
@@ -5819,6 +6133,86 @@
 - Runtime risk: tests prove token/context propagation, not receipt of a compatible OTA/build on a real device.
 - Security boundary: notification subtype selection is fail-closed on missing or invalid `guest_luggage_id`; no raw private URL is introduced for this subtype.
 - Sensitive-information review: no secrets, credentials, tokens, `.env` values, private media payloads, production data, or logs are added.
+## CRL-20260817-007 — P1-FIN-01 凭证读取无 DDL 边界与契约补全（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready; paired source fixed and local regression passed
+- **Updated:** 2026-08-17 Australia/Melbourne
+- **Request:** 将移动端凭证认证读取与 Root 的无 DDL reader hardening 纳入同一安全替代候选。
+- **Outcome:** 已保存凭证继续仅经 `receiptId + imageId` 认证 source 读取；与 Root 的无 DDL 路径成对发布。
+
+### Implementation
+
+- No raw URL fallback or new mobile runtime behavior is added here; this unit corrects FIN source/follow-up identity and binds the paired Root read-only boundary.
+
+### Files / Areas
+
+- `docs/feature-regression-registry.md` — FIN original/follow-up identity.
+- `docs/change-release-ledger.md` — superseding combined release evidence.
+
+### Impact / Dependencies
+
+- Paired unit: `root/CRL-20260817-007`; original source unit: `root/mobile CRL-20260817-004`.
+- API / storage / authorization / native runtime / production data: none in this mobile follow-up.
+
+### Validation
+
+- Mobile expense-receipt helper tests, typecheck, lint/static raw-URL audit and paired Root receipt contract are recorded as passing locally.
+
+### Staged Commit Scope
+
+- **Repository:** mobile
+- **Status:** prepared.
+- **Untracked review:** none; clean isolated candidate.
+- `docs/feature-regression-registry.md` — SHA-256: `41d34bbe3132899ae8a80ab1ec5c992ebe2b6cfb6bdd98e0e8d8c13e895db5bf`
+
+### Release Attempts
+
+#### RA-20260817-004
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260817-002`, `CRL-20260817-003`, `CRL-20260817-004`, `CRL-20260817-005`, `CRL-20260817-006`, `CRL-20260817-007`.
+- Selected CRL identities: `mobile/CRL-20260817-002, mobile/CRL-20260817-003, mobile/CRL-20260817-004, mobile/CRL-20260817-005, mobile/CRL-20260817-006, mobile/CRL-20260817-007`.
+- Intended action: `commit`.
+- Branch: `codex/p1-fdb-fin-20260817-final-v2`; target: `Dev`.
+- Base: `origin/Dev@e285ad7679c913a0ca8fbe3b41b410542f143bc4`; fetched at `2026-08-18T00:08:41+1000`.
+- Candidate patch SHA-256: `e314e0c3221de37349274e4daa8b1b7ea41fc8cb58c7af9882c5e0adfb376c8d`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `fdfe57c685dde4288433268110bfe901419cdcda`; candidate content commit.
+- Dependencies: paired root CRLs `002` through `007`; both repositories must travel together.
+- Required validation: PASS — targeted mobile media tests, shared reader tests, typecheck/lint/static raw-URL audit and paired Root evidence recorded for the isolated candidate.
+- Current isolated-candidate recheck: TypeScript is NOT VERIFIED in this worktree because it intentionally has no `node_modules` and no dependency installation is authorized; the unchanged mobile source-test evidence remains recorded above.
+- Shared-hunk review: PASS — registry identity hunks are intentionally shared with their original unpushed source units under this exact selected range.
+- Generated-file / secret review: PASS — no generated files, credentials, private bytes, logs or production data are staged.
+- Technical state: `committed`.
+- User authorization: `selected-for-commit`; evidence: user explicitly authorized replacement of unpushed CRL-002 through CRL-004 scope evidence with corrected CRL-005 through CRL-007 follow-ups.
+- Independent review: GO for commit — final independent read-only review verified the exact base, candidate fingerprint, full staged range, authenticated readers, registry mappings and scoped evidence.
+- Prior blocked attempt: `RA-20260817-003` was independently NO-GO for push because of incorrect CRL mappings, incomplete media contract registration and request-time schema bootstrap; it remains preserved as source evidence on the prior recovery branch and is superseded here rather than erased.
+- Action conclusion: `GO` — candidate content committed locally; push, PR, merge, deployment, OTA, production writes and device verification remain unapproved.
+
+#### RA-20260818-001
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260817-002`, `CRL-20260817-003`, `CRL-20260817-004`, `CRL-20260817-005`, `CRL-20260817-006`, `CRL-20260817-007`.
+- Selected CRL identities: `mobile/CRL-20260817-002, mobile/CRL-20260817-003, mobile/CRL-20260817-004, mobile/CRL-20260817-005, mobile/CRL-20260817-006, mobile/CRL-20260817-007`.
+- Intended action: `push`.
+- Branch: `codex/p1-fdb-fin-20260817-final-v2`; target: `Dev`.
+- Base: `origin/Dev@e285ad7679c913a0ca8fbe3b41b410542f143bc4`; fetched at `2026-08-18T00:08:41+1000`.
+- Candidate patch SHA-256: `e314e0c3221de37349274e4daa8b1b7ea41fc8cb58c7af9882c5e0adfb376c8d`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `fdfe57c685dde4288433268110bfe901419cdcda`; candidate content commit.
+- Pre-push receipt parent: `1b341abc7d0bbfb329817cc362dceec4fbb1876f`.
+- Dependencies: paired root CRLs `002` through `007`; both repositories must travel together.
+- Required validation: PASS — exact `base...pre-push receipt parent` release report passed with selected paths, 41 hunk fingerprints, clean worktree and no sensitive/generated files.
+- Shared-hunk review: PASS — unchanged from the committed candidate range.
+- Generated-file / secret review: PASS — no generated files, credentials, private bytes, logs or production data are selected.
+- Technical state: `committed`.
+- User authorization: approved-for-push — user confirmed `codex/p1-fdb-fin-20260817-final-v2@92887157a0bf88f6b0f06a76e093455e43e6d55e` on 2026-08-19; final receipt-head confirmation remains required before the network push.
+- Independent review: GO for push-attempt receipt commit — independent read-only review verified the exact base, branch, content commit, staged ledger-only scope and absence of nonledger or sensitive changes; this does not authorize `git push`.
+- Action conclusion: `NOT VERIFIED` pending final receipt, push review and final commit-bound confirmation.
+
+### Risks / Release Notes
+
+- Source/local tests do not prove OTA delivery, historical object availability or device rendering.
+
 ## CRL-20260816-001 — 修复移动端 PR 范围空白检查失败
 
 - **Repository:** `mobile`

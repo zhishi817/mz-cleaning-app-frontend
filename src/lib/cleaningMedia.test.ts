@@ -130,6 +130,28 @@ test('routes web-maintenance feedback media through the authenticated feedback p
   })
 })
 
+test('routes historical deep-cleaning feedback media through the authenticated feedback proxy', () => {
+  expect(buildCleaningMediaImageSource('token-1', 'deep-cleaning/before-photo.jpg', 'thumbnail', { accessTaskId: 'cleaning-task-1' })).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?key=deep-cleaning%2Fbefore-photo.jpg&variant=thumbnail&source_task_id=cleaning-task-1',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+  expect(buildCleaningMediaImageSource('token-1', 'https://media.r2.dev/deep-cleaning-upload/after-photo.jpg', 'preview', { accessTaskId: 'cleaning-task-1' })).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fmedia.r2.dev%2Fdeep-cleaning-upload%2Fafter-photo.jpg&variant=preview&source_task_id=cleaning-task-1',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+})
+
+test('routes daily-replacement inventory media through the authenticated feedback proxy', () => {
+  expect(buildCleaningMediaImageSource('token-1', 'inventory/daily-before.jpg', 'thumbnail', { accessTaskId: 'cleaning-task-1' })).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?key=inventory%2Fdaily-before.jpg&variant=thumbnail&source_task_id=cleaning-task-1',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+  expect(buildCleaningMediaImageSource('token-1', 'https://media.r2.dev/inventory/daily-after.jpg', 'preview', { accessTaskId: 'cleaning-task-1' })).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fmedia.r2.dev%2Finventory%2Fdaily-after.jpg&variant=preview&source_task_id=cleaning-task-1',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+})
+
 test('keeps local media direct and rejects unsafe cleaning keys', () => {
   expect(buildCleaningMediaImageSource('token-1', 'file:///tmp/photo.jpg')).toEqual({
     uri: 'file:///tmp/photo.jpg',

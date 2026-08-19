@@ -284,6 +284,30 @@ test('私有反馈照片全屏预览不提供浏览器打开入口', async () =>
   expect(ui.queryByText('浏览器打开')).toBeNull()
 })
 
+test('历史深清照片在反馈列表通过认证代理并保留当前任务上下文', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
+  const { listPropertyFeedbacks } = require('../../lib/api') as { listPropertyFeedbacks: jest.Mock }
+  listPropertyFeedbacks.mockResolvedValue([{
+    id: 'deep-cleaning-photo-1',
+    property_id: 'property-1',
+    kind: 'deep_cleaning',
+    areas: ['浴室'],
+    detail: '历史深清照片',
+    media_urls: ['deep-cleaning/before-photo.jpg'],
+    repair_photo_urls: ['https://media.r2.dev/deep-cleaning-upload/after-photo.jpg'],
+    created_at: '2026-08-17T00:00:00.000Z',
+    status: 'open',
+  }])
+  const ui = render(
+    <I18nProvider>
+      <FeedbackFormScreen navigation={{ navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }} route={{ key: 'deep-cleaning-photo', name: 'FeedbackForm', params: { taskId: 'w-feedback' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByRole('button', { name: '查看反馈照片' })).toBeTruthy())
+  expect(ui.UNSAFE_getAllByType(Image).some((image) => String(image.props.source?.uri || '').includes('key=deep-cleaning%2Fbefore-photo.jpg&variant=thumbnail&source_task_id=cleaning-1'))).toBe(true)
+})
+
 test('历史维修的已保存完工照片会在反馈详情通过认证代理显示', async () => {
   const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
   const { listPropertyFeedbacks } = require('../../lib/api') as { listPropertyFeedbacks: jest.Mock }
@@ -310,4 +334,35 @@ test('历史维修的已保存完工照片会在反馈详情通过认证代理�
   fireEvent.press(ui.getByRole('button', { name: '查看反馈详情' }))
   await waitFor(() => expect(ui.getByText('维修后照片')).toBeTruthy())
   expect(ui.UNSAFE_getAllByType(Image).some((image) => String(image.props.source?.uri || '').includes('key=mzapp%2Fmaintenance-completion.jpg'))).toBe(true)
+})
+
+test('日用品更换前后照片在反馈详情都通过认证代理显示', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
+  const { listPropertyFeedbacks } = require('../../lib/api') as { listPropertyFeedbacks: jest.Mock }
+  listPropertyFeedbacks.mockResolvedValue([{
+    id: 'daily-replacement-photo-1',
+    property_id: 'property-1',
+    kind: 'daily_necessities',
+    item_name: '卷纸',
+    quantity: 1,
+    detail: '需要补货',
+    media_urls: ['inventory/daily-before.jpg'],
+    repair_photo_urls: ['inventory/daily-after.jpg'],
+    created_at: '2026-08-17T00:00:00.000Z',
+    status: 'replaced',
+  }])
+  const ui = render(
+    <I18nProvider>
+      <FeedbackFormScreen navigation={{ navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }} route={{ key: 'daily-replacement-photo', name: 'FeedbackForm', params: { taskId: 'w-feedback' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByText('展开')).toBeTruthy())
+  fireEvent.press(ui.getByText('展开'))
+  await waitFor(() => expect(ui.getByRole('button', { name: '查看反馈详情' })).toBeTruthy())
+  fireEvent.press(ui.getByRole('button', { name: '查看反馈详情' }))
+  await waitFor(() => expect(ui.getByText('更换后照片')).toBeTruthy())
+  const imageUris = ui.UNSAFE_getAllByType(Image).map((image) => String(image.props.source?.uri || ''))
+  expect(imageUris.some((uri) => uri.includes('key=inventory%2Fdaily-before.jpg'))).toBe(true)
+  expect(imageUris.some((uri) => uri.includes('key=inventory%2Fdaily-after.jpg'))).toBe(true)
 })
