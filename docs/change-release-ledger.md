@@ -243,6 +243,25 @@
 - Independent review: GO for `commit` — independent read-only review rechecked the complete staged diff, base, 178-hunk scope, non-ledger candidate fingerprint, Expo SDK 54 dependency graph, validation evidence and secret/production-write boundary; no P0/P1 finding.
 - Action conclusion: `GO` — local content commit created. Push, PR, merge, replacement APK build, distribution and device verification require separate authorization and evidence.
 
+#### RA-20260819-004
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20260819-002`.
+- Selected CRL identities: `mobile/CRL-20260819-002`.
+- Intended action: `push`.
+- Branch: `codex/android-sdk54-runtime-alignment-20260819`; target: `Dev`.
+- Base: `origin/Dev@49c97ce88bd6a604b0bc2e6a85ac755faeefd0ab`; fetched at `2026-08-19T15:01:27+10:00`.
+- Candidate patch SHA-256: `32d7bf0e657fe4c122a04f769fdb298b40523114ef822c0e7948ceb32292fc3c`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `69b9b1dac1f8c48392c999d41dd1685058f43948`; content commit is an ancestor of the current ledger-receipt head.
+- Dependencies: merged `mobile/CRL-20260819-001`; no backend, schema, R2 or production-data dependency.
+- Required validation: PASS — Expo Doctor 18/18, local Android fingerprint generation, focused maintenance 37 tests, `npm run check:full` (57 suites / 328 tests), pre-commit gate and secret review.
+- Shared-hunk review: PASS — exact candidate scope is the recorded 178 manifest/lockfile hunks; ledger receipts add no business content.
+- Generated-file / secret review: PASS — exact candidate contains no generated artifacts, credentials, private URLs, media bytes, production logs or production data.
+- Technical state: `committed`.
+- User authorization: `not-selected`; push requires approval of this exact branch and range head after the independent push review.
+- Independent review: GO for `push` — independent read-only review rechecked the fresh base, exact committed range, candidate content commit, 178-hunk scope, Expo SDK 54 dependency resolution, validation evidence and secret/production-write boundary; no P0/P1/P2 finding.
+- Action conclusion: `NOT VERIFIED` — exact-range audit is pending the committed review receipt, and push itself additionally requires explicit user authorization.
+
 ### Risks / Release Notes
 
 - Native dependency alignment can expose incompatible direct API usage; local diagnostics and full regression pass, but the replacement EAS Android build is still required to prove cloud fingerprint parity.
