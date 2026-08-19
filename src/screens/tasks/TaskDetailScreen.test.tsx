@@ -105,6 +105,7 @@ jest.mock('../../lib/api', () => {
     uploadCleaningMedia: jest.fn(async () => ({ url: 'http://example.com/k.jpg' })),
     getWorkTaskFormPhotos: jest.fn(async () => ({ items: [] })),
     markWorkTask: jest.fn(async () => ({ ok: true })),
+    submitMaintenanceExecutorAction: jest.fn(async () => ({ status: 'pending_review', available_actions: [] })),
     appendWorkTaskCompletionPhotos: jest.fn(async () => ({ ok: true, completion_photo_urls: ['mzapp/completion-photo.jpg'] })),
     startCleaningTask: jest.fn(async () => ({ ok: true })),
     uploadMzappMedia: jest.fn(async () => ({ remoteReference: 'mzapp/completion-photo.jpg', url: 'mzapp/completion-photo.jpg' })),
@@ -150,6 +151,7 @@ beforeEach(() => {
   mockKeyQueueItem = null
   mockPendingCompletionPhotoReferences = []
   require('../../lib/api').getWorkTaskFormPhotos.mockClear()
+  require('../../lib/api').submitMaintenanceExecutorAction.mockClear()
   require('../../lib/workTaskCompletionPhotoPending').clearPendingWorkTaskCompletionPhotoReferences.mockClear()
   require('../../lib/workTaskCompletionPhotoPending').getPendingWorkTaskCompletionPhotoReferences.mockClear()
   require('../../lib/workTaskCompletionPhotoPending').setPendingWorkTaskCompletionPhotoReferences.mockClear()
@@ -293,6 +295,65 @@ test('maintenance executor complete and unfinished controls share the same flexi
     const unfinishedStyle = StyleSheet.flatten(ui.getByTestId('maintenance-task-not-complete').props.style)
     expect(completeStyle).toEqual(expect.objectContaining({ flex: 1, flexBasis: 0, minWidth: 0 }))
     expect(unfinishedStyle).toEqual(expect.objectContaining({ flex: 1, flexBasis: 0, minWidth: 0 }))
+  } finally {
+    snapshot.items[0] = previousTask
+  }
+})
+
+test('maintenance executor completion uses the dedicated workflow action instead of generic task marking', async () => {
+  jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const api = require('../../lib/api')
+  const photoDraft = require('../../lib/maintenanceCompletionPhotoDraft')
+  const navigation = { goBack: jest.fn(), setParams: jest.fn() }
+  snapshot.items[0] = {
+    ...previousTask,
+    id: 'property_maintenance:m1',
+    task_kind: 'maintenance',
+    source_type: 'property_maintenance',
+    source_id: 'm1',
+    status: 'assigned',
+    available_actions: [],
+    maintenance_workflow: { status: 'assigned', available_actions: ['executor_complete', 'executor_unfinished'] },
+  }
+  photoDraft.getMaintenanceCompletionPhotoDraft.mockResolvedValueOnce([{
+    media_id: 'maintenance-photo-1',
+    local_uri: 'file:///tmp/maintenance-completion.jpg',
+    remote_reference: 'mzapp/maintenance-completion.jpg',
+    name: 'maintenance-completion.jpg',
+    mime_type: 'image/jpeg',
+    captured_at: '2026-08-19T00:00:00.000Z',
+  }])
+  api.markWorkTask.mockClear()
+
+  try {
+    const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={navigation as any} route={{ key: 'maintenance-workflow-complete', name: 'TaskDetail', params: { id: 'property_maintenance:m1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByText('已上传 1 张照片，可继续追加或删除')).toBeTruthy()
+    })
+    fireEvent.press(ui.getByTestId('maintenance-task-complete'))
+
+    await waitFor(() => {
+      expect(api.submitMaintenanceExecutorAction).toHaveBeenCalledWith(
+        't1',
+        expect.objectContaining({
+          domain: 'internal',
+          recordId: 'm1',
+          action: 'executor_complete',
+          completionPhotoUrls: ['mzapp/maintenance-completion.jpg'],
+        }),
+      )
+      expect(navigation.goBack).toHaveBeenCalled()
+    })
+    expect(api.markWorkTask).not.toHaveBeenCalled()
   } finally {
     snapshot.items[0] = previousTask
   }
