@@ -64,15 +64,15 @@
 - Branch: `codex/release-dependency-sha-gates-20260825`
 - Base: `origin/Dev@2375d8a7c2e0adcb1c3f66ee21e5046f8a3b474b`; fetched at `2026-08-25 20:14 AEST`
 - Candidate patch SHA-256: `e3f0239a87d71df1764f287959e1c70ac0bb8f434f3482681016a1ab971021bc` excluding `docs/change-release-ledger.md`.
-- Commit SHA: `not committed`
+- Commit SHA: `e65d54a190368b021780bd2bae781d6b207fe7ff`; candidate content commit.
 - Dependencies: `none`
 - Required validation: `PASS`; evidence: mobile 31-test auditor regression, `git diff --check`, rebuilt pre-commit gate and ledger coverage audit passed.
 - Shared-hunk review: `PASS`; the selected script/test hunks are fully declared in this CRL and no unselected hunk is staged.
 - Generated-file review: `not applicable`; source and Markdown files only.
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: user selected root/mobile `CRL-20260825-001` together for release.
 - Independent review: `GO for commit`; evidence: fresh independent read-only review verified the P1 closure, exact candidate fingerprint `e3f0239a87d71df1764f287959e1c70ac0bb8f434f3482681016a1ab971021bc`, scope and secret/production-write boundaries.
-- Action conclusion: `GO`; selected root/mobile governance candidates may be committed separately; push remains unauthorized.
+- Action conclusion: `GO`; candidate content commit created; a post-commit exact range audit and commit-bound user push authorization remain required before push.
 
 ## CRL-20260819-002 — Android SDK 54 原生依赖与运行时指纹对齐（mobile）
 
