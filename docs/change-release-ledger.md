@@ -56,7 +56,7 @@
 - Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 23:20 AEST`.
 - Candidate patch SHA-256: `aab7cdb45d962ff10bae998e533e28cef5167dbc62bc86a693f041b981fc8180`, excluding `docs/change-release-ledger.md`; staged repair-only patch SHA-256 is `00ce8356e04dbb6ed5856c694983c5efc3b8ad629be240bb89947f53a2dd76a9`.
 - Commit SHA: `8b9dd201280c983b42aafcb2ad8ece02e387bbbb`; local candidate content commit.
-- Dependencies: `mobile/CRL-20260819-003@fe97861d75eb73fddf89aa5ea3e64f518f51e984`; `mobile/CRL-20260819-004@fe97861d75eb73fddf89aa5ea3e64f518f51e984`.
+- Dependencies: `none`; this timer-cleanup repair has no same-repository code dependency. Existing P2 branch content must be selected and audited separately before any combined branch push.
 - Required validation: `PASS`; evidence: `npm run check:ci` exit 0 plus the target `--detectOpenHandles` test completed in the isolated candidate.
 - Shared-hunk review: `PASS`; evidence: the staged candidate contains only the two new TasksScreen hunk fingerprints declared in this CRL, while prior P2 hunks remain committed branch history and retain their original CRLs.
 - Generated-file review: `PASS`; evidence: TypeScript source/test and Markdown only; no generated or sensitive file is intended.
