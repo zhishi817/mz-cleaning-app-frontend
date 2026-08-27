@@ -1,5 +1,68 @@
 # Change Release Ledger
 
+## CRL-20260828-001 — 发布账本 hunk 对账门禁（mobile）
+
+- **Repository:** `mobile`
+- **Status:** in-progress; selected for commit
+- **Updated:** 2026-08-28 00:59 AEST
+- **Request:** 对已承诺的 P2 hunk 因相邻独立修复而仅发生零上下文 diff 行号漂移时，允许经过结构化证据和独立审查的受控对账，不能放宽普通账本回执限制。
+- **Outcome:** 审计器仅在同一路径、精确 old→new SHA-256 映射、旧/新 scope 完全替换、已承诺候选内容范围包含新指纹且独立审查为 GO 时，允许 ledger-only receipt 同时更新该 scope 指纹；普通 scope 或业务身份修改仍保持阻断。
+
+### Implementation
+
+- Previous behavior: 任何 ledger-only 提交都只能改 `### Release Attempts`；相邻独立改动只改变零上下文 hunk header 行号时，历史 scope 的指纹无法在不绕过门禁的情况下对账。
+- New behavior: `Hunk reconciliation` 使用结构化 `` `path#old -> new`; evidence: ... `` 映射，审计器验证 scope 仅替换该映射、候选范围确有新指纹，并在 exact range report 复核最终声明与实际 hunk。
+- Key decisions: 不接受自由文本、跨路径映射、相同指纹、重复映射或 scope 中其他字段变化；不改移动端业务代码、CI workflow、权限、API 或生产数据。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — 受控 hunk 对账解析、ledger-only gate 和 exact-range 复核。
+- `scripts/tests/test_audit_change_release_ledger.py` — 对账成功路径及既有 untracked、scope mismatch、exact-range 回归覆盖。
+- `docs/change-release-ledger.md` — 本 mobile 治理 CRL 与发布证据。
+
+### Impact / Dependencies
+
+- Application routes/screens/API/roles/database/config/production data: none; local Git ledger governance only.
+- Dependencies: none.
+- Feature Regression Registry: not applicable; no business invariant or runtime behavior changes.
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed: 32 tests, including a structured reconciliation that passes both pre-commit and exact-range gates.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` (root repository) — passed: 18 tests; read-only independent-repository regression evidence.
+- Mobile `npm run check:ci` — passed (exit 0): ledger auditor regression, ledger coverage, TypeScript, lint (0 errors; 109 existing warnings), strict button contract, fast tests and full Jest (58 suites / 331 tests).
+- No browser, API, database, EAS, OTA, device or production action is in scope.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** `none`; isolated candidate contains no untracked paths.
+- `scripts/audit_change_release_ledger.py` — SHA-256: `386bbbae6c28f75e63b1c0a049f3c9848606156a02b5b190282159d222d9bd23`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `41bfd81784acc726f383384c48dbcaa9b4bf69114658f7f9cf116cbc1eb0c391`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `45aaea7e0d8e9377e3800b6a9961323a39aa72ba1c63fb44c047cf7dd96e9a9d`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `5058d1c701bc21a004e456da451bc38cba9fe836ed02fc4fb39734231482a6cb`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `762e15f7a544b7b972caae6444264673957de8694c3aafe2432e628abcd4e6c5`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `8f30d5bd193b8b46c273677413ff120a0bdcb52ab83082beca3fc0bc9e054701`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `9048667d68f5fa0a2f00e3b7e5918a2688774258088c5c77ebfe8e1bb9dbaef7`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `c5843435fe19021fece2cb1720e07546532d89962a539e21cc520ca0bf22d3bd`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `c6d96412f3c27646519b6db9150d31ed5b7dc626fad7d54d193361b8b1d40225`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `d563dfdaf3e984a01991d2f2b7ddd3c72bf5261f1da4e66f615de1c6d135ccb3`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `f0f7509257d019e2616e9ed86f409250fbbd494ccd906bed5dbde403c53c2ed0`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `6a43b8bfcbe9c44e68887e62f06e1981882c50e202a5f32bd4be0666250a5657`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `b32913db64e834a130b88ac26425ca334505696be58a9bba377ac6ac3a309a8a`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `b70e2b44ad52a7fbf0fe7c737570e47d17ed0cb237559c4279933e279303f5d1`
+
+### Release Attempts
+
+- None yet.
+
+### Risks / Release Notes
+
+- A reconciliation proves only an audited Git hunk-header relocation; it never authorizes a behavior rewrite, source mutation, push, PR, Dev merge, deployment, OTA/build or device verification.
+- Sensitive-information review: the range contains only Python source/tests and Markdown; no secrets, `.env`, tokens, URLs, media bytes, caches or production records.
+- Git state: local candidate staged for commit; not pushed.
+
 ## CRL-20260827-001 — TasksScreen 瞬时反馈定时器清理与 CI 测试稳定性（mobile）
 
 - **Repository:** `mobile`
