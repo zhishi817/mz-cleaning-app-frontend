@@ -1,5 +1,76 @@
 # Change Release Ledger
 
+## CRL-20260827-001 — TasksScreen 瞬时反馈定时器清理与 CI 测试稳定性（mobile）
+
+- **Repository:** `mobile`
+- **Status:** in-progress; selected for commit
+- **Updated:** 2026-08-27 23:20 AEST
+- **Request:** 修复 PR #325 的 Full Regression 中 `TasksScreen.test.tsx` 在慢速 CI runner 超过 10 秒而失败的问题。
+- **Outcome:** 复制反馈触发的 banner 定时器会在 TasksScreen 卸载时清理；测试在完成断言后主动卸载，并保留所有任务折叠、访客请求、Wi-Fi 显示和复制断言，同时使用仅针对该集成用例的 20 秒上限。
+
+### Implementation
+
+- Previous behavior: Wi-Fi 复制后创建 4 秒 banner 定时器，但组件卸载时只清理复制反馈定时器；测试保留 10 秒总上限且不主动卸载，慢速 CI 会因残留异步工作而超时。
+- New behavior: 同一卸载清理路径清除 banner 与复制反馈定时器，并把测试资源在断言结束时释放；不改任务数据、显示条件、复制值或业务 API。
+- Key decisions: 不修改 CI workflow、不移动测试到 Fast Regression、不弱化原有断言；20 秒只为已有完整集成断言提供 CI 调度余量。
+
+### Files / Areas
+
+- `src/screens/tabs/TasksScreen.tsx` — 清理 banner 反馈的卸载定时器。
+- `src/screens/tabs/TasksScreen.test.tsx` — 保持现有断言、主动卸载并使用有界的单用例超时。
+- `docs/change-release-ledger.md` — 本独立的 mobile 测试稳定性 CRL。
+
+### Impact / Dependencies
+
+- Application/API/roles/database/config/production data: none; Jest mock-only test infrastructure repair.
+- Dependencies: existing candidate `mobile/CRL-20260819-003@fe97861d75eb73fddf89aa5ea3e64f518f51e984` and `mobile/CRL-20260819-004@fe97861d75eb73fddf89aa5ea3e64f518f51e984` remain separate already-pushed branch content.
+- Feature Regression Registry: not applicable; no business invariant, route, permission, status transition or runtime contract changes.
+
+### Validation
+
+- `npm run check:ci` — passed (exit 0): ledger auditor regression, ledger coverage, TypeScript, lint, strict button contract, fast tests and full Jest all completed in the isolated candidate.
+- `npm test -- --runInBand --no-cache --detectOpenHandles src/screens/tabs/TasksScreen.test.tsx` — passed: 1 suite / 25 tests; first integration test 5.598 s; no open-handle warning.
+- `npm test -- --runInBand --no-cache` — passed: 58 suites / 331 tests.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors; 109 pre-existing warnings.
+- CI Full Regression screenshot before repair — failed: first TasksScreen integration test exceeded 10 seconds (18.362 s); local CI-matched baseline passed but emitted an asynchronous-handle warning when run alone.
+- OTA/build/device/production verification — not run; not required for a test-infrastructure-only source repair.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; isolated candidate is clean after the temporary dependency link was removed.
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `1ee48d448efa5bbd965a5a7bc437d11f4525da0fa3c10f64d191e3d3d975117e`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `639c2f4969d40a69ee89cfb686b9ebc1c7a2be3d624e4b107c75e74bb3845b5a`
+
+### Release Attempts
+
+#### RA-20260827-004
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260827-001`
+- Selected CRL identities: `mobile/CRL-20260827-001`
+- Intended action: `commit`
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 23:20 AEST`.
+- Candidate patch SHA-256: `aab7cdb45d962ff10bae998e533e28cef5167dbc62bc86a693f041b981fc8180`, excluding `docs/change-release-ledger.md`; staged repair-only patch SHA-256 is `00ce8356e04dbb6ed5856c694983c5efc3b8ad629be240bb89947f53a2dd76a9`.
+- Commit SHA: `not committed`.
+- Dependencies: `mobile/CRL-20260819-003@fe97861d75eb73fddf89aa5ea3e64f518f51e984`; `mobile/CRL-20260819-004@fe97861d75eb73fddf89aa5ea3e64f518f51e984`.
+- Required validation: `PASS`; evidence: `npm run check:ci` exit 0 plus the target `--detectOpenHandles` test completed in the isolated candidate.
+- Shared-hunk review: `PASS`; evidence: the staged candidate contains only the two new TasksScreen hunk fingerprints declared in this CRL, while prior P2 hunks remain committed branch history and retain their original CRLs.
+- Generated-file review: `PASS`; evidence: TypeScript source/test and Markdown only; no generated or sensitive file is intended.
+- Technical state: `verified`.
+- User authorization: `selected-for-commit`; evidence: user explicitly authorized “做修复” for this one CI test-stability issue on 2026-08-27.
+- Independent review: `GO for commit`; evidence: independent read-only review reproduced the two repair hunk fingerprints, verified `npm run check:ci` exit 0 and found no scope, secret or production-write risk.
+- Action conclusion: `GO` for commit; isolated mobile candidate is verified. Push, PR, Dev merge, OTA/build and device verification remain separate actions.
+
+### Risks / Release Notes
+
+- A 20-second test budget avoids false failures on constrained runners but is not a performance guarantee; a future runtime slowdown beyond that limit should be investigated separately.
+- Sensitive-information review: no credentials, tokens, document/media URLs, production records or caches are included.
+- Git state: uncommitted, not pushed, no new PR, Dev merge, OTA/build, deployment or device/production verification.
+
 ## CRL-20260819-003 — Photo ID / Visa presence-only 缓存与认证显示（mobile）
 
 - **Repository:** `mobile`

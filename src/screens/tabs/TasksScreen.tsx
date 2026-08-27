@@ -720,6 +720,10 @@ export default function TasksScreen(props: Props) {
 
   useEffect(() => {
     return () => {
+      if (bannerTimerRef.current) {
+        clearTimeout(bannerTimerRef.current)
+        bannerTimerRef.current = null
+      }
       Object.values(copyFeedbackTimersRef.current).forEach((timer) => clearTimeout(timer))
       copyFeedbackTimersRef.current = {}
     }
