@@ -120,10 +120,11 @@
 - Required validation: `PASS`; evidence: isolated typecheck, 6-suite targeted Jest, targeted ESLint with 0 errors and whitespace check passed.
 - Shared-hunk review: `PASS`; evidence: exact range matched 76 selected non-ledger hunks and no unselected file.
 - Generated-file review: `PASS`; evidence: 17 selected paths are TypeScript source/tests and Markdown only; no generated or sensitive file is in range.
-- Technical state: `committed`
+- Technical state: `pushed`
 - User authorization: `approved-for-push`; evidence: user said “继续” after Mobile branch head `45e6f37dd1d5f39dba49f31336c9c48d83bd3a4d` and the exact push scope were presented on 2026-08-27.
 - Independent review: `GO for push`; evidence: fresh independent read-only committed-range review reproduced the candidate fingerprint, confirmed the selected range and fresh base, and found no P0/P1/P2, secret or production-write risk.
-- Action conclusion: `GO` for push; exact committed range and user authorization are verified. PR, merge and deployment remain unauthorized.
+- Remote branch / SHA: `origin/codex/release-p2-id-src-20260827@4ec3c836657c4f0fa228779ba844f92895d58b66`; verified immediately after the source-range push.
+- Action conclusion: `GO` for push completed; PR, merge and deployment remain unauthorized.
 
 ### Risks / Release Notes
 
