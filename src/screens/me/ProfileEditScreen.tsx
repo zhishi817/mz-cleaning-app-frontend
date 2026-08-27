@@ -4,8 +4,8 @@ import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
-import { defaultProfileFromUser, getProfile, setProfile, type Profile } from '../../lib/profileStore'
-import { getMyProfile, updateMyProfile, uploadMzappMedia } from '../../lib/api'
+import { defaultProfileFromUser, getProfile, PROFILE_DOCUMENT_PRESENT, profileDocumentPresence, setProfile, type Profile } from '../../lib/profileStore'
+import { getMyProfile, profileDocumentImageSource, type ProfileDocumentType, updateMyProfile, uploadMzappMedia } from '../../lib/api'
 import { hairline, moderateScale } from '../../lib/scale'
 import { layoutTokens } from '../../lib/theme'
 import AppButton from '../../components/ui/AppButton'
@@ -27,10 +27,12 @@ function DocumentWatermarkOverlay() {
   )
 }
 
-function DocumentWatermarkedPreview({ uri, showPreviewWatermark, testID, onPress }: { uri: string; showPreviewWatermark: boolean; testID: string; onPress: () => void }) {
+type DocumentImageSource = { uri: string; headers?: { Authorization: string } }
+
+function DocumentWatermarkedPreview({ source, showPreviewWatermark, testID, onPress }: { source: DocumentImageSource; showPreviewWatermark: boolean; testID: string; onPress: () => void }) {
   return (
     <Pressable testID={testID} style={({ pressed }) => [styles.documentPreview, pressed ? styles.pressed : null]} onPress={onPress} accessibilityRole="button" accessibilityLabel="查看证件大图">
-      <Image source={{ uri }} style={styles.documentPreviewImage} resizeMode="cover" />
+      <Image source={source} style={styles.documentPreviewImage} resizeMode="cover" />
       {showPreviewWatermark ? <DocumentWatermarkOverlay /> : null}
     </Pressable>
   )
@@ -75,6 +77,9 @@ function canEditComplianceFields(user: any) {
 }
 
 function profileFromRemote(remote: any, fallback: Profile): Profile {
+  const presenceFromRemote = (field: 'photo_id_uploaded' | 'visa_document_uploaded', cachedValue: string | null) => (
+    remote?.[field] === undefined ? profileDocumentPresence(cachedValue) : remote?.[field] ? PROFILE_DOCUMENT_PRESENT : null
+  )
   return {
     avatar_url: remote?.avatar_url || fallback.avatar_url || null,
     display_name: String(remote?.display_name || remote?.username || fallback.display_name || ''),
@@ -84,8 +89,8 @@ function profileFromRemote(remote: any, fallback: Profile): Profile {
     bank_bsb: String(remote?.bank_bsb || fallback.bank_bsb || ''),
     bank_account_number: String(remote?.bank_account_number || fallback.bank_account_number || ''),
     personal_abn: String(remote?.personal_abn || fallback.personal_abn || ''),
-    photo_id_url: remote?.photo_id_url || fallback.photo_id_url || null,
-    visa_document_url: remote?.visa_document_url || fallback.visa_document_url || null,
+    photo_id_url: presenceFromRemote('photo_id_uploaded', fallback.photo_id_url),
+    visa_document_url: presenceFromRemote('visa_document_uploaded', fallback.visa_document_url),
     visa_grant_number: String(remote?.visa_grant_number || fallback.visa_grant_number || ''),
   }
 }
@@ -96,6 +101,12 @@ function profileApiText(value: string) {
 
 function profileApiUrl(value: string | null) {
   return String(value || '').trim()
+}
+
+function profileDocumentSource(token: string | null | undefined, type: ProfileDocumentType, localUri: string | null, persistedMarker: string | null): DocumentImageSource {
+  if (localUri) return { uri: localUri }
+  if (persistedMarker === PROFILE_DOCUMENT_PRESENT) return profileDocumentImageSource(token, type)
+  return { uri: '' }
 }
 
 async function pickSingleImage(t: (key: any) => string) {
@@ -124,9 +135,11 @@ export default function ProfileEditScreen() {
   const [localAvatarUri, setLocalAvatarUri] = useState<string | null>(null)
   const [localPhotoIdUri, setLocalPhotoIdUri] = useState<string | null>(null)
   const [localVisaDocumentUri, setLocalVisaDocumentUri] = useState<string | null>(null)
-  const [expandedDocument, setExpandedDocument] = useState<{ uri: string; showPreviewWatermark: boolean; title: string } | null>(null)
+  const [expandedDocument, setExpandedDocument] = useState<{ source: DocumentImageSource; showPreviewWatermark: boolean; title: string } | null>(null)
   const showComplianceFields = useMemo(() => canEditComplianceFields(user), [user])
   const { width: windowWidth, height: windowHeight } = useWindowDimensions()
+  const photoIdSource = profileDocumentSource(token, 'photo_id', localPhotoIdUri, form.photo_id_url)
+  const visaDocumentSource = profileDocumentSource(token, 'visa_document', localVisaDocumentUri, form.visa_document_url)
 
   const initials = useMemo(() => {
     const parts = form.display_name.trim().split(/\s+/g).filter(Boolean)
@@ -185,11 +198,13 @@ export default function ProfileEditScreen() {
       setUploadingPhotoId(true)
       const name = String(asset?.fileName || uri.split('/').pop() || `photo-id-${Date.now()}.jpg`)
       const mimeType = String(asset?.mimeType || 'image/jpeg')
-      const up = await uploadMzappMedia(token, { uri, name, mimeType }, { watermark_mode: 'photo_id_full' })
-      const updated = await updateMyProfile(token, { photo_id_url: up.url })
-      const next = profileFromRemote(updated, { ...form, photo_id_url: up.url })
+      const up = await uploadMzappMedia(token, { uri, name, mimeType }, { watermark_mode: 'photo_id_full', profile_document_type: 'photo_id' })
+      if (!up.key) throw new Error('上传成功但未返回私有证件引用')
+      const updated = await updateMyProfile(token, { photo_id_url: up.key })
+      const next = profileFromRemote(updated, { ...form, photo_id_url: PROFILE_DOCUMENT_PRESENT })
       setForm(next)
       await setProfile(user, next)
+      setLocalPhotoIdUri(null)
       Alert.alert(t('common_ok'), t('common_saved'))
     } catch (error: any) {
       Alert.alert(t('common_error'), String(error?.message || t('profile_upload_failed')))
@@ -211,11 +226,13 @@ export default function ProfileEditScreen() {
       setUploadingVisaDocument(true)
       const name = String(asset?.fileName || uri.split('/').pop() || `visa-document-${Date.now()}.jpg`)
       const mimeType = String(asset?.mimeType || 'image/jpeg')
-      const up = await uploadMzappMedia(token, { uri, name, mimeType }, { watermark_mode: 'profile_document_full' })
-      const updated = await updateMyProfile(token, { visa_document_url: up.url })
-      const next = profileFromRemote(updated, { ...form, visa_document_url: up.url })
+      const up = await uploadMzappMedia(token, { uri, name, mimeType }, { watermark_mode: 'profile_document_full', profile_document_type: 'visa_document' })
+      if (!up.key) throw new Error('上传成功但未返回私有证件引用')
+      const updated = await updateMyProfile(token, { visa_document_url: up.key })
+      const next = profileFromRemote(updated, { ...form, visa_document_url: PROFILE_DOCUMENT_PRESENT })
       setForm(next)
       await setProfile(user, next)
+      setLocalVisaDocumentUri(null)
       Alert.alert(t('common_ok'), t('common_saved'))
     } catch (error: any) {
       Alert.alert(t('common_error'), String(error?.message || t('profile_upload_failed')))
@@ -262,8 +279,6 @@ export default function ProfileEditScreen() {
           bank_bsb: showComplianceFields ? profileApiText(cleaned.bank_bsb) : undefined,
           bank_account_number: showComplianceFields ? profileApiText(cleaned.bank_account_number) : undefined,
           personal_abn: showComplianceFields ? profileApiText(cleaned.personal_abn) : undefined,
-          photo_id_url: showComplianceFields ? profileApiUrl(cleaned.photo_id_url) : undefined,
-          visa_document_url: showComplianceFields ? profileApiUrl(cleaned.visa_document_url) : undefined,
           visa_grant_number: showComplianceFields ? profileApiText(cleaned.visa_grant_number) : undefined,
         })
         Object.assign(cleaned, profileFromRemote(updated, cleaned))
@@ -379,12 +394,12 @@ export default function ProfileEditScreen() {
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>{t('profile_photo_id')}</Text>
               <Text style={styles.hint}>{t('profile_photo_id_hint')}</Text>
-              {localPhotoIdUri || form.photo_id_url ? (
+              {photoIdSource.uri ? (
                 <DocumentWatermarkedPreview
-                  uri={localPhotoIdUri || form.photo_id_url || ''}
+                  source={photoIdSource}
                   showPreviewWatermark={!!localPhotoIdUri}
                   testID="profile-photo-id-preview"
-                  onPress={() => setExpandedDocument({ uri: localPhotoIdUri || form.photo_id_url || '', showPreviewWatermark: !!localPhotoIdUri, title: t('profile_photo_id') })}
+                  onPress={() => setExpandedDocument({ source: photoIdSource, showPreviewWatermark: !!localPhotoIdUri, title: t('profile_photo_id') })}
                 />
               ) : (
                 <View style={styles.photoIdPlaceholder}>
@@ -415,12 +430,12 @@ export default function ProfileEditScreen() {
                   placeholder={t('profile_visa_grant_number_placeholder')}
                 />
               </View>
-              {localVisaDocumentUri || form.visa_document_url ? (
+              {visaDocumentSource.uri ? (
                 <DocumentWatermarkedPreview
-                  uri={localVisaDocumentUri || form.visa_document_url || ''}
+                  source={visaDocumentSource}
                   showPreviewWatermark={!!localVisaDocumentUri}
                   testID="profile-visa-document-preview"
-                  onPress={() => setExpandedDocument({ uri: localVisaDocumentUri || form.visa_document_url || '', showPreviewWatermark: !!localVisaDocumentUri, title: t('profile_visa_information') })}
+                  onPress={() => setExpandedDocument({ source: visaDocumentSource, showPreviewWatermark: !!localVisaDocumentUri, title: t('profile_visa_information') })}
                 />
               ) : (
                 <View style={styles.photoIdPlaceholder}>
@@ -455,7 +470,7 @@ export default function ProfileEditScreen() {
                 </Pressable>
               </View>
               <ScrollView
-                key={`profile-document:${expandedDocument.uri}`}
+                key={`profile-document:${expandedDocument.source.uri}`}
                 testID="profile-document-fullscreen-zoom"
                 style={styles.documentFullscreenScroll}
                 contentContainerStyle={styles.documentFullscreenScrollContent}
@@ -467,7 +482,7 @@ export default function ProfileEditScreen() {
                 showsVerticalScrollIndicator={false}
               >
                 <ImageBackground
-                  source={{ uri: expandedDocument.uri }}
+                  source={expandedDocument.source}
                   style={[styles.documentFullscreenImageWrap, { width: windowWidth, height: Math.max(320, windowHeight - 154) }]}
                   imageStyle={styles.documentFullscreenImage}
                   resizeMode="contain"

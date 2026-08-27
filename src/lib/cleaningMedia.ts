@@ -41,7 +41,7 @@ export function normalizeCleaningTaskNoticeId(value: unknown): string | null {
 
 export type CleaningMediaImageVariant = 'original' | 'thumbnail' | 'preview'
 
-type CleaningMediaAccessOptions = {
+export type CleaningMediaAccessOptions = {
   accessTaskId?: string | null
   accessWorkTaskId?: string | null
   guestLuggageId?: string | null
@@ -74,8 +74,16 @@ function cleaningMediaProxyUrl(reference: string, variant: CleaningMediaImageVar
 function isLegacyPrivateR2Url(value: string) {
   if (!/^https?:\/\//i.test(value)) return false
   try {
-    const pathname = new URL(value).pathname
-    return pathname.includes('/cleaning/') || pathname.includes('/mzapp/') || pathname.includes('/maintenance/') || pathname.includes('/deep-cleaning/') || pathname.includes('/deep-cleaning-upload/') || pathname.includes('/inventory/')
+    const url = new URL(value)
+    const hostname = url.hostname.toLowerCase()
+    const pathname = url.pathname
+    return hostname.endsWith('.r2.dev')
+      || pathname.includes('/cleaning/')
+      || pathname.includes('/mzapp/')
+      || pathname.includes('/maintenance/')
+      || pathname.includes('/deep-cleaning/')
+      || pathname.includes('/deep-cleaning-upload/')
+      || pathname.includes('/inventory/')
   } catch {
     return false
   }
@@ -84,6 +92,15 @@ function isLegacyPrivateR2Url(value: string) {
 function isServerManagedMzappTaskReference(value: string) {
   const match = /^r2:\/\/([a-z0-9][a-z0-9._-]{0,119})\/(mzapp\/.*)$/i.exec(value)
   return Boolean(match && normalizePrivateFeedbackObjectKey(match[2]))
+}
+
+export function isAuthenticatedCleaningMediaReference(value: any) {
+  const reference = cleanText(value)
+  return Boolean(
+    normalizePrivateFeedbackObjectKey(reference)
+    || isLegacyPrivateR2Url(reference)
+    || isServerManagedMzappTaskReference(reference),
+  )
 }
 
 export function buildCleaningMediaImageSource(
@@ -95,19 +112,14 @@ export function buildCleaningMediaImageSource(
   const reference = cleanText(rawReference)
   if (!reference) return { uri: '' }
   const key = normalizePrivateFeedbackObjectKey(reference)
-  const forceOfflineWorkTaskProxy = Boolean(options?.offlineWorkTaskMedia && cleanText(options?.accessWorkTaskId) && /^https:\/\//i.test(reference))
-  if (key || isLegacyPrivateR2Url(reference) || isServerManagedMzappTaskReference(reference) || forceOfflineWorkTaskProxy) {
+  if (isAuthenticatedCleaningMediaReference(reference)) {
     return {
       uri: cleaningMediaProxyUrl(key || reference, variant, options),
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     }
   }
-  if (reference.startsWith('//')) return { uri: `https:${reference}` }
-  if (/^[a-z][a-z0-9+.-]*:/i.test(reference)) return { uri: reference }
-
-  const base = normalizeBase(API_BASE_URL)
-  const root = base.replace(/\/auth\/?$/g, '').replace(/\/api\/?$/g, '')
-  return { uri: reference.startsWith('/') && root ? `${root}${reference}` : reference }
+  if (reference.startsWith('file:')) return { uri: reference }
+  return { uri: '' }
 }
 
 export function selectCleaningMediaReference(params: {

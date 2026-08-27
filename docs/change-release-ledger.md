@@ -1,5 +1,117 @@
 # Change Release Ledger
 
+## CRL-20260819-003 — Photo ID / Visa presence-only 缓存与认证显示（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready; selected for commit
+- **Updated:** 2026-08-27 17:30 AEST
+- **Request:** 移除移动端资料缓存和页面中持久化的 Photo ID/Visa URL，改用服务端 presence flags、私有 key 上传和认证自助读取。
+- **Outcome:** 设备仅存 `uploaded` 标记而不存证件 URL/key；已上传文件始终由认证 `users/me/profile-documents/:type` 显示，本地选择的未保存文件仍只作临时预览。
+
+### Implementation
+
+- Previous behavior: profile cache 和表单保存对象 URL；上传后把 `url` 直接写回 `/users/me`，远程预览直接使用该 URL。
+- New behavior: API 类型消费 presence flags，缓存迁移为 marker；上传携带证件类型并提交服务器返回的私有 key，保存成功后清除本地预览；一般资料保存不再回传 marker。远程预览使用带 Bearer token 的自助 reader。
+- Key decisions: 不新增队列、浏览器打开或下载能力；兼容旧 cache 时只保留“已上传”而不再显示其历史引用。
+
+### Files / Areas
+
+- `src/lib/api.ts` — presence DTO、文档类型与认证图片 source。
+- `src/lib/profileStore.ts` — presence marker 的迁移与持久化。
+- `src/lib/profileStore.test.ts` — presence marker 持久化回归。
+- `src/screens/me/ProfileEditScreen.tsx` — 专属上传元数据、私有 key 保存、认证预览。
+- `src/screens/me/ProfileEditScreen.test.tsx` — 专属上传元数据、私有 key 保存和认证预览回归。
+- `src/screens/tabs/MeScreen.tsx`, `src/screens/tabs/TasksScreen.tsx` — 资料刷新只落 presence marker。
+- `docs/change-release-ledger.md` — 本 CRL 与提交证据。
+
+### Impact / Dependencies
+
+- API: requires paired root/CRL-20260819-003 `photo_id_uploaded` / `visa_document_uploaded`、private key upload response and self-service reader.
+- Database / config / R2 / production data: none in mobile; no device or production document is read or written.
+- Dependencies: paired root runtime must deploy before any mobile OTA/build delivery.
+
+### Validation
+
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` — passed in the isolated candidate with a temporary dependency link, then removed.
+- `./node_modules/.bin/jest --runInBand --no-cache src/lib/profileStore.test.ts src/lib/cleaningMedia.test.ts src/lib/noticeMedia.test.ts src/screens/me/ProfileEditScreen.test.tsx src/screens/notices/NoticeDetailScreen.test.tsx src/screens/tabs/NoticesScreen.test.tsx` — passed: 6 suites / 50 tests.
+- `./node_modules/.bin/eslint src/lib/api.ts src/lib/cleaningMedia.ts src/lib/noticeMedia.ts src/lib/profileStore.ts src/screens/me/ProfileEditScreen.tsx src/screens/notices/NoticeDetailScreen.tsx src/screens/tabs/MeScreen.tsx src/screens/tabs/NoticesScreen.tsx src/screens/tabs/TasksScreen.tsx` — passed: 0 errors; 59 existing warnings in large shared files.
+- `git diff --check` — passed.
+- OTA, build and real-device/production verification — not run.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`; listed contribution to the jointly selected candidate `mobile/CRL-20260819-003` + `mobile/CRL-20260819-004`.
+- **Untracked review:** `none`; clean candidate worktree contains no untracked files.
+- `src/lib/api.ts` — SHA-256: `946cec7078dca0e35a1f315941e99c4b76f063a0ee005ad69727f70e33a0af90`
+- `src/lib/api.ts` — SHA-256: `b1643d08b6ab8c70e801e7728aae66830db986a39217b0c4b404bcd651abb298`
+- `src/lib/api.ts` — SHA-256: `eb9b4ef046e1006b817bffeaf68e96711a7f4f2cd9df6d1babdeef8e5c3be998`
+- `src/lib/profileStore.test.ts` — SHA-256: `f3e836c829d31f8a903b46fba1d2197563acf4dc465061003fe54a75ea74ce26`
+- `src/lib/profileStore.ts` — SHA-256: `06921502e959846ad078d6a8243bd981257d44d87da0457d7efe3fe13bb261a6`
+- `src/lib/profileStore.ts` — SHA-256: `1bd977c7945ff28b45200f2753b696b8d82ecdc9a9922dcf10ab5ba98e9fbe40`
+- `src/lib/profileStore.ts` — SHA-256: `98295f2a09e233f3d59a5d0bab2e8a20a80128d13012689433f7c1a0f96d86eb`
+- `src/lib/profileStore.ts` — SHA-256: `b0896fb156c2753343290ec375db129e04e35bdbe4e0b3e35a4ed82710c52eaf`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `2709c4e8f9bc57d59af3f30c9452a9a2eedc46d8613e17a45dc4e513cb317582`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `6bba4f4565e61715fc910ab2874bdec503aac0dcc1235f1d4f0f378d45f1a893`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `6ea39827f17a384d0d702c3473f9184230722f9eb93fc651509c935553412564`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `7bf9f69a666c0ec099c67fc4a27e330caa5f2b6c0d87404476c54bbae7808536`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `90ed9ac5b3ed63546d9c5b91c36bec4427e98b8d3337578a0dc912ead4b27221`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `c6bf10e6428cd1f34911b6e78b803a0739aa314a4fe6880ac8b5b01eab9c95a5`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `cb4c30ef1edcab1b9ead66a3c66a24e1056d4b395655c6e73b80e0199167f455`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `cf07bc1a8a99ab313db600e3cf9645d9dde5ce0f00732ca43d45934401b0a5bb`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `1f71e0346807420b714bd021799982ec8cd19f6ce2c962609a8742c8a343646a`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `2332b8d05a4a35f29e5319f6292df77f13e15d548403659720921c4fc562778a`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `27ad315bbdec39916f607018045133f50f7ca646aaa879a77044e6da50979ee3`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `2c6fb34567cf405f44522935494aa6d7085f677ef4b61a976f78558667e9e961`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `2cdc1cf09670bc1d73f07faf6b621e8927ac2502a5aa3b7f20a74db8773dd54f`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `32597ec9cebcff608098434fbdc45dca085a0befab1255bf2343b3039b537774`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `33bca10b30c11c4957376410339caa6b997fd03fd2ae6dab5e70df28ff713649`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `33e077cce1c0ec3e926460c971ed333cea5e9c7120a8b9375d29d20ef9a80214`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `352de0c42422bd8543d9fe73aa0fbb3225d9bbc3c28f46fc00498f821ba292ae`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `661a32cfe19ebcac76237d669e5644b88824486232746869b10b572fa67e056a`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `6ace5dc2c280765230d2cb6c1cf88d8508877898538929dcc7f7de571c82f738`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `7b10c6b7ebef0c06b4db92a7cc7c7acba5171af3799eb0550e1d74649784c45e`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `83759f160582292b4f7c7270233367b7e2bbe2c65024a1f010ba67afcc96df3b`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `90fb6a0e43db4f98220e03031290644e96d2082b2052fb022611a60f1c0c840d`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `9ffe45bec6b18cc451ef722173fec0914a2aed7f1f32722538c3b3d4dc00c9b4`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `a1100649492e1aa44727fd0ac15ba3d1dcd34b8dbe1ebd3df947a215b60e7529`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `aa781a41eaee1606189abbf0f1a98792fc3c34b74edc88b71ddf363083831bb7`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `ba5b92bcb34145d7513bfa8937d5bf663e01cf93ccd6957c71ee05c83cfdbbb8`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `db1016ed4a3f72deb8f4683f1cfcb6c981de717321890613d7dfc71a15d8e38e`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `e384bd2765d43b9bfc82d6e927d1790988c627ce9b05cd541747c79980e1ade9`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `f50a318bef3cfe98452cc43f5ae5d5538ba6751cfc38d37a85ec936082413675`
+- `src/screens/tabs/MeScreen.tsx` — SHA-256: `1b184457d5be1890882c0ac15c0ade1ecd505516480ac0d8913bde03f828233f`
+- `src/screens/tabs/MeScreen.tsx` — SHA-256: `7eaab2c282c704bee2db0bd0975f738b6d3c1306d72f7be9146900d1a33459e5`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `2e09140df263c3b3831a4b737a9daafce765f2c9aa7367f725e270ab3b2fa060`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `b7d6cf9755cdcb3788fd3d3d45c5614dbe608000ec0b66f0c142694f333b1f16`
+
+### Release Attempts
+
+#### RA-20260827-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260819-003`, `CRL-20260819-004`
+- Selected CRL identities: `mobile/CRL-20260819-003`, `mobile/CRL-20260819-004`
+- Intended action: `commit`
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 17:18 AEST`
+- Candidate patch SHA-256: `855a089cdc0cc03ffefe91f5c06d704335ff74f61a5aefefb21d008af56b246f`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `not committed`
+- Dependencies: none for the local mobile commit; paired root/CRL-20260819-003 is a delivery dependency.
+- Required validation: `PASS`; evidence: isolated typecheck, 6-suite targeted Jest, targeted ESLint with 0 errors and whitespace check passed.
+- Shared-hunk review: `PASS`; evidence: pre-commit gate matched 76 selected non-ledger hunks and no unselected file.
+- Generated-file review: `PASS`; evidence: 17 selected paths are TypeScript source/tests and Markdown only; no generated or sensitive file is staged.
+- Technical state: `verified`
+- User authorization: `selected-for-commit`; evidence: user confirmed the selected P2 commit scope on 2026-08-27.
+- Independent review: `GO for commit`; evidence: fresh independent read-only review reproduced the candidate fingerprint, reviewed the complete staged range and found no P0/P1/P2, secret or production-write risk.
+- Action conclusion: `GO` for commit; exact selected scope is verified locally. Push remains unauthorized.
+
+### Risks / Release Notes
+
+- This client must not be delivered ahead of its paired root API; local markers cannot prove an object exists or is authorized.
+- Sensitive-information review: no credentials, tokens, document URL/key, media bytes or production data are included.
+- Git state: uncommitted, not pushed, no PR, OTA or device/production verification.
+
 ## CRL-20260825-001 — Release Attempt 依赖 SHA 门禁（mobile）
 
 - **Repository:** `mobile`
@@ -1201,6 +1313,98 @@
 - This repair cannot grant access: the backend remains the authority for the exact recorded task medium and reader role. Runtime proof still requires an authorized account to test list → detail → viewer after a compatible OTA/build.
 - Sensitive-information review: no credentials, tokens, private URLs, media bytes, logs, caches or production data are added.
 - Git state: candidate worktree only; not committed, not pushed, no PR, not deployed, no OTA and no device verification.
+
+## CRL-20260819-004 — Inbox 私有媒体来源上下文 fail-closed（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready; selected for commit
+- **Updated:** 2026-08-27 17:30 AEST
+- **Request:** 核实并修复 Inbox 未分类/缺上下文图片会回退原始 URL 的风险。
+- **Outcome:** 列表、详情和预览共用来源 resolver；只有已知业务事件、精确上下文和受管私有引用才经认证代理显示，其他来源隐藏。
+
+### Implementation
+
+- Previous behavior: 两个通知页面分别推断上下文，`issue_reported` 可在没有任务上下文时渲染，未知事件最终回退 `Image` 原始 URL。
+- New behavior: `noticeMedia` 按业务事件返回 guest-luggage/task/offline-task context 与测试标识；`cleaningMedia` 仅为受管 key、R2 历史引用或 server-managed reference 构建远程 source，未知远程引用返回空 source。页面三种显示路径复用 resolver。
+- Key decisions: 本地 `file:` 临时草稿保持可显示；不修改 Root proxy、R2 ACL、通知收件人、Push、数据或历史对象。
+
+### Files / Areas
+
+- `src/lib/cleaningMedia.ts` — 认证引用白名单和 source fail-closed。
+- `src/lib/cleaningMedia.test.ts` — 认证引用白名单和 source fail-closed 回归。
+- `src/lib/noticeMedia.ts` — 通知事件来源上下文 resolver。
+- `src/lib/noticeMedia.test.ts` — 事件来源、上下文和未知引用 fail-closed 回归。
+- `src/screens/tabs/NoticesScreen.tsx` — Inbox 缩略图统一 resolver。
+- `src/screens/tabs/NoticesScreen.test.tsx` — Inbox 缩略图来源上下文回归。
+- `src/screens/notices/NoticeDetailScreen.tsx` — 详情与预览统一 resolver。
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — 详情与预览来源上下文回归。
+- `docs/feature-regression-registry.md` — FR-P1-NTF-04 和 FR-P2-SRC-01。
+- `docs/change-release-ledger.md` — 本 CRL 与提交证据。
+
+### Impact / Dependencies
+
+- API / database / migration / configuration: none; reuse existing `/cleaning-app/media/image` authorization.
+- Shared dependency: `cleaningMedia.ts` is shared by task/feedback/day-end/maintenance sources; targeted `cleaningMedia.test.ts` covers each existing accepted source mapping.
+- Dependencies: none for source commit; backend deployment and real-device checks are separate.
+
+### Validation
+
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` — passed in the isolated candidate with a temporary dependency link, then removed.
+- `./node_modules/.bin/jest --runInBand --no-cache src/lib/profileStore.test.ts src/lib/cleaningMedia.test.ts src/lib/noticeMedia.test.ts src/screens/me/ProfileEditScreen.test.tsx src/screens/notices/NoticeDetailScreen.test.tsx src/screens/tabs/NoticesScreen.test.tsx` — passed: 6 suites / 50 tests.
+- `./node_modules/.bin/eslint src/lib/api.ts src/lib/cleaningMedia.ts src/lib/noticeMedia.ts src/lib/profileStore.ts src/screens/me/ProfileEditScreen.tsx src/screens/notices/NoticeDetailScreen.tsx src/screens/tabs/MeScreen.tsx src/screens/tabs/NoticesScreen.tsx src/screens/tabs/TasksScreen.tsx` — passed: 0 errors; 59 existing warnings in large shared files.
+- `git diff --check` — passed.
+- OTA, build and real-device/production verification — not run.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`; listed contribution to the jointly selected candidate `mobile/CRL-20260819-003` + `mobile/CRL-20260819-004`.
+- **Untracked review:** `none`; clean candidate worktree contains no untracked files.
+- `docs/feature-regression-registry.md` — SHA-256: `448cb5c77be1289bba19094a4d5480dca25b805bd81206f682522830133a2d70`
+- `docs/feature-regression-registry.md` — SHA-256: `6758f76a2f80c5ab4ec01ecb91d909d4bac52f1901d3804ea90bc63f688ce045`
+- `docs/feature-regression-registry.md` — SHA-256: `ed414b79937cecba820d1df0562961c3aef18cfcdb6c68cab069139ba157d2cf`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `2611937d6bfe4a83b496ccb4c7aa257e1ee46141e7d499bfe29362cf9d336b74`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `3a1d985955cac52012b177a930e5495ff59d324a72f08f93a5228f821f3b2a0d`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `949ad48c6cc578f9b39fd45917212ac8e2fb301f9928b029780297feac67c722`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `e5a3905e43155f0ad448783b532d9bdc410e09eba548775ff1f53e28fa16c19a`
+- `src/lib/cleaningMedia.ts` — SHA-256: `00f244c49eede4100b748a36b83ca99967699b637f6e10ecd33c79d5b7a31671`
+- `src/lib/cleaningMedia.ts` — SHA-256: `2975b7c9f11c108ae83dd9db5080b411c11885db160e4b50914f7f0c30afbff7`
+- `src/lib/cleaningMedia.ts` — SHA-256: `51dd8edb28514fe23f1ed4517ca432c6bb5d0b032b44a1a9fab8e39633770674`
+- `src/lib/cleaningMedia.ts` — SHA-256: `74ea4f0dd3d6688348db46e6244e701ae5edee4fe7a16ab06b4b40d96247c014`
+- `src/lib/cleaningMedia.ts` — SHA-256: `8cfef4c1d06f804e857a267977c90e71888e3d862f68ed7bd6a10735c719ea85`
+- `src/lib/noticeMedia.test.ts` — SHA-256: `79194dc20f451a21dac320391e4bd31dedc8d2d816bad91db98c6c58b9ca635e`
+- `src/lib/noticeMedia.ts` — SHA-256: `5b555dc9a8536f569e1df3e0c75c0153b72ab510252db2abd6cfea9191e66a5a`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `05032c9cd4df931e407e4c6196c7c27a727c0d821647cec0d6be859ee43bdbb7`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `257c66a5fcd122937232da6376246fb37af83cfc4dcb982eb289de225be79547`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `4e306988b826fcc90089c8d6c2a2c66f4c6e53bda1d04b81099d98cdf95aa909`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `0787079c7089ef8ec2ddd3b9e433d01fab03e531d833acc421d252843b5de9fb`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `0e44d00f8e1b823c511e8f5b5a08445ca265afcad364d97b09d3c9a5e61c0777`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `0fa8393e230a75a777d7c86c067cb023c481391659f1fcbb16fb42b13d7061aa`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `25ed6896f85ce96ae134f6ea4b24e6b16637cae3d57a6ff53a785334e8153269`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `33e78430d61815897af2e3720b61edd026ba6f49e16c7ee77f4e4e1acbcdf3e3`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `516de30406212444b4f279d9d54e4cea385e6ee4bd2b378ca1f3c837b7dcfbf7`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `874bdd17cdc06c71b970178e5ea109829b036242690d354bdd9bc5bcdd34041f`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `90124ded108cf0a2d697b699b51fd7114982b6da481aca0e2e8e178bf5029351`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `ba3ebe7474cbb84611be9357b64a08a7d466c9a943f937192f7ee00a5ee9bf21`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `be169470a0ba720755183a675d230dd0a19ecb81d97b9773baf2882dd8cb0da1`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `ec4598aa8b9423cf9f84e3a63c008c5e40413f65e61cdbebfba14638e63b5f75`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `50f3d1116bf6740e1a65578bb35dfddf073e7a1b5a6f93497a8b1323215de80b`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `ccf6a21c86ba7698b06c053b41d9a6ed5b7241687b264ca60198575f1fb6182b`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `22394fcc8d17af57ee525e0abb1b0d05fb8847273b7e054d236998e5c1a223a0`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `487f74ecf68305ab0630b519431381c9657ae88077a9535b3f479e6a1231aad0`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `4b73e5bdcccc017de6513c42ce02c97ede353729eb6a28040bbb61aa4210ada1`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `538b244832786a5db50152a3ca4f31b269eafeda7613c84907fa548dbf93ff00`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `d41ba4d86fac83ee1392e33a8fcb35475e9800b2c4eaa2c349de7dd9680974ce`
+
+### Release Attempts
+
+- See `RA-20260827-002` in mobile/CRL-20260819-003; the selected mobile CRL set, base, authorization and commit boundary are shared.
+
+### Risks / Release Notes
+
+- Unclassified historical Inbox media becomes intentionally hidden until a business owner/context mapping is added; no raw fallback is retained.
+- Sensitive-information review: no credentials, tokens, private media URL/key, image bytes or production records are included.
+- Git state: uncommitted, not pushed, no PR, OTA or device/production verification.
 
 ## CRL-20260816-003 — P1-NTF-04 房源问题通知认证媒体渲染（mobile）
 

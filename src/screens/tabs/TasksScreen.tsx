@@ -25,7 +25,7 @@ import {
 } from '../../lib/keyUploadQueue'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import { getNoticesSnapshot, initNoticesStore, prependNotice, subscribeNotices } from '../../lib/noticesStore'
-import { getProfile, setProfile, type Profile } from '../../lib/profileStore'
+import { getProfile, PROFILE_DOCUMENT_PRESENT, profileDocumentPresence, setProfile, type Profile } from '../../lib/profileStore'
 import {
   cleaningTaskTitleSuffix,
   effectiveInspectionMode,
@@ -801,8 +801,8 @@ export default function TasksScreen(props: Props) {
           bank_bsb: String(remote.bank_bsb || saved?.bank_bsb || ''),
           bank_account_number: String(remote.bank_account_number || saved?.bank_account_number || ''),
           personal_abn: String(remote.personal_abn || saved?.personal_abn || ''),
-          photo_id_url: remote.photo_id_url || saved?.photo_id_url || null,
-          visa_document_url: remote.visa_document_url || saved?.visa_document_url || null,
+          photo_id_url: remote.photo_id_uploaded === undefined ? profileDocumentPresence(saved?.photo_id_url) : remote.photo_id_uploaded ? PROFILE_DOCUMENT_PRESENT : null,
+          visa_document_url: remote.visa_document_uploaded === undefined ? profileDocumentPresence(saved?.visa_document_url) : remote.visa_document_uploaded ? PROFILE_DOCUMENT_PRESENT : null,
           visa_grant_number: String(remote.visa_grant_number || saved?.visa_grant_number || ''),
         }
         await setProfile(user, merged)

@@ -80,13 +80,13 @@
 - **Status:** active
 - **Maintenance scope:** `mobile`
 - **Last reviewed:** 2026-08-16 Australia/Melbourne
-- **Business outcome:** `issue_reported` 的列表、详情与大图均走认证媒体；任务关联问题保留合法 `task_id`，普通房源反馈无任务上下文时走既有反馈授权分支。
-- **Related CRLs:** `mobile/CRL-20260816-003`; historical payload source `mobile/CRL-20260622-015`.
+- **Business outcome:** `issue_reported` 只有携带合法 `task_id` 时才在列表、详情与大图显示认证私有媒体；无任务上下文、未知来源或不受支持引用一律隐藏，不得回退到原始 URL。
+- **Related CRLs:** `mobile/CRL-20260816-003`; hardening `mobile/CRL-20260819-004`; historical payload source `mobile/CRL-20260622-015`.
 
 ### Test-to-invariant mapping
 
-- `src/screens/tabs/NoticesScreen.test.tsx` — property-feedback and task-bound issue thumbnails both use the authenticated renderer.
-- `src/screens/notices/NoticeDetailScreen.test.tsx` — property-feedback and task-bound issue detail/viewer preserve their respective contexts.
+- `src/screens/tabs/NoticesScreen.test.tsx` — task-bound issue thumbnail uses the authenticated renderer; missing task context is hidden.
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — task-bound issue detail/viewer preserve the same context; missing task context renders neither.
 - Root `/cleaning-app/media/image` — exact association and authorization are reused, not modified.
 
 ## FR-P1-NTF-05 — 线下任务完成通知私有照片认证读取
@@ -102,6 +102,20 @@
 - `src/screens/tabs/NoticesScreen.test.tsx` — exact offline task context is preserved and invalid context is fail-closed.
 - `src/screens/notices/NoticeDetailScreen.test.tsx` — detail and viewer preserve the same offline work-task context.
 - Root `/cleaning-app/media/image` — exact association, ambiguity rejection and authorization are reused, not modified.
+
+## FR-P2-SRC-01 — Inbox 私有媒体来源白名单与 fail-closed 解析
+
+- **Status:** active
+- **Maintenance scope:** `mobile`; reuses the existing Root authenticated media proxy without changing its authorization rules.
+- **Last reviewed:** 2026-08-27 Australia/Melbourne
+- **Business outcome:** Inbox 图片只接受已知业务事件（临时行李、钥匙、检查完成、补货、任务关联问题、线下完成任务）及其精确读取上下文；未知事件、缺上下文、原始公共/未知 URL 或不受支持引用在列表、详情和大图均隐藏。已知 R2/受管 key 始终经认证代理，不出现页面级裸 URL 回退。
+- **Related CRLs:** `mobile/CRL-20260819-004`.
+
+### Test-to-invariant mapping
+
+- `src/lib/noticeMedia.test.ts` — 事件到 guest-luggage/task/offline-task 上下文的映射，缺上下文与原始 URL fail-closed。
+- `src/lib/cleaningMedia.test.ts` — 已管理 key、R2 历史引用与本地暂存文件的读取边界；未知远程引用不返回裸 URL。
+- `src/screens/tabs/NoticesScreen.test.tsx` and `src/screens/notices/NoticeDetailScreen.test.tsx` — 列表、详情和预览使用同一个 resolver，问题通知缺 task context 时不渲染。
 
 ### Shared validation and release boundary
 

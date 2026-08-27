@@ -12,5 +12,6 @@ test('profile store persists and restores profile', async () => {
   }
   await setProfile({ id: 'u1', username: 'demo' }, updated)
   const read = await getProfile({ id: 'u1', username: 'demo' })
-  expect(read).toMatchObject(updated)
+  expect(read).toMatchObject({ ...updated, visa_document_url: 'uploaded' })
+  expect(read?.visa_document_url).toBe('uploaded')
 })
