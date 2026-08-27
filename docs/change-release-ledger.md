@@ -145,6 +145,26 @@
 - Independent review: `GO for commit`; evidence: independent read-only review reproduced the two repair hunk fingerprints, verified `npm run check:ci` exit 0 and found no scope, secret or production-write risk.
 - Action conclusion: `GO` for commit completed locally; push, PR, Dev merge, OTA/build and device verification remain separate actions.
 
+#### RA-20260828-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260819-003`, `CRL-20260819-004`, `CRL-20260827-001`, `CRL-20260828-001`
+- Selected CRL identities: `mobile/CRL-20260819-003`, `mobile/CRL-20260819-004`, `mobile/CRL-20260827-001`, `mobile/CRL-20260828-001`
+- Intended action: `push`; target: `Dev`.
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-28 01:06 AEST`.
+- Candidate patch SHA-256: `f5e2d8240a85b81de9fe80ec5e3af42f580d983be57a0b2369995c1e6ffc0882`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `f7908e4b5912ab58287b0fe16ad244e46094fd0e` (latest content commit after the existing P2 and TasksScreen content commits).
+- Dependencies: `none`.
+- Required validation: `PASS`; evidence: P2 targeted 6-suite / 50-test, mobile 32-test auditor regression, root 18-test auditor regression, and mobile `npm run check:ci` exit 0 (58 suites / 331 tests).
+- Shared-hunk review: `PASS`; evidence: all 76 P2 hunks, two TasksScreen repair hunks and 14 governance hunks are declared; the adjacent TasksScreen hunk is reconciled below without a source-body change.
+- Generated-file review: `PASS`; evidence: TypeScript, Python source/tests and Markdown only; no generated or sensitive path is in the candidate range.
+- Hunk reconciliation: `src/screens/tabs/TasksScreen.tsx#2e09140df263c3b3831a4b737a9daafce765f2c9aa7367f725e270ab3b2fa060 -> c151168d08eb757f0f014a82bf3fcb43107c73c981d6befd75a6d97c65688d24`; evidence: the independent four-line banner-timer cleanup at old line 722 shifts only this P2 hunk header from `+804` to `+808`; its four changed source lines are identical.
+- Technical state: `committed`.
+- User authorization: `not-selected`; evidence: user authorized the governance repair and joint-audit preparation, not a push of this resulting head SHA.
+- Independent review: `GO for reconciliation receipt commit`; evidence: fresh independent read-only review checked the exact four-CRL range, 20 changed files, 92 non-ledger hunks, candidate SHA `f5e2d8240a85b81de9fe80ec5e3af42f580d983be57a0b2369995c1e6ffc0882`, the old→new mapping, clean staged scope and sensitive/generated-file evidence; no P0/P1/P2 was found.
+- Action conclusion: `GO` for the reconciliation receipt commit; push remains `NOT VERIFIED` until explicit authorization covers the resulting branch and exact head SHA. No remote push, PR, Dev merge, deployment, OTA/build or device verification has occurred.
+
 ### Risks / Release Notes
 
 - A 20-second test budget avoids false failures on constrained runners but is not a performance guarantee; a future runtime slowdown beyond that limit should be investigated separately.
@@ -233,7 +253,7 @@
 - `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `f50a318bef3cfe98452cc43f5ae5d5538ba6751cfc38d37a85ec936082413675`
 - `src/screens/tabs/MeScreen.tsx` — SHA-256: `1b184457d5be1890882c0ac15c0ade1ecd505516480ac0d8913bde03f828233f`
 - `src/screens/tabs/MeScreen.tsx` — SHA-256: `7eaab2c282c704bee2db0bd0975f738b6d3c1306d72f7be9146900d1a33459e5`
-- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `2e09140df263c3b3831a4b737a9daafce765f2c9aa7367f725e270ab3b2fa060`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `c151168d08eb757f0f014a82bf3fcb43107c73c981d6befd75a6d97c65688d24`
 - `src/screens/tabs/TasksScreen.tsx` — SHA-256: `b7d6cf9755cdcb3788fd3d3d45c5614dbe608000ec0b66f0c142694f333b1f16`
 
 ### Release Attempts
