@@ -69,6 +69,25 @@
 - Independent review: `GO for commit`; evidence: second independent read-only review verified the receipt-base source immutability P1 closure, exact candidate fingerprint, staged scope and secret/production-write boundaries.
 - Action conclusion: `GO` for the completed commit only; blockers: none. Push requires a committed-range audit and a new exact user push authorization.
 
+#### RA-20260827-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260827-001`
+- Selected CRL identities: `mobile/CRL-20260827-001`
+- Intended action: `push`
+- Branch: `codex/historical-receipt-audit-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 AEST`
+- Candidate patch SHA-256: `8b7c2bbf5c28af9a0519ac1c5938519d4270e377a920cfe3c3b1d512dbba39b7` excluding `docs/change-release-ledger.md`.
+- Commit SHA: `9ccdd55912efe38cac1f0a861ab178802151ef8c` (candidate content commit).
+- Dependencies: none.
+- Required validation: `PASS`; evidence: refreshed remote baseline plus the exact committed mobile range audit at the pre-push receipt head passed.
+- Shared-hunk review: `PASS`; all nine selected non-ledger hunk fingerprints match the committed range.
+- Generated-file review: not applicable; Python source, tests and Markdown only.
+- Technical state: `committed`.
+- User authorization: `not-selected`; evidence: final post-receipt audit head has not yet been presented for exact push confirmation.
+- Independent review: `GO for commit`; evidence: the reviewed candidate is unchanged; this does not constitute push authorization.
+- Action conclusion: `NOT VERIFIED`; blockers: commit this push-attempt receipt, re-audit its exact final head, then obtain user push authorization bound to that head and branch.
+
 ### Risks / Release Notes
 
 - This adds audit policy only. It does not release, push, merge, deploy or otherwise change the two pre-existing historical receipt commits.
