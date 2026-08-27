@@ -106,6 +106,25 @@
 - Independent review: `GO for commit`; evidence: fresh independent read-only review reproduced the candidate fingerprint, reviewed the complete staged range and found no P0/P1/P2, secret or production-write risk.
 - Action conclusion: `GO` for commit completed locally; push remains unauthorized.
 
+#### RA-20260827-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260819-003`, `CRL-20260819-004`
+- Selected CRL identities: `mobile/CRL-20260819-003`, `mobile/CRL-20260819-004`
+- Intended action: `push`; target: `Dev`.
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 19:37 AEST`.
+- Candidate patch SHA-256: `855a089cdc0cc03ffefe91f5c06d704335ff74f61a5aefefb21d008af56b246f`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `fe97861d75eb73fddf89aa5ea3e64f518f51e984` (candidate content commit; exact audit head follows in the range report).
+- Dependencies: `none`.
+- Required validation: `PASS`; evidence: isolated typecheck, 6-suite targeted Jest, targeted ESLint with 0 errors and whitespace check passed.
+- Shared-hunk review: `PASS`; evidence: exact range matched 76 selected non-ledger hunks and no unselected file.
+- Generated-file review: `PASS`; evidence: 17 selected paths are TypeScript source/tests and Markdown only; no generated or sensitive file is in range.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: user said “继续” after Mobile branch head `45e6f37dd1d5f39dba49f31336c9c48d83bd3a4d` and the exact push scope were presented on 2026-08-27.
+- Independent review: `GO for push`; evidence: fresh independent read-only committed-range review reproduced the candidate fingerprint, confirmed the selected range and fresh base, and found no P0/P1/P2, secret or production-write risk.
+- Action conclusion: `GO` for push; exact committed range and user authorization are verified. PR, merge and deployment remain unauthorized.
+
 ### Risks / Release Notes
 
 - This client must not be delivered ahead of its paired root API; local markers cannot prove an object exists or is authorized.
