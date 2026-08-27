@@ -55,7 +55,24 @@
 
 ### Release Attempts
 
-- None yet.
+#### RA-20260828-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260828-001`
+- Selected CRL identities: `mobile/CRL-20260828-001`
+- Intended action: `commit`
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-28 00:59 AEST`.
+- Candidate patch SHA-256: `f5e2d8240a85b81de9fe80ec5e3af42f580d983be57a0b2369995c1e6ffc0882`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `f7908e4b5912ab58287b0fe16ad244e46094fd0e`.
+- Dependencies: `none`.
+- Required validation: `PASS`; evidence: mobile 32-test auditor regression, root 18-test auditor regression and mobile `npm run check:ci` exit 0 (58 suites / 331 tests).
+- Shared-hunk review: `PASS`; evidence: the candidate stages only its 14 declared auditor/test hunks; the ledger hunk belongs solely to this new CRL.
+- Generated-file review: `PASS`; evidence: Python source/tests and Markdown only; no generated or sensitive path is staged.
+- Technical state: `committed`.
+- User authorization: `selected-for-commit`; evidence: user explicitly authorized the minimal mobile hunk-reconciliation governance repair on 2026-08-28.
+- Independent review: `GO for commit`; evidence: independent read-only review checked the exact staged SHA `cc6a5af7487cc2cef9e459240af84265f27532d7b82b5174424308585b0509d7`, all 14 hunk mappings, clean state, full CI and no P0/P1/security/production-write risk.
+- Action conclusion: `GO` for local commit completed; the later combined P2/CI range still requires a fresh exact audit, separate push review and explicit user push authorization.
 
 ### Risks / Release Notes
 
