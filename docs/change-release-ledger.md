@@ -96,15 +96,15 @@
 - Branch: `codex/release-p2-id-src-20260827`
 - Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 17:18 AEST`
 - Candidate patch SHA-256: `855a089cdc0cc03ffefe91f5c06d704335ff74f61a5aefefb21d008af56b246f`, excluding `docs/change-release-ledger.md`.
-- Commit SHA: `not committed`
+- Commit SHA: `fe97861` (candidate content commit; exact audit head follows in the range report).
 - Dependencies: none for the local mobile commit; paired root/CRL-20260819-003 is a delivery dependency.
 - Required validation: `PASS`; evidence: isolated typecheck, 6-suite targeted Jest, targeted ESLint with 0 errors and whitespace check passed.
 - Shared-hunk review: `PASS`; evidence: pre-commit gate matched 76 selected non-ledger hunks and no unselected file.
 - Generated-file review: `PASS`; evidence: 17 selected paths are TypeScript source/tests and Markdown only; no generated or sensitive file is staged.
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: user confirmed the selected P2 commit scope on 2026-08-27.
 - Independent review: `GO for commit`; evidence: fresh independent read-only review reproduced the candidate fingerprint, reviewed the complete staged range and found no P0/P1/P2, secret or production-write risk.
-- Action conclusion: `GO` for commit; exact selected scope is verified locally. Push remains unauthorized.
+- Action conclusion: `GO` for commit completed locally; push remains unauthorized.
 
 ### Risks / Release Notes
 
