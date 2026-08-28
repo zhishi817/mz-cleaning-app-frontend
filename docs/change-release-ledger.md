@@ -1,5 +1,81 @@
 # Change Release Ledger
 
+## CRL-20260828-002 — Profile Photo ID 缓存迁移持久化（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready; included in RA-20260828-004 candidate
+- **Updated:** 2026-08-28 22:39 AEST
+- **Request:** 修复独立推送审查发现的 P1：已有 v2 profile 缓存若只含历史 Photo ID URL，读取时必须把该原始引用持久化替换为 presence marker，不能仅在内存返回值中隐藏。
+- **Outcome:** 读取旧 v2 缓存后，Photo ID/Visa 只会返回并写回 `uploaded` 或 `null`；设备 storage 不再保留历史 Photo ID URL，远程文档继续仅由既有认证自助读取器显示。
+
+### Implementation
+
+- Previous behavior: `getProfile` 规范化 `photo_id_url`，但仅当 Visa URL 或 grant number 改变时才调用 `setJson`；只含 Photo ID URL 的旧 v2 缓存会继续在设备 storage 中保存原始 URL。
+- New behavior: 持久化迁移条件同样比较 `photo_id_url`；回归测试直接构造仅含旧 Photo ID URL 的 v2 缓存，并验证返回值和序列化 storage 都变为 `uploaded`、不含旧 URL。
+- Key decisions: 不改 API、认证 reader、上传、权限、路由、数据库、配置或依赖；不读取任何真实文档、设备缓存或生产数据。
+
+### Files / Areas
+
+- `src/lib/profileStore.ts` — 旧 v2 缓存的 Photo ID marker 差异触发持久化覆写。
+- `src/lib/profileStore.test.ts` — 仅 Photo ID URL 的 v2 migration persistence 回归。
+- `docs/feature-regression-registry.md` — 新增 `FR-P1-ID-01`，登记“不持久化原始证件引用”的不变量与测试映射。
+- `docs/change-release-ledger.md` — 本独立 P1 修复及后续发布证据。
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Production data / external sync / notification / media job: none; change only writes the current device's existing AsyncStorage record during its normal local read migration.
+- Related units: follow-up to `mobile/CRL-20260819-003@fe97861d75eb73fddf89aa5ea3e64f518f51e984`; paired Root profile-document contract remains `root/CRL-20260819-003` and is not modified.
+- Delivery dependency: the paired Root runtime must be deployed before any mobile OTA/native delivery; this local cache repair does not prove OTA, build, device or production behavior.
+
+### Validation
+
+- `NODE_PATH=<existing mobile dependencies> node <existing jest> --runInBand --no-cache src/lib/profileStore.test.ts` — passed: 1 suite / 2 tests, including persisted-only-Photo-ID migration; used an existing local dependency path without installing or adding `node_modules` to the candidate.
+- `git diff --check` — passed.
+- Mobile `npm run check:ci` — blocked in the full Jest phase: TypeScript passed; ESLint passed with 0 errors / 109 existing warnings; ledger auditor 32 tests, current ledger coverage, button audit and fast tests (3 suites / 18 tests) passed; then existing `src/lib/inspectionMediaQueue.test.ts` self-complete case failed because its fixed `2026-07-29` capture timestamp exceeded the 30-day queue retention window on the current date. The target profile-store suite passed.
+- `npm test -- --runInBand --no-cache src/lib/inspectionMediaQueue.test.ts` — failed reproducibly: 1 failed / 3 passed; unrelated to this CRL's staged files and no repair is included without new CRL selection.
+- Post-`mobile/CRL-20260828-003` combined candidate: target `profileStore` and inspection-media regressions passed 2 suites / 6 tests; typecheck passed; ESLint passed with 0 errors / 109 existing warnings; ledger auditor regression passed 32 tests; ledger coverage, strict button audit and fast tests passed; silent full Jest passed 58 suites / 332 tests.
+- Feature-registry audit — not run: this mobile repository provides neither `check:feature-registry` nor `scripts/audit_feature_regression_registry.py`.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** `none`; clean isolated candidate contains no untracked paths.
+- `docs/feature-regression-registry.md` — SHA-256: `e12989e436d2042b9ec5322344a6381cc550d2159e0fec1cfb0026745b8b4dca`
+- `src/lib/profileStore.test.ts` — SHA-256: `4d19a2f705682d4dae38157fb93a7526ff4b1e5973d6f2e31bc9fac48d563236`
+- `src/lib/profileStore.test.ts` — SHA-256: `4dfa3d918be10f7f9e4b85cf5d3f95f6b36018fd645073cbdcf5199b803b5d26`
+- `src/lib/profileStore.test.ts` — SHA-256: `a661a604790d84492bc7260a7ae4573c1287cbd20a8be2e25b5b195bde95a124`
+- `src/lib/profileStore.ts` — SHA-256: `14c252442f80525158415e0c8d378a98dfa7d40a516b3bb46e779012387dec3a`
+
+### Release Attempts
+
+#### RA-20260828-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260819-003`, `CRL-20260819-004`, `CRL-20260827-001`, `CRL-20260828-001`, `CRL-20260828-002`
+- Selected CRL identities: `mobile/CRL-20260819-003`, `mobile/CRL-20260819-004`, `mobile/CRL-20260827-001`, `mobile/CRL-20260828-001`, `mobile/CRL-20260828-002`
+- Intended action: `commit`
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-28 22:14 AEST`.
+- Candidate patch SHA-256: `efabe77bf09ef2ae7671c5361e04e1a6dd4265d204d2500959294dfdc59b81e4`, excluding `docs/change-release-ledger.md`; staged-new-content-only fingerprint is `28c89fe04236b7aa9c91b93f38beabf24323bbf32a523b9f39ea0e288ce21d7e`.
+- Commit SHA: `not committed`.
+- Dependencies: `mobile/CRL-20260819-003@fe97861d75eb73fddf89aa5ea3e64f518f51e984`; the three already-local CRLs remain jointly required because this P1 changes the same selected mobile release candidate.
+- Required validation: `FAIL`; evidence: target profile-store regression, TypeScript, lint, ledger, button and fast gates passed, but the current full Jest suite reproducibly fails in the unrelated stale-timestamp inspection-media test.
+- Shared-hunk review: `PASS`; evidence: the exact staged candidate contains only the five declared P1 hunk fingerprints; no untracked or unselected path is staged.
+- Generated-file review: `PASS`; evidence: TypeScript source/test and Markdown only; no generated or sensitive path is staged.
+- Technical state: `verified`.
+- User authorization: `selected-for-commit`; evidence: user explicitly confirmed on 2026-08-28 that `mobile/CRL-20260828-002` is included with the four existing mobile CRLs for this local commit; this is not push authorization.
+- Independent review: `NO-GO for push`; evidence: fresh read-only push review found the legacy Photo ID URL persistence defect in `src/lib/profileStore.ts:42` and required this minimal repair plus a regression.
+- Action conclusion: `BLOCKED`; blockers: the full Jest suite fails in a separate stale-timestamp test fixture; fresh independent commit review must follow a passing full validation. Push, PR, Dev merge, deployment, OTA/build and device verification are not authorized.
+
+### Risks / Release Notes
+
+- Risk: the existing migration executes on normal local profile reads; the new test proves serialized mock storage only, not a real device cache or a production document read.
+- Sensitive-information review: no real document URL/key, token, `.env`, credential, cache dump, media bytes or production data is added; the test uses a non-resolving placeholder string only.
+- Rollback: revert the Photo ID comparison and its focused regression/registry/ledger records; no server or data rollback is required.
+- Git state: uncommitted, not pushed, no PR, Dev merge, deployment, OTA/build or device/production verification.
+
 ## CRL-20260828-001 — 发布账本 hunk 对账门禁（mobile）
 
 - **Repository:** `mobile`
@@ -79,6 +155,76 @@
 - A reconciliation proves only an audited Git hunk-header relocation; it never authorizes a behavior rewrite, source mutation, push, PR, Dev merge, deployment, OTA/build or device verification.
 - Sensitive-information review: the range contains only Python source/tests and Markdown; no secrets, `.env`, tokens, URLs, media bytes, caches or production records.
 - Git state: local candidate staged for commit; not pushed.
+
+## CRL-20260828-003 — Inspection media self-complete 测试保留期夹具（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready; selected for commit
+- **Updated:** 2026-08-28 22:39 AEST
+- **Request:** 修复 Full Regression 发现的确定性测试漂移：self-complete lockbox video 用例使用已超过本地队列 30 天保留期的固定 capture timestamp，导致当前日期下正常过期清理而不上传。
+- **Outcome:** self-complete 测试使用执行时的 capture timestamp，并在请求断言中复用同一值；仍验证本地优先视频上传、专用 self-complete 保存路由和不调用普通 lockbox 路由。
+
+### Implementation
+
+- Previous behavior: 测试将 `captured_at` 固定在 2026-07-29；当前时间超过由该值推导的 `retain_until` 后，生产队列按既有规则过期清理，mock 上传调用为零而测试失败。
+- New behavior: 测试在开始时生成当前 ISO timestamp，入队和 `uploadSelfLockboxVideo` 期望使用同一变量，始终处于正常 30 天保留窗口。
+- Key decisions: 不改 `inspectionMediaQueue.ts`、30 天保留期、上传重试、私有文件清理、API、任务状态、权限或生产数据；这是测试夹具修复而非运行时行为变更。
+
+### Files / Areas
+
+- `src/lib/inspectionMediaQueue.test.ts` — self-complete 视频测试的当前 capture timestamp 与同值断言。
+- `docs/change-release-ledger.md` — 本独立 P2 测试稳定性单元与发布证据。
+
+### Impact / Dependencies
+
+- Application/API/database/config/dependencies/production data: none.
+- External sync/notification/media job: none; Jest mock-only test runs。
+- Related units: validates the existing lockbox-video local-first and self-complete routing contract; follows `mobile/CRL-20260827-001` as the current Full Regression stabilization work, but does not change its runtime behavior.
+- Feature Regression Registry: not applicable; existing self-complete business assertions remain intact and this change only makes their fixture time valid.
+
+### Validation
+
+- Reproduction before repair: `npm test -- --runInBand --no-cache src/lib/inspectionMediaQueue.test.ts` — failed reproducibly: 1 failed / 3 passed; the fixed timestamp was outside the production retention window.
+- `NODE_PATH=<existing mobile dependencies> node <existing jest> --runInBand --no-cache src/lib/inspectionMediaQueue.test.ts src/lib/profileStore.test.ts` — passed: 2 suites / 6 tests.
+- Combined candidate validation: TypeScript passed; ESLint passed with 0 errors / 109 existing warnings; ledger auditor regression passed 32 tests; current ledger coverage, strict button audit and fast tests passed; silent full Jest passed 58 suites / 332 tests. Existing dependencies were temporarily linked only for the command and then removed; none were staged.
+- Feature-registry audit — not run: this mobile repository provides neither `check:feature-registry` nor `scripts/audit_feature_regression_registry.py`.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** `none`; clean isolated candidate contains no untracked paths.
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `63032b7b5e0bb36a1c81eb4d10c84bc8eeb6247e0ff0be56cde1fea0e5e37b53`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `84222184401730805bc7ed43398ae43a116ce2a99acc221393d2794168e20e11`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `91041882a9b8a2e26290a8a38de65a515452e58f54cfcbc94449cdded2574fbf`
+
+### Release Attempts
+
+#### RA-20260828-004
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260819-003`, `CRL-20260819-004`, `CRL-20260827-001`, `CRL-20260828-001`, `CRL-20260828-002`, `CRL-20260828-003`
+- Selected CRL identities: `mobile/CRL-20260819-003`, `mobile/CRL-20260819-004`, `mobile/CRL-20260827-001`, `mobile/CRL-20260828-001`, `mobile/CRL-20260828-002`, `mobile/CRL-20260828-003`
+- Intended action: `commit`
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-28 22:14 AEST`.
+- Candidate patch SHA-256: `not created`.
+- Commit SHA: `not committed`.
+- Dependencies: `none`.
+- Required validation: `PASS`; evidence: targeted 2-suite / 6-test regression, typecheck, lint (0 errors / 109 existing warnings), 32-test ledger auditor, ledger/button/fast gates and silent full Jest (58 suites / 332 tests) passed.
+- Shared-hunk review: `PASS`; evidence: the exact staged candidate contains only 8 declared P1/P2 hunk fingerprints across 5 paths; no untracked or unselected path is staged.
+- Generated-file review: `PASS`; evidence: TypeScript source/tests and Markdown only; no generated or sensitive path is staged.
+- Technical state: `candidate`.
+- User authorization: `selected-for-commit`; evidence: user explicitly confirmed the new test-fixture unit on 2026-08-28 for local commit with the existing five mobile CRLs; this is not push authorization.
+- Independent review: `GO for local content commit`; evidence: independent read-only review checked the exact staged 5-path / 8-hunk candidate, the complete 21-path `origin/Dev...working-tree` range, staged fingerprint `28c89fe04236b7aa9c91b93f38beabf24323bbf32a523b9f39ea0e288ce21d7e`, full-range fingerprint `efabe77bf09ef2ae7671c5361e04e1a6dd4265d204d2500959294dfdc59b81e4`, validation evidence, secret/generated-file risk and clean Git state; no P0/P1 or uncovered current-task path was found.
+- Action conclusion: `GO` for local content commit. Non-blocking P2: the hunk-reconciliation governance test has no explicit malformed/duplicate-mapping cases; current fail-closed guards were reviewed. Push, PR, Dev merge, deployment, OTA/build and device verification are not authorized.
+
+### Risks / Release Notes
+
+- Risk: test time is intentionally dynamic, so it validates the queue within its valid retention window; explicit expiry behavior remains covered by queue expiration tests.
+- Sensitive-information review: no tokens, real media URL/key, `.env`, credentials, cache dump, media bytes or production data is added.
+- Rollback: restore the fixed test timestamp; no runtime/server/data rollback is needed.
+- Git state: uncommitted, not pushed, no PR, Dev merge, deployment, OTA/build or device/production verification.
 
 ## CRL-20260827-001 — TasksScreen 瞬时反馈定时器清理与 CI 测试稳定性（mobile）
 

@@ -123,6 +123,25 @@
 - Post-release validation: administrator, offline manager, customer service and eligible task roles verify list → detail → viewer. Wrong task, unrelated media and unauthorized user remain server-side `403`.
 - Does not cover P1-NTF-01/02, Photo ID/Visa, object recovery, R2 ACL, recipient policy, Badge, Push, deployment, OTA or real-device proof.
 
+## FR-P1-ID-01 — Photo ID/Visa 资料缓存不持久化原始引用
+
+- **Status:** active
+- **Maintenance scope:** `mobile`; paired Root profile-document authorization and self-service reader are reused without modification.
+- **Last reviewed:** 2026-08-28 Australia/Melbourne
+- **Business outcome:** 已登录用户的 v2 profile 缓存只可保留 Photo ID/Visa 的 `uploaded` presence marker 或 `null`，绝不持久化历史文档 URL/key。任何旧缓存 URL 在首次读取时必须立即覆写为 marker；页面继续走认证自助读取，不回退原始 URL。
+- **Related CRLs:** `mobile/CRL-20260819-003`, `mobile/CRL-20260828-002`; paired `root/CRL-20260819-003`.
+
+### Test-to-invariant mapping
+
+- `src/lib/profileStore.test.ts` — 仅含旧 Photo ID URL 的 v2 缓存在读取后返回并持久化 `uploaded`，序列化内容不再包含旧 URL。
+- `src/screens/me/ProfileEditScreen.test.tsx` — 图片资料只根据 presence 标记和认证 self-service reader 显示，不回退原始 URL。
+- Root `users/me/profile-documents/:type` — 当前用户的证件读取仍由既有 Root 授权路由强制；本 mobile 修复不修改其鉴权。
+
+### Shared validation and release boundary
+
+- Local proof covers only cache migration and serialization; it does not read a real document or verify object recovery.
+- Root backend must precede any mobile OTA/native delivery. OTA、EAS/native、真实设备和生产文档验证均需单独授权。
+
 ## FR-P1-FIN-01 — 报销凭证私有图片认证读取
 
 - **Status:** active

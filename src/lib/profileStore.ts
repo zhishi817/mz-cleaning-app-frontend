@@ -39,7 +39,11 @@ export async function getProfile(owner: { id?: string | null; username?: string 
       visa_document_url: profileDocumentPresence(v2.visa_document_url),
       visa_grant_number: v2.visa_grant_number || '',
     }
-    if (normalized.visa_document_url !== v2.visa_document_url || normalized.visa_grant_number !== v2.visa_grant_number) {
+    if (
+      normalized.photo_id_url !== v2.photo_id_url ||
+      normalized.visa_document_url !== v2.visa_document_url ||
+      normalized.visa_grant_number !== v2.visa_grant_number
+    ) {
       await setJson(key, normalized)
     }
     return normalized
