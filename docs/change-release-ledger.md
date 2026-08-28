@@ -58,13 +58,13 @@
 - Intended action: `commit`
 - Branch: `codex/release-p2-id-src-20260827`
 - Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-28 22:14 AEST`.
-- Candidate patch SHA-256: `efabe77bf09ef2ae7671c5361e04e1a6dd4265d204d2500959294dfdc59b81e4`, excluding `docs/change-release-ledger.md`; staged-new-content-only fingerprint is `28c89fe04236b7aa9c91b93f38beabf24323bbf32a523b9f39ea0e288ce21d7e`.
+- Candidate patch SHA-256: `not created`.
 - Commit SHA: `not committed`.
 - Dependencies: `mobile/CRL-20260819-003@fe97861d75eb73fddf89aa5ea3e64f518f51e984`; the three already-local CRLs remain jointly required because this P1 changes the same selected mobile release candidate.
 - Required validation: `FAIL`; evidence: target profile-store regression, TypeScript, lint, ledger, button and fast gates passed, but the current full Jest suite reproducibly fails in the unrelated stale-timestamp inspection-media test.
 - Shared-hunk review: `PASS`; evidence: the exact staged candidate contains only the five declared P1 hunk fingerprints; no untracked or unselected path is staged.
 - Generated-file review: `PASS`; evidence: TypeScript source/test and Markdown only; no generated or sensitive path is staged.
-- Technical state: `verified`.
+- Technical state: `candidate`.
 - User authorization: `selected-for-commit`; evidence: user explicitly confirmed on 2026-08-28 that `mobile/CRL-20260828-002` is included with the four existing mobile CRLs for this local commit; this is not push authorization.
 - Independent review: `NO-GO for push`; evidence: fresh read-only push review found the legacy Photo ID URL persistence defect in `src/lib/profileStore.ts:42` and required this minimal repair plus a regression.
 - Action conclusion: `BLOCKED`; blockers: the full Jest suite fails in a separate stale-timestamp test fixture; fresh independent commit review must follow a passing full validation. Push, PR, Dev merge, deployment, OTA/build and device verification are not authorized.
@@ -208,16 +208,16 @@
 - Intended action: `commit`
 - Branch: `codex/release-p2-id-src-20260827`
 - Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-28 22:14 AEST`.
-- Candidate patch SHA-256: `not created`.
-- Commit SHA: `not committed`.
+- Candidate patch SHA-256: `efabe77bf09ef2ae7671c5361e04e1a6dd4265d204d2500959294dfdc59b81e4`, excluding `docs/change-release-ledger.md`; staged-new-content-only fingerprint is `28c89fe04236b7aa9c91b93f38beabf24323bbf32a523b9f39ea0e288ce21d7e`.
+- Commit SHA: `33237286ad1975d348f43c59c3443f690e4bc893` (candidate content commit; exact audit head follows in the range report).
 - Dependencies: `none`.
 - Required validation: `PASS`; evidence: targeted 2-suite / 6-test regression, typecheck, lint (0 errors / 109 existing warnings), 32-test ledger auditor, ledger/button/fast gates and silent full Jest (58 suites / 332 tests) passed.
 - Shared-hunk review: `PASS`; evidence: the exact staged candidate contains only 8 declared P1/P2 hunk fingerprints across 5 paths; no untracked or unselected path is staged.
 - Generated-file review: `PASS`; evidence: TypeScript source/tests and Markdown only; no generated or sensitive path is staged.
-- Technical state: `candidate`.
+- Technical state: `committed`.
 - User authorization: `selected-for-commit`; evidence: user explicitly confirmed the new test-fixture unit on 2026-08-28 for local commit with the existing five mobile CRLs; this is not push authorization.
 - Independent review: `GO for local content commit`; evidence: independent read-only review checked the exact staged 5-path / 8-hunk candidate, the complete 21-path `origin/Dev...working-tree` range, staged fingerprint `28c89fe04236b7aa9c91b93f38beabf24323bbf32a523b9f39ea0e288ce21d7e`, full-range fingerprint `efabe77bf09ef2ae7671c5361e04e1a6dd4265d204d2500959294dfdc59b81e4`, validation evidence, secret/generated-file risk and clean Git state; no P0/P1 or uncovered current-task path was found.
-- Action conclusion: `GO` for local content commit. Non-blocking P2: the hunk-reconciliation governance test has no explicit malformed/duplicate-mapping cases; current fail-closed guards were reviewed. Push, PR, Dev merge, deployment, OTA/build and device verification are not authorized.
+- Action conclusion: `GO` for local content commit completed. Non-blocking P2: the hunk-reconciliation governance test has no explicit malformed/duplicate-mapping cases; current fail-closed guards were reviewed. Push, PR, Dev merge, deployment, OTA/build and device verification are not authorized.
 
 ### Risks / Release Notes
 
