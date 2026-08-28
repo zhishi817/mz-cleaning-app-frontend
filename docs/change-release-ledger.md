@@ -42,11 +42,11 @@
 - **Repository:** `mobile`
 - **Status:** `prepared`
 - **Untracked review:** `none`; clean isolated candidate contains no untracked paths.
-- `docs/feature-regression-registry.md` — SHA-256: `e12989e436d2042b9ec5322344a6381cc550d2159e0fec1cfb0026745b8b4dca`
-- `src/lib/profileStore.test.ts` — SHA-256: `4d19a2f705682d4dae38157fb93a7526ff4b1e5973d6f2e31bc9fac48d563236`
+- `docs/feature-regression-registry.md` — SHA-256: `3e5be373c143d393c38d923e461c3e104db338cc3a8e0baf851a8b9d0881287d`
+- `src/lib/profileStore.test.ts` — SHA-256: `c71debc470198a6efa2948d3b06869c93582a5edcc1fe3348815e2bc931843a3`
 - `src/lib/profileStore.test.ts` — SHA-256: `4dfa3d918be10f7f9e4b85cf5d3f95f6b36018fd645073cbdcf5199b803b5d26`
 - `src/lib/profileStore.test.ts` — SHA-256: `a661a604790d84492bc7260a7ae4573c1287cbd20a8be2e25b5b195bde95a124`
-- `src/lib/profileStore.ts` — SHA-256: `14c252442f80525158415e0c8d378a98dfa7d40a516b3bb46e779012387dec3a`
+- `src/lib/profileStore.ts` — SHA-256: `7daa0bd97232d211b83415aa72625fcbc99dd1b0cfe05961e17f5b08c4dd4c64`
 
 ### Release Attempts
 
@@ -214,9 +214,10 @@
 - Required validation: `PASS`; evidence: targeted 2-suite / 6-test regression, typecheck, lint (0 errors / 109 existing warnings), 32-test ledger auditor, ledger/button/fast gates and silent full Jest (58 suites / 332 tests) passed.
 - Shared-hunk review: `PASS`; evidence: the exact staged candidate contains only 8 declared P1/P2 hunk fingerprints across 5 paths; no untracked or unselected path is staged.
 - Generated-file review: `PASS`; evidence: TypeScript source/tests and Markdown only; no generated or sensitive path is staged.
+- Hunk reconciliation: `docs/feature-regression-registry.md#e12989e436d2042b9ec5322344a6381cc550d2159e0fec1cfb0026745b8b4dca -> 3e5be373c143d393c38d923e461c3e104db338cc3a8e0baf851a8b9d0881287d`; evidence: the adjacent previously committed Inbox registry insert shifts the new P1 registry hunk header only. | `src/lib/profileStore.test.ts#f3e836c829d31f8a903b46fba1d2197563acf4dc465061003fe54a75ea74ce26 -> c71debc470198a6efa2948d3b06869c93582a5edcc1fe3348815e2bc931843a3`; evidence: the P2 assertion and new P1 migration test now form one exact-range hunk; the P2 assertion body is unchanged. | `src/lib/profileStore.test.ts#4d19a2f705682d4dae38157fb93a7526ff4b1e5973d6f2e31bc9fac48d563236 -> c71debc470198a6efa2948d3b06869c93582a5edcc1fe3348815e2bc931843a3`; evidence: the P1 test addition joins the same exact-range hunk without changing the P2 assertion body. | `src/lib/profileStore.ts#1bd977c7945ff28b45200f2753b696b8d82ecdc9a9922dcf10ab5ba98e9fbe40 -> f200a60107b59e2462c28b33eea1b7871c2599fe9c9f3ee5bca6541614f0a195`; evidence: the P1 condition adds four earlier lines and shifts the unchanged legacy-marker hunk header. | `src/lib/profileStore.ts#b0896fb156c2753343290ec375db129e04e35bdbe4e0b3e35a4ed82710c52eaf -> 6c986d6791f8094c947579ab7fdac3387fa1ad0acbcc6671ebf3a519551cc325`; evidence: preceding P1 condition and unchanged legacy-marker hunk shift the setProfile hunk header only. | `src/lib/profileStore.ts#14c252442f80525158415e0c8d378a98dfa7d40a516b3bb46e779012387dec3a -> 7daa0bd97232d211b83415aa72625fcbc99dd1b0cfe05961e17f5b08c4dd4c64`; evidence: the new Photo ID persistence condition has the same source body but its final base-relative hunk header differs.
 - Technical state: `committed`.
 - User authorization: `selected-for-commit`; evidence: user explicitly confirmed the new test-fixture unit on 2026-08-28 for local commit with the existing five mobile CRLs; this is not push authorization.
-- Independent review: `GO for local content commit`; evidence: independent read-only review checked the exact staged 5-path / 8-hunk candidate, the complete 21-path `origin/Dev...working-tree` range, staged fingerprint `28c89fe04236b7aa9c91b93f38beabf24323bbf32a523b9f39ea0e288ce21d7e`, full-range fingerprint `efabe77bf09ef2ae7671c5361e04e1a6dd4265d204d2500959294dfdc59b81e4`, validation evidence, secret/generated-file risk and clean Git state; no P0/P1 or uncovered current-task path was found.
+- Independent review: `GO for local content commit and reconciliation receipt`; evidence: the initial independent review checked the exact staged 5-path / 8-hunk candidate, complete 21-path range, validation and secret/generated-file risk; a second independent read-only review checked the six ledger-only mappings, scope-only replacements, unchanged CRL identity and `origin/Dev...33237286ad1975d348f43c59c3443f690e4bc893` range (99 non-ledger hunks) with no P0/P1. Non-blocking P2: add a future negative audit test for many-old-to-one-new mapping coverage across every associated CRL.
 - Action conclusion: `GO` for local content commit completed. Non-blocking P2: the hunk-reconciliation governance test has no explicit malformed/duplicate-mapping cases; current fail-closed guards were reviewed. Push, PR, Dev merge, deployment, OTA/build and device verification are not authorized.
 
 ### Risks / Release Notes
@@ -363,11 +364,11 @@
 - `src/lib/api.ts` — SHA-256: `946cec7078dca0e35a1f315941e99c4b76f063a0ee005ad69727f70e33a0af90`
 - `src/lib/api.ts` — SHA-256: `b1643d08b6ab8c70e801e7728aae66830db986a39217b0c4b404bcd651abb298`
 - `src/lib/api.ts` — SHA-256: `eb9b4ef046e1006b817bffeaf68e96711a7f4f2cd9df6d1babdeef8e5c3be998`
-- `src/lib/profileStore.test.ts` — SHA-256: `f3e836c829d31f8a903b46fba1d2197563acf4dc465061003fe54a75ea74ce26`
+- `src/lib/profileStore.test.ts` — SHA-256: `c71debc470198a6efa2948d3b06869c93582a5edcc1fe3348815e2bc931843a3`
 - `src/lib/profileStore.ts` — SHA-256: `06921502e959846ad078d6a8243bd981257d44d87da0457d7efe3fe13bb261a6`
-- `src/lib/profileStore.ts` — SHA-256: `1bd977c7945ff28b45200f2753b696b8d82ecdc9a9922dcf10ab5ba98e9fbe40`
+- `src/lib/profileStore.ts` — SHA-256: `f200a60107b59e2462c28b33eea1b7871c2599fe9c9f3ee5bca6541614f0a195`
 - `src/lib/profileStore.ts` — SHA-256: `98295f2a09e233f3d59a5d0bab2e8a20a80128d13012689433f7c1a0f96d86eb`
-- `src/lib/profileStore.ts` — SHA-256: `b0896fb156c2753343290ec375db129e04e35bdbe4e0b3e35a4ed82710c52eaf`
+- `src/lib/profileStore.ts` — SHA-256: `6c986d6791f8094c947579ab7fdac3387fa1ad0acbcc6671ebf3a519551cc325`
 - `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `2709c4e8f9bc57d59af3f30c9452a9a2eedc46d8613e17a45dc4e513cb317582`
 - `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `6bba4f4565e61715fc910ab2874bdec503aac0dcc1235f1d4f0f378d45f1a893`
 - `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `6ea39827f17a384d0d702c3473f9184230722f9eb93fc651509c935553412564`
