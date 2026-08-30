@@ -220,6 +220,25 @@
 - Independent review: `GO for local content commit and reconciliation receipt`; evidence: the initial independent review checked the exact staged 5-path / 8-hunk candidate, complete 21-path range, validation and secret/generated-file risk; a second independent read-only review checked the six ledger-only mappings, scope-only replacements, unchanged CRL identity and `origin/Dev...33237286ad1975d348f43c59c3443f690e4bc893` range (99 non-ledger hunks) with no P0/P1. Non-blocking P2: add a future negative audit test for many-old-to-one-new mapping coverage across every associated CRL.
 - Action conclusion: `GO` for local content commit completed. Non-blocking P2: the hunk-reconciliation governance test has no explicit malformed/duplicate-mapping cases; current fail-closed guards were reviewed. Push, PR, Dev merge, deployment, OTA/build and device verification are not authorized.
 
+#### RA-20260830-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260819-003`, `CRL-20260819-004`, `CRL-20260827-001`, `CRL-20260828-001`, `CRL-20260828-002`, `CRL-20260828-003`
+- Selected CRL identities: `mobile/CRL-20260819-003`, `mobile/CRL-20260819-004`, `mobile/CRL-20260827-001`, `mobile/CRL-20260828-001`, `mobile/CRL-20260828-002`, `mobile/CRL-20260828-003`
+- Intended action: `push`
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-30 17:09 AEST`.
+- Candidate patch SHA-256: `efabe77bf09ef2ae7671c5361e04e1a6dd4265d204d2500959294dfdc59b81e4`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `33237286ad1975d348f43c59c3443f690e4bc893` (candidate content commit; audit head follows in the range report).
+- Dependencies: none.
+- Required validation: `PASS`; evidence: targeted 2-suite / 6-test regression, typecheck, lint (0 errors / 109 existing warnings), 32-test ledger auditor, ledger/button/fast gates and silent full Jest (58 suites / 332 tests) passed.
+- Shared-hunk review: `PASS`; evidence: the exact candidate contains only declared scope hunk fingerprints; 21 changed paths and 99 non-ledger final-range hunks are covered by the six selected CRLs.
+- Generated-file review: `PASS`; evidence: exact range contains TypeScript/Python source/tests and Markdown only; no generated files or sensitive-information categories.
+- Technical state: `committed`.
+- User authorization: `approved-for-push`; evidence: user explicitly requested `推送` on 2026-08-30 for this reported mobile branch and committed candidate; this does not authorize a PR, Dev merge, deployment, OTA/build or device verification.
+- Independent review: `GO for push`; evidence: independent read-only pre-push review on 2026-08-30 checked `origin/Dev@db91ae40412b91072951b590fca984499ea967da...457b665da2595533bc037431070b7b0b09abba07`, all six CRLs, 21 selected paths / 99 non-ledger hunks, six reconciliations, clean worktree, whitespace, secret/generated-file risk and remote fast-forward state; no P0/P1 and only a non-blocking governance-test P2 gap.
+- Action conclusion: `GO` for push; blockers: none. PR, Dev merge, deployment, OTA/build and device verification are outside this attempt.
+
 ### Risks / Release Notes
 
 - Risk: test time is intentionally dynamic, so it validates the queue within its valid retention window; explicit expiry behavior remains covered by queue expiration tests.
