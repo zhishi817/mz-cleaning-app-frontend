@@ -7536,7 +7536,7 @@
 - Base: `origin/Dev@4f75f5f097b148ebe1a209289267892c8f2e34b0`; fetched at `2026-08-30 AEST`
 - Candidate patch SHA-256: `efa86065d8e2d3f3dc40ce2f11c79ce53a8918aa83fd76f32cf321a25aa35458`, excluding `docs/change-release-ledger.md` from the registered `MERGE_HEAD` candidate range.
 - Commit SHA: `c9884e0ecfb58f61a0ed37fb773d29be929cc48f` (candidate content merge commit).
-- Dependencies: `mobile/CRL-20260830-002`.
+- Dependencies: none; `mobile/CRL-20260830-002` is co-selected in this exact attempt, not an external dependency.
 - Required validation: `PASS`; evidence: 41 focused auditor tests, final-candidate Python compile, exact merge-parent pre-commit gate, current ledger coverage, whitespace check and `npm run check:ci` (58 suites / 332 tests; lint 0 errors / 109 existing warnings) passed.
 - Shared-hunk review: `PASS`; evidence: final 16 non-ledger hunk fingerprints exactly match the combined selected CRLs relative to the current registered `MERGE_HEAD`.
 - Generated-file review: `PASS`; evidence: final candidate contains only Python source/tests and Markdown; no generated or sensitive path is present.
