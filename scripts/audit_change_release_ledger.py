@@ -40,6 +40,9 @@ STAGED_SCOPE_HEADING = "### Staged Commit Scope"
 SCOPE_HUNK = re.compile(
     r"^- `([^`]+)`\s+—\s+SHA-256:\s*`([0-9a-fA-F]{64})`\s*$"
 )
+HUNK_RECONCILIATION = re.compile(
+    r"^`(?P<path>[^`#]+)#(?P<old>[0-9a-fA-F]{64})\s*->\s*(?P<new>[0-9a-fA-F]{64})`\s*;\s*evidence:\s*.+$"
+)
 DIFF_HUNK_HEADER = re.compile(
     r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? \+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@"
 )
@@ -587,6 +590,84 @@ def selected_scope_hunks(sections: list[CrlSection]) -> set[tuple[str, str]]:
     return set().union(*(parse_staged_commit_scope(section).hunk_fingerprints for section in sections))
 
 
+def parse_hunk_reconciliation(
+    attempt: ReleaseAttempt,
+) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """Parse the one-or-more structured scope replacements recorded on an attempt."""
+    value = field_value(attempt, "Hunk reconciliation")
+    if not value:
+        return [], []
+    entries = [entry.strip() for entry in value.split(" | ") if entry.strip()]
+    mappings: list[tuple[str, str, str]] = []
+    errors: list[str] = []
+    for entry in entries:
+        match = HUNK_RECONCILIATION.fullmatch(entry)
+        if not match:
+            errors.append("Hunk reconciliation must use `path#<old SHA-256> -> <new SHA-256>`; evidence: <reason>.")
+            continue
+        mappings.append(
+            (
+                match.group("path"),
+                match.group("old").lower(),
+                match.group("new").lower(),
+            )
+        )
+    if len(set(mappings)) != len(mappings):
+        errors.append("Hunk reconciliation contains a duplicate old-to-new mapping.")
+    if any(old == new for _, old, new in mappings):
+        errors.append("Hunk reconciliation must replace an old fingerprint with a different new fingerprint.")
+    return mappings, errors
+
+
+def reconciliation_scope_issues(
+    before_sections: dict[str, CrlSection],
+    staged_sections: dict[str, CrlSection],
+    selected_ids: frozenset[str],
+    attempt: ReleaseAttempt,
+) -> tuple[list[str], list[tuple[str, str, str]]]:
+    """Allow only an exactly recorded, hunk-line-only scope reconciliation."""
+    mappings, errors = parse_hunk_reconciliation(attempt)
+    before_selected = [before_sections[identifier] for identifier in selected_ids]
+    staged_selected = [staged_sections[identifier] for identifier in selected_ids]
+    before_hunks = selected_scope_hunks(before_selected)
+    staged_hunks = selected_scope_hunks(staged_selected)
+    removed = before_hunks - staged_hunks
+    added = staged_hunks - before_hunks
+    expected_removed = {(path, old) for path, old, _ in mappings}
+    expected_added = {(path, new) for path, _, new in mappings}
+    if removed != expected_removed or added != expected_added:
+        errors.append("Hunk reconciliation must replace exactly the declared old/new Staged Commit Scope fingerprints.")
+    for identifier in selected_ids:
+        before_lines = subsection(before_sections[identifier].lines, STAGED_SCOPE_HEADING)
+        staged_lines = subsection(staged_sections[identifier].lines, STAGED_SCOPE_HEADING)
+        normalized_before = list(before_lines)
+        for path, old, new in mappings:
+            old_line = f"- `{path}` — SHA-256: `{old}`"
+            new_line = f"- `{path}` — SHA-256: `{new}`"
+            normalized_before = [new_line if line == old_line else line for line in normalized_before]
+        if tuple(normalized_before) != staged_lines:
+            errors.append("Hunk reconciliation may change only the declared Staged Commit Scope fingerprint lines.")
+            break
+    return errors, mappings
+
+
+def reconciliation_range_issues(
+    attempt: ReleaseAttempt,
+    declared_hunks: set[tuple[str, str]],
+    actual_hunks: set[tuple[str, str]],
+) -> tuple[list[str], list[tuple[str, str, str]]]:
+    """Require a recorded reconciliation to describe the final exact-range scope."""
+    mappings, errors = parse_hunk_reconciliation(attempt)
+    for path, old, new in mappings:
+        if (path, old) in declared_hunks:
+            errors.append("Hunk reconciliation keeps its old fingerprint in the final Staged Commit Scope.")
+        if (path, new) not in declared_hunks:
+            errors.append("Hunk reconciliation replacement is absent from the final Staged Commit Scope.")
+        if (path, new) not in actual_hunks:
+            errors.append("Hunk reconciliation replacement is absent from the exact committed range.")
+    return errors, mappings
+
+
 def selected_identity_issues(
     sections: list[CrlSection], expected_repository: str
 ) -> tuple[list[str], list[str]]:
@@ -683,13 +764,15 @@ def staged_ledger_scope_issues(root: Path, selected_ids: frozenset[str]) -> list
 
 
 def receipt_only_issues(root: Path, selected_sections: list[CrlSection], selected_identities: frozenset[str]) -> list[str]:
-    """Allow a ledger-only stage only for a verified receipt in selected Release Attempts."""
+    """Allow a verified ledger-only receipt and a tightly scoped hunk reconciliation."""
     errors: list[str] = []
     selected_ids = frozenset(section.identifier for section in selected_sections)
     try:
         before = run_git(root, "show", f"HEAD:{LEDGER_RELATIVE_PATH.as_posix()}")
         staged = run_git(root, "show", f":{LEDGER_RELATIVE_PATH.as_posix()}")
         assert isinstance(before, str) and isinstance(staged, str)
+        before_sections = parse_crl_sections_text(before)
+        staged_sections = parse_crl_sections_text(staged)
         before_ranges = subsection_line_ranges(before, selected_ids, "### Release Attempts")
         staged_ranges = subsection_line_ranges(staged, selected_ids, "### Release Attempts")
         diff = run_git(root, "diff", "--cached", "--unified=0", "--", LEDGER_RELATIVE_PATH.as_posix())
@@ -698,21 +781,34 @@ def receipt_only_issues(root: Path, selected_sections: list[CrlSection], selecte
         return ["Unable to verify the staged ledger-only Release Attempt receipt."]
     if len(before_ranges) != len(selected_ids) or len(staged_ranges) != len(selected_ids):
         errors.append("Ledger-only receipt requires a Release Attempts subsection in every selected CRL.")
+    staged_selected_sections = [staged_sections[identifier] for identifier in selected_ids]
+    attempts = [attempt for section in staged_selected_sections for attempt in parse_attempts(section)]
+    exact_attempts = [attempt for attempt in attempts if attempt.selected_identities == selected_identities]
+    attempt = exact_attempts[-1] if exact_attempts else None
+    reconciliation_mappings: list[tuple[str, str, str]] = []
+    if attempt is not None:
+        reconciliation_errors, reconciliation_mappings = reconciliation_scope_issues(
+            before_sections, staged_sections, selected_ids, attempt
+        )
+        if reconciliation_mappings or reconciliation_errors:
+            errors.extend(reconciliation_errors)
+    before_scope_ranges = subsection_line_ranges(before, selected_ids, STAGED_SCOPE_HEADING)
+    staged_scope_ranges = subsection_line_ranges(staged, selected_ids, STAGED_SCOPE_HEADING)
+    allowed_before_ranges = before_ranges + (before_scope_ranges if reconciliation_mappings else [])
+    allowed_staged_ranges = staged_ranges + (staged_scope_ranges if reconciliation_mappings else [])
     for line in diff.splitlines():
         match = DIFF_HUNK_HEADER.match(line)
         if not match:
             continue
         old_count = int(match.group("old_count") or "1")
         new_count = int(match.group("new_count") or "1")
-        if not line_range_is_within(int(match.group("old_start")), old_count, before_ranges):
+        if not line_range_is_within(int(match.group("old_start")), old_count, allowed_before_ranges):
             errors.append("Ledger-only receipt changes a line outside selected CRL Release Attempts.")
-        if not line_range_is_within(int(match.group("new_start")), new_count, staged_ranges):
+        if not line_range_is_within(int(match.group("new_start")), new_count, allowed_staged_ranges):
             errors.append("Ledger-only receipt adds a line outside selected CRL Release Attempts.")
-    attempts = [attempt for section in selected_sections for attempt in parse_attempts(section)]
-    exact_attempts = [attempt for attempt in attempts if attempt.selected_identities == selected_identities]
     if not exact_attempts:
         return errors + ["Ledger-only receipt has no Release Attempt bound to exactly the selected canonical CRL identities."]
-    attempt = exact_attempts[-1]
+    assert attempt is not None
     if historical_receipt_enabled(attempt):
         return errors + historical_receipt_precommit_issues(root, attempt, selected_sections, selected_identities)
     if leading_status(field_value(attempt, "Technical state"), ("committed", "pushed", "merged", "deployed")) is None:
@@ -735,6 +831,9 @@ def receipt_only_issues(root: Path, selected_sections: list[CrlSection], selecte
         errors.append("Ledger-only receipt content commit is not inside the current base...HEAD ancestry.")
     elif content_patch_sha256(root, base, candidate) != patch_match.group(0).lower():
         errors.append("Ledger-only receipt candidate patch fingerprint does not match its recorded content commit.")
+    for path, _, new in reconciliation_mappings:
+        if (path, new) not in diff_hunk_fingerprints(root, path, f"{base}...{candidate}"):
+            errors.append("Hunk reconciliation replacement is not present in the recorded candidate content range.")
     if not selected_scope_hunks(selected_sections):
         errors.append("Ledger-only receipt requires an existing selected content-hunk scope.")
     return errors
@@ -924,6 +1023,92 @@ def safe_text(value: str, limit: int = 240) -> str:
     return " ".join(value.split())[:limit]
 
 
+def merge_head(root: Path) -> str | None:
+    """Return the active merge parent, if Git is currently preparing a merge."""
+    result = subprocess.run(
+        ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 1:
+        return None
+    if result.returncode:
+        raise GitError(result.stderr.strip() or "Unable to inspect MERGE_HEAD.")
+    return result.stdout.strip()
+
+
+def pre_commit_comparison_base(
+    root: Path, selected_sections: list[CrlSection], selected_identities: frozenset[str]
+) -> tuple[str, str | None]:
+    """Use a merge parent only when the selected attempt records that exact base."""
+    parent = merge_head(root)
+    if parent is None:
+        return "HEAD", None
+    if git_paths(root, "diff", "--name-only", "--diff-filter=U"):
+        return "HEAD", "Merge candidate has unresolved index paths."
+    try:
+        current_dev = resolve_ref(root, "origin/Dev")
+    except GitError:
+        return "HEAD", "Merge candidate requires a locally fetched origin/Dev baseline."
+    if parent != current_dev:
+        return "HEAD", "MERGE_HEAD does not match the current origin/Dev baseline."
+    attempts = [
+        attempt
+        for section in selected_sections
+        for attempt in parse_attempts(section)
+        if attempt.selected_identities == selected_identities
+    ]
+    for attempt in attempts:
+        base_match = SHA.search(field_value(attempt, "Base"))
+        if base_match and resolve_ref(root, base_match.group(0)) == parent:
+            return parent, None
+    return "HEAD", "MERGE_HEAD does not exactly match a selected Release Attempt Base."
+
+
+def staged_candidate_paths(root: Path, comparison_base: str) -> list[str]:
+    return sorted(git_paths(root, "diff", "--cached", comparison_base, "--name-only"))
+
+
+def staged_candidate_ledger_scope_issues(
+    root: Path, selected_ids: frozenset[str], comparison_base: str
+) -> list[str]:
+    """Require ledger hunks to stay in selected CRLs relative to the candidate baseline."""
+    try:
+        before = run_git(root, "show", f"{comparison_base}:{LEDGER_RELATIVE_PATH.as_posix()}")
+        staged = run_git(root, "show", f":{LEDGER_RELATIVE_PATH.as_posix()}")
+        assert isinstance(before, str) and isinstance(staged, str)
+        before_ranges = crl_line_ranges(before, selected_ids)
+        staged_ranges = crl_line_ranges(staged, selected_ids)
+        diff = run_git(
+            root,
+            "diff",
+            "--cached",
+            comparison_base,
+            "--unified=0",
+            "--",
+            LEDGER_RELATIVE_PATH.as_posix(),
+        )
+        assert isinstance(diff, str)
+    except GitError:
+        return ["Unable to verify staged ledger CRL scope."]
+    errors: list[str] = []
+    if len(staged_ranges) != len(selected_ids):
+        errors.append("Staged ledger is missing a selected CRL section.")
+    for line in diff.splitlines():
+        match = DIFF_HUNK_HEADER.match(line)
+        if not match:
+            continue
+        old_count = int(match.group("old_count") or "1")
+        new_count = int(match.group("new_count") or "1")
+        if not line_range_is_within(int(match.group("old_start")), old_count, before_ranges):
+            errors.append("Staged ledger changes a line outside selected CRL sections.")
+        if not line_range_is_within(int(match.group("new_start")), new_count, staged_ranges):
+            errors.append("Staged ledger adds a line outside selected CRL sections.")
+    return errors
+
+
 def check_item(name: str, result: str, evidence: str) -> dict[str, str]:
     return {"gate": name, "result": result, "evidence": safe_text(evidence)}
 
@@ -945,6 +1130,7 @@ def build_pre_commit_report(
         "unselected_staged_files": [],
         "unexpected_hunks": [],
         "missing_hunks": [],
+        "staged_comparison_base": "HEAD",
         "checks": checks,
     }
     if repository != expected_repository:
@@ -973,7 +1159,16 @@ def build_pre_commit_report(
     missing.extend(scope_missing)
     checks.append(check_item("staged commit scope", "FAIL" if scope_errors else "NOT VERIFIED" if scope_missing else "PASS", "; ".join(scope_errors + scope_missing) or "Selected CRL scopes are prepared."))
     try:
-        staged = staged_paths(root)
+        comparison_base, comparison_error = pre_commit_comparison_base(
+            root, selected_sections, frozenset(report["crl_identities"])
+        )
+        report["staged_comparison_base"] = comparison_base
+        if comparison_error:
+            errors.append(comparison_error)
+            checks.append(check_item("staged comparison base", "FAIL", comparison_error))
+        else:
+            checks.append(check_item("staged comparison base", "PASS", comparison_base))
+        staged = staged_candidate_paths(root, comparison_base)
         untracked = untracked_paths(root)
         report["staged_files"] = staged
         report["untracked_files"] = untracked
@@ -996,7 +1191,9 @@ def build_pre_commit_report(
         else:
             checks.append(check_item("untracked files", "PASS", "No untracked files."))
         if LEDGER_RELATIVE_PATH.as_posix() in staged:
-            ledger_scope_errors = staged_ledger_scope_issues(root, selected_ids)
+            ledger_scope_errors = staged_candidate_ledger_scope_issues(
+                root, selected_ids, comparison_base
+            )
             if ledger_scope_errors:
                 errors.extend(ledger_scope_errors)
                 checks.append(check_item("staged ledger CRL scope", "FAIL", "; ".join(ledger_scope_errors)))
@@ -1008,11 +1205,14 @@ def build_pre_commit_report(
         for path in staged:
             if path == LEDGER_RELATIVE_PATH.as_posix():
                 continue
-            fingerprints = diff_hunk_fingerprints(root, path, "--cached")
+            fingerprints = diff_hunk_fingerprints(root, path, "--cached", comparison_base)
             if not fingerprints:
                 non_text_hunk_paths.append(path)
             actual_hunks.update(fingerprints)
-        if receipt_only:
+        if receipt_only and comparison_base != "HEAD":
+            errors.append("Ledger-only receipt candidates cannot use a merge-parent comparison base.")
+            checks.append(check_item("ledger-only receipt", "FAIL", "Merge-parent candidates must include a scoped content change."))
+        elif receipt_only:
             receipt_errors = receipt_only_issues(root, selected_sections, frozenset(report["crl_identities"]))
             if receipt_errors:
                 errors.extend(receipt_errors)
@@ -1334,6 +1534,24 @@ def build_release_report(
                 checks.append(check_item("committed hunk fingerprints", "FAIL", f"unexpected={len(unexpected_hunks)}, missing={len(missing_hunks)}"))
             else:
                 checks.append(check_item("committed hunk fingerprints", "PASS", f"{len(actual_hunks)} non-ledger hunk(s) match scope."))
+            reconciliation_errors, reconciliations = reconciliation_range_issues(
+                attempt, declared_hunks, actual_hunks
+            )
+            errors.extend(reconciliation_errors)
+            reconciliation_evidence = (
+                f"{len(reconciliations)} structured old-to-new mapping(s) match the final range."
+                if reconciliations and not reconciliation_errors
+                else "No hunk reconciliation is recorded."
+                if not reconciliations
+                else "; ".join(reconciliation_errors)
+            )
+            checks.append(
+                check_item(
+                    "hunk reconciliation",
+                    "FAIL" if reconciliation_errors else "PASS",
+                    reconciliation_evidence,
+                )
+            )
         shared = sorted(
             selected_files.intersection(
                 set().union(

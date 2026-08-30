@@ -2461,6 +2461,25 @@ export async function logCopyCompanySecretForApp(token: string, secretId: string
   return (await parseJsonOrThrow(res)) as any
 }
 
+export type ProfileDocumentType = 'photo_id' | 'visa_document'
+
+type MyProfileResponse = {
+  id: string
+  username: string
+  role: string
+  phone_au?: string | null
+  display_name?: string | null
+  avatar_url?: string | null
+  legal_name?: string | null
+  bank_account_name?: string | null
+  bank_bsb?: string | null
+  bank_account_number?: string | null
+  personal_abn?: string | null
+  photo_id_uploaded?: boolean
+  visa_document_uploaded?: boolean
+  visa_grant_number?: string | null
+}
+
 export async function getMyProfile(token: string) {
   const urls = buildUrlCandidates('users/me')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -2471,21 +2490,14 @@ export async function getMyProfile(token: string) {
   }
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as {
-    id: string
-    username: string
-    role: string
-    phone_au?: string | null
-    display_name?: string | null
-    avatar_url?: string | null
-    legal_name?: string | null
-    bank_account_name?: string | null
-    bank_bsb?: string | null
-    bank_account_number?: string | null
-    personal_abn?: string | null
-    photo_id_url?: string | null
-    visa_document_url?: string | null
-    visa_grant_number?: string | null
+  return (await parseJsonOrThrow(res)) as MyProfileResponse
+}
+
+export function profileDocumentImageSource(token: string | null | undefined, type: ProfileDocumentType) {
+  const uri = buildUrlCandidates(`users/me/profile-documents/${type}`)[0] || ''
+  return {
+    uri,
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   }
 }
 
@@ -2518,22 +2530,7 @@ export async function updateMyProfile(
   }
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as {
-    id: string
-    username: string
-    role: string
-    phone_au?: string | null
-    display_name?: string | null
-    avatar_url?: string | null
-    legal_name?: string | null
-    bank_account_name?: string | null
-    bank_bsb?: string | null
-    bank_account_number?: string | null
-    personal_abn?: string | null
-    photo_id_url?: string | null
-    visa_document_url?: string | null
-    visa_grant_number?: string | null
-  }
+  return (await parseJsonOrThrow(res)) as MyProfileResponse
 }
 
 export async function changeMyPassword(token: string, params: { old_password: string; new_password: string }) {

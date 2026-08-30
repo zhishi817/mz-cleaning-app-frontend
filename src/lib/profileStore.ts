@@ -16,6 +16,12 @@ export type Profile = {
   owner_username?: string
 }
 
+export const PROFILE_DOCUMENT_PRESENT = 'uploaded'
+
+export function profileDocumentPresence(value: unknown): string | null {
+  return String(value || '').trim() ? PROFILE_DOCUMENT_PRESENT : null
+}
+
 const LEGACY_STORAGE_KEY = 'mzstay.profile.v1'
 function storageKey(ownerId: string) {
   return `mzstay.profile.v2:${ownerId}`
@@ -29,11 +35,15 @@ export async function getProfile(owner: { id?: string | null; username?: string 
   if (v2) {
     const normalized: Profile = {
       ...v2,
-      photo_id_url: v2.photo_id_url || null,
-      visa_document_url: v2.visa_document_url || null,
+      photo_id_url: profileDocumentPresence(v2.photo_id_url),
+      visa_document_url: profileDocumentPresence(v2.visa_document_url),
       visa_grant_number: v2.visa_grant_number || '',
     }
-    if (normalized.visa_document_url !== v2.visa_document_url || normalized.visa_grant_number !== v2.visa_grant_number) {
+    if (
+      normalized.photo_id_url !== v2.photo_id_url ||
+      normalized.visa_document_url !== v2.visa_document_url ||
+      normalized.visa_grant_number !== v2.visa_grant_number
+    ) {
       await setJson(key, normalized)
     }
     return normalized
@@ -52,8 +62,8 @@ export async function getProfile(owner: { id?: string | null; username?: string 
       bank_bsb: legacy.bank_bsb || '',
       bank_account_number: legacy.bank_account_number || '',
       personal_abn: legacy.personal_abn || '',
-      photo_id_url: legacy.photo_id_url || null,
-      visa_document_url: legacy.visa_document_url || null,
+      photo_id_url: profileDocumentPresence(legacy.photo_id_url),
+      visa_document_url: profileDocumentPresence(legacy.visa_document_url),
       visa_grant_number: legacy.visa_grant_number || '',
       owner_id: id,
       owner_username: u,
@@ -68,7 +78,13 @@ export async function setProfile(owner: { id?: string | null; username?: string 
   const id = String(owner?.id || '').trim()
   if (!id) return
   const u = String(owner?.username || '').trim()
-  await setJson(storageKey(id), { ...p, owner_id: id, owner_username: u || undefined })
+  await setJson(storageKey(id), {
+    ...p,
+    photo_id_url: profileDocumentPresence(p.photo_id_url),
+    visa_document_url: profileDocumentPresence(p.visa_document_url),
+    owner_id: id,
+    owner_username: u || undefined,
+  })
 }
 
 export async function clearProfile() {

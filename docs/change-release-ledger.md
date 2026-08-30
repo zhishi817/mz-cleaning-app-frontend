@@ -1,51 +1,56 @@
 # Change Release Ledger
 
-## CRL-20260827-001 — 历史台账回执精确审计模式（mobile）
+## CRL-20260830-002 — 历史台账回执精确审计模式（mobile；受控身份迁移）
 
 - **Repository:** `mobile`
-- **Status:** commit-ready; selected for commit
-- **Updated:** 2026-08-27 Australia/Melbourne
-- **Request:** 为已合入历史修复的补充台账回执提供独立、可验证且默认拒绝的精确审计模式，避免现有正常 `base...head` 审计把“仅记录旧事实”的文档范围错误阻断，同时不能允许虚构历史修复证据。
-- **Outcome:** 普通 `--release-report` 完全保持原有规则。只有明确标记的历史回执才可在当前范围仅变更台账文档；审计器仍会在同一 CRL 内验证历史来源 Release Attempt 的规范身份、来源必须已存在于回执基线且原始块未被改写、基线与内容提交祖先关系、候选补丁指纹、完整已登记的源码 hunk、独立审查 GO，以及当前范围严格仅为台账文档。任何缺证据、来源不匹配或非文档改动均为 `BLOCKED`。
+- **Status:** in-progress; PR #39 conflict resolution prepared locally
+- **Updated:** 2026-08-30 AEST
+- **Request:** 解决 PR #39 与当前 `Dev` 的账本/审计器冲突，同时保留历史回执精确审计能力和已合入移动端修复的完整发布证据。
+- **Outcome:** 历史回执模式与当前 hunk 对账门禁共存并保持 fail-closed；`Dev` 的既有 CRL、Release Attempt 和业务代码完整保留。原分支局部身份 `mobile/CRL-20260827-001` 与已合入的 TasksScreen 单元发生编号冲突，受控迁移为本 CRL，未改写任何已在 `Dev` 的业务单元。
 
 ### Implementation
 
-- Previous behavior: 对一个已在 `Dev` 合入的历史内容提交补充回执时，当前回执提交的 `base...head` 不包含原始源码 hunks，因此常规精确范围门禁必然拒绝，即使旧内容本身真实存在。
-- New behavior: 为明确的 `Historical receipt: true` 增加独立 fail-closed 来源证明；来源 RA 必须在回执基线的台账中唯一存在，且其完整块与当前台账逐行一致。首次文档候选可在还没有自身提交 SHA 时验证，随后精确范围报告验证当前文档边界与历史内容来源。普通提交和普通回执没有标记时不进入此分支。
-- Key decisions: 不信任自由文本或外部仓库声明；不自动补写历史 CRL，不改变旧内容提交、PR、合并或部署事实；本次只交付审计能力及其回归，不推送任何历史回执。
+- Previous behavior: PR 分支和后续 `Dev` 并行占用了 `mobile/CRL-20260827-001`；GitHub 无法自动合并账本，审计器的历史回执分支也与后续 hunk-reconciliation 收据校验在同一函数冲突。
+- New behavior: 保留 `Dev` 的普通 receipt/hunk-reconciliation 校验，并在其选择到 `Historical receipt: true` 时进入历史来源的严格验证。历史审计单元改用唯一身份 `mobile/CRL-20260830-002`，保留原始内容提交、候选指纹和已推送分支证据。
+- Identity migration: branch-local `mobile/CRL-20260827-001` -> `mobile/CRL-20260830-002`; reason: `origin/Dev` 已将前者用于 TasksScreen CI 稳定性单元。迁移不改变原审计器源码意图、历史来源或既有 `Dev` 记录。
+- Key decisions: 不修改移动端应用、API、权限、数据库、配置、CI workflow 或生产数据；不覆盖任何 `origin/Dev` 的 Release Attempt。
 
 ### Files / Areas
 
-- `scripts/audit_change_release_ledger.py` — 历史回执标记、来源 Release Attempt 和严格文档边界的 fail-closed 审计。
-- `scripts/tests/test_audit_change_release_ledger.py` — 首次候选、已验证文档范围、来源不存在和当前范围混入源码的回归。
-- `docs/change-release-ledger.md` — 本独立 mobile CRL、验证与提交证据。
+- `scripts/audit_change_release_ledger.py` — 合并历史回执与 hunk-reconciliation 的 fail-closed 收据路径。
+- `scripts/tests/test_audit_change_release_ledger.py` — 合并双方已存在的历史回执与 hunk-reconciliation 回归。
+- `docs/change-release-ledger.md` — 受控 CRL 身份迁移及 PR #39 冲突解决证据。
 
 ### Impact / Dependencies
 
 - Application / API / database / configuration / production data / deployment: none.
-- Dependencies: none. 历史来源只在同一仓库、同一 CRL 的既有 Release Attempt 中核验；跨仓库仍不由本模式代替独立仓库审计。
+- Dependencies: none. 历史来源仅在同一移动端仓库与同一 CRL 的已有 Release Attempt 中验证；不以此替代根仓库或 OTA/设备验证。
 - Feature Regression Registry: not applicable; no business workflow, route, API contract, role, data model or runtime behavior changes.
 
 ### Validation
 
-- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed: 37 tests, including历史来源缺失、当前范围伪造来源、当前范围改写来源和非台账范围的 fail-closed cases.
-- `python3 -m py_compile scripts/audit_change_release_ledger.py scripts/tests/test_audit_change_release_ledger.py` — passed.
-- Feature Registry: no mobile `check:feature-registry` script is defined; no FR change is needed for this governance-only CRL.
-- Pending: staged pre-commit gate, independent review, commit, exact committed-range report; push/PR/merge/deployment/OTA/device/production verification are not authorized or run.
+- Carried source evidence: `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed before this conflict resolution: 37 tests, including历史来源缺失、当前范围伪造来源、当前范围改写来源和非台账范围的 fail-closed cases.
+- Carried source evidence: `python3 -m py_compile scripts/audit_change_release_ledger.py scripts/tests/test_audit_change_release_ledger.py` — passed before this conflict resolution.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed after merge resolution: 38 tests, including both historical-receipt and hunk-reconciliation paths.
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/audit_change_release_ledger.py scripts/tests/test_audit_change_release_ledger.py` — passed; its two generated `__pycache__` files were removed before the coverage audit.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/audit_change_release_ledger.py` — passed: 21 changed files, 21 recorded, coverage PASS against fetched `origin/Dev`.
+- `git diff --cached --check` — passed.
+- `npm run check:ci` — passed: 38 auditor tests, current ledger coverage (21/21), TypeScript, ESLint (0 errors; 109 existing warnings), strict button audit, fast Jest (3 suites / 18 tests) and full Jest (58 suites / 332 tests).
+- Independent review and all relevant local regression have passed, but the current local `--pre-commit` gate is merge-parent-blind: it compares the merge index only with the original first parent and therefore incorrectly classifies `origin/Dev`'s already-contained 18 business paths and their ledger/hunks as this CRL's changes. The gate has no merge-parent or `--base` mode. A separately approved audit-governance CRL and regression are required before a merge commit can be created. No browser, API, database, EAS, OTA, device or production action is in scope.
 
 ### Staged Commit Scope
 
 - **Repository:** `mobile`
-- **Status:** `prepared`; all selected paths and exact non-ledger staged hunk fingerprints are recorded for the local commit gate.
-- **Untracked review:** `none`; clean isolated candidate has no untracked files.
-- `scripts/audit_change_release_ledger.py` — SHA-256: `04232a2ce9687cc0364c04abed6d5df5f3bcfd221086f6427ffc92092700e3b1`
-- `scripts/audit_change_release_ledger.py` — SHA-256: `0b3ceff05344174dbbb9f561cde423d4c46c766f6ef7824b585f9fb4b9c72e2c`
-- `scripts/audit_change_release_ledger.py` — SHA-256: `1b23ae46ac81799be044c0d005b5670e2fd915f5f1443a2896067acf9852bf50`
-- `scripts/audit_change_release_ledger.py` — SHA-256: `8173e20d7f18aed0115b6b31bbd9bb277ad9119427712a4e07bafc1ba710ca7d`
-- `scripts/audit_change_release_ledger.py` — SHA-256: `8e5e70eb242852f7e919ab1edf89db8ed7c0591f6b5f2f5e72a944b90e7a1d43`
-- `scripts/audit_change_release_ledger.py` — SHA-256: `a5401643e945d4f034e9c124fd2aabc0fea8e5b8a6cf1651ecf0ed045045662f`
-- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `4b658a571e81d7f2fa5967c10a4cc3dfd69a39fa0be8cbc1da20221eba3f828c`
+- **Status:** prepared; exact non-ledger conflict-resolution hunk fingerprints are recorded against fetched `origin/Dev@4f75f5f097b148ebe1a209289267892c8f2e34b0`.
+- **Untracked review:** none; this dedicated worktree was clean before the local merge.
+- `scripts/audit_change_release_ledger.py` — SHA-256: `c2d48489f7179bc6484584dd73de8e1738013edd99c9f04e9c55a6841a209b83`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `d0c7a2ea147806191d41c9e22df7cc35603d8e8314db870d90430c1fc30e1c79`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `5a10de627be26214274bfbd58c597ddb96827425e25393c43e3a295b475a867d`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `866e041decafc896c10aff062bbed4d41c554b74202bbc6952d4abd9695594c4`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `129bff5f97388a33e8f767b14c1e49e9602547383b0206852bb938c64fc726e3`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `f454d2dc72aaef16babf0caa2d61df2013f1a4cad52319bf4c84a29e6fc604dc`
 - `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `04f523851e5668b56b712052e413c226458fc2b7e7d0d62f28b80188fcdc486f`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `4b658a571e81d7f2fa5967c10a4cc3dfd69a39fa0be8cbc1da20221eba3f828c`
 - `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `ab91d4342aba282851bf3f630ff84a981238fb7070f2dda3c1736e734d9ed63e`
 
 ### Release Attempts
@@ -53,46 +58,536 @@
 #### RA-20260827-001
 
 - Repository: `mobile`
-- Selected CRLs: `CRL-20260827-001`
-- Selected CRL identities: `mobile/CRL-20260827-001`
+- Selected CRLs: `CRL-20260830-002` (migrated from branch-local `CRL-20260827-001`).
+- Selected CRL identities: `mobile/CRL-20260830-002`
 - Intended action: `commit`
 - Branch: `codex/historical-receipt-audit-20260827`
-- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 AEST`
-- Candidate patch SHA-256: `8b7c2bbf5c28af9a0519ac1c5938519d4270e377a920cfe3c3b1d512dbba39b7` excluding `docs/change-release-ledger.md`.
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 AEST`.
+- Candidate patch SHA-256: `8b7c2bbf5c28af9a0519ac1c5938519d4270e377a920cfe3c3b1d512dbba39b7`, excluding `docs/change-release-ledger.md`.
 - Commit SHA: `9ccdd55912efe38cac1f0a861ab178802151ef8c` (candidate content commit).
 - Dependencies: none.
-- Required validation: `PASS`; evidence: 37-test auditor regression and Python compile passed.
-- Shared-hunk review: `PASS`; all nine selected non-ledger staged hunk fingerprints are declared and no unselected hunk is staged.
+- Required validation: `PASS`; evidence: 37-test auditor regression and Python compile passed before the current conflict resolution.
+- Shared-hunk review: `PASS`; all nine original non-ledger staged hunk fingerprints were declared and no unselected hunk was staged.
 - Generated-file review: not applicable; Python source, tests and Markdown only.
 - Technical state: `committed`.
-- User authorization: `selected-for-commit`; evidence: user confirmed approval for this bounded root/mobile governance repair on 2026-08-27.
-- Independent review: `GO for commit`; evidence: second independent read-only review verified the receipt-base source immutability P1 closure, exact candidate fingerprint, staged scope and secret/production-write boundaries.
-- Action conclusion: `GO` for the completed commit only; blockers: none. Push requires a committed-range audit and a new exact user push authorization.
+- User authorization: `selected-for-commit`; evidence: user confirmed the bounded governance repair on 2026-08-27 under the then branch-local identity.
+- Independent review: `GO for commit`; evidence: independent read-only review verified receipt-base source immutability, exact candidate fingerprint, staged scope and secret/production-write boundaries.
+- Action conclusion: `GO` for the completed original content commit; this historical record is preserved through the controlled identity migration.
 
 #### RA-20260827-002
 
 - Repository: `mobile`
-- Selected CRLs: `CRL-20260827-001`
-- Selected CRL identities: `mobile/CRL-20260827-001`
+- Selected CRLs: `CRL-20260830-002` (migrated from branch-local `CRL-20260827-001`).
+- Selected CRL identities: `mobile/CRL-20260830-002`
 - Intended action: `push`
 - Branch: `codex/historical-receipt-audit-20260827`
-- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 AEST`
-- Candidate patch SHA-256: `8b7c2bbf5c28af9a0519ac1c5938519d4270e377a920cfe3c3b1d512dbba39b7` excluding `docs/change-release-ledger.md`.
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 AEST`.
+- Candidate patch SHA-256: `8b7c2bbf5c28af9a0519ac1c5938519d4270e377a920cfe3c3b1d512dbba39b7`, excluding `docs/change-release-ledger.md`.
 - Commit SHA: `9ccdd55912efe38cac1f0a861ab178802151ef8c` (candidate content commit).
-- Remote branch: `origin/codex/historical-receipt-audit-20260827@6a78bd4e37bfde33b4d623a3c9ab927580525d88`; verified by `git ls-remote` after the authorized push on 2026-08-27.
+- Remote branch: `origin/codex/historical-receipt-audit-20260827@6a78bd4e37bfde33b4d623a3c9ab927580525d88`; verified after the authorized original push on 2026-08-27.
 - Dependencies: none.
-- Required validation: `PASS`; evidence: refreshed remote baseline plus the exact committed mobile range audit at the pre-push receipt head passed.
-- Shared-hunk review: `PASS`; all nine selected non-ledger hunk fingerprints match the committed range.
+- Required validation: `PASS`; evidence: refreshed remote baseline and exact committed mobile range audit passed before the current conflict resolution.
+- Shared-hunk review: `PASS`; all nine original non-ledger hunk fingerprints matched the committed range.
 - Generated-file review: not applicable; Python source, tests and Markdown only.
 - Technical state: `pushed`.
-- User authorization: `approved-for-push`; evidence: user confirmed Mobile `6e16b0b0ef00de2d35fd437f93c676df02027dee`, candidate content commit `9ccdd55912efe38cac1f0a861ab178802151ef8c`, and branch `codex/historical-receipt-audit-20260827` on 2026-08-27.
-- Independent review: `GO for commit`; evidence: the reviewed candidate is unchanged; this does not constitute push authorization.
-- Action conclusion: `GO`; the authorized branch push completed and its first remote head was independently verified. PR, merge, deployment, OTA and device/production verification remain not run.
+- User authorization: `approved-for-push`; evidence: user confirmed the original mobile content commit and branch on 2026-08-27; it does not authorize the new conflict-resolution commit or a new push.
+- Independent review: `GO for commit`; evidence: the reviewed source candidate was unchanged.
+- Action conclusion: `GO`; original branch push completed. PR merge, deployment, OTA and device/production verification remain not run.
+
+#### RA-20260830-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260830-002`
+- Selected CRL identities: `mobile/CRL-20260830-002`
+- Intended action: `commit`
+- Branch: `codex/historical-receipt-audit-20260827`
+- Base: `origin/Dev@4f75f5f097b148ebe1a209289267892c8f2e34b0`; fetched at `2026-08-30 AEST`.
+- Candidate patch SHA-256: `a6d8f6558f340f1665260bb81f1f78328cd71e88beb282457c2f535a7f142750`, excluding `docs/change-release-ledger.md` from the resolved `origin/Dev` candidate range.
+- Commit SHA: not committed.
+- Dependencies: none.
+- Required validation: `PASS`; evidence: merged 38-test auditor regression, Python compile, current ledger coverage (21/21), whitespace check and `npm run check:ci` (58 suites / 332 tests; lint 0 errors / 109 existing warnings) passed; no application/runtime surface is changed by this candidate.
+- Shared-hunk review: `PASS`; evidence: nine Python source/test hunk fingerprints are declared against the fetched `origin/Dev` merge parent; all other staged paths are already contained in that parent.
+- Generated-file review: `PASS`; evidence: resolved candidate relative to `origin/Dev` contains only Python source/tests and Markdown; no generated or sensitive path is present.
+- Technical state: `candidate`.
+- User authorization: `selected-for-commit`; evidence: user requested that the displayed PR #39 conflict be resolved on 2026-08-30. This is not push, PR merge, deployment, OTA/build or device authorization.
+- Independent review: `GO` for the resolved three-file `origin/Dev`-relative governance candidate only; evidence: exact candidate fingerprint and all nine declared hunk fingerprints match, no sensitive/generated path is present, and `npm run check:ci` passed. This does not waive the required pre-commit gate.
+- Action conclusion: `BLOCKED` for local merge commit: the required `--pre-commit` gate has no merge-parent-aware comparison and reports 18 `origin/Dev`-contained paths, 99 unexpected and 9 missing hunks, plus their historical ledger lines. A narrow audit-governance change with tests and a new CRL is required; do not commit or push this merge state until then.
 
 ### Risks / Release Notes
 
-- This adds audit policy only. It does not release, push, merge, deploy or otherwise change the two pre-existing historical receipt commits.
-- Fail-closed conditions deliberately prevent accepting an arbitrary CRL ID, source SHA, mutable prose, or a current source-code modification as historical evidence.
+- This is release-governance-only work. It preserves immutable remote CRL business records and both fail-closed audit modes; no application behavior or production data is changed.
+- Sensitive-information review: no credentials, tokens, document/media URLs, production records or caches are introduced.
+- Rollback: revert only the future conflict-resolution merge commit; the existing `Dev` ledger and original source branch commits remain untouched.
+
+## CRL-20260828-002 — Profile Photo ID 缓存迁移持久化（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready; included in RA-20260828-004 candidate
+- **Updated:** 2026-08-28 22:39 AEST
+- **Request:** 修复独立推送审查发现的 P1：已有 v2 profile 缓存若只含历史 Photo ID URL，读取时必须把该原始引用持久化替换为 presence marker，不能仅在内存返回值中隐藏。
+- **Outcome:** 读取旧 v2 缓存后，Photo ID/Visa 只会返回并写回 `uploaded` 或 `null`；设备 storage 不再保留历史 Photo ID URL，远程文档继续仅由既有认证自助读取器显示。
+
+### Implementation
+
+- Previous behavior: `getProfile` 规范化 `photo_id_url`，但仅当 Visa URL 或 grant number 改变时才调用 `setJson`；只含 Photo ID URL 的旧 v2 缓存会继续在设备 storage 中保存原始 URL。
+- New behavior: 持久化迁移条件同样比较 `photo_id_url`；回归测试直接构造仅含旧 Photo ID URL 的 v2 缓存，并验证返回值和序列化 storage 都变为 `uploaded`、不含旧 URL。
+- Key decisions: 不改 API、认证 reader、上传、权限、路由、数据库、配置或依赖；不读取任何真实文档、设备缓存或生产数据。
+
+### Files / Areas
+
+- `src/lib/profileStore.ts` — 旧 v2 缓存的 Photo ID marker 差异触发持久化覆写。
+- `src/lib/profileStore.test.ts` — 仅 Photo ID URL 的 v2 migration persistence 回归。
+- `docs/feature-regression-registry.md` — 新增 `FR-P1-ID-01`，登记“不持久化原始证件引用”的不变量与测试映射。
+- `docs/change-release-ledger.md` — 本独立 P1 修复及后续发布证据。
+
+### Impact / Dependencies
+
+- API / database / migration / config / dependencies: none.
+- Production data / external sync / notification / media job: none; change only writes the current device's existing AsyncStorage record during its normal local read migration.
+- Related units: follow-up to `mobile/CRL-20260819-003@fe97861d75eb73fddf89aa5ea3e64f518f51e984`; paired Root profile-document contract remains `root/CRL-20260819-003` and is not modified.
+- Delivery dependency: the paired Root runtime must be deployed before any mobile OTA/native delivery; this local cache repair does not prove OTA, build, device or production behavior.
+
+### Validation
+
+- `NODE_PATH=<existing mobile dependencies> node <existing jest> --runInBand --no-cache src/lib/profileStore.test.ts` — passed: 1 suite / 2 tests, including persisted-only-Photo-ID migration; used an existing local dependency path without installing or adding `node_modules` to the candidate.
+- `git diff --check` — passed.
+- Mobile `npm run check:ci` — blocked in the full Jest phase: TypeScript passed; ESLint passed with 0 errors / 109 existing warnings; ledger auditor 32 tests, current ledger coverage, button audit and fast tests (3 suites / 18 tests) passed; then existing `src/lib/inspectionMediaQueue.test.ts` self-complete case failed because its fixed `2026-07-29` capture timestamp exceeded the 30-day queue retention window on the current date. The target profile-store suite passed.
+- `npm test -- --runInBand --no-cache src/lib/inspectionMediaQueue.test.ts` — failed reproducibly: 1 failed / 3 passed; unrelated to this CRL's staged files and no repair is included without new CRL selection.
+- Post-`mobile/CRL-20260828-003` combined candidate: target `profileStore` and inspection-media regressions passed 2 suites / 6 tests; typecheck passed; ESLint passed with 0 errors / 109 existing warnings; ledger auditor regression passed 32 tests; ledger coverage, strict button audit and fast tests passed; silent full Jest passed 58 suites / 332 tests.
+- Feature-registry audit — not run: this mobile repository provides neither `check:feature-registry` nor `scripts/audit_feature_regression_registry.py`.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** `none`; clean isolated candidate contains no untracked paths.
+- `docs/feature-regression-registry.md` — SHA-256: `3e5be373c143d393c38d923e461c3e104db338cc3a8e0baf851a8b9d0881287d`
+- `src/lib/profileStore.test.ts` — SHA-256: `c71debc470198a6efa2948d3b06869c93582a5edcc1fe3348815e2bc931843a3`
+- `src/lib/profileStore.test.ts` — SHA-256: `4dfa3d918be10f7f9e4b85cf5d3f95f6b36018fd645073cbdcf5199b803b5d26`
+- `src/lib/profileStore.test.ts` — SHA-256: `a661a604790d84492bc7260a7ae4573c1287cbd20a8be2e25b5b195bde95a124`
+- `src/lib/profileStore.ts` — SHA-256: `7daa0bd97232d211b83415aa72625fcbc99dd1b0cfe05961e17f5b08c4dd4c64`
+
+### Release Attempts
+
+#### RA-20260828-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260819-003`, `CRL-20260819-004`, `CRL-20260827-001`, `CRL-20260828-001`, `CRL-20260828-002`
+- Selected CRL identities: `mobile/CRL-20260819-003`, `mobile/CRL-20260819-004`, `mobile/CRL-20260827-001`, `mobile/CRL-20260828-001`, `mobile/CRL-20260828-002`
+- Intended action: `commit`
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-28 22:14 AEST`.
+- Candidate patch SHA-256: `not created`.
+- Commit SHA: `not committed`.
+- Dependencies: `mobile/CRL-20260819-003@fe97861d75eb73fddf89aa5ea3e64f518f51e984`; the three already-local CRLs remain jointly required because this P1 changes the same selected mobile release candidate.
+- Required validation: `FAIL`; evidence: target profile-store regression, TypeScript, lint, ledger, button and fast gates passed, but the current full Jest suite reproducibly fails in the unrelated stale-timestamp inspection-media test.
+- Shared-hunk review: `PASS`; evidence: the exact staged candidate contains only the five declared P1 hunk fingerprints; no untracked or unselected path is staged.
+- Generated-file review: `PASS`; evidence: TypeScript source/test and Markdown only; no generated or sensitive path is staged.
+- Technical state: `candidate`.
+- User authorization: `selected-for-commit`; evidence: user explicitly confirmed on 2026-08-28 that `mobile/CRL-20260828-002` is included with the four existing mobile CRLs for this local commit; this is not push authorization.
+- Independent review: `NO-GO for push`; evidence: fresh read-only push review found the legacy Photo ID URL persistence defect in `src/lib/profileStore.ts:42` and required this minimal repair plus a regression.
+- Action conclusion: `BLOCKED`; blockers: the full Jest suite fails in a separate stale-timestamp test fixture; fresh independent commit review must follow a passing full validation. Push, PR, Dev merge, deployment, OTA/build and device verification are not authorized.
+
+### Risks / Release Notes
+
+- Risk: the existing migration executes on normal local profile reads; the new test proves serialized mock storage only, not a real device cache or a production document read.
+- Sensitive-information review: no real document URL/key, token, `.env`, credential, cache dump, media bytes or production data is added; the test uses a non-resolving placeholder string only.
+- Rollback: revert the Photo ID comparison and its focused regression/registry/ledger records; no server or data rollback is required.
+- Git state: uncommitted, not pushed, no PR, Dev merge, deployment, OTA/build or device/production verification.
+
+## CRL-20260828-001 — 发布账本 hunk 对账门禁（mobile）
+
+- **Repository:** `mobile`
+- **Status:** in-progress; selected for commit
+- **Updated:** 2026-08-28 00:59 AEST
+- **Request:** 对已承诺的 P2 hunk 因相邻独立修复而仅发生零上下文 diff 行号漂移时，允许经过结构化证据和独立审查的受控对账，不能放宽普通账本回执限制。
+- **Outcome:** 审计器仅在同一路径、精确 old→new SHA-256 映射、旧/新 scope 完全替换、已承诺候选内容范围包含新指纹且独立审查为 GO 时，允许 ledger-only receipt 同时更新该 scope 指纹；普通 scope 或业务身份修改仍保持阻断。
+
+### Implementation
+
+- Previous behavior: 任何 ledger-only 提交都只能改 `### Release Attempts`；相邻独立改动只改变零上下文 hunk header 行号时，历史 scope 的指纹无法在不绕过门禁的情况下对账。
+- New behavior: `Hunk reconciliation` 使用结构化 `` `path#old -> new`; evidence: ... `` 映射，审计器验证 scope 仅替换该映射、候选范围确有新指纹，并在 exact range report 复核最终声明与实际 hunk。
+- Key decisions: 不接受自由文本、跨路径映射、相同指纹、重复映射或 scope 中其他字段变化；不改移动端业务代码、CI workflow、权限、API 或生产数据。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — 受控 hunk 对账解析、ledger-only gate 和 exact-range 复核。
+- `scripts/tests/test_audit_change_release_ledger.py` — 对账成功路径及既有 untracked、scope mismatch、exact-range 回归覆盖。
+- `docs/change-release-ledger.md` — 本 mobile 治理 CRL 与发布证据。
+
+### Impact / Dependencies
+
+- Application routes/screens/API/roles/database/config/production data: none; local Git ledger governance only.
+- Dependencies: none.
+- Feature Regression Registry: not applicable; no business invariant or runtime behavior changes.
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed: 32 tests, including a structured reconciliation that passes both pre-commit and exact-range gates.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` (root repository) — passed: 18 tests; read-only independent-repository regression evidence.
+- Mobile `npm run check:ci` — passed (exit 0): ledger auditor regression, ledger coverage, TypeScript, lint (0 errors; 109 existing warnings), strict button contract, fast tests and full Jest (58 suites / 331 tests).
+- No browser, API, database, EAS, OTA, device or production action is in scope.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** `none`; isolated candidate contains no untracked paths.
+- `scripts/audit_change_release_ledger.py` — SHA-256: `386bbbae6c28f75e63b1c0a049f3c9848606156a02b5b190282159d222d9bd23`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `41bfd81784acc726f383384c48dbcaa9b4bf69114658f7f9cf116cbc1eb0c391`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `45aaea7e0d8e9377e3800b6a9961323a39aa72ba1c63fb44c047cf7dd96e9a9d`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `5058d1c701bc21a004e456da451bc38cba9fe836ed02fc4fb39734231482a6cb`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `762e15f7a544b7b972caae6444264673957de8694c3aafe2432e628abcd4e6c5`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `8f30d5bd193b8b46c273677413ff120a0bdcb52ab83082beca3fc0bc9e054701`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `9048667d68f5fa0a2f00e3b7e5918a2688774258088c5c77ebfe8e1bb9dbaef7`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `c5843435fe19021fece2cb1720e07546532d89962a539e21cc520ca0bf22d3bd`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `c6d96412f3c27646519b6db9150d31ed5b7dc626fad7d54d193361b8b1d40225`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `d563dfdaf3e984a01991d2f2b7ddd3c72bf5261f1da4e66f615de1c6d135ccb3`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `f0f7509257d019e2616e9ed86f409250fbbd494ccd906bed5dbde403c53c2ed0`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `6a43b8bfcbe9c44e68887e62f06e1981882c50e202a5f32bd4be0666250a5657`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `b32913db64e834a130b88ac26425ca334505696be58a9bba377ac6ac3a309a8a`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `b70e2b44ad52a7fbf0fe7c737570e47d17ed0cb237559c4279933e279303f5d1`
+
+### Release Attempts
+
+#### RA-20260828-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260828-001`
+- Selected CRL identities: `mobile/CRL-20260828-001`
+- Intended action: `commit`
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-28 00:59 AEST`.
+- Candidate patch SHA-256: `f5e2d8240a85b81de9fe80ec5e3af42f580d983be57a0b2369995c1e6ffc0882`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `f7908e4b5912ab58287b0fe16ad244e46094fd0e`.
+- Dependencies: `none`.
+- Required validation: `PASS`; evidence: mobile 32-test auditor regression, root 18-test auditor regression and mobile `npm run check:ci` exit 0 (58 suites / 331 tests).
+- Shared-hunk review: `PASS`; evidence: the candidate stages only its 14 declared auditor/test hunks; the ledger hunk belongs solely to this new CRL.
+- Generated-file review: `PASS`; evidence: Python source/tests and Markdown only; no generated or sensitive path is staged.
+- Technical state: `committed`.
+- User authorization: `selected-for-commit`; evidence: user explicitly authorized the minimal mobile hunk-reconciliation governance repair on 2026-08-28.
+- Independent review: `GO for commit`; evidence: independent read-only review checked the exact staged SHA `cc6a5af7487cc2cef9e459240af84265f27532d7b82b5174424308585b0509d7`, all 14 hunk mappings, clean state, full CI and no P0/P1/security/production-write risk.
+- Action conclusion: `GO` for local commit completed; the later combined P2/CI range still requires a fresh exact audit, separate push review and explicit user push authorization.
+
+### Risks / Release Notes
+
+- A reconciliation proves only an audited Git hunk-header relocation; it never authorizes a behavior rewrite, source mutation, push, PR, Dev merge, deployment, OTA/build or device verification.
+- Sensitive-information review: the range contains only Python source/tests and Markdown; no secrets, `.env`, tokens, URLs, media bytes, caches or production records.
+- Git state: local candidate staged for commit; not pushed.
+
+## CRL-20260828-003 — Inspection media self-complete 测试保留期夹具（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready; selected for commit
+- **Updated:** 2026-08-28 22:39 AEST
+- **Request:** 修复 Full Regression 发现的确定性测试漂移：self-complete lockbox video 用例使用已超过本地队列 30 天保留期的固定 capture timestamp，导致当前日期下正常过期清理而不上传。
+- **Outcome:** self-complete 测试使用执行时的 capture timestamp，并在请求断言中复用同一值；仍验证本地优先视频上传、专用 self-complete 保存路由和不调用普通 lockbox 路由。
+
+### Implementation
+
+- Previous behavior: 测试将 `captured_at` 固定在 2026-07-29；当前时间超过由该值推导的 `retain_until` 后，生产队列按既有规则过期清理，mock 上传调用为零而测试失败。
+- New behavior: 测试在开始时生成当前 ISO timestamp，入队和 `uploadSelfLockboxVideo` 期望使用同一变量，始终处于正常 30 天保留窗口。
+- Key decisions: 不改 `inspectionMediaQueue.ts`、30 天保留期、上传重试、私有文件清理、API、任务状态、权限或生产数据；这是测试夹具修复而非运行时行为变更。
+
+### Files / Areas
+
+- `src/lib/inspectionMediaQueue.test.ts` — self-complete 视频测试的当前 capture timestamp 与同值断言。
+- `docs/change-release-ledger.md` — 本独立 P2 测试稳定性单元与发布证据。
+
+### Impact / Dependencies
+
+- Application/API/database/config/dependencies/production data: none.
+- External sync/notification/media job: none; Jest mock-only test runs。
+- Related units: validates the existing lockbox-video local-first and self-complete routing contract; follows `mobile/CRL-20260827-001` as the current Full Regression stabilization work, but does not change its runtime behavior.
+- Feature Regression Registry: not applicable; existing self-complete business assertions remain intact and this change only makes their fixture time valid.
+
+### Validation
+
+- Reproduction before repair: `npm test -- --runInBand --no-cache src/lib/inspectionMediaQueue.test.ts` — failed reproducibly: 1 failed / 3 passed; the fixed timestamp was outside the production retention window.
+- `NODE_PATH=<existing mobile dependencies> node <existing jest> --runInBand --no-cache src/lib/inspectionMediaQueue.test.ts src/lib/profileStore.test.ts` — passed: 2 suites / 6 tests.
+- Combined candidate validation: TypeScript passed; ESLint passed with 0 errors / 109 existing warnings; ledger auditor regression passed 32 tests; current ledger coverage, strict button audit and fast tests passed; silent full Jest passed 58 suites / 332 tests. Existing dependencies were temporarily linked only for the command and then removed; none were staged.
+- Feature-registry audit — not run: this mobile repository provides neither `check:feature-registry` nor `scripts/audit_feature_regression_registry.py`.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** `none`; clean isolated candidate contains no untracked paths.
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `63032b7b5e0bb36a1c81eb4d10c84bc8eeb6247e0ff0be56cde1fea0e5e37b53`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `84222184401730805bc7ed43398ae43a116ce2a99acc221393d2794168e20e11`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `91041882a9b8a2e26290a8a38de65a515452e58f54cfcbc94449cdded2574fbf`
+
+### Release Attempts
+
+#### RA-20260828-004
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260819-003`, `CRL-20260819-004`, `CRL-20260827-001`, `CRL-20260828-001`, `CRL-20260828-002`, `CRL-20260828-003`
+- Selected CRL identities: `mobile/CRL-20260819-003`, `mobile/CRL-20260819-004`, `mobile/CRL-20260827-001`, `mobile/CRL-20260828-001`, `mobile/CRL-20260828-002`, `mobile/CRL-20260828-003`
+- Intended action: `commit`
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-28 22:14 AEST`.
+- Candidate patch SHA-256: `efabe77bf09ef2ae7671c5361e04e1a6dd4265d204d2500959294dfdc59b81e4`, excluding `docs/change-release-ledger.md`; staged-new-content-only fingerprint is `28c89fe04236b7aa9c91b93f38beabf24323bbf32a523b9f39ea0e288ce21d7e`.
+- Commit SHA: `33237286ad1975d348f43c59c3443f690e4bc893` (candidate content commit; exact audit head follows in the range report).
+- Dependencies: `none`.
+- Required validation: `PASS`; evidence: targeted 2-suite / 6-test regression, typecheck, lint (0 errors / 109 existing warnings), 32-test ledger auditor, ledger/button/fast gates and silent full Jest (58 suites / 332 tests) passed.
+- Shared-hunk review: `PASS`; evidence: the exact staged candidate contains only 8 declared P1/P2 hunk fingerprints across 5 paths; no untracked or unselected path is staged.
+- Generated-file review: `PASS`; evidence: TypeScript source/tests and Markdown only; no generated or sensitive path is staged.
+- Hunk reconciliation: `docs/feature-regression-registry.md#e12989e436d2042b9ec5322344a6381cc550d2159e0fec1cfb0026745b8b4dca -> 3e5be373c143d393c38d923e461c3e104db338cc3a8e0baf851a8b9d0881287d`; evidence: the adjacent previously committed Inbox registry insert shifts the new P1 registry hunk header only. | `src/lib/profileStore.test.ts#f3e836c829d31f8a903b46fba1d2197563acf4dc465061003fe54a75ea74ce26 -> c71debc470198a6efa2948d3b06869c93582a5edcc1fe3348815e2bc931843a3`; evidence: the P2 assertion and new P1 migration test now form one exact-range hunk; the P2 assertion body is unchanged. | `src/lib/profileStore.test.ts#4d19a2f705682d4dae38157fb93a7526ff4b1e5973d6f2e31bc9fac48d563236 -> c71debc470198a6efa2948d3b06869c93582a5edcc1fe3348815e2bc931843a3`; evidence: the P1 test addition joins the same exact-range hunk without changing the P2 assertion body. | `src/lib/profileStore.ts#1bd977c7945ff28b45200f2753b696b8d82ecdc9a9922dcf10ab5ba98e9fbe40 -> f200a60107b59e2462c28b33eea1b7871c2599fe9c9f3ee5bca6541614f0a195`; evidence: the P1 condition adds four earlier lines and shifts the unchanged legacy-marker hunk header. | `src/lib/profileStore.ts#b0896fb156c2753343290ec375db129e04e35bdbe4e0b3e35a4ed82710c52eaf -> 6c986d6791f8094c947579ab7fdac3387fa1ad0acbcc6671ebf3a519551cc325`; evidence: preceding P1 condition and unchanged legacy-marker hunk shift the setProfile hunk header only. | `src/lib/profileStore.ts#14c252442f80525158415e0c8d378a98dfa7d40a516b3bb46e779012387dec3a -> 7daa0bd97232d211b83415aa72625fcbc99dd1b0cfe05961e17f5b08c4dd4c64`; evidence: the new Photo ID persistence condition has the same source body but its final base-relative hunk header differs.
+- Technical state: `committed`.
+- User authorization: `selected-for-commit`; evidence: user explicitly confirmed the new test-fixture unit on 2026-08-28 for local commit with the existing five mobile CRLs; this is not push authorization.
+- Independent review: `GO for local content commit and reconciliation receipt`; evidence: the initial independent review checked the exact staged 5-path / 8-hunk candidate, complete 21-path range, validation and secret/generated-file risk; a second independent read-only review checked the six ledger-only mappings, scope-only replacements, unchanged CRL identity and `origin/Dev...33237286ad1975d348f43c59c3443f690e4bc893` range (99 non-ledger hunks) with no P0/P1. Non-blocking P2: add a future negative audit test for many-old-to-one-new mapping coverage across every associated CRL.
+- Action conclusion: `GO` for local content commit completed. Non-blocking P2: the hunk-reconciliation governance test has no explicit malformed/duplicate-mapping cases; current fail-closed guards were reviewed. Push, PR, Dev merge, deployment, OTA/build and device verification are not authorized.
+
+#### RA-20260830-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260819-003`, `CRL-20260819-004`, `CRL-20260827-001`, `CRL-20260828-001`, `CRL-20260828-002`, `CRL-20260828-003`
+- Selected CRL identities: `mobile/CRL-20260819-003`, `mobile/CRL-20260819-004`, `mobile/CRL-20260827-001`, `mobile/CRL-20260828-001`, `mobile/CRL-20260828-002`, `mobile/CRL-20260828-003`
+- Intended action: `push`
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-30 17:09 AEST`.
+- Candidate patch SHA-256: `efabe77bf09ef2ae7671c5361e04e1a6dd4265d204d2500959294dfdc59b81e4`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `33237286ad1975d348f43c59c3443f690e4bc893` (candidate content commit; audit head follows in the range report).
+- Dependencies: none.
+- Required validation: `PASS`; evidence: targeted 2-suite / 6-test regression, typecheck, lint (0 errors / 109 existing warnings), 32-test ledger auditor, ledger/button/fast gates and silent full Jest (58 suites / 332 tests) passed.
+- Shared-hunk review: `PASS`; evidence: the exact candidate contains only declared scope hunk fingerprints; 21 changed paths and 99 non-ledger final-range hunks are covered by the six selected CRLs.
+- Generated-file review: `PASS`; evidence: exact range contains TypeScript/Python source/tests and Markdown only; no generated files or sensitive-information categories.
+- Technical state: `pushed`.
+- Remote branch: `origin/codex/release-p2-id-src-20260827@8e5c480915b874919b14bf74b88cf47f7807b803`; initial audited push succeeded at `2026-08-30 17:10 AEST`. The following ledger receipt commit records this evidence and is pushed to the same branch before final remote verification.
+- User authorization: `approved-for-push`; evidence: user explicitly requested `推送` on 2026-08-30 for this reported mobile branch and committed candidate; this does not authorize a PR, Dev merge, deployment, OTA/build or device verification.
+- Independent review: `GO for push`; evidence: independent read-only pre-push review on 2026-08-30 checked `origin/Dev@db91ae40412b91072951b590fca984499ea967da...457b665da2595533bc037431070b7b0b09abba07`, all six CRLs, 21 selected paths / 99 non-ledger hunks, six reconciliations, clean worktree, whitespace, secret/generated-file risk and remote fast-forward state; no P0/P1 and only a non-blocking governance-test P2 gap.
+- Action conclusion: `GO` for push; blockers: none. PR, Dev merge, deployment, OTA/build and device verification are outside this attempt.
+
+### Risks / Release Notes
+
+- Risk: test time is intentionally dynamic, so it validates the queue within its valid retention window; explicit expiry behavior remains covered by queue expiration tests.
+- Sensitive-information review: no tokens, real media URL/key, `.env`, credentials, cache dump, media bytes or production data is added.
+- Rollback: restore the fixed test timestamp; no runtime/server/data rollback is needed.
+- Git state: uncommitted, not pushed, no PR, Dev merge, deployment, OTA/build or device/production verification.
+
+## CRL-20260827-001 — TasksScreen 瞬时反馈定时器清理与 CI 测试稳定性（mobile）
+
+- **Repository:** `mobile`
+- **Status:** in-progress; selected for commit
+- **Updated:** 2026-08-27 23:20 AEST
+- **Request:** 修复 PR #325 的 Full Regression 中 `TasksScreen.test.tsx` 在慢速 CI runner 超过 10 秒而失败的问题。
+- **Outcome:** 复制反馈触发的 banner 定时器会在 TasksScreen 卸载时清理；测试在完成断言后主动卸载，并保留所有任务折叠、访客请求、Wi-Fi 显示和复制断言，同时使用仅针对该集成用例的 20 秒上限。
+
+### Implementation
+
+- Previous behavior: Wi-Fi 复制后创建 4 秒 banner 定时器，但组件卸载时只清理复制反馈定时器；测试保留 10 秒总上限且不主动卸载，慢速 CI 会因残留异步工作而超时。
+- New behavior: 同一卸载清理路径清除 banner 与复制反馈定时器，并把测试资源在断言结束时释放；不改任务数据、显示条件、复制值或业务 API。
+- Key decisions: 不修改 CI workflow、不移动测试到 Fast Regression、不弱化原有断言；20 秒只为已有完整集成断言提供 CI 调度余量。
+
+### Files / Areas
+
+- `src/screens/tabs/TasksScreen.tsx` — 清理 banner 反馈的卸载定时器。
+- `src/screens/tabs/TasksScreen.test.tsx` — 保持现有断言、主动卸载并使用有界的单用例超时。
+- `docs/change-release-ledger.md` — 本独立的 mobile 测试稳定性 CRL。
+
+### Impact / Dependencies
+
+- Application/API/roles/database/config/production data: none; Jest mock-only test infrastructure repair.
+- Dependencies: existing candidate `mobile/CRL-20260819-003@fe97861d75eb73fddf89aa5ea3e64f518f51e984` and `mobile/CRL-20260819-004@fe97861d75eb73fddf89aa5ea3e64f518f51e984` remain separate already-pushed branch content.
+- Feature Regression Registry: not applicable; no business invariant, route, permission, status transition or runtime contract changes.
+
+### Validation
+
+- `npm run check:ci` — passed (exit 0): ledger auditor regression, ledger coverage, TypeScript, lint, strict button contract, fast tests and full Jest all completed in the isolated candidate.
+- `npm test -- --runInBand --no-cache --detectOpenHandles src/screens/tabs/TasksScreen.test.tsx` — passed: 1 suite / 25 tests; first integration test 5.598 s; no open-handle warning.
+- `npm test -- --runInBand --no-cache` — passed: 58 suites / 331 tests.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed: 0 errors; 109 pre-existing warnings.
+- CI Full Regression screenshot before repair — failed: first TasksScreen integration test exceeded 10 seconds (18.362 s); local CI-matched baseline passed but emitted an asynchronous-handle warning when run alone.
+- OTA/build/device/production verification — not run; not required for a test-infrastructure-only source repair.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; isolated candidate is clean after the temporary dependency link was removed.
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `1ee48d448efa5bbd965a5a7bc437d11f4525da0fa3c10f64d191e3d3d975117e`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `639c2f4969d40a69ee89cfb686b9ebc1c7a2be3d624e4b107c75e74bb3845b5a`
+
+### Release Attempts
+
+#### RA-20260827-004
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260827-001`
+- Selected CRL identities: `mobile/CRL-20260827-001`
+- Intended action: `commit`
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 23:20 AEST`.
+- Candidate patch SHA-256: `aab7cdb45d962ff10bae998e533e28cef5167dbc62bc86a693f041b981fc8180`, excluding `docs/change-release-ledger.md`; staged repair-only patch SHA-256 is `00ce8356e04dbb6ed5856c694983c5efc3b8ad629be240bb89947f53a2dd76a9`.
+- Commit SHA: `8b9dd201280c983b42aafcb2ad8ece02e387bbbb`; local candidate content commit.
+- Dependencies: `none`
+- Required validation: `PASS`; evidence: `npm run check:ci` exit 0 plus the target `--detectOpenHandles` test completed in the isolated candidate.
+- Shared-hunk review: `PASS`; evidence: the staged candidate contains only the two new TasksScreen hunk fingerprints declared in this CRL, while prior P2 hunks remain committed branch history and retain their original CRLs.
+- Generated-file review: `PASS`; evidence: TypeScript source/test and Markdown only; no generated or sensitive file is intended.
+- Technical state: `committed`.
+- User authorization: `selected-for-commit`; evidence: user explicitly authorized “做修复” for this one CI test-stability issue on 2026-08-27.
+- Independent review: `GO for commit`; evidence: independent read-only review reproduced the two repair hunk fingerprints, verified `npm run check:ci` exit 0 and found no scope, secret or production-write risk.
+- Action conclusion: `GO` for commit completed locally; push, PR, Dev merge, OTA/build and device verification remain separate actions.
+
+#### RA-20260828-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260819-003`, `CRL-20260819-004`, `CRL-20260827-001`, `CRL-20260828-001`
+- Selected CRL identities: `mobile/CRL-20260819-003`, `mobile/CRL-20260819-004`, `mobile/CRL-20260827-001`, `mobile/CRL-20260828-001`
+- Intended action: `push`; target: `Dev`.
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-28 01:06 AEST`.
+- Candidate patch SHA-256: `f5e2d8240a85b81de9fe80ec5e3af42f580d983be57a0b2369995c1e6ffc0882`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `f7908e4b5912ab58287b0fe16ad244e46094fd0e` (latest content commit after the existing P2 and TasksScreen content commits).
+- Dependencies: `none`.
+- Required validation: `PASS`; evidence: P2 targeted 6-suite / 50-test, mobile 32-test auditor regression, root 18-test auditor regression, and mobile `npm run check:ci` exit 0 (58 suites / 331 tests).
+- Shared-hunk review: `PASS`; evidence: all 76 P2 hunks, two TasksScreen repair hunks and 14 governance hunks are declared; the adjacent TasksScreen hunk is reconciled below without a source-body change.
+- Generated-file review: `PASS`; evidence: TypeScript, Python source/tests and Markdown only; no generated or sensitive path is in the candidate range.
+- Hunk reconciliation: `src/screens/tabs/TasksScreen.tsx#2e09140df263c3b3831a4b737a9daafce765f2c9aa7367f725e270ab3b2fa060 -> c151168d08eb757f0f014a82bf3fcb43107c73c981d6befd75a6d97c65688d24`; evidence: the independent four-line banner-timer cleanup at old line 722 shifts only this P2 hunk header from `+804` to `+808`; its four changed source lines are identical.
+- Technical state: `committed`.
+- User authorization: `not-selected`; evidence: user authorized the governance repair and joint-audit preparation, not a push of this resulting head SHA.
+- Independent review: `GO for reconciliation receipt commit`; evidence: fresh independent read-only review checked the exact four-CRL range, 20 changed files, 92 non-ledger hunks, candidate SHA `f5e2d8240a85b81de9fe80ec5e3af42f580d983be57a0b2369995c1e6ffc0882`, the old→new mapping, clean staged scope and sensitive/generated-file evidence; no P0/P1/P2 was found.
+- Action conclusion: `GO` for the reconciliation receipt commit; push remains `NOT VERIFIED` until explicit authorization covers the resulting branch and exact head SHA. No remote push, PR, Dev merge, deployment, OTA/build or device verification has occurred.
+
+### Risks / Release Notes
+
+- A 20-second test budget avoids false failures on constrained runners but is not a performance guarantee; a future runtime slowdown beyond that limit should be investigated separately.
+- Sensitive-information review: no credentials, tokens, document/media URLs, production records or caches are included.
+- Git state: uncommitted, not pushed, no new PR, Dev merge, OTA/build, deployment or device/production verification.
+
+## CRL-20260819-003 — Photo ID / Visa presence-only 缓存与认证显示（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready; selected for commit
+- **Updated:** 2026-08-27 17:30 AEST
+- **Request:** 移除移动端资料缓存和页面中持久化的 Photo ID/Visa URL，改用服务端 presence flags、私有 key 上传和认证自助读取。
+- **Outcome:** 设备仅存 `uploaded` 标记而不存证件 URL/key；已上传文件始终由认证 `users/me/profile-documents/:type` 显示，本地选择的未保存文件仍只作临时预览。
+
+### Implementation
+
+- Previous behavior: profile cache 和表单保存对象 URL；上传后把 `url` 直接写回 `/users/me`，远程预览直接使用该 URL。
+- New behavior: API 类型消费 presence flags，缓存迁移为 marker；上传携带证件类型并提交服务器返回的私有 key，保存成功后清除本地预览；一般资料保存不再回传 marker。远程预览使用带 Bearer token 的自助 reader。
+- Key decisions: 不新增队列、浏览器打开或下载能力；兼容旧 cache 时只保留“已上传”而不再显示其历史引用。
+
+### Files / Areas
+
+- `src/lib/api.ts` — presence DTO、文档类型与认证图片 source。
+- `src/lib/profileStore.ts` — presence marker 的迁移与持久化。
+- `src/lib/profileStore.test.ts` — presence marker 持久化回归。
+- `src/screens/me/ProfileEditScreen.tsx` — 专属上传元数据、私有 key 保存、认证预览。
+- `src/screens/me/ProfileEditScreen.test.tsx` — 专属上传元数据、私有 key 保存和认证预览回归。
+- `src/screens/tabs/MeScreen.tsx`, `src/screens/tabs/TasksScreen.tsx` — 资料刷新只落 presence marker。
+- `docs/change-release-ledger.md` — 本 CRL 与提交证据。
+
+### Impact / Dependencies
+
+- API: requires paired root/CRL-20260819-003 `photo_id_uploaded` / `visa_document_uploaded`、private key upload response and self-service reader.
+- Database / config / R2 / production data: none in mobile; no device or production document is read or written.
+- Dependencies: paired root runtime must deploy before any mobile OTA/build delivery.
+
+### Validation
+
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` — passed in the isolated candidate with a temporary dependency link, then removed.
+- `./node_modules/.bin/jest --runInBand --no-cache src/lib/profileStore.test.ts src/lib/cleaningMedia.test.ts src/lib/noticeMedia.test.ts src/screens/me/ProfileEditScreen.test.tsx src/screens/notices/NoticeDetailScreen.test.tsx src/screens/tabs/NoticesScreen.test.tsx` — passed: 6 suites / 50 tests.
+- `./node_modules/.bin/eslint src/lib/api.ts src/lib/cleaningMedia.ts src/lib/noticeMedia.ts src/lib/profileStore.ts src/screens/me/ProfileEditScreen.tsx src/screens/notices/NoticeDetailScreen.tsx src/screens/tabs/MeScreen.tsx src/screens/tabs/NoticesScreen.tsx src/screens/tabs/TasksScreen.tsx` — passed: 0 errors; 59 existing warnings in large shared files.
+- `git diff --check` — passed.
+- OTA, build and real-device/production verification — not run.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`; listed contribution to the jointly selected candidate `mobile/CRL-20260819-003` + `mobile/CRL-20260819-004`.
+- **Untracked review:** `none`; clean candidate worktree contains no untracked files.
+- `src/lib/api.ts` — SHA-256: `946cec7078dca0e35a1f315941e99c4b76f063a0ee005ad69727f70e33a0af90`
+- `src/lib/api.ts` — SHA-256: `b1643d08b6ab8c70e801e7728aae66830db986a39217b0c4b404bcd651abb298`
+- `src/lib/api.ts` — SHA-256: `eb9b4ef046e1006b817bffeaf68e96711a7f4f2cd9df6d1babdeef8e5c3be998`
+- `src/lib/profileStore.test.ts` — SHA-256: `c71debc470198a6efa2948d3b06869c93582a5edcc1fe3348815e2bc931843a3`
+- `src/lib/profileStore.ts` — SHA-256: `06921502e959846ad078d6a8243bd981257d44d87da0457d7efe3fe13bb261a6`
+- `src/lib/profileStore.ts` — SHA-256: `f200a60107b59e2462c28b33eea1b7871c2599fe9c9f3ee5bca6541614f0a195`
+- `src/lib/profileStore.ts` — SHA-256: `98295f2a09e233f3d59a5d0bab2e8a20a80128d13012689433f7c1a0f96d86eb`
+- `src/lib/profileStore.ts` — SHA-256: `6c986d6791f8094c947579ab7fdac3387fa1ad0acbcc6671ebf3a519551cc325`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `2709c4e8f9bc57d59af3f30c9452a9a2eedc46d8613e17a45dc4e513cb317582`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `6bba4f4565e61715fc910ab2874bdec503aac0dcc1235f1d4f0f378d45f1a893`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `6ea39827f17a384d0d702c3473f9184230722f9eb93fc651509c935553412564`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `7bf9f69a666c0ec099c67fc4a27e330caa5f2b6c0d87404476c54bbae7808536`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `90ed9ac5b3ed63546d9c5b91c36bec4427e98b8d3337578a0dc912ead4b27221`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `c6bf10e6428cd1f34911b6e78b803a0739aa314a4fe6880ac8b5b01eab9c95a5`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `cb4c30ef1edcab1b9ead66a3c66a24e1056d4b395655c6e73b80e0199167f455`
+- `src/screens/me/ProfileEditScreen.test.tsx` — SHA-256: `cf07bc1a8a99ab313db600e3cf9645d9dde5ce0f00732ca43d45934401b0a5bb`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `1f71e0346807420b714bd021799982ec8cd19f6ce2c962609a8742c8a343646a`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `2332b8d05a4a35f29e5319f6292df77f13e15d548403659720921c4fc562778a`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `27ad315bbdec39916f607018045133f50f7ca646aaa879a77044e6da50979ee3`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `2c6fb34567cf405f44522935494aa6d7085f677ef4b61a976f78558667e9e961`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `2cdc1cf09670bc1d73f07faf6b621e8927ac2502a5aa3b7f20a74db8773dd54f`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `32597ec9cebcff608098434fbdc45dca085a0befab1255bf2343b3039b537774`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `33bca10b30c11c4957376410339caa6b997fd03fd2ae6dab5e70df28ff713649`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `33e077cce1c0ec3e926460c971ed333cea5e9c7120a8b9375d29d20ef9a80214`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `352de0c42422bd8543d9fe73aa0fbb3225d9bbc3c28f46fc00498f821ba292ae`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `661a32cfe19ebcac76237d669e5644b88824486232746869b10b572fa67e056a`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `6ace5dc2c280765230d2cb6c1cf88d8508877898538929dcc7f7de571c82f738`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `7b10c6b7ebef0c06b4db92a7cc7c7acba5171af3799eb0550e1d74649784c45e`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `83759f160582292b4f7c7270233367b7e2bbe2c65024a1f010ba67afcc96df3b`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `90fb6a0e43db4f98220e03031290644e96d2082b2052fb022611a60f1c0c840d`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `9ffe45bec6b18cc451ef722173fec0914a2aed7f1f32722538c3b3d4dc00c9b4`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `a1100649492e1aa44727fd0ac15ba3d1dcd34b8dbe1ebd3df947a215b60e7529`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `aa781a41eaee1606189abbf0f1a98792fc3c34b74edc88b71ddf363083831bb7`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `ba5b92bcb34145d7513bfa8937d5bf663e01cf93ccd6957c71ee05c83cfdbbb8`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `db1016ed4a3f72deb8f4683f1cfcb6c981de717321890613d7dfc71a15d8e38e`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `e384bd2765d43b9bfc82d6e927d1790988c627ce9b05cd541747c79980e1ade9`
+- `src/screens/me/ProfileEditScreen.tsx` — SHA-256: `f50a318bef3cfe98452cc43f5ae5d5538ba6751cfc38d37a85ec936082413675`
+- `src/screens/tabs/MeScreen.tsx` — SHA-256: `1b184457d5be1890882c0ac15c0ade1ecd505516480ac0d8913bde03f828233f`
+- `src/screens/tabs/MeScreen.tsx` — SHA-256: `7eaab2c282c704bee2db0bd0975f738b6d3c1306d72f7be9146900d1a33459e5`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `c151168d08eb757f0f014a82bf3fcb43107c73c981d6befd75a6d97c65688d24`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `b7d6cf9755cdcb3788fd3d3d45c5614dbe608000ec0b66f0c142694f333b1f16`
+
+### Release Attempts
+
+#### RA-20260827-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260819-003`, `CRL-20260819-004`
+- Selected CRL identities: `mobile/CRL-20260819-003`, `mobile/CRL-20260819-004`
+- Intended action: `commit`
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 17:18 AEST`
+- Candidate patch SHA-256: `855a089cdc0cc03ffefe91f5c06d704335ff74f61a5aefefb21d008af56b246f`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `fe97861` (candidate content commit; exact audit head follows in the range report).
+- Dependencies: `none`.
+- Required validation: `PASS`; evidence: isolated typecheck, 6-suite targeted Jest, targeted ESLint with 0 errors and whitespace check passed.
+- Shared-hunk review: `PASS`; evidence: pre-commit gate matched 76 selected non-ledger hunks and no unselected file.
+- Generated-file review: `PASS`; evidence: 17 selected paths are TypeScript source/tests and Markdown only; no generated or sensitive file is staged.
+- Technical state: `committed`
+- User authorization: `selected-for-commit`; evidence: user confirmed the selected P2 commit scope on 2026-08-27.
+- Independent review: `GO for commit`; evidence: fresh independent read-only review reproduced the candidate fingerprint, reviewed the complete staged range and found no P0/P1/P2, secret or production-write risk.
+- Action conclusion: `GO` for commit completed locally; push remains unauthorized.
+
+#### RA-20260827-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260819-003`, `CRL-20260819-004`
+- Selected CRL identities: `mobile/CRL-20260819-003`, `mobile/CRL-20260819-004`
+- Intended action: `push`; target: `Dev`.
+- Branch: `codex/release-p2-id-src-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 19:37 AEST`.
+- Candidate patch SHA-256: `855a089cdc0cc03ffefe91f5c06d704335ff74f61a5aefefb21d008af56b246f`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `fe97861d75eb73fddf89aa5ea3e64f518f51e984` (candidate content commit; exact audit head follows in the range report).
+- Dependencies: `none`.
+- Required validation: `PASS`; evidence: isolated typecheck, 6-suite targeted Jest, targeted ESLint with 0 errors and whitespace check passed.
+- Shared-hunk review: `PASS`; evidence: exact range matched 76 selected non-ledger hunks and no unselected file.
+- Generated-file review: `PASS`; evidence: 17 selected paths are TypeScript source/tests and Markdown only; no generated or sensitive file is in range.
+- Technical state: `pushed`
+- User authorization: `approved-for-push`; evidence: user said “继续” after Mobile branch head `45e6f37dd1d5f39dba49f31336c9c48d83bd3a4d` and the exact push scope were presented on 2026-08-27.
+- Independent review: `GO for push`; evidence: fresh independent read-only committed-range review reproduced the candidate fingerprint, confirmed the selected range and fresh base, and found no P0/P1/P2, secret or production-write risk.
+- Remote branch / SHA: `origin/codex/release-p2-id-src-20260827@4ec3c836657c4f0fa228779ba844f92895d58b66`; verified immediately after the source-range push.
+- Action conclusion: `GO` for push completed; PR, merge and deployment remain unauthorized.
+
+### Risks / Release Notes
+
+- This client must not be delivered ahead of its paired root API; local markers cannot prove an object exists or is authorized.
+- Sensitive-information review: no credentials, tokens, document URL/key, media bytes or production data are included.
+- Git state: uncommitted, not pushed, no PR, OTA or device/production verification.
 
 ## CRL-20260825-001 — Release Attempt 依赖 SHA 门禁（mobile）
 
@@ -1295,6 +1790,98 @@
 - This repair cannot grant access: the backend remains the authority for the exact recorded task medium and reader role. Runtime proof still requires an authorized account to test list → detail → viewer after a compatible OTA/build.
 - Sensitive-information review: no credentials, tokens, private URLs, media bytes, logs, caches or production data are added.
 - Git state: candidate worktree only; not committed, not pushed, no PR, not deployed, no OTA and no device verification.
+
+## CRL-20260819-004 — Inbox 私有媒体来源上下文 fail-closed（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready; selected for commit
+- **Updated:** 2026-08-27 17:30 AEST
+- **Request:** 核实并修复 Inbox 未分类/缺上下文图片会回退原始 URL 的风险。
+- **Outcome:** 列表、详情和预览共用来源 resolver；只有已知业务事件、精确上下文和受管私有引用才经认证代理显示，其他来源隐藏。
+
+### Implementation
+
+- Previous behavior: 两个通知页面分别推断上下文，`issue_reported` 可在没有任务上下文时渲染，未知事件最终回退 `Image` 原始 URL。
+- New behavior: `noticeMedia` 按业务事件返回 guest-luggage/task/offline-task context 与测试标识；`cleaningMedia` 仅为受管 key、R2 历史引用或 server-managed reference 构建远程 source，未知远程引用返回空 source。页面三种显示路径复用 resolver。
+- Key decisions: 本地 `file:` 临时草稿保持可显示；不修改 Root proxy、R2 ACL、通知收件人、Push、数据或历史对象。
+
+### Files / Areas
+
+- `src/lib/cleaningMedia.ts` — 认证引用白名单和 source fail-closed。
+- `src/lib/cleaningMedia.test.ts` — 认证引用白名单和 source fail-closed 回归。
+- `src/lib/noticeMedia.ts` — 通知事件来源上下文 resolver。
+- `src/lib/noticeMedia.test.ts` — 事件来源、上下文和未知引用 fail-closed 回归。
+- `src/screens/tabs/NoticesScreen.tsx` — Inbox 缩略图统一 resolver。
+- `src/screens/tabs/NoticesScreen.test.tsx` — Inbox 缩略图来源上下文回归。
+- `src/screens/notices/NoticeDetailScreen.tsx` — 详情与预览统一 resolver。
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — 详情与预览来源上下文回归。
+- `docs/feature-regression-registry.md` — FR-P1-NTF-04 和 FR-P2-SRC-01。
+- `docs/change-release-ledger.md` — 本 CRL 与提交证据。
+
+### Impact / Dependencies
+
+- API / database / migration / configuration: none; reuse existing `/cleaning-app/media/image` authorization.
+- Shared dependency: `cleaningMedia.ts` is shared by task/feedback/day-end/maintenance sources; targeted `cleaningMedia.test.ts` covers each existing accepted source mapping.
+- Dependencies: none for source commit; backend deployment and real-device checks are separate.
+
+### Validation
+
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` — passed in the isolated candidate with a temporary dependency link, then removed.
+- `./node_modules/.bin/jest --runInBand --no-cache src/lib/profileStore.test.ts src/lib/cleaningMedia.test.ts src/lib/noticeMedia.test.ts src/screens/me/ProfileEditScreen.test.tsx src/screens/notices/NoticeDetailScreen.test.tsx src/screens/tabs/NoticesScreen.test.tsx` — passed: 6 suites / 50 tests.
+- `./node_modules/.bin/eslint src/lib/api.ts src/lib/cleaningMedia.ts src/lib/noticeMedia.ts src/lib/profileStore.ts src/screens/me/ProfileEditScreen.tsx src/screens/notices/NoticeDetailScreen.tsx src/screens/tabs/MeScreen.tsx src/screens/tabs/NoticesScreen.tsx src/screens/tabs/TasksScreen.tsx` — passed: 0 errors; 59 existing warnings in large shared files.
+- `git diff --check` — passed.
+- OTA, build and real-device/production verification — not run.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`; listed contribution to the jointly selected candidate `mobile/CRL-20260819-003` + `mobile/CRL-20260819-004`.
+- **Untracked review:** `none`; clean candidate worktree contains no untracked files.
+- `docs/feature-regression-registry.md` — SHA-256: `448cb5c77be1289bba19094a4d5480dca25b805bd81206f682522830133a2d70`
+- `docs/feature-regression-registry.md` — SHA-256: `6758f76a2f80c5ab4ec01ecb91d909d4bac52f1901d3804ea90bc63f688ce045`
+- `docs/feature-regression-registry.md` — SHA-256: `ed414b79937cecba820d1df0562961c3aef18cfcdb6c68cab069139ba157d2cf`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `2611937d6bfe4a83b496ccb4c7aa257e1ee46141e7d499bfe29362cf9d336b74`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `3a1d985955cac52012b177a930e5495ff59d324a72f08f93a5228f821f3b2a0d`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `949ad48c6cc578f9b39fd45917212ac8e2fb301f9928b029780297feac67c722`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `e5a3905e43155f0ad448783b532d9bdc410e09eba548775ff1f53e28fa16c19a`
+- `src/lib/cleaningMedia.ts` — SHA-256: `00f244c49eede4100b748a36b83ca99967699b637f6e10ecd33c79d5b7a31671`
+- `src/lib/cleaningMedia.ts` — SHA-256: `2975b7c9f11c108ae83dd9db5080b411c11885db160e4b50914f7f0c30afbff7`
+- `src/lib/cleaningMedia.ts` — SHA-256: `51dd8edb28514fe23f1ed4517ca432c6bb5d0b032b44a1a9fab8e39633770674`
+- `src/lib/cleaningMedia.ts` — SHA-256: `74ea4f0dd3d6688348db46e6244e701ae5edee4fe7a16ab06b4b40d96247c014`
+- `src/lib/cleaningMedia.ts` — SHA-256: `8cfef4c1d06f804e857a267977c90e71888e3d862f68ed7bd6a10735c719ea85`
+- `src/lib/noticeMedia.test.ts` — SHA-256: `79194dc20f451a21dac320391e4bd31dedc8d2d816bad91db98c6c58b9ca635e`
+- `src/lib/noticeMedia.ts` — SHA-256: `5b555dc9a8536f569e1df3e0c75c0153b72ab510252db2abd6cfea9191e66a5a`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `05032c9cd4df931e407e4c6196c7c27a727c0d821647cec0d6be859ee43bdbb7`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `257c66a5fcd122937232da6376246fb37af83cfc4dcb982eb289de225be79547`
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — SHA-256: `4e306988b826fcc90089c8d6c2a2c66f4c6e53bda1d04b81099d98cdf95aa909`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `0787079c7089ef8ec2ddd3b9e433d01fab03e531d833acc421d252843b5de9fb`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `0e44d00f8e1b823c511e8f5b5a08445ca265afcad364d97b09d3c9a5e61c0777`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `0fa8393e230a75a777d7c86c067cb023c481391659f1fcbb16fb42b13d7061aa`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `25ed6896f85ce96ae134f6ea4b24e6b16637cae3d57a6ff53a785334e8153269`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `33e78430d61815897af2e3720b61edd026ba6f49e16c7ee77f4e4e1acbcdf3e3`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `516de30406212444b4f279d9d54e4cea385e6ee4bd2b378ca1f3c837b7dcfbf7`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `874bdd17cdc06c71b970178e5ea109829b036242690d354bdd9bc5bcdd34041f`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `90124ded108cf0a2d697b699b51fd7114982b6da481aca0e2e8e178bf5029351`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `ba3ebe7474cbb84611be9357b64a08a7d466c9a943f937192f7ee00a5ee9bf21`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `be169470a0ba720755183a675d230dd0a19ecb81d97b9773baf2882dd8cb0da1`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `ec4598aa8b9423cf9f84e3a63c008c5e40413f65e61cdbebfba14638e63b5f75`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `50f3d1116bf6740e1a65578bb35dfddf073e7a1b5a6f93497a8b1323215de80b`
+- `src/screens/tabs/NoticesScreen.test.tsx` — SHA-256: `ccf6a21c86ba7698b06c053b41d9a6ed5b7241687b264ca60198575f1fb6182b`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `22394fcc8d17af57ee525e0abb1b0d05fb8847273b7e054d236998e5c1a223a0`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `487f74ecf68305ab0630b519431381c9657ae88077a9535b3f479e6a1231aad0`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `4b73e5bdcccc017de6513c42ce02c97ede353729eb6a28040bbb61aa4210ada1`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `538b244832786a5db50152a3ca4f31b269eafeda7613c84907fa548dbf93ff00`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `d41ba4d86fac83ee1392e33a8fcb35475e9800b2c4eaa2c349de7dd9680974ce`
+
+### Release Attempts
+
+- See `RA-20260827-002` in mobile/CRL-20260819-003; the selected mobile CRL set, base, authorization and commit boundary are shared.
+
+### Risks / Release Notes
+
+- Unclassified historical Inbox media becomes intentionally hidden until a business owner/context mapping is added; no raw fallback is retained.
+- Sensitive-information review: no credentials, tokens, private media URL/key, image bytes or production records are included.
+- Git state: uncommitted, not pushed, no PR, OTA or device/production verification.
 
 ## CRL-20260816-003 — P1-NTF-04 房源问题通知认证媒体渲染（mobile）
 
@@ -6817,3 +7404,149 @@
 - Rollback: restore the final blank line if necessary, though doing so will reproduce the CI failure.
 - Sensitive-information review: no secrets, credentials, tokens, `.env` values, private URLs, caches, logs, or production data are added.
 - Git state: candidate content commit `aa02d04b1b7fad0eaa6596ba44939fe87648abf1` on `codex/fix-mobile-ci-whitespace-20260816`, based on `origin/Dev@195b9e8ae26a13a9f9e604dd2cb4bb8eb8dda3e0`; not pushed, no PR, deployment/OTA, or device verification.
+## CRL-20260830-001 — 修复自完成挂钥匙视频测试过期夹具（mobile）
+
+- **Repository:** `mobile`
+- **Status:** verified; selected-for-commit
+- **Updated:** 2026-08-30 Australia/Melbourne
+- **Request:** 修复 Root Full Regression 因移动端自完成挂钥匙视频队列测试使用已过期固定 `captured_at` 而失败的问题。
+- **Outcome:** 测试在每次运行时使用仍处于 30 天本地保留期内的捕获时间，并继续验证私有视频先上传、再调用自完成业务保存接口的既有行为。
+
+### Implementation
+
+- Previous behavior: 测试 fixture 固定为 `2026-07-29T02:03:04.000Z`；超过 30 天后，队列正确执行过期清理，导致测试错误地期待一次上传。
+- New behavior: 测试在开始时生成 `capturedAt`，入队参数和业务保存断言复用同一值；运行时队列、保留策略、上传、重试和业务保存逻辑均未修改。
+- Key decisions: 这是 CI 测试夹具修复，不放宽 30 天媒体清理，也不改变真实自完成媒体流程。
+
+### Files / Areas
+
+- `src/lib/inspectionMediaQueue.test.ts` — modified: 将会过期的自完成视频测试时间替换为本次测试的动态捕获时间。
+- `docs/change-release-ledger.md` — modified: 记录本次独立 mobile CI 修复单元。
+
+### Impact / Dependencies
+
+- App runtime / API / database / migration / configuration / production data: none.
+- Feature Regression Registry: no update; the existing queue invariant and its test remain unchanged, only fixture lifetime is corrected.
+- Dependencies: root/CRL-20260830-001 is the related root release whose Full Regression currently consumes mobile `Dev`; no runtime dependency.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/lib/inspectionMediaQueue.test.ts` — passed: 4/4 tests, including the formerly failing self-complete upload/business-save case.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed with 0 errors and 528 pre-existing warnings outside this CRL.
+- `npm run check:ci` — passed: 31 ledger-auditor tests, recorded-path coverage 2/2, typecheck, lint (0 errors / 528 warnings), button contract, fast Jest (3 suites / 18 tests), and full Jest (57 suites / 328 tests).
+- Current-worktree ledger audit and staged pre-commit gate passed; independent review returned GO for commit only.
+- Pending: content commit and committed-range report.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared.
+- **Untracked review:** PASS — clean isolated candidate; temporary validation dependencies and CI log were removed before staging.
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `63032b7b5e0bb36a1c81eb4d10c84bc8eeb6247e0ff0be56cde1fea0e5e37b53`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `84222184401730805bc7ed43398ae43a116ce2a99acc221393d2794168e20e11`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `91041882a9b8a2e26290a8a38de65a515452e58f54cfcbc94449cdded2574fbf`
+
+### Release Attempts
+
+#### RA-20260830-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260830-001`
+- Selected CRL identities: `mobile/CRL-20260830-001`
+- Intended action: `commit`
+- Branch: `codex/pdf-queue-scale-zero-20260830`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-30 Australia/Melbourne`
+- Candidate patch SHA-256: `53ed5529d9091c74ea87ad26a83c9c66e046fd9757cac8a440de0fe6a45bc844`; excluding `docs/change-release-ledger.md`.
+- Commit SHA: `d621961`; candidate content commit.
+- Dependencies: none.
+- Required validation: PASS — focused Jest, typecheck, lint and `check:ci`, current-worktree ledger audit and staged pre-commit gate passed; independent review is GO for commit only.
+- Shared-hunk review: PASS — the three declared non-ledger test hunks exactly match the staged source change; no selected path is shared with an unselected CRL.
+- Generated-file review: PASS — source test and Markdown ledger only; no generated files, credentials, private media bytes, logs or production data are staged.
+- Technical state: committed.
+- User authorization: selected-for-commit; evidence: user authorized the exact mobile test-only repair and independent commit flow on 2026-08-30.
+- Independent review: GO for commit only — independent read-only review on 2026-08-30 found no P0/P1; it verified the exact base, non-ledger candidate fingerprint, staged scope, test evidence and absence of production-write or secret risk.
+- Action conclusion: GO for commit — content commit `d621961` was created; the exact committed-range report and a new user authorization for this exact commit and branch are required before push.
+
+### Risks / Release Notes
+
+- Risk: a dynamic current-time fixture intentionally no longer validates the historical literal timestamp; it continues to verify the timestamp is preserved from enqueue to the self-complete business request.
+- Rollback: restore the static timestamp only if deliberately testing expiration, but that would again make this success-path case fail after 30 days.
+- Sensitive-information review: no secrets, credentials, `.env` values, private media bytes, production logs or production data are included.
+- Git state: isolated mobile candidate on `codex/pdf-queue-scale-zero-20260830`; uncommitted, not pushed, PR not created, deployment/OTA/device/production verification not run.
+## CRL-20260830-003 — 合并候选的 Dev 父节点预提交审计（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready; verified for local merge commit
+- **Updated:** 2026-08-30 AEST
+- **Request:** 让 PR #39 的本地 merge candidate 能以实际合入的 `Dev` 父节点执行严格 pre-commit 审计，避免将已在 `Dev` 的路径误判为本次变更。
+- **Outcome:** 仅当 Git 的 `MERGE_HEAD` 与选中 Release Attempt 记录的 `Base` 精确一致时，预提交审计才以该父节点比对 staged paths、台账范围与 hunk；普通候选继续相对 `HEAD`，不匹配或存在未解决冲突时 fail-closed。
+
+### Implementation
+
+- Previous behavior: merge 中的 index 始终相对原 first parent `HEAD` 审计，导致 `Dev` 已有文件、台账行和 hunk 被错误计入候选。
+- New behavior: 受控 merge candidate 使用已验证的 `MERGE_HEAD` 作为 staged 比较基线；该基线必须由一个精确选中 CRL identities 的 Release Attempt 的 `Base` 证明。
+- Key decisions: 不变更应用运行时、API、权限、数据库、CI workflow、依赖或生产数据；ledger-only receipt merge candidate 继续 fail-closed。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — 增加受控 merge-parent staged 比较基线及 fail-closed 验证。
+- `scripts/tests/test_audit_change_release_ledger.py` — 覆盖已登记 Dev merge parent 的通过与基线不匹配的阻断。
+- `docs/change-release-ledger.md` — 记录该独立治理单元及合并提交证据。
+
+### Impact / Dependencies
+
+- Application / API / database / configuration / production data / deployment: none.
+- Feature Regression Registry: not applicable; no business invariant or runtime workflow changes.
+- Dependencies: `mobile/CRL-20260830-002` is the merge candidate that exposed this auditor limitation; the two units must be audited and committed together.
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed: 41 tests, including exact registered merge-parent pass, unregistered merge-parent block, and registered-but-non-`origin/Dev` merge-parent block.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/audit_change_release_ledger.py --pre-commit --repo mobile --crl CRL-20260830-002 --crl CRL-20260830-003` — passed: exact registered `MERGE_HEAD`, 3 staged paths and 16 non-ledger hunks; no untracked or unselected path.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/audit_change_release_ledger.py` — passed: 21 changed files, 21 recorded, coverage PASS.
+- `git diff --cached MERGE_HEAD --check` — passed.
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/audit_change_release_ledger.py scripts/tests/test_audit_change_release_ledger.py` — passed after the P1 correction; generated bytecode was removed before final audit.
+- `npm run check:ci` — passed after the P1 correction: 41 auditor tests, current ledger coverage (21/21), TypeScript, ESLint (0 errors; 109 existing warnings), strict button audit, fast Jest (3 suites / 18 tests) and full Jest (58 suites / 332 tests).
+- Final `--pre-commit` gate passed after the P1 correction: registered `MERGE_HEAD` equals the current fetched `origin/Dev`, 3 staged paths and 16 non-ledger hunk fingerprints; no untracked or unselected path. Current ledger coverage and `git diff --cached MERGE_HEAD --check` also passed.
+- Pending: independent re-review.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared; exact non-ledger hunk fingerprints are calculated against `MERGE_HEAD` / fetched `origin/Dev@4f75f5f097b148ebe1a209289267892c8f2e34b0`.
+- **Untracked review:** none; dedicated worktree has no untracked paths.
+- `scripts/audit_change_release_ledger.py` — SHA-256: `c82d4447482408b6b3e7c84a03b24af4c4817d9cdffc4a75ca3e417205793ae4`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `f12d870f634266cd19557ac50f7e21d39bda3e7e55fa58360164101a818447e2`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `7a2770c43d55b56b485bd6d2e32dbca5f2e5633d41fde8d0368dbcb44bf5ac1d`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `ac912f9e584bb46e3e7aba0ef0a20fa3d4a2904a12cda363359931151c7d0bbc`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `a8d27d4b3a8a680a932541442e5aaf6b5dd2dff993c9858af649580cac7de421`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `1b216f45e0827278a6b324af840f51cce25f3afe0c8206c961801f4855448ef6`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `6d5f4428c4bf86c7bfc4283a4bae125cb8e1da4ad59f810b71c9ac8c98794219`
+
+### Release Attempts
+
+#### RA-20260830-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260830-002`, `CRL-20260830-003`
+- Selected CRL identities: `mobile/CRL-20260830-002`, `mobile/CRL-20260830-003`
+- Intended action: `commit`
+- Branch: `codex/historical-receipt-audit-20260827`
+- Base: `origin/Dev@4f75f5f097b148ebe1a209289267892c8f2e34b0`; fetched at `2026-08-30 AEST`
+- Candidate patch SHA-256: `efa86065d8e2d3f3dc40ce2f11c79ce53a8918aa83fd76f32cf321a25aa35458`, excluding `docs/change-release-ledger.md` from the registered `MERGE_HEAD` candidate range.
+- Commit SHA: not committed.
+- Dependencies: `mobile/CRL-20260830-002`.
+- Required validation: `PASS`; evidence: 41 focused auditor tests, final-candidate Python compile, exact merge-parent pre-commit gate, current ledger coverage, whitespace check and `npm run check:ci` (58 suites / 332 tests; lint 0 errors / 109 existing warnings) passed.
+- Shared-hunk review: `PASS`; evidence: final 16 non-ledger hunk fingerprints exactly match the combined selected CRLs relative to the current registered `MERGE_HEAD`.
+- Generated-file review: `PASS`; evidence: final candidate contains only Python source/tests and Markdown; no generated or sensitive path is present.
+- Technical state: `verified`.
+- User authorization: `selected-for-commit`; evidence: user authorized this narrow merge-parent audit governance repair on 2026-08-30. This does not authorize push, PR merge, deployment, OTA/build or device verification.
+- Independent review: `GO` for local merge commit; final independent read-only review verified that `MERGE_HEAD` must equal both the current `origin/Dev` and the exact selected Release Attempt Base, the registered-but-non-`origin/Dev` regression blocks, the candidate hash and all 16 hunk fingerprints match, and no P0/P1/P2, secret, generated-file or production-write risk remains.
+- Action conclusion: `GO` for local merge commit only. Push, PR merge, deployment, OTA/build and device verification remain unapproved.
+
+### Risks / Release Notes
+
+- Risk: using an arbitrary merge parent could conceal unrelated work; exact `Base == MERGE_HEAD`, selected identities and no-unmerged-path checks are mandatory.
+- Rollback: revert only the future governance merge commit; normal `HEAD`-relative candidate auditing remains available.
+- Sensitive-information review: no credentials, tokens, private media references, production records, caches or logs are introduced.

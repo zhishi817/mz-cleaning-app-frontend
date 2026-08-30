@@ -126,6 +126,7 @@ test('retries lockbox business save without re-uploading the local video', async
 })
 
 test('uses the self-complete business route while retaining the same local-first video queue', async () => {
+  const capturedAt = new Date().toISOString()
   const api = require('./api') as {
     uploadCleaningVideo: jest.Mock
     uploadLockboxVideo: jest.Mock
@@ -141,7 +142,7 @@ test('uses the self-complete business route while retaining the same local-first
     source_uri: 'file:///camera/lock-1.mov',
     name: 'self-complete-lock.mov',
     mime_type: 'video/quicktime',
-    captured_at: '2026-07-29T02:03:04.000Z',
+    captured_at: capturedAt,
     meta: { lockbox_submission_mode: 'self_complete' },
   })
 
@@ -150,7 +151,7 @@ test('uses the self-complete business route while retaining the same local-first
   expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
   expect(api.uploadSelfLockboxVideo).toHaveBeenCalledWith('token-self-complete', 'self-complete-task', {
     media_url: 'https://cdn.example.com/self-complete-lock.mov',
-    captured_at: '2026-07-29T02:03:04.000Z',
+    captured_at: capturedAt,
   })
   expect(api.uploadLockboxVideo).not.toHaveBeenCalled()
   const [queued] = await queueMod.listInspectionMediaQueueItemsForTask('self-complete-task', ['lockbox_video'])
