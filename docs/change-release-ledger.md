@@ -1,5 +1,124 @@
 # Change Release Ledger
 
+## CRL-20260830-002 — 历史台账回执精确审计模式（mobile；受控身份迁移）
+
+- **Repository:** `mobile`
+- **Status:** in-progress; PR #39 conflict resolution prepared locally
+- **Updated:** 2026-08-30 AEST
+- **Request:** 解决 PR #39 与当前 `Dev` 的账本/审计器冲突，同时保留历史回执精确审计能力和已合入移动端修复的完整发布证据。
+- **Outcome:** 历史回执模式与当前 hunk 对账门禁共存并保持 fail-closed；`Dev` 的既有 CRL、Release Attempt 和业务代码完整保留。原分支局部身份 `mobile/CRL-20260827-001` 与已合入的 TasksScreen 单元发生编号冲突，受控迁移为本 CRL，未改写任何已在 `Dev` 的业务单元。
+
+### Implementation
+
+- Previous behavior: PR 分支和后续 `Dev` 并行占用了 `mobile/CRL-20260827-001`；GitHub 无法自动合并账本，审计器的历史回执分支也与后续 hunk-reconciliation 收据校验在同一函数冲突。
+- New behavior: 保留 `Dev` 的普通 receipt/hunk-reconciliation 校验，并在其选择到 `Historical receipt: true` 时进入历史来源的严格验证。历史审计单元改用唯一身份 `mobile/CRL-20260830-002`，保留原始内容提交、候选指纹和已推送分支证据。
+- Identity migration: branch-local `mobile/CRL-20260827-001` -> `mobile/CRL-20260830-002`; reason: `origin/Dev` 已将前者用于 TasksScreen CI 稳定性单元。迁移不改变原审计器源码意图、历史来源或既有 `Dev` 记录。
+- Key decisions: 不修改移动端应用、API、权限、数据库、配置、CI workflow 或生产数据；不覆盖任何 `origin/Dev` 的 Release Attempt。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — 合并历史回执与 hunk-reconciliation 的 fail-closed 收据路径。
+- `scripts/tests/test_audit_change_release_ledger.py` — 合并双方已存在的历史回执与 hunk-reconciliation 回归。
+- `docs/change-release-ledger.md` — 受控 CRL 身份迁移及 PR #39 冲突解决证据。
+
+### Impact / Dependencies
+
+- Application / API / database / configuration / production data / deployment: none.
+- Dependencies: none. 历史来源仅在同一移动端仓库与同一 CRL 的已有 Release Attempt 中验证；不以此替代根仓库或 OTA/设备验证。
+- Feature Regression Registry: not applicable; no business workflow, route, API contract, role, data model or runtime behavior changes.
+
+### Validation
+
+- Carried source evidence: `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed before this conflict resolution: 37 tests, including历史来源缺失、当前范围伪造来源、当前范围改写来源和非台账范围的 fail-closed cases.
+- Carried source evidence: `python3 -m py_compile scripts/audit_change_release_ledger.py scripts/tests/test_audit_change_release_ledger.py` — passed before this conflict resolution.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed after merge resolution: 38 tests, including both historical-receipt and hunk-reconciliation paths.
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/audit_change_release_ledger.py scripts/tests/test_audit_change_release_ledger.py` — passed; its two generated `__pycache__` files were removed before the coverage audit.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/audit_change_release_ledger.py` — passed: 21 changed files, 21 recorded, coverage PASS against fetched `origin/Dev`.
+- `git diff --cached --check` — passed.
+- `npm run check:ci` — passed: 38 auditor tests, current ledger coverage (21/21), TypeScript, ESLint (0 errors; 109 existing warnings), strict button audit, fast Jest (3 suites / 18 tests) and full Jest (58 suites / 332 tests).
+- Independent review and all relevant local regression have passed, but the current local `--pre-commit` gate is merge-parent-blind: it compares the merge index only with the original first parent and therefore incorrectly classifies `origin/Dev`'s already-contained 18 business paths and their ledger/hunks as this CRL's changes. The gate has no merge-parent or `--base` mode. A separately approved audit-governance CRL and regression are required before a merge commit can be created. No browser, API, database, EAS, OTA, device or production action is in scope.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared; exact non-ledger conflict-resolution hunk fingerprints are recorded against fetched `origin/Dev@4f75f5f097b148ebe1a209289267892c8f2e34b0`.
+- **Untracked review:** none; this dedicated worktree was clean before the local merge.
+- `scripts/audit_change_release_ledger.py` — SHA-256: `c2d48489f7179bc6484584dd73de8e1738013edd99c9f04e9c55a6841a209b83`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `d0c7a2ea147806191d41c9e22df7cc35603d8e8314db870d90430c1fc30e1c79`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `5a10de627be26214274bfbd58c597ddb96827425e25393c43e3a295b475a867d`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `866e041decafc896c10aff062bbed4d41c554b74202bbc6952d4abd9695594c4`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `129bff5f97388a33e8f767b14c1e49e9602547383b0206852bb938c64fc726e3`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `f454d2dc72aaef16babf0caa2d61df2013f1a4cad52319bf4c84a29e6fc604dc`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `04f523851e5668b56b712052e413c226458fc2b7e7d0d62f28b80188fcdc486f`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `4b658a571e81d7f2fa5967c10a4cc3dfd69a39fa0be8cbc1da20221eba3f828c`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `ab91d4342aba282851bf3f630ff84a981238fb7070f2dda3c1736e734d9ed63e`
+
+### Release Attempts
+
+#### RA-20260827-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260830-002` (migrated from branch-local `CRL-20260827-001`).
+- Selected CRL identities: `mobile/CRL-20260830-002`
+- Intended action: `commit`
+- Branch: `codex/historical-receipt-audit-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 AEST`.
+- Candidate patch SHA-256: `8b7c2bbf5c28af9a0519ac1c5938519d4270e377a920cfe3c3b1d512dbba39b7`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `9ccdd55912efe38cac1f0a861ab178802151ef8c` (candidate content commit).
+- Dependencies: none.
+- Required validation: `PASS`; evidence: 37-test auditor regression and Python compile passed before the current conflict resolution.
+- Shared-hunk review: `PASS`; all nine original non-ledger staged hunk fingerprints were declared and no unselected hunk was staged.
+- Generated-file review: not applicable; Python source, tests and Markdown only.
+- Technical state: `committed`.
+- User authorization: `selected-for-commit`; evidence: user confirmed the bounded governance repair on 2026-08-27 under the then branch-local identity.
+- Independent review: `GO for commit`; evidence: independent read-only review verified receipt-base source immutability, exact candidate fingerprint, staged scope and secret/production-write boundaries.
+- Action conclusion: `GO` for the completed original content commit; this historical record is preserved through the controlled identity migration.
+
+#### RA-20260827-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260830-002` (migrated from branch-local `CRL-20260827-001`).
+- Selected CRL identities: `mobile/CRL-20260830-002`
+- Intended action: `push`
+- Branch: `codex/historical-receipt-audit-20260827`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-27 AEST`.
+- Candidate patch SHA-256: `8b7c2bbf5c28af9a0519ac1c5938519d4270e377a920cfe3c3b1d512dbba39b7`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `9ccdd55912efe38cac1f0a861ab178802151ef8c` (candidate content commit).
+- Remote branch: `origin/codex/historical-receipt-audit-20260827@6a78bd4e37bfde33b4d623a3c9ab927580525d88`; verified after the authorized original push on 2026-08-27.
+- Dependencies: none.
+- Required validation: `PASS`; evidence: refreshed remote baseline and exact committed mobile range audit passed before the current conflict resolution.
+- Shared-hunk review: `PASS`; all nine original non-ledger hunk fingerprints matched the committed range.
+- Generated-file review: not applicable; Python source, tests and Markdown only.
+- Technical state: `pushed`.
+- User authorization: `approved-for-push`; evidence: user confirmed the original mobile content commit and branch on 2026-08-27; it does not authorize the new conflict-resolution commit or a new push.
+- Independent review: `GO for commit`; evidence: the reviewed source candidate was unchanged.
+- Action conclusion: `GO`; original branch push completed. PR merge, deployment, OTA and device/production verification remain not run.
+
+#### RA-20260830-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260830-002`
+- Selected CRL identities: `mobile/CRL-20260830-002`
+- Intended action: `commit`
+- Branch: `codex/historical-receipt-audit-20260827`
+- Base: `origin/Dev@4f75f5f097b148ebe1a209289267892c8f2e34b0`; fetched at `2026-08-30 AEST`.
+- Candidate patch SHA-256: `a6d8f6558f340f1665260bb81f1f78328cd71e88beb282457c2f535a7f142750`, excluding `docs/change-release-ledger.md` from the resolved `origin/Dev` candidate range.
+- Commit SHA: not committed.
+- Dependencies: none.
+- Required validation: `PASS`; evidence: merged 38-test auditor regression, Python compile, current ledger coverage (21/21), whitespace check and `npm run check:ci` (58 suites / 332 tests; lint 0 errors / 109 existing warnings) passed; no application/runtime surface is changed by this candidate.
+- Shared-hunk review: `PASS`; evidence: nine Python source/test hunk fingerprints are declared against the fetched `origin/Dev` merge parent; all other staged paths are already contained in that parent.
+- Generated-file review: `PASS`; evidence: resolved candidate relative to `origin/Dev` contains only Python source/tests and Markdown; no generated or sensitive path is present.
+- Technical state: `candidate`.
+- User authorization: `selected-for-commit`; evidence: user requested that the displayed PR #39 conflict be resolved on 2026-08-30. This is not push, PR merge, deployment, OTA/build or device authorization.
+- Independent review: `GO` for the resolved three-file `origin/Dev`-relative governance candidate only; evidence: exact candidate fingerprint and all nine declared hunk fingerprints match, no sensitive/generated path is present, and `npm run check:ci` passed. This does not waive the required pre-commit gate.
+- Action conclusion: `BLOCKED` for local merge commit: the required `--pre-commit` gate has no merge-parent-aware comparison and reports 18 `origin/Dev`-contained paths, 99 unexpected and 9 missing hunks, plus their historical ledger lines. A narrow audit-governance change with tests and a new CRL is required; do not commit or push this merge state until then.
+
+### Risks / Release Notes
+
+- This is release-governance-only work. It preserves immutable remote CRL business records and both fail-closed audit modes; no application behavior or production data is changed.
+- Sensitive-information review: no credentials, tokens, document/media URLs, production records or caches are introduced.
+- Rollback: revert only the future conflict-resolution merge commit; the existing `Dev` ledger and original source branch commits remain untouched.
+
 ## CRL-20260828-002 — Profile Photo ID 缓存迁移持久化（mobile）
 
 - **Repository:** `mobile`
@@ -7355,3 +7474,99 @@
 - Rollback: restore the static timestamp only if deliberately testing expiration, but that would again make this success-path case fail after 30 days.
 - Sensitive-information review: no secrets, credentials, `.env` values, private media bytes, production logs or production data are included.
 - Git state: isolated mobile candidate on `codex/pdf-queue-scale-zero-20260830`; uncommitted, not pushed, PR not created, deployment/OTA/device/production verification not run.
+## CRL-20260830-003 — 合并候选的 Dev 父节点预提交审计（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready; verified for local merge commit
+- **Updated:** 2026-08-30 AEST
+- **Request:** 让 PR #39 的本地 merge candidate 能以实际合入的 `Dev` 父节点执行严格 pre-commit 审计，避免将已在 `Dev` 的路径误判为本次变更。
+- **Outcome:** 仅当 Git 的 `MERGE_HEAD` 与选中 Release Attempt 记录的 `Base` 精确一致时，预提交审计才以该父节点比对 staged paths、台账范围与 hunk；普通候选继续相对 `HEAD`，不匹配或存在未解决冲突时 fail-closed。
+
+### Implementation
+
+- Previous behavior: merge 中的 index 始终相对原 first parent `HEAD` 审计，导致 `Dev` 已有文件、台账行和 hunk 被错误计入候选。
+- New behavior: 受控 merge candidate 使用已验证的 `MERGE_HEAD` 作为 staged 比较基线；该基线必须由一个精确选中 CRL identities 的 Release Attempt 的 `Base` 证明。
+- Key decisions: 不变更应用运行时、API、权限、数据库、CI workflow、依赖或生产数据；ledger-only receipt merge candidate 继续 fail-closed。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — 增加受控 merge-parent staged 比较基线及 fail-closed 验证。
+- `scripts/tests/test_audit_change_release_ledger.py` — 覆盖已登记 Dev merge parent 的通过与基线不匹配的阻断。
+- `docs/change-release-ledger.md` — 记录该独立治理单元及合并提交证据。
+
+### Impact / Dependencies
+
+- Application / API / database / configuration / production data / deployment: none.
+- Feature Regression Registry: not applicable; no business invariant or runtime workflow changes.
+- Dependencies: `mobile/CRL-20260830-002` is the merge candidate that exposed this auditor limitation; the two units must be audited and committed together.
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed: 41 tests, including exact registered merge-parent pass, unregistered merge-parent block, and registered-but-non-`origin/Dev` merge-parent block.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/audit_change_release_ledger.py --pre-commit --repo mobile --crl CRL-20260830-002 --crl CRL-20260830-003` — passed: exact registered `MERGE_HEAD`, 3 staged paths and 16 non-ledger hunks; no untracked or unselected path.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/audit_change_release_ledger.py` — passed: 21 changed files, 21 recorded, coverage PASS.
+- `git diff --cached MERGE_HEAD --check` — passed.
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/audit_change_release_ledger.py scripts/tests/test_audit_change_release_ledger.py` — passed after the P1 correction; generated bytecode was removed before final audit.
+- `npm run check:ci` — passed after the P1 correction: 41 auditor tests, current ledger coverage (21/21), TypeScript, ESLint (0 errors; 109 existing warnings), strict button audit, fast Jest (3 suites / 18 tests) and full Jest (58 suites / 332 tests).
+- Final `--pre-commit` gate passed after the P1 correction: registered `MERGE_HEAD` equals the current fetched `origin/Dev`, 3 staged paths and 16 non-ledger hunk fingerprints; no untracked or unselected path. Current ledger coverage and `git diff --cached MERGE_HEAD --check` also passed.
+- Pending: independent re-review.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared; exact non-ledger hunk fingerprints are calculated against `MERGE_HEAD` / fetched `origin/Dev@4f75f5f097b148ebe1a209289267892c8f2e34b0`.
+- **Untracked review:** none; dedicated worktree has no untracked paths.
+- `scripts/audit_change_release_ledger.py` — SHA-256: `c82d4447482408b6b3e7c84a03b24af4c4817d9cdffc4a75ca3e417205793ae4`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `f12d870f634266cd19557ac50f7e21d39bda3e7e55fa58360164101a818447e2`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `7a2770c43d55b56b485bd6d2e32dbca5f2e5633d41fde8d0368dbcb44bf5ac1d`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `ac912f9e584bb46e3e7aba0ef0a20fa3d4a2904a12cda363359931151c7d0bbc`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `a8d27d4b3a8a680a932541442e5aaf6b5dd2dff993c9858af649580cac7de421`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `1b216f45e0827278a6b324af840f51cce25f3afe0c8206c961801f4855448ef6`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `6d5f4428c4bf86c7bfc4283a4bae125cb8e1da4ad59f810b71c9ac8c98794219`
+
+### Release Attempts
+
+#### RA-20260830-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260830-002`, `CRL-20260830-003`
+- Selected CRL identities: `mobile/CRL-20260830-002`, `mobile/CRL-20260830-003`
+- Intended action: `commit`
+- Branch: `codex/historical-receipt-audit-20260827`
+- Base: `origin/Dev@4f75f5f097b148ebe1a209289267892c8f2e34b0`; fetched at `2026-08-30 AEST`
+- Candidate patch SHA-256: `efa86065d8e2d3f3dc40ce2f11c79ce53a8918aa83fd76f32cf321a25aa35458`, excluding `docs/change-release-ledger.md` from the registered `MERGE_HEAD` candidate range.
+- Commit SHA: `c9884e0ecfb58f61a0ed37fb773d29be929cc48f` (candidate content merge commit).
+- Dependencies: none.
+- Required validation: `PASS`; evidence: 41 focused auditor tests, final-candidate Python compile, exact merge-parent pre-commit gate, current ledger coverage, whitespace check and `npm run check:ci` (58 suites / 332 tests; lint 0 errors / 109 existing warnings) passed.
+- Shared-hunk review: `PASS`; evidence: final 16 non-ledger hunk fingerprints exactly match the combined selected CRLs relative to the current registered `MERGE_HEAD`.
+- Generated-file review: `PASS`; evidence: final candidate contains only Python source/tests and Markdown; no generated or sensitive path is present.
+- Technical state: `committed`.
+- User authorization: `selected-for-commit`; evidence: user authorized this narrow merge-parent audit governance repair on 2026-08-30. This does not authorize push, PR merge, deployment, OTA/build or device verification.
+- Independent review: `GO` for local merge commit; final independent read-only review verified that `MERGE_HEAD` must equal both the current `origin/Dev` and the exact selected Release Attempt Base, the registered-but-non-`origin/Dev` regression blocks, the candidate hash and all 16 hunk fingerprints match, and no P0/P1/P2, secret, generated-file or production-write risk remains.
+- Action conclusion: `GO` for the completed local merge commit. Exact committed-range audit is required before any separate, commit-bound push authorization; push, PR merge, deployment, OTA/build and device verification remain unapproved.
+
+#### RA-20260830-004
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260830-002`, `CRL-20260830-003`
+- Selected CRL identities: `mobile/CRL-20260830-002`, `mobile/CRL-20260830-003`
+- Intended action: `push`
+- Branch: `codex/historical-receipt-audit-20260827`
+- Base: `origin/Dev@4f75f5f097b148ebe1a209289267892c8f2e34b0`; fetched at `2026-08-30 AEST`
+- Candidate patch SHA-256: `efa86065d8e2d3f3dc40ce2f11c79ce53a8918aa83fd76f32cf321a25aa35458`, excluding `docs/change-release-ledger.md` from the registered `MERGE_HEAD` candidate range.
+- Commit SHA: `c9884e0ecfb58f61a0ed37fb773d29be929cc48f` (candidate content merge commit).
+- Dependencies: none.
+- Required validation: `PASS`; evidence: 41 focused auditor tests, final-candidate Python compile, exact merge-parent pre-commit gate, whitespace check and `npm run check:ci` (58 suites / 332 tests; lint 0 errors / 109 existing warnings) passed; the exact committed-range report at pre-receipt `HEAD=3d22a7c4a656e575b80d9687514fb8fbe5918d27` was `GO`.
+- Shared-hunk review: `PASS`; evidence: all 16 non-ledger hunk fingerprints exactly match the combined selected CRLs relative to the registered `MERGE_HEAD`.
+- Generated-file review: `PASS`; evidence: the candidate contains only Python source/tests and Markdown; no generated or sensitive path is present.
+- Technical state: `committed`.
+- User authorization: `not-selected`; evidence: the user's 2026-08-30 push authorization applied to pre-receipt `HEAD=3d22a7c4a656e575b80d9687514fb8fbe5918d27` on this branch. This ledger-only receipt creates a different `HEAD`, so a fresh, commit-bound approval for that final SHA is required before network push.
+- Independent review: `GO` for this ledger-only push-attempt receipt commit; read-only review confirmed the clean current range, candidate content commit, patch fingerprint, selected scope, validation evidence and secret/generated-file checks, with no P0/P1/P2. It does not approve network push.
+- Remote / push evidence: `NOT VERIFIED`; a live `ls-remote` retry is required after an earlier DNS resolution failure, and no push has been attempted.
+- Action conclusion: `NOT VERIFIED`; after this receipt commits, rerun the exact range report, verify live remote state, obtain fresh approval for the resulting branch and SHA, and then separately assess network push.
+
+### Risks / Release Notes
+
+- Risk: using an arbitrary merge parent could conceal unrelated work; exact `Base == MERGE_HEAD`, selected identities and no-unmerged-path checks are mandatory.
+- Rollback: revert only the future governance merge commit; normal `HEAD`-relative candidate auditing remains available.
+- Sensitive-information review: no credentials, tokens, private media references, production records, caches or logs are introduced.

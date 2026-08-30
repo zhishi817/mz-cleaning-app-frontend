@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import hashlib
 import subprocess
 import sys
 import tempfile
@@ -230,8 +231,142 @@ class ReleaseReportFixture:
         ledger.write_text(ledger.read_text(encoding="utf-8").replace(old_line, new_line), encoding="utf-8")
         git(self.root, "add", "src/feature.txt", "docs/change-release-ledger.md")
 
+    def stage_historical_receipt_candidate(self, source_attempt: str = "RA-20260803-777") -> None:
+        self.historical_base = self.head
+        git(self.root, "update-ref", "refs/remotes/origin/Dev", self.historical_base)
+        empty_patch = hashlib.sha256(b"").hexdigest()
+        attempt = f"""#### RA-20260803-779
+
+- Repository: `{EXPECTED_REPOSITORY}`
+- Selected CRLs: `CRL-20260803-777`
+- Selected CRL identities: `{EXPECTED_REPOSITORY}/CRL-20260803-777`
+- Intended action: `commit`
+- Branch: `codex/historical-receipt-fixture`
+- Base: `origin/Dev@{self.historical_base}`; fetched at `fixture-time`
+- Candidate patch SHA-256: `{empty_patch}`
+- Commit SHA: `not committed`
+- Dependencies: none
+- Required validation: `PASS`; evidence: `fixture historical receipt`
+- Shared-hunk review: `PASS`; evidence: `ledger-only fixture`
+- Generated-file review: `not applicable`; evidence: `Markdown only`
+- Historical receipt: `true`
+- Historical source attempt: `{source_attempt}`
+- Technical state: `candidate`
+- User authorization: `selected-for-commit`; evidence: `fixture selection`
+- Independent review: `not run`
+- Action conclusion: `GO`; blockers: none
+
+"""
+        ledger = self.root / "docs/change-release-ledger.md"
+        ledger.write_text(ledger.read_text(encoding="utf-8").replace("\n## CRL-20260803-778", f"\n{attempt}## CRL-20260803-778"), encoding="utf-8")
+        git(self.root, "add", "docs/change-release-ledger.md")
+
+    def forge_current_historical_source_attempt(self) -> None:
+        ledger = self.root / "docs/change-release-ledger.md"
+        text = ledger.read_text(encoding="utf-8")
+        source_start = text.index("#### RA-20260803-777")
+        source_end = text.index("\n#### RA-20260803-779", source_start)
+        source_block = text[source_start:source_end].replace("#### RA-20260803-777", "#### RA-20260803-781", 1)
+        text = text[:source_end] + "\n" + source_block + text[source_end:]
+        text = text.replace("Historical source attempt: `RA-20260803-777`", "Historical source attempt: `RA-20260803-781`", 1)
+        ledger.write_text(text, encoding="utf-8")
+        git(self.root, "add", "docs/change-release-ledger.md")
+
+    def rewrite_historical_source_attempt(self) -> None:
+        ledger = self.root / "docs/change-release-ledger.md"
+        ledger.write_text(ledger.read_text(encoding="utf-8").replace("fixture approval", "forged fixture approval", 1), encoding="utf-8")
+        git(self.root, "add", "docs/change-release-ledger.md")
+        git(self.root, "commit", "-qm", "rewrite historical source attempt")
+        self.head = git(self.root, "rev-parse", "HEAD")
+
+    def finish_historical_receipt(self, *, include_nonledger_path: bool = False) -> None:
+        git(self.root, "commit", "-qm", "historical receipt candidate")
+        self.historical_candidate = git(self.root, "rev-parse", "HEAD")
+        empty_patch = AUDITOR.content_patch_sha256(self.root, self.historical_base, self.historical_candidate)
+        push_attempt = f"""#### RA-20260803-780
+
+- Repository: `{EXPECTED_REPOSITORY}`
+- Selected CRLs: `CRL-20260803-777`
+- Selected CRL identities: `{EXPECTED_REPOSITORY}/CRL-20260803-777`
+- Intended action: `push`
+- Branch: `codex/historical-receipt-fixture`
+- Base: `origin/Dev@{self.historical_base}`; fetched at `fixture-time`
+- Candidate patch SHA-256: `{empty_patch}`
+- Commit SHA: `{self.historical_candidate}`
+- Dependencies: none
+- Required validation: `PASS`; evidence: `fixture historical receipt`
+- Shared-hunk review: `PASS`; evidence: `ledger-only fixture`
+- Generated-file review: `not applicable`; evidence: `Markdown only`
+- Historical receipt: `true`
+- Historical source attempt: `RA-20260803-777`
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: `fixture approval`
+- Independent review: `GO`; evidence: `fixture review`
+- Action conclusion: `GO`; blockers: none
+
+"""
+        ledger = self.root / "docs/change-release-ledger.md"
+        ledger.write_text(ledger.read_text(encoding="utf-8").replace("\n## CRL-20260803-778", f"\n{push_attempt}## CRL-20260803-778"), encoding="utf-8")
+        if include_nonledger_path:
+            self._write("src/feature.txt", "historical receipt must remain ledger-only\n")
+            git(self.root, "add", "src/feature.txt")
+        git(self.root, "add", "docs/change-release-ledger.md")
+        git(self.root, "commit", "-qm", "historical receipt evidence")
+        self.head = git(self.root, "rev-parse", "HEAD")
+
+    def historical_receipt_report(self):
+        return self.report(base=self.historical_base)
+
 
 class ReleaseReportTests(unittest.TestCase):
+    def test_pre_commit_gate_accepts_initial_historical_receipt_candidate(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        fixture.stage_historical_receipt_candidate()
+        report = AUDITOR.build_pre_commit_report(fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"])
+        self.assertEqual("GO", report["conclusion"])
+        self.assertTrue(any(item["gate"] == "ledger-only receipt" and item["result"] == "PASS" for item in report["checks"]))
+
+    def test_historical_receipt_report_accepts_verified_ledger_only_range(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        fixture.stage_historical_receipt_candidate()
+        fixture.finish_historical_receipt()
+        report = fixture.historical_receipt_report()
+        self.assertEqual("GO", report["conclusion"])
+        self.assertTrue(report["historical_receipt"])
+        self.assertTrue(any(item["gate"] == "historical source proof" and item["result"] == "PASS" for item in report["checks"]))
+
+    def test_historical_receipt_blocks_nonledger_current_range(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        fixture.stage_historical_receipt_candidate()
+        fixture.finish_historical_receipt(include_nonledger_path=True)
+        report = fixture.historical_receipt_report()
+        self.assertEqual("BLOCKED", report["conclusion"])
+        self.assertTrue(any("must change only docs/change-release-ledger.md" in blocker for blocker in report["blockers"]))
+
+    def test_historical_receipt_blocks_unknown_source_attempt(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        fixture.stage_historical_receipt_candidate("RA-20260803-999")
+        report = AUDITOR.build_pre_commit_report(fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"])
+        self.assertEqual("BLOCKED", report["conclusion"])
+        self.assertTrue(any("Historical source attempt is missing" in blocker for blocker in report["blockers"]))
+
+    def test_historical_receipt_blocks_source_added_in_current_ledger(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        fixture.stage_historical_receipt_candidate()
+        fixture.forge_current_historical_source_attempt()
+        report = AUDITOR.build_pre_commit_report(fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"])
+        self.assertEqual("BLOCKED", report["conclusion"])
+        self.assertTrue(any("must already exist" in blocker for blocker in report["blockers"]))
+
+    def test_historical_receipt_report_blocks_rewritten_source_attempt(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        fixture.stage_historical_receipt_candidate()
+        fixture.finish_historical_receipt()
+        fixture.rewrite_historical_source_attempt()
+        report = fixture.historical_receipt_report()
+        self.assertEqual("BLOCKED", report["conclusion"])
+        self.assertTrue(any("byte-for-byte unchanged" in blocker for blocker in report["blockers"]))
+
     def test_pre_commit_gate_accepts_exact_staged_hunk_scope(self) -> None:
         fixture = ReleaseReportFixture(self)
         fixture.stage_pre_commit_candidate()
@@ -783,6 +918,102 @@ class ReleaseReportTests(unittest.TestCase):
 
         self.assertEqual(2, coverage_code)
         self.assertIn("NOT VERIFIED", coverage_output.getvalue())
+
+
+class MergeParentPreCommitTests(unittest.TestCase):
+    def stage_merge_candidate(self, fixture: ReleaseReportFixture) -> str:
+        source_ledger = (fixture.root / "docs/change-release-ledger.md").read_text(encoding="utf-8")
+        selected_start = source_ledger.index("\n## CRL-20260803-777")
+        dependency_start = source_ledger.index("\n## CRL-20260803-778")
+        dev_ledger = source_ledger[:selected_start] + source_ledger[dependency_start:]
+
+        git(fixture.root, "branch", "fixture-source", fixture.head)
+        git(fixture.root, "checkout", "-qb", "fixture-dev", fixture.base)
+        fixture._write("docs/change-release-ledger.md", dev_ledger)
+        fixture._write("src/dev-only.txt", "already in merge parent\n")
+        git(fixture.root, "add", "docs/change-release-ledger.md", "src/dev-only.txt")
+        git(fixture.root, "commit", "-qm", "fixture dev parent")
+        merge_parent = git(fixture.root, "rev-parse", "HEAD")
+        git(fixture.root, "update-ref", "refs/remotes/origin/Dev", merge_parent)
+
+        git(fixture.root, "checkout", "-q", "fixture-source")
+        merge = subprocess.run(
+            ["git", "merge", "--no-commit", "--no-ff", "fixture-dev"],
+            cwd=fixture.root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(1, merge.returncode)
+        resolved_ledger = source_ledger.replace(
+            f"origin/Dev@{fixture.base}", f"origin/Dev@{merge_parent}", 1
+        )
+        fixture._write("docs/change-release-ledger.md", resolved_ledger)
+        git(fixture.root, "add", "docs/change-release-ledger.md")
+        return merge_parent
+
+    def test_pre_commit_gate_uses_exact_registered_merge_parent(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        merge_parent = self.stage_merge_candidate(fixture)
+
+        report = AUDITOR.build_pre_commit_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            ["CRL-20260803-777"],
+        )
+
+        self.assertEqual("GO", report["conclusion"])
+        self.assertEqual(merge_parent, report["staged_comparison_base"])
+        self.assertIn("src/feature.txt", report["staged_files"])
+        self.assertNotIn("src/dev-only.txt", report["staged_files"])
+        self.assertTrue(
+            any(
+                item["gate"] == "staged comparison base" and item["result"] == "PASS"
+                for item in report["checks"]
+            )
+        )
+
+    def test_pre_commit_gate_blocks_unregistered_merge_parent(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        merge_parent = self.stage_merge_candidate(fixture)
+        ledger = fixture.root / "docs/change-release-ledger.md"
+        ledger.write_text(
+            ledger.read_text(encoding="utf-8").replace(
+                merge_parent, fixture.base, 1
+            ),
+            encoding="utf-8",
+        )
+        git(fixture.root, "add", "docs/change-release-ledger.md")
+
+        report = AUDITOR.build_pre_commit_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            ["CRL-20260803-777"],
+        )
+
+        self.assertEqual("BLOCKED", report["conclusion"])
+        self.assertTrue(
+            any("MERGE_HEAD does not exactly match" in blocker for blocker in report["blockers"])
+        )
+
+    def test_pre_commit_gate_blocks_registered_non_dev_merge_parent(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        self.stage_merge_candidate(fixture)
+        git(fixture.root, "update-ref", "refs/remotes/origin/Dev", fixture.base)
+
+        report = AUDITOR.build_pre_commit_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            ["CRL-20260803-777"],
+        )
+
+        self.assertEqual("BLOCKED", report["conclusion"])
+        self.assertTrue(
+            any("MERGE_HEAD does not match the current origin/Dev" in blocker for blocker in report["blockers"])
+        )
 
 
 if __name__ == "__main__":
