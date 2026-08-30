@@ -234,7 +234,8 @@
 - Required validation: `PASS`; evidence: targeted 2-suite / 6-test regression, typecheck, lint (0 errors / 109 existing warnings), 32-test ledger auditor, ledger/button/fast gates and silent full Jest (58 suites / 332 tests) passed.
 - Shared-hunk review: `PASS`; evidence: the exact candidate contains only declared scope hunk fingerprints; 21 changed paths and 99 non-ledger final-range hunks are covered by the six selected CRLs.
 - Generated-file review: `PASS`; evidence: exact range contains TypeScript/Python source/tests and Markdown only; no generated files or sensitive-information categories.
-- Technical state: `committed`.
+- Technical state: `pushed`.
+- Remote branch: `origin/codex/release-p2-id-src-20260827@8e5c480915b874919b14bf74b88cf47f7807b803`; initial audited push succeeded at `2026-08-30 17:10 AEST`. The following ledger receipt commit records this evidence and is pushed to the same branch before final remote verification.
 - User authorization: `approved-for-push`; evidence: user explicitly requested `推送` on 2026-08-30 for this reported mobile branch and committed candidate; this does not authorize a PR, Dev merge, deployment, OTA/build or device verification.
 - Independent review: `GO for push`; evidence: independent read-only pre-push review on 2026-08-30 checked `origin/Dev@db91ae40412b91072951b590fca984499ea967da...457b665da2595533bc037431070b7b0b09abba07`, all six CRLs, 21 selected paths / 99 non-ledger hunks, six reconciliations, clean worktree, whitespace, secret/generated-file risk and remote fast-forward state; no P0/P1 and only a non-blocking governance-test P2 gap.
 - Action conclusion: `GO` for push; blockers: none. PR, Dev merge, deployment, OTA/build and device verification are outside this attempt.
