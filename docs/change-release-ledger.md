@@ -6723,3 +6723,73 @@
 - Rollback: restore the final blank line if necessary, though doing so will reproduce the CI failure.
 - Sensitive-information review: no secrets, credentials, tokens, `.env` values, private URLs, caches, logs, or production data are added.
 - Git state: candidate content commit `aa02d04b1b7fad0eaa6596ba44939fe87648abf1` on `codex/fix-mobile-ci-whitespace-20260816`, based on `origin/Dev@195b9e8ae26a13a9f9e604dd2cb4bb8eb8dda3e0`; not pushed, no PR, deployment/OTA, or device verification.
+## CRL-20260830-001 — 修复自完成挂钥匙视频测试过期夹具（mobile）
+
+- **Repository:** `mobile`
+- **Status:** verified; selected-for-commit
+- **Updated:** 2026-08-30 Australia/Melbourne
+- **Request:** 修复 Root Full Regression 因移动端自完成挂钥匙视频队列测试使用已过期固定 `captured_at` 而失败的问题。
+- **Outcome:** 测试在每次运行时使用仍处于 30 天本地保留期内的捕获时间，并继续验证私有视频先上传、再调用自完成业务保存接口的既有行为。
+
+### Implementation
+
+- Previous behavior: 测试 fixture 固定为 `2026-07-29T02:03:04.000Z`；超过 30 天后，队列正确执行过期清理，导致测试错误地期待一次上传。
+- New behavior: 测试在开始时生成 `capturedAt`，入队参数和业务保存断言复用同一值；运行时队列、保留策略、上传、重试和业务保存逻辑均未修改。
+- Key decisions: 这是 CI 测试夹具修复，不放宽 30 天媒体清理，也不改变真实自完成媒体流程。
+
+### Files / Areas
+
+- `src/lib/inspectionMediaQueue.test.ts` — modified: 将会过期的自完成视频测试时间替换为本次测试的动态捕获时间。
+- `docs/change-release-ledger.md` — modified: 记录本次独立 mobile CI 修复单元。
+
+### Impact / Dependencies
+
+- App runtime / API / database / migration / configuration / production data: none.
+- Feature Regression Registry: no update; the existing queue invariant and its test remain unchanged, only fixture lifetime is corrected.
+- Dependencies: root/CRL-20260830-001 is the related root release whose Full Regression currently consumes mobile `Dev`; no runtime dependency.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/lib/inspectionMediaQueue.test.ts` — passed: 4/4 tests, including the formerly failing self-complete upload/business-save case.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed with 0 errors and 528 pre-existing warnings outside this CRL.
+- `npm run check:ci` — passed: 31 ledger-auditor tests, recorded-path coverage 2/2, typecheck, lint (0 errors / 528 warnings), button contract, fast Jest (3 suites / 18 tests), and full Jest (57 suites / 328 tests).
+- Current-worktree ledger audit and staged pre-commit gate passed; independent review returned GO for commit only.
+- Pending: content commit and committed-range report.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared.
+- **Untracked review:** PASS — clean isolated candidate; temporary validation dependencies and CI log were removed before staging.
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `63032b7b5e0bb36a1c81eb4d10c84bc8eeb6247e0ff0be56cde1fea0e5e37b53`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `84222184401730805bc7ed43398ae43a116ce2a99acc221393d2794168e20e11`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `91041882a9b8a2e26290a8a38de65a515452e58f54cfcbc94449cdded2574fbf`
+
+### Release Attempts
+
+#### RA-20260830-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260830-001`
+- Selected CRL identities: `mobile/CRL-20260830-001`
+- Intended action: `commit`
+- Branch: `codex/pdf-queue-scale-zero-20260830`
+- Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-30 Australia/Melbourne`
+- Candidate patch SHA-256: `53ed5529d9091c74ea87ad26a83c9c66e046fd9757cac8a440de0fe6a45bc844`; excluding `docs/change-release-ledger.md`.
+- Commit SHA: not committed; audit head pending.
+- Dependencies: related root/CRL-20260830-001; no code or runtime dependency.
+- Required validation: PASS — focused Jest, typecheck, lint and `check:ci`, current-worktree ledger audit and staged pre-commit gate passed; independent review is GO for commit only.
+- Shared-hunk review: PASS — the three declared non-ledger test hunks exactly match the staged source change; no selected path is shared with an unselected CRL.
+- Generated-file review: PASS — source test and Markdown ledger only; no generated files, credentials, private media bytes, logs or production data are staged.
+- Technical state: candidate.
+- User authorization: selected-for-commit; evidence: user authorized the exact mobile test-only repair and independent commit flow on 2026-08-30.
+- Independent review: GO for commit only — independent read-only review on 2026-08-30 found no P0/P1; it verified the exact base, non-ledger candidate fingerprint, staged scope, test evidence and absence of production-write or secret risk.
+- Action conclusion: GO for commit — the user selected this exact CRL for commit; push remains separately unauthorized.
+
+### Risks / Release Notes
+
+- Risk: a dynamic current-time fixture intentionally no longer validates the historical literal timestamp; it continues to verify the timestamp is preserved from enqueue to the self-complete business request.
+- Rollback: restore the static timestamp only if deliberately testing expiration, but that would again make this success-path case fail after 30 days.
+- Sensitive-information review: no secrets, credentials, `.env` values, private media bytes, production logs or production data are included.
+- Git state: isolated mobile candidate on `codex/pdf-queue-scale-zero-20260830`; uncommitted, not pushed, PR not created, deployment/OTA/device/production verification not run.
