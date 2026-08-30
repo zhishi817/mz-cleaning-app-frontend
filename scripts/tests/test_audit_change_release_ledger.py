@@ -160,14 +160,14 @@ class ReleaseReportFixture:
         git(self.root, "init", "-q")
         git(self.root, "config", "user.email", "fixture@example.invalid")
         git(self.root, "config", "user.name", "Release Fixture")
-        self._write("src/feature.txt", "before\n")
+        self._write("src/feature.txt", "header\nstable\nbefore\n")
         self._write("docs/change-release-ledger.md", "# Change Release Ledger\n")
         git(self.root, "add", "src/feature.txt", "docs/change-release-ledger.md")
         git(self.root, "commit", "-qm", "base fixture")
         self.base = git(self.root, "rev-parse", "HEAD")
         git(self.root, "update-ref", "refs/remotes/origin/Dev", self.base)
 
-        self._write("src/feature.txt", "after\n")
+        self._write("src/feature.txt", "header\nstable\nafter\n")
         if self.env_file:
             self._write("config/.env", "FIXTURE_VALUE=not-a-secret\n")
         if self.generated:
@@ -294,6 +294,121 @@ class ReleaseReportTests(unittest.TestCase):
         report = AUDITOR.build_pre_commit_report(fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"])
         self.assertEqual("BLOCKED", report["conclusion"])
         self.assertTrue(any("candidate patch fingerprint" in blocker for blocker in report["blockers"]))
+
+    def test_hunk_reconciliation_allows_only_the_shifted_scope_and_exact_range(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        original_hunk = fixture.scope_hunks[0]
+        ledger = fixture.root / "docs/change-release-ledger.md"
+
+        fixture._write("src/feature.txt", "inserted\nheader\nstable\nafter\n")
+        git(fixture.root, "add", "src/feature.txt")
+        insertion_hunks = AUDITOR.diff_hunk_fingerprints(
+            fixture.root, "src/feature.txt", "--cached"
+        )
+        self.assertEqual(1, len(insertion_hunks))
+        insertion_path, insertion_hunk = next(iter(insertion_hunks))
+
+        current = ledger.read_text(encoding="utf-8")
+        dependency_start = current.index("## CRL-20260803-778 — Fixture dependency")
+        insertion_scope = f"- `{insertion_path}` — SHA-256: `{insertion_hunk}`"
+        companion_crl = f"""## CRL-20260803-778 — Fixture insertion unit
+
+- **Repository:** `{EXPECTED_REPOSITORY}`
+- **Request:** Insert an unrelated line before the original fixture hunk.
+- **Outcome:** The original source hunk body remains unchanged but its zero-context header shifts.
+
+### Files / Areas
+
+- `src/feature.txt` — fixture insertion path.
+- `docs/change-release-ledger.md` — fixture release evidence.
+
+### Staged Commit Scope
+
+- **Repository:** `{EXPECTED_REPOSITORY}`
+- **Status:** `prepared`
+- **Untracked review:** `none`
+{insertion_scope}
+
+### Release Attempts
+
+- None yet.
+"""
+        fixture._write("docs/change-release-ledger.md", current[:dependency_start] + companion_crl)
+        git(fixture.root, "add", "docs/change-release-ledger.md")
+        git(fixture.root, "commit", "-qm", "fixture insertion content")
+        late_content = git(fixture.root, "rev-parse", "HEAD")
+
+        actual_hunks = AUDITOR.diff_hunk_fingerprints(
+            fixture.root, "src/feature.txt", f"{fixture.base}...{late_content}"
+        )
+        shifted_hunks = actual_hunks - insertion_hunks
+        self.assertEqual(1, len(shifted_hunks))
+        shifted_path, shifted_hunk = next(iter(shifted_hunks))
+        self.assertEqual(original_hunk[0], shifted_path)
+        self.assertNotEqual(original_hunk[1], shifted_hunk)
+
+        reconciled_hash = AUDITOR.content_patch_sha256(
+            fixture.root, fixture.base, late_content
+        )
+        updated = ledger.read_text(encoding="utf-8")
+        updated = updated.replace(
+            f"- `src/feature.txt` — SHA-256: `{original_hunk[1]}`",
+            f"- `src/feature.txt` — SHA-256: `{shifted_hunk}`",
+            1,
+        )
+        updated = updated.replace(
+            "- Selected CRLs: `CRL-20260803-777`",
+            "- Selected CRLs: `CRL-20260803-777`, `CRL-20260803-778`",
+            1,
+        )
+        updated = updated.replace(
+            f"- Selected CRL identities: `{EXPECTED_REPOSITORY}/CRL-20260803-777`",
+            f"- Selected CRL identities: `{EXPECTED_REPOSITORY}/CRL-20260803-777`, `{EXPECTED_REPOSITORY}/CRL-20260803-778`",
+            1,
+        )
+        initial_hash = AUDITOR.content_patch_sha256(
+            fixture.root, fixture.base, fixture.candidate_commit
+        )
+        updated = updated.replace(initial_hash, reconciled_hash, 1)
+        updated = updated.replace(fixture.candidate_commit, late_content, 1)
+        updated = updated.replace(
+            f"- Commit SHA: `{late_content}`",
+            f"- Commit SHA: `{late_content}`\n- Hunk reconciliation: `src/feature.txt#{original_hunk[1]} -> {shifted_hunk}`; evidence: an independent insertion hunk shifts only the zero-context header.",
+            1,
+        )
+        fixture._write("docs/change-release-ledger.md", updated)
+        git(fixture.root, "add", "docs/change-release-ledger.md")
+
+        pre_commit = AUDITOR.build_pre_commit_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            ["CRL-20260803-777", "CRL-20260803-778"],
+        )
+        self.assertEqual("GO", pre_commit["conclusion"])
+        self.assertTrue(
+            any(
+                item["gate"] == "ledger-only receipt" and item["result"] == "PASS"
+                for item in pre_commit["checks"]
+            )
+        )
+        git(fixture.root, "commit", "-qm", "fixture hunk reconciliation receipt")
+
+        report = AUDITOR.build_release_report(
+            root=fixture.root,
+            expected_repository=EXPECTED_REPOSITORY,
+            repository=EXPECTED_REPOSITORY,
+            base_reference=fixture.base,
+            head_reference="HEAD",
+            crl_ids=["CRL-20260803-777", "CRL-20260803-778"],
+        )
+        self.assertEqual("GO", report["conclusion"])
+        self.assertTrue(
+            any(
+                item["gate"] == "hunk reconciliation" and item["result"] == "PASS"
+                for item in report["checks"]
+            )
+        )
 
     def test_cli_range_coverage_accepts_base_and_head_without_release_report(self) -> None:
         fixture = ReleaseReportFixture(self)

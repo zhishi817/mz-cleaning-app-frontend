@@ -89,7 +89,7 @@ test('loads an available notice before deciding the detail is missing', async ()
   })
 })
 
-test('property-feedback issue detail and preview use authenticated media without task context', async () => {
+test('property-feedback issue detail hides media without an authenticated task context', async () => {
   await initNoticesStore()
   await upsertNotices([
     {
@@ -123,13 +123,8 @@ test('property-feedback issue detail and preview use authenticated media without
     expect(ui.getByText('Docklands CW209 · 发现房源问题')).toBeTruthy()
     expect(ui.getByText('房源')).toBeTruthy()
     expect(ui.getByText('Docklands CW209')).toBeTruthy()
-    expect(ui.getByTestId('issue-reported-notice-image')).toBeTruthy()
+    expect(ui.queryByTestId('issue-reported-notice-image')).toBeNull()
   })
-  expect(JSON.parse(ui.getByTestId('issue-reported-notice-image').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: null })
-
-  fireEvent.press(ui.getByTestId('issue-reported-notice-image'))
-  await waitFor(() => expect(ui.getByTestId('issue-reported-notice-preview')).toBeTruthy())
-  expect(JSON.parse(ui.getByTestId('issue-reported-notice-preview').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: null })
 })
 
 test('task-bound issue detail and preview preserve the Inbox task context', async () => {
