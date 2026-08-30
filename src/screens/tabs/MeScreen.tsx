@@ -5,7 +5,7 @@ import { useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
-import { defaultProfileFromUser, getProfile, type Profile } from '../../lib/profileStore'
+import { defaultProfileFromUser, getProfile, PROFILE_DOCUMENT_PRESENT, profileDocumentPresence, type Profile } from '../../lib/profileStore'
 import { getMyProfile } from '../../lib/api'
 import { hasAnyPermission } from '../../lib/roles'
 import { hairline } from '../../lib/scale'
@@ -62,8 +62,8 @@ export default function MeScreen(props: Props) {
               bank_bsb: String(remote.bank_bsb || ''),
               bank_account_number: String(remote.bank_account_number || ''),
               personal_abn: String(remote.personal_abn || ''),
-              photo_id_url: remote.photo_id_url || null,
-              visa_document_url: remote.visa_document_url || null,
+              photo_id_url: remote.photo_id_uploaded === undefined ? profileDocumentPresence(saved?.photo_id_url) : remote.photo_id_uploaded ? PROFILE_DOCUMENT_PRESENT : null,
+              visa_document_url: remote.visa_document_uploaded === undefined ? profileDocumentPresence(saved?.visa_document_url) : remote.visa_document_uploaded ? PROFILE_DOCUMENT_PRESENT : null,
               visa_grant_number: String(remote.visa_grant_number || ''),
             }
             setProfile(merged)

@@ -93,7 +93,7 @@ test('routes a server-owned offline task reference through the authenticated pro
   })
 })
 
-test('routes a historical offline task URL through the authenticated proxy only with explicit offline task context', () => {
+test('routes a historical offline task URL through the authenticated proxy without a raw URL fallback', () => {
   const reference = 'https://current-public-base.r2.dev/historical/offline-task-photo.jpg'
   expect(buildCleaningMediaImageSource('token-1', reference, 'thumbnail', {
     accessWorkTaskId: 'cleaning_offline_tasks:task-1',
@@ -104,7 +104,10 @@ test('routes a historical offline task URL through the authenticated proxy only 
   })
   expect(buildCleaningMediaImageSource('token-1', reference, 'thumbnail', {
     accessWorkTaskId: 'cleaning_offline_tasks:task-1',
-  })).toEqual({ uri: reference })
+  })).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fcurrent-public-base.r2.dev%2Fhistorical%2Foffline-task-photo.jpg&variant=thumbnail&work_task_id=cleaning_offline_tasks%3Atask-1',
+    headers: { Authorization: 'Bearer token-1' },
+  })
 })
 
 test('routes legacy mzapp feedback media through the authenticated feedback proxy', () => {
@@ -152,12 +155,13 @@ test('routes daily-replacement inventory media through the authenticated feedbac
   })
 })
 
-test('keeps local media direct and rejects unsafe cleaning keys', () => {
+test('keeps local files direct and hides unsafe or unknown remote references', () => {
   expect(buildCleaningMediaImageSource('token-1', 'file:///tmp/photo.jpg')).toEqual({
     uri: 'file:///tmp/photo.jpg',
   })
   expect(normalizeCleaningObjectKey('cleaning/../secret')).toBe('')
-  expect(buildCleaningMediaImageSource('token-1', 'mzapp/../secret')).toEqual({ uri: 'mzapp/../secret' })
+  expect(buildCleaningMediaImageSource('token-1', 'mzapp/../secret')).toEqual({ uri: '' })
+  expect(buildCleaningMediaImageSource('token-1', 'https://example.invalid/private.jpg')).toEqual({ uri: '' })
 })
 
 test('prefers remote media online and falls back to thumbnail offline or after remote failure', () => {

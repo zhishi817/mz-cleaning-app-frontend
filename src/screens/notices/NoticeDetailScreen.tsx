@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import { hairline, moderateScale } from '../../lib/scale'
@@ -8,10 +8,9 @@ import { layoutTokens } from '../../lib/theme'
 import { getPresentedNotice } from '../../lib/noticePresentation'
 import CleaningMediaImage from '../../components/CleaningMediaImage'
 import CleaningMediaPreview from '../../components/CleaningMediaPreview'
-import { normalizeCleaningTaskNoticeId, normalizeGuestLuggageNoticeId } from '../../lib/cleaningMedia'
+import { isNoticeMediaReferenceEligible, resolveNoticeMediaContext } from '../../lib/noticeMedia'
 import type { NoticesStackParamList } from '../../navigation/RootNavigator'
 import { useI18n } from '../../lib/i18n'
-import { API_BASE_URL } from '../../config/env'
 import { getAuthToken, getStoredUser } from '../../lib/authStorage'
 import { markInboxNotificationsRead } from '../../lib/api'
 import { isTaskManagerUser, roleNamesOf } from '../../lib/roles'
@@ -25,24 +24,6 @@ function formatTime(iso: string) {
   if (!Number.isFinite(d.getTime())) return '--/-- --:--'
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-function normalizeBase(base: string) {
-  return String(base || '').trim().replace(/\/+$/g, '')
-}
-
-function toAbsoluteUrl(rawUrl: any) {
-  const s0 = String(rawUrl ?? '').trim()
-  if (!s0) return ''
-  if (/^https?:\/\//i.test(s0)) return s0
-  if (s0.startsWith('//')) return `https:${s0}`
-  const base = normalizeBase(API_BASE_URL)
-  const stripAuth = base.replace(/\/auth\/?$/g, '')
-  const stripApi = stripAuth.replace(/\/api\/?$/g, '')
-  const root = stripApi || stripAuth || base
-  if (!root) return s0
-  if (s0.startsWith('/')) return `${root}${s0}`
-  return s0
 }
 
 function stripUrlLines(text: string) {
@@ -103,13 +84,6 @@ function pickTaskRouteIdFromNoticeData(data0: any) {
   const entityId = String((data as any).entityId || (data as any).entity_id || '').trim()
   if ((entity === 'cleaning_task' || entity === 'work_task') && entityId) return entityId
   return ''
-}
-
-function offlineWorkTaskIdFromNoticeData(data: any): string | null {
-  const taskId = normalizeCleaningTaskNoticeId(data?.task_id)
-  const prefix = 'cleaning_offline_tasks:'
-  if (!taskId || !taskId.startsWith(prefix) || !taskId.slice(prefix.length).trim()) return null
-  return taskId
 }
 
 export default function NoticeDetailScreen(props: Props) {
@@ -211,25 +185,15 @@ export default function NoticeDetailScreen(props: Props) {
   const targetUserName = String((notice as any)?.data?.target_user_name || '').trim()
   const canOpenDayEnd = action === 'open_day_end_handover' && !!targetDate
   const noticeData = (rawNotice as any)?.data || (notice as any)?.data || {}
-  const noticeKind = String((noticeData as any)?.kind || '').trim()
-  const isGuestLuggageNotice = noticeKind === 'guest_luggage_updated'
-  const guestLuggageId = isGuestLuggageNotice ? normalizeGuestLuggageNoticeId((noticeData as any)?.guest_luggage_id) : null
-  const isKeyMediaNotice = noticeKind === 'key_photo_uploaded' || noticeKind === 'keys_hung'
-  const keyMediaTaskId = isKeyMediaNotice ? normalizeCleaningTaskNoticeId((noticeData as any)?.task_id) : null
-  const isConsumablesNotice = noticeKind === 'consumables_submitted' || noticeKind === 'consumables_updated'
-  const consumablesTaskId = isConsumablesNotice ? normalizeCleaningTaskNoticeId((noticeData as any)?.task_id) : null
-  const isIssueReportedNotice = noticeKind === 'issue_reported'
-  const issueReportedTaskId = isIssueReportedNotice ? normalizeCleaningTaskNoticeId((noticeData as any)?.task_id) : null
-  const isOfflineWorkTaskCompletionNotice = noticeKind === 'work_task_completed'
-  const offlineWorkTaskId = isOfflineWorkTaskCompletionNotice ? offlineWorkTaskIdFromNoticeData(noticeData) : null
-  const displayImages = (isGuestLuggageNotice && !guestLuggageId)
-    || (isKeyMediaNotice && !keyMediaTaskId)
-    || (isConsumablesNotice && !consumablesTaskId)
-    || (isOfflineWorkTaskCompletionNotice && !offlineWorkTaskId)
-    ? []
-    : imgs
+  const noticeMedia = resolveNoticeMediaContext(noticeData)
+  const displayImages = noticeMedia ? imgs.filter((reference) => isNoticeMediaReferenceEligible(noticeData, reference)) : []
   const taskRouteId = pickTaskRouteIdFromNoticeData(noticeData)
   const canOpenTask = !!taskRouteId && !canOpenDayEnd
+
+  function renderNoticeMediaImage(reference: string) {
+    if (!noticeMedia || !mediaToken) return <View style={styles.image} />
+    return <CleaningMediaImage testID={`${noticeMedia.testIdPrefix}-image`} token={mediaToken} remoteReference={reference} {...noticeMedia.access} variant="thumbnail" style={styles.image} />
+  }
 
   async function openRelatedTask() {
     if (!taskRouteId || openingTask) return
@@ -316,27 +280,7 @@ export default function NoticeDetailScreen(props: Props) {
                   }}
                   style={({ pressed }) => [styles.imagePress, pressed ? styles.pressed : null]}
                 >
-                  {isGuestLuggageNotice
-                    ? mediaToken
-                      ? <CleaningMediaImage testID="guest-luggage-notice-image" token={mediaToken} remoteReference={u} guestLuggageId={guestLuggageId} variant="thumbnail" style={styles.image} />
-                      : <View style={styles.image} />
-                    : isKeyMediaNotice
-                      ? mediaToken
-                        ? <CleaningMediaImage testID="key-media-notice-image" token={mediaToken} remoteReference={u} accessTaskId={keyMediaTaskId} variant="thumbnail" style={styles.image} />
-                        : <View style={styles.image} />
-                      : isConsumablesNotice
-                        ? mediaToken
-                          ? <CleaningMediaImage testID="consumables-notice-image" token={mediaToken} remoteReference={u} accessTaskId={consumablesTaskId} variant="thumbnail" style={styles.image} />
-                          : <View style={styles.image} />
-                        : isIssueReportedNotice
-                          ? mediaToken
-                            ? <CleaningMediaImage testID="issue-reported-notice-image" token={mediaToken} remoteReference={u} accessTaskId={issueReportedTaskId} variant="thumbnail" style={styles.image} />
-                            : <View style={styles.image} />
-                          : isOfflineWorkTaskCompletionNotice
-                            ? mediaToken
-                              ? <CleaningMediaImage testID="offline-work-task-completed-notice-image" token={mediaToken} remoteReference={u} accessWorkTaskId={offlineWorkTaskId} offlineWorkTaskMedia variant="thumbnail" style={styles.image} />
-                              : <View style={styles.image} />
-                            : <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.image} />}
+                  {renderNoticeMediaImage(u)}
                 </Pressable>
               ))}
             </View>
@@ -383,27 +327,7 @@ export default function NoticeDetailScreen(props: Props) {
                   }}
                   style={({ pressed }) => [styles.imagePress, pressed ? styles.pressed : null]}
                 >
-                  {isGuestLuggageNotice
-                    ? mediaToken
-                      ? <CleaningMediaImage testID="guest-luggage-notice-image" token={mediaToken} remoteReference={u} guestLuggageId={guestLuggageId} variant="thumbnail" style={styles.image} />
-                      : <View style={styles.image} />
-                    : isKeyMediaNotice
-                      ? mediaToken
-                        ? <CleaningMediaImage testID="key-media-notice-image" token={mediaToken} remoteReference={u} accessTaskId={keyMediaTaskId} variant="thumbnail" style={styles.image} />
-                        : <View style={styles.image} />
-                      : isConsumablesNotice
-                        ? mediaToken
-                          ? <CleaningMediaImage testID="consumables-notice-image" token={mediaToken} remoteReference={u} accessTaskId={consumablesTaskId} variant="thumbnail" style={styles.image} />
-                          : <View style={styles.image} />
-                        : isIssueReportedNotice
-                          ? mediaToken
-                            ? <CleaningMediaImage testID="issue-reported-notice-image" token={mediaToken} remoteReference={u} accessTaskId={issueReportedTaskId} variant="thumbnail" style={styles.image} />
-                            : <View style={styles.image} />
-                          : isOfflineWorkTaskCompletionNotice
-                            ? mediaToken
-                              ? <CleaningMediaImage testID="offline-work-task-completed-notice-image" token={mediaToken} remoteReference={u} accessWorkTaskId={offlineWorkTaskId} offlineWorkTaskMedia variant="thumbnail" style={styles.image} />
-                              : <View style={styles.image} />
-                            : <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.image} />}
+                  {renderNoticeMediaImage(u)}
                 </Pressable>
               ))}
             </View>
@@ -431,29 +355,11 @@ export default function NoticeDetailScreen(props: Props) {
           <View style={styles.viewerTopRow} pointerEvents="none">
             <Text style={styles.viewerCloseText}>点击任意位置关闭</Text>
           </View>
-          {viewerUrl && ((!isGuestLuggageNotice || guestLuggageId) && (!isKeyMediaNotice || keyMediaTaskId) && (!isConsumablesNotice || consumablesTaskId) && (!isOfflineWorkTaskCompletionNotice || offlineWorkTaskId)) ? (
+          {viewerUrl && noticeMedia ? (
             <View style={{ flex: 1 }} pointerEvents="none">
-              {isGuestLuggageNotice
-                ? mediaToken
-                  ? <CleaningMediaPreview testID="guest-luggage-notice-preview" token={mediaToken} reference={viewerUrl} guestLuggageId={guestLuggageId} style={styles.viewerImg} />
-                  : <View style={styles.viewerImg} />
-                : isKeyMediaNotice
-                  ? mediaToken
-                    ? <CleaningMediaPreview testID="key-media-notice-preview" token={mediaToken} reference={viewerUrl} accessTaskId={keyMediaTaskId} style={styles.viewerImg} />
-                    : <View style={styles.viewerImg} />
-                  : isConsumablesNotice
-                    ? mediaToken
-                      ? <CleaningMediaPreview testID="consumables-notice-preview" token={mediaToken} reference={viewerUrl} accessTaskId={consumablesTaskId} style={styles.viewerImg} />
-                      : <View style={styles.viewerImg} />
-                    : isIssueReportedNotice
-                      ? mediaToken
-                        ? <CleaningMediaPreview testID="issue-reported-notice-preview" token={mediaToken} reference={viewerUrl} accessTaskId={issueReportedTaskId} style={styles.viewerImg} />
-                        : <View style={styles.viewerImg} />
-                      : isOfflineWorkTaskCompletionNotice
-                        ? mediaToken
-                          ? <CleaningMediaPreview testID="offline-work-task-completed-notice-preview" token={mediaToken} reference={viewerUrl} accessWorkTaskId={offlineWorkTaskId} offlineWorkTaskMedia style={styles.viewerImg} />
-                          : <View style={styles.viewerImg} />
-                        : <Image source={{ uri: toAbsoluteUrl(viewerUrl) }} style={styles.viewerImg} resizeMode="contain" />}
+              {mediaToken
+                ? <CleaningMediaPreview testID={`${noticeMedia.testIdPrefix}-preview`} token={mediaToken} reference={viewerUrl} {...noticeMedia.access} style={styles.viewerImg} />
+                : <View style={styles.viewerImg} />}
             </View>
           ) : null}
         </Pressable>

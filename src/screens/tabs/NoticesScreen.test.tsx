@@ -235,7 +235,7 @@ test('consumables thumbnail keeps the Inbox task id for authenticated media read
   mockNoticeItems = []
 })
 
-test('issue-reported thumbnails keep optional task context and never use the raw image renderer', async () => {
+test('issue-reported thumbnails fail closed without task context and keep it when present', async () => {
   mockNoticeItems = [
     {
       id: 'property-issue-1', type: 'update', title: 'TEST01 · 发现房源问题', summary: '漏水', content: '漏水', createdAt: '2026-08-16T00:00:00.000Z',
@@ -250,11 +250,8 @@ test('issue-reported thumbnails keep optional task context and never use the raw
   const ui = renderScreen()
   await act(async () => { await Promise.resolve(); await Promise.resolve() })
 
-  await waitFor(() => expect(ui.getAllByTestId('issue-reported-notice-thumbnail')).toHaveLength(2))
-  expect(ui.getAllByTestId('issue-reported-notice-thumbnail').map((node) => JSON.parse(node.props.accessibilityLabel))).toEqual([
-    { guestLuggageId: null, accessTaskId: null },
-    { guestLuggageId: null, accessTaskId: 'cleaning-task-1' },
-  ])
+  await waitFor(() => expect(ui.getByTestId('issue-reported-notice-thumbnail')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('issue-reported-notice-thumbnail').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
   mockNoticeItems = []
 })
 

@@ -16,7 +16,10 @@ const mockProfile = {
   visa_document_url: null,
   visa_grant_number: '',
 }
-const mockUploadMzappMedia = jest.fn(async (..._args: any[]) => ({ url: 'https://example.com/watermarked-document.jpg' }))
+const mockUploadMzappMedia = jest.fn(async (...args: any[]) => {
+  const type = String(args[2]?.profile_document_type || 'photo_id')
+  return { url: `mzapp/profile-documents/cleaner-1/${type}/document.jpg`, key: `mzapp/profile-documents/cleaner-1/${type}/document.jpg` }
+})
 const mockUpdateMyProfile = jest.fn(async (params: any) => ({ ...mockProfile, ...params }))
 
 jest.mock('expo-image-picker', () => ({
@@ -32,6 +35,8 @@ jest.mock('../../lib/auth', () => ({
 }))
 
 jest.mock('../../lib/profileStore', () => ({
+  PROFILE_DOCUMENT_PRESENT: 'uploaded',
+  profileDocumentPresence: (value: any) => String(value || '').trim() ? 'uploaded' : null,
   defaultProfileFromUser: () => mockProfile,
   getProfile: jest.fn(() => new Promise(() => {})),
   setProfile: jest.fn(async () => {}),
@@ -39,6 +44,7 @@ jest.mock('../../lib/profileStore', () => ({
 
 jest.mock('../../lib/api', () => ({
   getMyProfile: jest.fn(async () => mockProfile),
+  profileDocumentImageSource: (_token: string, type: string) => ({ uri: `https://api.example.test/users/me/profile-documents/${type}`, headers: { Authorization: 'Bearer profile-token' } }),
   updateMyProfile: (...args: any[]) => mockUpdateMyProfile(args[1]),
   uploadMzappMedia: (token: string, file: any, options?: any) => mockUploadMzappMedia(token, file, options),
 }))
@@ -75,12 +81,12 @@ test('Photo ID 和签证的本地预览均显示整版水印，并按资料类�
   fireEvent.press(ui.getByTestId('profile-photo-id-upload'))
   await waitFor(() => {
     expect(ui.getByTestId('profile-photo-id-preview')).toBeTruthy()
-    expect(ui.getAllByText(/仅用于MZ Property/).length).toBeGreaterThan(1)
     expect(mockUploadMzappMedia).toHaveBeenCalledWith(
       'profile-token',
       expect.objectContaining({ uri: 'file:///document.jpg' }),
-      { watermark_mode: 'photo_id_full' },
+      { watermark_mode: 'photo_id_full', profile_document_type: 'photo_id' },
     )
+    expect(mockUpdateMyProfile).toHaveBeenCalledWith({ photo_id_url: 'mzapp/profile-documents/cleaner-1/photo_id/document.jpg' })
   })
   fireEvent.press(ui.getByTestId('profile-photo-id-preview'))
   expect(ui.getByTestId('profile-document-fullscreen')).toBeTruthy()
@@ -95,8 +101,9 @@ test('Photo ID 和签证的本地预览均显示整版水印，并按资料类�
     expect(mockUploadMzappMedia).toHaveBeenCalledWith(
       'profile-token',
       expect.objectContaining({ uri: 'file:///document.jpg' }),
-      { watermark_mode: 'profile_document_full' },
+      { watermark_mode: 'profile_document_full', profile_document_type: 'visa_document' },
     )
+    expect(mockUpdateMyProfile).toHaveBeenCalledWith({ visa_document_url: 'mzapp/profile-documents/cleaner-1/visa_document/document.jpg' })
   })
   fireEvent.press(ui.getByTestId('profile-visa-document-preview'))
   expect(ui.getByTestId('profile-document-fullscreen')).toBeTruthy()
