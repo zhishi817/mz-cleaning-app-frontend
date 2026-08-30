@@ -6778,7 +6778,7 @@
 - Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-30 Australia/Melbourne`
 - Candidate patch SHA-256: `53ed5529d9091c74ea87ad26a83c9c66e046fd9757cac8a440de0fe6a45bc844`; excluding `docs/change-release-ledger.md`.
 - Commit SHA: `d621961`; candidate content commit.
-- Dependencies: related root/CRL-20260830-001; no code or runtime dependency.
+- Dependencies: none.
 - Required validation: PASS — focused Jest, typecheck, lint and `check:ci`, current-worktree ledger audit and staged pre-commit gate passed; independent review is GO for commit only.
 - Shared-hunk review: PASS — the three declared non-ledger test hunks exactly match the staged source change; no selected path is shared with an unselected CRL.
 - Generated-file review: PASS — source test and Markdown ledger only; no generated files, credentials, private media bytes, logs or production data are staged.
