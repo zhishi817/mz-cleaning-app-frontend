@@ -7545,6 +7545,26 @@
 - Independent review: `GO` for local merge commit; final independent read-only review verified that `MERGE_HEAD` must equal both the current `origin/Dev` and the exact selected Release Attempt Base, the registered-but-non-`origin/Dev` regression blocks, the candidate hash and all 16 hunk fingerprints match, and no P0/P1/P2, secret, generated-file or production-write risk remains.
 - Action conclusion: `GO` for the completed local merge commit. Exact committed-range audit is required before any separate, commit-bound push authorization; push, PR merge, deployment, OTA/build and device verification remain unapproved.
 
+#### RA-20260830-004
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260830-002`, `CRL-20260830-003`
+- Selected CRL identities: `mobile/CRL-20260830-002`, `mobile/CRL-20260830-003`
+- Intended action: `push`
+- Branch: `codex/historical-receipt-audit-20260827`
+- Base: `origin/Dev@4f75f5f097b148ebe1a209289267892c8f2e34b0`; fetched at `2026-08-30 AEST`
+- Candidate patch SHA-256: `efa86065d8e2d3f3dc40ce2f11c79ce53a8918aa83fd76f32cf321a25aa35458`, excluding `docs/change-release-ledger.md` from the registered `MERGE_HEAD` candidate range.
+- Commit SHA: `c9884e0ecfb58f61a0ed37fb773d29be929cc48f` (candidate content merge commit).
+- Dependencies: none.
+- Required validation: `PASS`; evidence: 41 focused auditor tests, final-candidate Python compile, exact merge-parent pre-commit gate, whitespace check and `npm run check:ci` (58 suites / 332 tests; lint 0 errors / 109 existing warnings) passed; the exact committed-range report at pre-receipt `HEAD=3d22a7c4a656e575b80d9687514fb8fbe5918d27` was `GO`.
+- Shared-hunk review: `PASS`; evidence: all 16 non-ledger hunk fingerprints exactly match the combined selected CRLs relative to the registered `MERGE_HEAD`.
+- Generated-file review: `PASS`; evidence: the candidate contains only Python source/tests and Markdown; no generated or sensitive path is present.
+- Technical state: `committed`.
+- User authorization: `not-selected`; evidence: the user's 2026-08-30 push authorization applied to pre-receipt `HEAD=3d22a7c4a656e575b80d9687514fb8fbe5918d27` on this branch. This ledger-only receipt creates a different `HEAD`, so a fresh, commit-bound approval for that final SHA is required before network push.
+- Independent review: `GO` for this ledger-only push-attempt receipt commit; read-only review confirmed the clean current range, candidate content commit, patch fingerprint, selected scope, validation evidence and secret/generated-file checks, with no P0/P1/P2. It does not approve network push.
+- Remote / push evidence: `NOT VERIFIED`; a live `ls-remote` retry is required after an earlier DNS resolution failure, and no push has been attempted.
+- Action conclusion: `NOT VERIFIED`; after this receipt commits, rerun the exact range report, verify live remote state, obtain fresh approval for the resulting branch and SHA, and then separately assess network push.
+
 ### Risks / Release Notes
 
 - Risk: using an arbitrary merge parent could conceal unrelated work; exact `Base == MERGE_HEAD`, selected identities and no-unmerged-path checks are mandatory.
