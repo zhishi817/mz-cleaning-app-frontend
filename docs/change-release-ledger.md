@@ -6777,15 +6777,15 @@
 - Branch: `codex/pdf-queue-scale-zero-20260830`
 - Base: `origin/Dev@db91ae40412b91072951b590fca984499ea967da`; fetched at `2026-08-30 Australia/Melbourne`
 - Candidate patch SHA-256: `53ed5529d9091c74ea87ad26a83c9c66e046fd9757cac8a440de0fe6a45bc844`; excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed; audit head pending.
+- Commit SHA: `d621961`; candidate content commit.
 - Dependencies: related root/CRL-20260830-001; no code or runtime dependency.
 - Required validation: PASS — focused Jest, typecheck, lint and `check:ci`, current-worktree ledger audit and staged pre-commit gate passed; independent review is GO for commit only.
 - Shared-hunk review: PASS — the three declared non-ledger test hunks exactly match the staged source change; no selected path is shared with an unselected CRL.
 - Generated-file review: PASS — source test and Markdown ledger only; no generated files, credentials, private media bytes, logs or production data are staged.
-- Technical state: candidate.
+- Technical state: committed.
 - User authorization: selected-for-commit; evidence: user authorized the exact mobile test-only repair and independent commit flow on 2026-08-30.
 - Independent review: GO for commit only — independent read-only review on 2026-08-30 found no P0/P1; it verified the exact base, non-ledger candidate fingerprint, staged scope, test evidence and absence of production-write or secret risk.
-- Action conclusion: GO for commit — the user selected this exact CRL for commit; push remains separately unauthorized.
+- Action conclusion: GO for commit — content commit `d621961` was created; the exact committed-range report and a new user authorization for this exact commit and branch are required before push.
 
 ### Risks / Release Notes
 
