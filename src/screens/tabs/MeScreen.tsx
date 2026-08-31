@@ -5,10 +5,11 @@ import { useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
-import { defaultProfileFromUser, getProfile, type Profile } from '../../lib/profileStore'
+import { defaultProfileFromUser, getProfile, PROFILE_DOCUMENT_PRESENT, profileDocumentPresence, type Profile } from '../../lib/profileStore'
 import { getMyProfile } from '../../lib/api'
 import { hasAnyPermission } from '../../lib/roles'
 import { hairline } from '../../lib/scale'
+import { layoutTokens } from '../../lib/theme'
 import type { MeStackParamList } from '../../navigation/RootNavigator'
 
 function initialsOf(username: string) {
@@ -61,7 +62,9 @@ export default function MeScreen(props: Props) {
               bank_bsb: String(remote.bank_bsb || ''),
               bank_account_number: String(remote.bank_account_number || ''),
               personal_abn: String(remote.personal_abn || ''),
-              photo_id_url: remote.photo_id_url || null,
+              photo_id_url: remote.photo_id_uploaded === undefined ? profileDocumentPresence(saved?.photo_id_url) : remote.photo_id_uploaded ? PROFILE_DOCUMENT_PRESENT : null,
+              visa_document_url: remote.visa_document_uploaded === undefined ? profileDocumentPresence(saved?.visa_document_url) : remote.visa_document_uploaded ? PROFILE_DOCUMENT_PRESENT : null,
+              visa_grant_number: String(remote.visa_grant_number || ''),
             }
             setProfile(merged)
           } catch {}
@@ -143,7 +146,7 @@ export default function MeScreen(props: Props) {
         ) : null}
       </View>
 
-      <Pressable style={({ pressed }) => [styles.logoutBtn, pressed ? styles.logoutPressed : null]} onPress={onLogout}>
+      <Pressable testID="me-logout-action" style={({ pressed }) => [styles.logoutBtn, pressed ? styles.logoutPressed : null]} onPress={onLogout}>
         <Text style={styles.logoutText}>{t('me_logout')}</Text>
       </Pressable>
     </View>
@@ -184,7 +187,7 @@ const styles = StyleSheet.create({
   listRow: { paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' },
   listLabel: { flexShrink: 1, fontSize: 14, fontWeight: '900', color: '#111827' },
   langWrap: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' },
-  langChip: { minHeight: 30, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  langChip: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 10, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   langChipActive: { backgroundColor: '#2563EB' },
   langText: { fontSize: 12, fontWeight: '900', color: '#6B7280' },
   langTextActive: { color: '#FFFFFF' },
@@ -193,10 +196,13 @@ const styles = StyleSheet.create({
   sep: { height: hairline(), backgroundColor: '#EEF0F6' },
   logoutBtn: {
     marginTop: 16,
+    minHeight: layoutTokens.button.height,
     backgroundColor: '#EF4444',
-    paddingVertical: 14,
+    paddingHorizontal: layoutTokens.button.horizontalPadding,
+    paddingVertical: 0,
     borderRadius: 12,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   logoutPressed: { opacity: 0.9 },
   logoutText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },

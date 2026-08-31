@@ -36,31 +36,53 @@ test('checkout notice shows guest request and only calls out non-default keys', 
   expect(presented.title).toBe('Aura2707 · 客人已退房')
   expect(presented.summary).toBe('清洁任务可以开始')
   expect(presented.content).not.toContain('房源：Aura2707')
-  expect(presented.content).toContain('时间：2026-06-15')
+  expect(presented.content).toContain('任务日期：2026-06-15')
   expect(presented.content).toContain('操作人：客服 A')
   expect(presented.content).toContain('任务要求：保留客人行李')
   expect(presented.content).toContain('钥匙要求：需挂 2 套钥匙')
   expect(presented.content).not.toContain('已退房（2把钥匙）')
 })
 
-test('cleaning and inspection notices show no guest request and hide the default key count', () => {
-  for (const kind of ['consumables_submitted', 'inspection_complete']) {
-    const presented = getPresentedNotice(notice({
-      data: {
-        kind,
-        property_code: 'Aura2707',
-        task_date: '2026-06-15',
-        actor_name: kind === 'inspection_complete' ? '检查员 A' : '清洁员 A',
-        guest_special_request: null,
-        keys_required: 1,
-      },
-    }))
+test('cleaning and inspection notices show room code plus actionable restock details', () => {
+  const cleaningNotice = getPresentedNotice(notice({
+    data: {
+      kind: 'consumables_submitted',
+      property_code: 'Aura2707',
+      task_date: '2026-06-15',
+      actor_name: '清洁员 A',
+      guest_special_request: null,
+      keys_required: 1,
+      restock_items: [
+        { item_id: 'paper', label: '卷纸', qty: 2, status: 'low' },
+        { item_id: 'soap', label: '洗手液', qty: 1, status: 'low' },
+      ],
+    },
+  }))
 
-    expect(presented.content).not.toContain('房源：Aura2707')
-    expect(presented.content).toContain('时间：2026-06-15')
-    expect(presented.content).toContain('任务要求：无')
-    expect(presented.content).not.toContain('钥匙要求')
-  }
+  expect(cleaningNotice.title).toBe('Aura2707 · 清洁已完成')
+  expect(cleaningNotice.summary).toBe('待补货：卷纸 x2、洗手液 x1')
+  expect(cleaningNotice.content).toContain('待补货：卷纸 x2、洗手液 x1')
+  expect(cleaningNotice.content).not.toContain('房源：Aura2707')
+  expect(cleaningNotice.content).toContain('任务日期：2026-06-15')
+  expect(cleaningNotice.content).toContain('任务要求：无')
+  expect(cleaningNotice.content).not.toContain('钥匙要求')
+
+  const inspectionNotice = getPresentedNotice(notice({
+    data: {
+      kind: 'inspection_complete',
+      property_code: 'Aura2707',
+      task_date: '2026-06-15',
+      actor_name: '检查员 A',
+      guest_special_request: null,
+      keys_required: 1,
+    },
+  }))
+
+  expect(inspectionNotice.title).toBe('Aura2707 · 检查已完成')
+  expect(inspectionNotice.summary).toBe('现场消耗品已确认充足')
+  expect(inspectionNotice.content).toContain('任务日期：2026-06-15')
+  expect(inspectionNotice.content).toContain('任务要求：无')
+  expect(inspectionNotice.content).not.toContain('钥匙要求')
 })
 
 test('keys hung notice uses room-code title and clear summary', () => {
@@ -79,7 +101,7 @@ test('keys hung notice uses room-code title and clear summary', () => {
 
   expect(presented.title).toBe('Aura2707 · 房间已挂钥匙')
   expect(presented.summary).toBe('挂钥匙视频已上传，房间钥匙已挂好')
-  expect(presented.content).toContain('时间：2026-06-15')
+  expect(presented.content).toContain('任务日期：2026-06-15')
   expect(presented.content).toContain('操作人：检查员 A')
 })
 
@@ -100,6 +122,22 @@ test('key requirement change uses concise before and after values', () => {
   expect(presented.summary).toBe('1 套 → 2 套')
   expect(presented.content).toContain('操作人：客服 A')
   expect(presented.content).toContain('变更：1 套 → 2 套')
+})
+
+test('restock sufficient confirmation uses room-code title and explicit summary', () => {
+  const presented = getPresentedNotice(notice({
+    data: {
+      kind: 'restock_sufficient_confirmed',
+      property_code: 'Aura2707',
+      task_date: '2026-06-15',
+      actor_name: '检查员 A',
+    },
+  }))
+
+  expect(presented.title).toBe('Aura2707 · 消耗品已确认充足')
+  expect(presented.summary).toBe('检查员已确认现场消耗品充足')
+  expect(presented.content).toContain('任务日期：2026-06-15')
+  expect(presented.content).toContain('操作人：检查员 A')
 })
 
 test('key photo and issue notifications expose actor and issue details', () => {
@@ -124,9 +162,12 @@ test('key photo and issue notifications expose actor and issue details', () => {
       issue_title: '浴室漏水',
       issue_detail: '洗手盆下方持续滴水',
       severity: 'high',
+      photo_urls: ['https://example.com/issue-1.jpg', 'https://example.com/issue-2.jpg'],
     },
   }))
   expect(issue.title).toBe('Aura2707 · 发现房源问题')
   expect(issue.summary).toBe('浴室漏水')
+  expect(issue.content).toContain('房源：Aura2707')
   expect(issue.content).toContain('问题详情：洗手盆下方持续滴水')
+  expect(issue.images).toEqual(['https://example.com/issue-1.jpg', 'https://example.com/issue-2.jpg'])
 })

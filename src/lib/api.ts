@@ -1,7 +1,38 @@
 import { API_BASE_URL } from '../config/env'
 import { notifyAuthInvalidated } from './authEvents'
+import { File } from 'expo-file-system'
 
 type Json = any
+type AuthenticatedRequestOptions = {
+  skipAuthInvalidation?: boolean
+  skipImageCompression?: boolean
+}
+
+function authenticatedHeaders(
+  token: string,
+  options?: AuthenticatedRequestOptions,
+  extras?: Record<string, string>,
+) {
+  return {
+    Authorization: `Bearer ${token}`,
+    ...(options?.skipAuthInvalidation ? { 'X-Skip-Auth-Invalidation': '1' } : {}),
+    ...(extras || {}),
+  }
+}
+
+export class ApiError extends Error {
+  status: number
+  code?: string
+  retryable: boolean
+
+  constructor(message: string, status = 0, code?: string, retryable = false) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
+    this.retryable = retryable
+  }
+}
 
 function normalizeBase(base: string) {
   return String(base || '').trim().replace(/\/+$/g, '')
@@ -53,20 +84,57 @@ async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: num
       controller.abort()
     } catch {}
   }, timeoutMs)
+  const headers = new Headers(init?.headers || {})
+  if (!headers.has('Cache-Control')) headers.set('Cache-Control', 'no-cache')
+  if (!headers.has('Pragma')) headers.set('Pragma', 'no-cache')
   try {
-    const res = await fetch(input, { ...init, signal: controller.signal })
-    const authHeader = (init?.headers as any)?.Authorization || (init?.headers as any)?.authorization
-    const skipAuthInvalidation = String((init?.headers as any)?.['X-Skip-Auth-Invalidation'] || '').trim() === '1'
+    const res = await fetch(input, { ...init, headers, cache: 'no-store', signal: controller.signal })
+    const authHeader = headers.get('Authorization')
+    const skipAuthInvalidation = String(headers.get('X-Skip-Auth-Invalidation') || '').trim() === '1'
     if (res.status === 401 && authHeader && !skipAuthInvalidation) notifyAuthInvalidated('session_expired')
     return res
   } catch (e: any) {
-    if (e?.name === 'AbortError') throw new Error('网络超时，请检查网络后重试')
-    throw e
+    if (e?.name === 'AbortError') throw new ApiError('网络超时，请检查网络后重试', 0, 'TIMEOUT', true)
+    if (e instanceof ApiError) throw e
+    const msg = String(e?.message || '网络异常，请稍后重试')
+    throw new ApiError(msg, 0, 'NETWORK_ERROR', true)
   } finally {
     try {
       clearTimeout(timer)
     } catch {}
   }
+}
+
+function toApiError(res: Response, message: string, errorCode?: string) {
+  const status = Number(res.status || 0)
+  if (status === 401) return new ApiError(message || '登录已失效，请重新登录', status, 'UNAUTHORIZED', false)
+  if (status === 403) return new ApiError(message || '权限不足', status, 'FORBIDDEN', false)
+  if (status === 409) return new ApiError(message || '提交内容已冲突，请重新提交', status, errorCode || 'IDEMPOTENCY_CONFLICT', false)
+  if (status >= 500) return new ApiError(message || '服务器错误，请稍后重试', status, 'SERVER_ERROR', true)
+  return new ApiError(message || `请求失败 (${status})`, status, undefined, false)
+}
+
+async function responseErrorCode(res: Response) {
+  try {
+    const json = await res.clone().json() as any
+    return String(json?.code || '').trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function toApiErrorFromResponse(res: Response) {
+  const code = await responseErrorCode(res)
+  const message = await parseErrorMessage(res)
+  return toApiError(res, message, code)
+}
+
+export function isRetryableApiError(error: unknown) {
+  return error instanceof ApiError ? error.retryable : false
+}
+
+export function isTerminalAuthApiError(error: unknown) {
+  return error instanceof ApiError && (error.status === 401 || error.status === 403)
 }
 
 async function parseErrorMessage(res: Response) {
@@ -81,6 +149,13 @@ async function parseErrorMessage(res: Response) {
     }
     try {
       const json = JSON.parse(txt) as any
+      const errorCode = String(json?.code || '').trim()
+      if (errorCode === 'CLEANING_SUBMISSION_REQUIRED' || String(json?.message || '').trim() === 'cleaning_submission_required') {
+        return '请先等待清洁提交补品记录和房源照片，再提交检查。'
+      }
+      if (errorCode === 'IMAGE_FORMAT_UNSUPPORTED' || String(json?.message || '').trim() === 'image_format_unsupported') {
+        return '照片格式无法处理，请重新拍摄或选择 JPG/PNG 图片。'
+      }
       const msg = json?.message
       if (typeof msg === 'string' && msg.trim()) {
         const raw = msg.trim()
@@ -191,7 +266,7 @@ export async function loginApi(params: { username: string; password: string }) {
   }
 
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw await toApiErrorFromResponse(res)
   const data = (await parseJsonOrThrow(res)) as Json
   const token = String(data?.token || '')
   if (!token) throw new Error('登录成功但未返回 token')
@@ -376,6 +451,7 @@ export type MzappExpenseReceiptRecord = {
   note?: string | null
   created_at?: string | null
   created_by?: string | null
+  first_image_id?: string | null
   first_image_url?: string | null
   item_count: number
   scope_summary: string
@@ -420,7 +496,7 @@ export type CleaningAppTask = {
   assignee_id: string | null
   cleaner_id?: string | null
   inspector_id: string | null
-  inspection_mode?: 'pending_decision' | 'same_day' | 'self_complete' | 'deferred' | null
+  inspection_mode?: 'pending_decision' | 'same_day' | 'deferred' | 'self_complete' | 'checked_done' | null
   inspection_due_date?: string | null
   cleaner_name?: string | null
   inspector_name?: string | null
@@ -502,12 +578,57 @@ export type GuestLuggageNotice = {
   }
 }
 
+export type WorkTaskActionId =
+  | 'upload_key_photo'
+  | 'fill_supplies'
+  | 'submit_inspection'
+  | 'upload_access_video'
+  | 'complete_cleaning'
+  | 'append_completion_photo'
+  | 'report_issue'
+  | 'mark_guest_checkout'
+
+export type WorkTaskActionTarget =
+  | 'TaskDetail'
+  | 'SuppliesForm'
+  | 'InspectionPanel'
+  | 'InspectionComplete'
+  | 'CleaningSelfComplete'
+  | 'FeedbackForm'
+
+export type WorkTaskAvailableAction = {
+  id: WorkTaskActionId
+  label: string
+  placement: 'primary' | 'more'
+  enabled: boolean
+  disabled_reason?: string
+  read_only?: boolean
+  target?: WorkTaskActionTarget
+  intent: 'cleaning' | 'inspection' | 'site_action' | 'completion' | 'issue' | 'manager'
+  source_type?: string | null
+  source_id?: string | null
+}
+
+export type WorkTaskParticipant = {
+  user_id: string
+  participant_role?: 'assignee' | 'cleaner' | 'inspector' | 'collaborator' | string | null
+  action_ids?: (WorkTaskActionId | '*')[] | null
+  source_relation?: 'legacy' | 'manual' | string | null
+  source_type?: string | null
+  source_id?: string | null
+}
+
 export type WorkTask = {
   id: string
   task_kind: string
+  execution_role?: 'cleaning' | 'inspection' | 'execution' | 'mixed' | 'work' | string | null
+  execution_semantics?: 'cleaning_execution' | 'checkin_inspection' | 'inspection_execution' | 'key_or_password_action' | 'mixed_cleaning_inspection' | 'work_task' | string | null
   source_type: string
   source_id: string
   source_ids?: string[]
+  active_source_ids?: string[]
+  superseded_source_ids?: string[]
+  all_related_source_ids?: string[]
   cleaning_task_ids?: string[]
   inspection_task_ids?: string[]
   order_id?: string | null
@@ -521,22 +642,34 @@ export type WorkTask = {
   end_time: string | null
   task_type?: string | null
   assignee_id: string | null
+  cleaner_id?: string | null
   inspector_id?: string | null
-  inspection_mode?: 'pending_decision' | 'same_day' | 'self_complete' | 'deferred' | null
+  inspection_mode?: 'pending_decision' | 'same_day' | 'deferred' | 'self_complete' | 'checked_done' | null
+  inspection_scope?: 'inspect_and_hang' | 'password_only' | null
   inspection_due_date?: string | null
   status: string
   cleaning_status?: string | null
+  cleaning_submission_ready?: boolean | null
   inspection_status?: string | null
   urgency: string
   sort_index?: number | null
+  photo_urls?: string[] | null
   old_code?: string | null
   new_code?: string | null
   guest_special_request?: string | null
+  guest_request_checkout?: string | null
+  guest_request_checkin?: string | null
+  guest_request_summary?: string | null
   guest_luggage?: GuestLuggageNotice | null
   note?: string | null
   completion_photo_urls?: string[] | null
   completion_note?: string | null
   completion_reason?: string | null
+  maintenance_workflow?: {
+    domain: 'internal' | 'external'
+    status: 'pending_assignment' | 'assigned' | 'in_progress' | 'pending_review' | 'closed' | 'cancelled' | string
+    available_actions: string[]
+  } | null
   keys_required?: number | null
   keys_required_checkout?: number | null
   keys_required_checkin?: number | null
@@ -547,14 +680,43 @@ export type WorkTask = {
     show_checkin: boolean
   } | null
   checked_out_at?: string | null
+  assignee_name?: string | null
+  executor_name?: string | null
   cleaner_name?: string | null
   inspector_name?: string | null
   key_photo_url?: string | null
   lockbox_video_url?: string | null
+  living_room_photo_urls?: string[] | null
   living_room_photo_url?: string | null
   completion_photos_ok?: boolean
   stayed_nights?: number | null
   remaining_nights?: number | null
+  is_late_checkout?: boolean
+  is_early_checkin?: boolean
+  is_late_checkin?: boolean
+  display_conflicts?: Record<string, any>[]
+  turnover_display?: {
+    checkout_order_id?: string | null
+    checkin_order_id?: string | null
+    checkout_time?: string | null
+    checkin_time?: string | null
+    is_late_checkout?: boolean
+    is_early_checkin?: boolean
+    is_late_checkin?: boolean
+    guest_request_checkout?: string | null
+    guest_request_checkin?: string | null
+    guest_request_summary?: string | null
+    old_code?: string | null
+    new_code?: string | null
+    keys_required_checkout?: number | null
+    keys_required_checkin?: number | null
+    stayed_nights?: number | null
+    remaining_nights?: number | null
+    active_source_ids?: string[]
+    superseded_source_ids?: string[]
+    all_related_source_ids?: string[]
+    conflicts?: Record<string, any>[]
+  } | null
   restock_items?: Array<{
     item_id: string
     label: string
@@ -563,6 +725,9 @@ export type WorkTask = {
     photo_url: string | null
     status: string
   }>
+  capabilities?: Record<string, any> | null
+  available_actions?: WorkTaskAvailableAction[] | null
+  participants?: WorkTaskParticipant[] | null
   property: WorkTaskProperty | null
 }
 
@@ -648,7 +813,6 @@ export async function createCleaningOfflineTask(
     content?: string | null
     kind: string
     status: 'todo' | 'done'
-    urgency: 'low' | 'medium' | 'high' | 'urgent'
     property_id?: string | null
     assignee_id?: string | null
   },
@@ -660,6 +824,36 @@ export async function createCleaningOfflineTask(
     lastRes = await fetchWithTimeout(
       url,
       { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function updateCleaningOfflineTask(
+  token: string,
+  id: string,
+  params: {
+    date?: string
+    task_type?: 'property' | 'company' | 'other'
+    title?: string
+    content?: string | null
+    kind?: string
+    status?: 'todo' | 'done'
+    property_id?: string | null
+    assignee_id?: string | null
+  },
+) {
+  const urls = buildUrlCandidates(`cleaning/offline-tasks/${encodeURIComponent(id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
       15000,
     )
     if (lastRes.status !== 404) break
@@ -850,9 +1044,15 @@ export type PropertyFeedback = {
   resolved_at?: string | null
   completed_at?: string | null
   review_status?: 'pending' | 'approved' | 'rejected' | null
+  completion_photo_urls?: string[] | null
   repair_photo_urls?: string[] | null
   repair_notes?: string | null
   project_items?: PropertyFeedbackProject[] | null
+  capabilities?: {
+    can_edit_content: boolean
+    can_delete: boolean
+    can_move_category: boolean
+  }
 }
 
 export type PropertyFeedbackProject = {
@@ -930,6 +1130,9 @@ export async function createPropertyFeedback(
         kind: 'maintenance'
         property_id: string
         source_task_id?: string
+        submit_id?: string
+        step_key?: string
+        client_item_id?: string
         area?: string
         category?: string
         detail?: string
@@ -940,6 +1143,9 @@ export async function createPropertyFeedback(
         kind: 'deep_cleaning'
         property_id: string
         source_task_id?: string
+        submit_id?: string
+        step_key?: string
+        client_item_id?: string
         areas?: string[]
         detail?: string
         media_urls?: string[]
@@ -948,6 +1154,9 @@ export async function createPropertyFeedback(
         kind: 'daily_necessities'
         property_id: string
         source_task_id?: string
+        submit_id?: string
+        step_key?: string
+        client_item_id?: string
         status: 'need_replace' | 'replaced' | 'no_action'
         item_name: string
         quantity: number
@@ -973,41 +1182,101 @@ export async function createPropertyFeedback(
 
 export async function createPropertyFeedbackBatch(
   token: string,
-  items: Array<
+  params:
+    | Array<
+        | {
+            kind: 'maintenance'
+            property_id: string
+            source_task_id?: string
+            submit_id?: string
+            step_key?: string
+            client_item_id?: string
+            area?: string
+            category?: string
+            detail?: string
+            media_urls?: string[]
+            items?: Array<{ area: string; category: string; detail: string; media_urls?: string[] }>
+          }
+        | {
+            kind: 'deep_cleaning'
+            property_id: string
+            source_task_id?: string
+            submit_id?: string
+            step_key?: string
+            client_item_id?: string
+            areas?: string[]
+            detail?: string
+            media_urls?: string[]
+          }
+        | {
+            kind: 'daily_necessities'
+            property_id: string
+            source_task_id?: string
+            submit_id?: string
+            step_key?: string
+            client_item_id?: string
+            status: 'need_replace' | 'replaced' | 'no_action'
+            item_name: string
+            quantity: number
+            note?: string
+            media_urls?: string[]
+          }
+      >
     | {
-        kind: 'maintenance'
-        property_id: string
-        source_task_id?: string
-        area?: string
-        category?: string
-        detail?: string
-        media_urls?: string[]
-        items?: Array<{ area: string; category: string; detail: string; media_urls?: string[] }>
-      }
-    | {
-        kind: 'deep_cleaning'
-        property_id: string
-        source_task_id?: string
-        areas?: string[]
-        detail?: string
-        media_urls?: string[]
-      }
-    | {
-        kind: 'daily_necessities'
-        property_id: string
-        source_task_id?: string
-        status: 'need_replace' | 'replaced' | 'no_action'
-        item_name: string
-        quantity: number
-        note?: string
-        media_urls?: string[]
-      }
-  >,
+        submit_id?: string
+        step_key?: string
+        items: Array<
+          | {
+              kind: 'maintenance'
+              property_id: string
+              source_task_id?: string
+              submit_id?: string
+              step_key?: string
+              client_item_id?: string
+              area?: string
+              category?: string
+              detail?: string
+              media_urls?: string[]
+              items?: Array<{ area: string; category: string; detail: string; media_urls?: string[] }>
+            }
+          | {
+              kind: 'deep_cleaning'
+              property_id: string
+              source_task_id?: string
+              submit_id?: string
+              step_key?: string
+              client_item_id?: string
+              areas?: string[]
+              detail?: string
+              media_urls?: string[]
+            }
+          | {
+              kind: 'daily_necessities'
+              property_id: string
+              source_task_id?: string
+              submit_id?: string
+              step_key?: string
+              client_item_id?: string
+              status: 'need_replace' | 'replaced' | 'no_action'
+              item_name: string
+              quantity: number
+              note?: string
+              media_urls?: string[]
+            }
+        >
+      },
 ) {
+  const batchSubmitId = Array.isArray(params) ? '' : String(params.submit_id || '').trim()
+  const batchStepKey = Array.isArray(params) ? '' : String(params.step_key || '').trim()
+  const items = Array.isArray(params) ? params : params.items
   const results: Array<{ ok: boolean; response?: any; error?: string }> = []
   for (const item of items) {
     try {
-      const response = await createPropertyFeedback(token, item as any)
+      const response = await createPropertyFeedback(token, {
+        ...item,
+        submit_id: String((item as any)?.submit_id || batchSubmitId || '').trim() || undefined,
+        step_key: String((item as any)?.step_key || batchStepKey || '').trim() || undefined,
+      } as any)
       results.push({ ok: true, response })
     } catch (e: any) {
       results.push({ ok: false, error: String(e?.message || '提交失败') })
@@ -1061,6 +1330,48 @@ export async function updatePropertyFeedback(
   }
   const msg = lastRes ? await parseErrorMessage(lastRes) : ''
   throw new Error(msg || '更新反馈失败')
+}
+
+export async function deletePropertyFeedback(
+  token: string,
+  kind: 'maintenance' | 'deep_cleaning' | 'daily_necessities',
+  feedbackId: string,
+) {
+  const urls = buildUrlCandidates(`mzapp/property-feedbacks/${encodeURIComponent(kind)}/${encodeURIComponent(feedbackId)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    lastRes = res
+    if (res.ok) return (await res.json()) as { ok: boolean; deleted?: boolean }
+  }
+  const msg = lastRes ? await parseErrorMessage(lastRes) : ''
+  throw new Error(msg || '删除反馈失败')
+}
+
+export async function movePropertyFeedback(
+  token: string,
+  kind: 'maintenance' | 'deep_cleaning' | 'daily_necessities',
+  feedbackId: string,
+  targetKind: 'maintenance' | 'deep_cleaning' | 'daily_necessities',
+) {
+  const urls = buildUrlCandidates(`mzapp/property-feedbacks/${encodeURIComponent(kind)}/${encodeURIComponent(feedbackId)}/move`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_kind: targetKind }),
+    })
+    lastRes = res
+    if (res.ok) return (await res.json()) as { ok: boolean; row?: PropertyFeedback | null }
+  }
+  const msg = lastRes ? await parseErrorMessage(lastRes) : ''
+  throw new Error(msg || '调整反馈类型失败')
 }
 
 export async function createPropertyFeedbackProject(
@@ -1139,17 +1450,25 @@ export async function completePropertyFeedbackProject(
   throw new Error(msg || '提交完成失败')
 }
 
-async function prepareImageUploadUri(uri: string) {
-  const sourceUri = String(uri || '').trim()
+function jpegNameFrom(name: string) {
+  const value = String(name || '').trim()
+  const base = value.replace(/\.[^./]+$/, '').trim() || 'photo'
+  return `${base}.jpg`
+}
+
+async function prepareImageUpload(file: { uri: string; name: string; mimeType: string }) {
+  const sourceUri = String(file.uri || '').trim()
   if (!sourceUri) throw new Error('missing uri')
-  try {
-    const mod = await import('./imageCompression')
-    const fn = (mod as any)?.compressImageForUpload
-    if (typeof fn !== 'function') return sourceUri
-    const compressedUri = await fn(sourceUri)
-    return String(compressedUri || '').trim() || sourceUri
-  } catch {
-    return sourceUri
+  const mod = await import('./imageCompression')
+  const fn = (mod as any)?.compressImageForUpload
+  if (typeof fn !== 'function') throw new Error('照片压缩模块不可用，请重新拍摄')
+  const compressedUri = String(await fn(sourceUri) || '').trim()
+  if (!compressedUri) throw new Error('照片格式转换失败，请重新拍摄')
+  const converted = compressedUri !== sourceUri
+  return {
+    uri: compressedUri,
+    name: converted ? jpegNameFrom(file.name) : file.name,
+    mimeType: converted ? 'image/jpeg' : file.mimeType,
   }
 }
 
@@ -1157,10 +1476,12 @@ export async function uploadCleaningMedia(
   token: string,
   file: { uri: string; name: string; mimeType: string },
   meta?: Record<string, string | undefined | null>,
+  options?: AuthenticatedRequestOptions,
 ) {
   const urls = buildUrlCandidates('cleaning-app/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const compressedUri = await prepareImageUploadUri(file.uri)
+  const preparedFile = options?.skipImageCompression ? file : await prepareImageUpload(file)
+  if (!new File(preparedFile.uri).exists) throw new ApiError('本地文件已丢失，请重新拍摄', 0, 'MISSING_LOCAL_FILE', false)
   const form = new FormData()
   if (meta) {
     for (const [k, v] of Object.entries(meta)) {
@@ -1168,7 +1489,7 @@ export async function uploadCleaningMedia(
       if (vv) form.append(k, vv)
     }
   }
-  form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
+  form.append('file', { uri: preparedFile.uri, name: preparedFile.name, type: preparedFile.mimeType } as any)
 
   let lastRes: Response | null = null
   for (const url of urls) {
@@ -1176,7 +1497,7 @@ export async function uploadCleaningMedia(
       url,
       {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: authenticatedHeaders(token, options),
         body: form as any,
       },
       30000,
@@ -1184,16 +1505,18 @@ export async function uploadCleaningMedia(
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw await toApiErrorFromResponse(res)
   const data = (await parseJsonOrThrow(res)) as any
   const u = String(data?.url || '').trim()
-  if (!u) throw new Error('上传成功但未返回 url')
-  return { url: u }
+  const key = String(data?.key || '').trim()
+  if (!u) throw new ApiError('上传成功但未返回 url', 0, 'MISSING_URL', false)
+  return { url: u, key: key || null }
 }
 
 export async function uploadCleaningVideo(token: string, file: { uri: string; name: string; mimeType: string }) {
   const urls = buildUrlCandidates('cleaning-app/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  if (!new File(file.uri).exists) throw new ApiError('本地文件已丢失，请重新拍摄', 0, 'MISSING_LOCAL_FILE', false)
   const form = new FormData()
   form.append('file', { uri: file.uri, name: file.name, type: file.mimeType } as any)
 
@@ -1211,10 +1534,10 @@ export async function uploadCleaningVideo(token: string, file: { uri: string; na
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
   const data = (await parseJsonOrThrow(res)) as any
   const u = String(data?.url || '').trim()
-  if (!u) throw new Error('上传成功但未返回 url')
+  if (!u) throw new ApiError('上传成功但未返回 url', 0, 'MISSING_URL', false)
   return { url: u }
 }
 
@@ -1487,6 +1810,30 @@ export async function uploadLockboxVideo(token: string, cleaningTaskId: string, 
   return (await parseJsonOrThrow(res)) as any
 }
 
+export async function deleteLockboxVideo(token: string, cleaningTaskId: string) {
+  const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/lockbox-video`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404 && lastRes.status !== 405) break
+  }
+  const res = lastRes as Response
+  if (res.ok) return (await parseJsonOrThrow(res)) as any
+  if (res.status === 404 || res.status === 405) {
+    const urls2 = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/lockbox-video/delete`)
+    let lastRes2: Response | null = null
+    for (const url of urls2) {
+      lastRes2 = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }, 15000)
+      if (lastRes2.status !== 404 && lastRes2.status !== 405) break
+    }
+    const res2 = lastRes2 as Response
+    if (!res2.ok) throw new Error(await parseErrorMessage(res2))
+    return (await parseJsonOrThrow(res2)) as any
+  }
+  throw new Error(await parseErrorMessage(res))
+}
+
 export async function uploadSelfLockboxVideo(token: string, cleaningTaskId: string, params: { media_url: string; captured_at?: string }) {
   const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/lockbox-video`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -1504,7 +1851,43 @@ export async function uploadSelfLockboxVideo(token: string, cleaningTaskId: stri
   return (await parseJsonOrThrow(res)) as any
 }
 
-export type InspectionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'shower_drain' | 'unclean'
+export type InspectionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'bathroom' | 'shower_drain' | 'unclean'
+
+export type WorkTaskFormPhotoRecord = {
+  id: string
+  task_id: string
+  source: 'inspection' | 'restock' | 'consumable' | 'issue' | string
+  area?: string | null
+  item_id?: string | null
+  label?: string | null
+  url: string
+  uploaded_key?: string | null
+  captured_at?: string | null
+  created_at?: string | null
+  uploader_id?: string | null
+  status?: 'synced' | 'synced_unlabeled' | string
+}
+
+export async function getWorkTaskFormPhotos(token: string, workTaskRef: string, sourceIds: string[] = []) {
+  const params = new URLSearchParams()
+  const ids = Array.from(new Set(sourceIds.map((item) => String(item || '').trim()).filter(Boolean))).slice(0, 50)
+  if (ids.length) params.set('source_ids', ids.join(','))
+  const query = params.toString()
+  const path = `mzapp/work-tasks/${encodeURIComponent(workTaskRef)}/form-photos${query ? `?${query}` : ''}`
+  const urls = buildUrlCandidates(path)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as {
+    task_ids?: string[]
+    items: WorkTaskFormPhotoRecord[]
+  }
+}
 
 export async function getInspectionPhotos(token: string, cleaningTaskId: string) {
   const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/inspection-photos`)
@@ -1515,7 +1898,7 @@ export async function getInspectionPhotos(token: string, cleaningTaskId: string)
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
     items: Array<{ area: string; url: string; note?: string | null; captured_at?: string | null; created_at?: string | null }>
   }
@@ -1524,7 +1907,13 @@ export async function getInspectionPhotos(token: string, cleaningTaskId: string)
 export async function saveInspectionPhotos(
   token: string,
   cleaningTaskId: string,
-  params: { items: Array<{ area: InspectionPhotoArea; url: string; note?: string | null; captured_at?: string }> },
+  params: {
+    items: Array<{ area: InspectionPhotoArea; url: string; note?: string | null; captured_at?: string }>
+    guest_arrival_confirmed?: boolean
+    submit_id?: string
+    step_key?: string
+  },
+  options?: AuthenticatedRequestOptions,
 ) {
   const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/inspection-photos`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -1532,13 +1921,39 @@ export async function saveInspectionPhotos(
   for (const url of urls) {
     lastRes = await fetchWithTimeout(
       url,
-      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      { method: 'POST', headers: authenticatedHeaders(token, options, { 'Content-Type': 'application/json' }), body: JSON.stringify(params) },
       15000,
     )
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw await toApiErrorFromResponse(res)
+  return (await parseJsonOrThrow(res)) as any
+}
+
+export async function appendInspectionIssuePhotos(
+  token: string,
+  cleaningTaskId: string,
+  params: {
+    items: { url: string; note?: string | null; captured_at?: string }[]
+    submit_id: string
+    step_key: string
+  },
+  options?: AuthenticatedRequestOptions,
+) {
+  const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/inspection-issue-photos`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: authenticatedHeaders(token, options, { 'Content-Type': 'application/json' }), body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw await toApiErrorFromResponse(res)
   return (await parseJsonOrThrow(res)) as any
 }
 
@@ -1551,7 +1966,7 @@ export async function getRestockProof(token: string, cleaningTaskId: string) {
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
     items: Array<{ item_id: string; proof_url: string | null; proof_urls?: string[]; status?: string | null; qty?: number | null; note?: string | null; created_at?: string | null }>
     confirmed_sufficient?: boolean
@@ -1563,9 +1978,12 @@ export async function saveRestockProof(
   token: string,
   cleaningTaskId: string,
   params: {
-    items: Array<{ item_id: string; status: 'restocked' | 'unavailable'; qty?: number | null; note?: string | null; proof_url: string | null; proof_urls?: string[] }>
+    items: Array<{ item_id: string; label?: string | null; status: 'restocked' | 'carry_forward' | 'unavailable'; qty?: number | null; note?: string | null; proof_url: string | null; proof_urls?: string[] }>
     confirmed_sufficient?: boolean
+    submit_id?: string
+    step_key?: string
   },
+  options?: AuthenticatedRequestOptions,
 ) {
   const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/restock-proof`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -1573,17 +1991,17 @@ export async function saveRestockProof(
   for (const url of urls) {
     lastRes = await fetchWithTimeout(
       url,
-      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      { method: 'POST', headers: authenticatedHeaders(token, options, { 'Content-Type': 'application/json' }), body: JSON.stringify(params) },
       15000,
     )
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw await toApiErrorFromResponse(res)
   return (await parseJsonOrThrow(res)) as any
 }
 
-export type CompletionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'vacuum_used'
+export type CompletionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'shower_drain' | 'remote_tv' | 'remote_ac' | 'vacuum_used' | 'remote_controls'
 
 export async function getCompletionPhotos(token: string, cleaningTaskId: string) {
   const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/completion-photos`)
@@ -1594,7 +2012,7 @@ export async function getCompletionPhotos(token: string, cleaningTaskId: string)
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
     items: Array<{ area: string; url: string; note?: string | null; captured_at?: string | null; created_at?: string | null }>
   }
@@ -1603,7 +2021,11 @@ export async function getCompletionPhotos(token: string, cleaningTaskId: string)
 export async function saveCompletionPhotos(
   token: string,
   cleaningTaskId: string,
-  params: { items: Array<{ area: CompletionPhotoArea; url: string; note?: string | null; captured_at?: string }> },
+  params: {
+    items: Array<{ area: CompletionPhotoArea; url: string; note?: string | null; captured_at?: string }>
+    submit_id?: string
+    step_key?: string
+  },
 ) {
   const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/completion-photos`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -1617,7 +2039,7 @@ export async function saveCompletionPhotos(
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw await toApiErrorFromResponse(res)
   return (await parseJsonOrThrow(res)) as any
 }
 
@@ -1780,7 +2202,12 @@ export async function markInboxNotificationsRead(token: string, params: { ids?: 
 export async function submitCleaningConsumables(
   token: string,
   taskId: string,
-  params: { living_room_photo_url: string; items: Array<{ item_id: string; status: 'ok' | 'low'; qty?: number; note?: string; photo_url?: string; photo_urls?: string[] }> },
+  params: {
+    living_room_photo_url?: string | null
+    living_room_photo_urls?: string[]
+    items: Array<{ item_id: string; status: 'ok' | 'low'; qty?: number; note?: string; photo_url?: string; photo_urls?: string[] }>
+    submit_id?: string
+  },
 ) {
   const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(taskId)}/consumables`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -1798,7 +2225,7 @@ export async function submitCleaningConsumables(
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as any
 }
 
@@ -1821,8 +2248,9 @@ export async function getCleaningConsumables(
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
+    living_room_photo_urls?: string[]
     living_room_photo_url?: string | null
     items: Array<{ id: string; item_id: string; qty: number; need_restock: boolean; note?: string | null; status?: string | null; photo_url?: string | null; photo_urls?: string[]; item_label?: string | null; created_at?: string | null }>
   }
@@ -1852,6 +2280,24 @@ export async function listUsers(token: string) {
   }>
 }
 
+export type CompanyOfflinePassword = {
+  id: string
+  title: string
+  property_code?: string | null
+  property_codes?: string[] | null
+  property_ids?: string[] | null
+  secret_kind?: string | null
+  box_number?: string | null
+  location?: string | null
+  rotation_interval_days?: number | null
+  next_rotation_at?: string | null
+  note?: string | null
+  status?: 'active' | 'inactive' | string | null
+  secret?: string | null
+  has_key?: boolean | null
+  updated_at?: string | null
+}
+
 export async function listCompanySecretsForApp(token: string) {
   const urls = buildUrlCandidates('cms/company/secrets/app-list')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -1866,7 +2312,7 @@ export async function listCompanySecretsForApp(token: string) {
   }
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as Array<{ id: string; title: string; username?: string | null; note?: string | null; secret?: string | null; updated_at?: string | null }>
+  return (await parseJsonOrThrow(res)) as CompanyOfflinePassword[]
 }
 
 export type CompanyContentAudienceScope = 'all_staff' | 'cleaners' | 'warehouse_staff' | 'maintenance_staff' | 'managers'
@@ -2015,6 +2461,25 @@ export async function logCopyCompanySecretForApp(token: string, secretId: string
   return (await parseJsonOrThrow(res)) as any
 }
 
+export type ProfileDocumentType = 'photo_id' | 'visa_document'
+
+type MyProfileResponse = {
+  id: string
+  username: string
+  role: string
+  phone_au?: string | null
+  display_name?: string | null
+  avatar_url?: string | null
+  legal_name?: string | null
+  bank_account_name?: string | null
+  bank_bsb?: string | null
+  bank_account_number?: string | null
+  personal_abn?: string | null
+  photo_id_uploaded?: boolean
+  visa_document_uploaded?: boolean
+  visa_grant_number?: string | null
+}
+
 export async function getMyProfile(token: string) {
   const urls = buildUrlCandidates('users/me')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -2025,19 +2490,14 @@ export async function getMyProfile(token: string) {
   }
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as {
-    id: string
-    username: string
-    role: string
-    phone_au?: string | null
-    display_name?: string | null
-    avatar_url?: string | null
-    legal_name?: string | null
-    bank_account_name?: string | null
-    bank_bsb?: string | null
-    bank_account_number?: string | null
-    personal_abn?: string | null
-    photo_id_url?: string | null
+  return (await parseJsonOrThrow(res)) as MyProfileResponse
+}
+
+export function profileDocumentImageSource(token: string | null | undefined, type: ProfileDocumentType) {
+  const uri = buildUrlCandidates(`users/me/profile-documents/${type}`)[0] || ''
+  return {
+    uri,
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   }
 }
 
@@ -2053,6 +2513,8 @@ export async function updateMyProfile(
     bank_account_number?: string | null
     personal_abn?: string | null
     photo_id_url?: string | null
+    visa_document_url?: string | null
+    visa_grant_number?: string | null
   },
 ) {
   const urls = buildUrlCandidates('users/me')
@@ -2068,20 +2530,7 @@ export async function updateMyProfile(
   }
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
-  return (await parseJsonOrThrow(res)) as {
-    id: string
-    username: string
-    role: string
-    phone_au?: string | null
-    display_name?: string | null
-    avatar_url?: string | null
-    legal_name?: string | null
-    bank_account_name?: string | null
-    bank_bsb?: string | null
-    bank_account_number?: string | null
-    personal_abn?: string | null
-    photo_id_url?: string | null
-  }
+  return (await parseJsonOrThrow(res)) as MyProfileResponse
 }
 
 export async function changeMyPassword(token: string, params: { old_password: string; new_password: string }) {
@@ -2193,14 +2642,53 @@ export async function reorderWorkTasks(
   return (await parseJsonOrThrow(res)) as any
 }
 
+export type MixedWorkTaskReorderItem = {
+  kind: 'work' | 'cleaner' | 'inspector'
+  ids: string[]
+  sort_index: number
+}
+
+export async function reorderMixedWorkTasks(
+  token: string,
+  params: { date: string; items: MixedWorkTaskReorderItem[] },
+) {
+  const items = (Array.isArray(params.items) ? params.items : [])
+    .map((item) => ({
+      kind: item.kind,
+      ids: Array.from(new Set((Array.isArray(item.ids) ? item.ids : []).map((x) => String(x || '').trim()).filter(Boolean))),
+      sort_index: Number(item.sort_index),
+    }))
+    .filter((item) => (item.kind === 'work' || item.kind === 'cleaner' || item.kind === 'inspector') && item.ids.length && Number.isInteger(item.sort_index) && item.sort_index > 0)
+  if (!items.length) throw new Error('缺少任务顺序')
+  const urls = buildUrlCandidates('mzapp/work-tasks/mixed-reorder')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: params.date, items }),
+      },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as any
+}
+
 export async function uploadMzappMedia(
   token: string,
   file: { uri: string; name: string; mimeType: string },
   meta?: Record<string, string | undefined | null>,
+  options?: { skipImageCompression?: boolean },
 ) {
   const urls = buildUrlCandidates('mzapp/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const compressedUri = await prepareImageUploadUri(file.uri)
+  const preparedFile = options?.skipImageCompression ? file : await prepareImageUpload(file)
   const form = new FormData()
   if (meta) {
     for (const [k, v] of Object.entries(meta)) {
@@ -2208,7 +2696,7 @@ export async function uploadMzappMedia(
       if (vv) form.append(k, vv)
     }
   }
-  form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
+  form.append('file', { uri: preparedFile.uri, name: preparedFile.name, type: preparedFile.mimeType } as any)
   let lastRes: Response | null = null
   for (const url of urls) {
     lastRes = await fetchWithTimeout(
@@ -2223,7 +2711,9 @@ export async function uploadMzappMedia(
   const data = (await parseJsonOrThrow(res)) as any
   const u = String(data?.url || '').trim()
   if (!u) throw new Error('上传成功但未返回 url')
-  return { url: u }
+  const key = String(data?.key || '').trim()
+  const remoteReference = String(data?.remote_reference || '').trim()
+  return { url: u, key: key || undefined, remoteReference: remoteReference || undefined }
 }
 
 export async function getMzappExpenseBootstrap(token: string) {
@@ -2245,9 +2735,9 @@ export async function uploadMzappExpenseReceipt(
 ) {
   const urls = buildUrlCandidates('mzapp/expenses/receipts/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const compressedUri = await prepareImageUploadUri(file.uri)
+  const preparedFile = await prepareImageUpload(file)
   const form = new FormData()
-  form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
+  form.append('file', { uri: preparedFile.uri, name: preparedFile.name, type: preparedFile.mimeType } as any)
   let lastRes: Response | null = null
   for (const url of urls) {
     lastRes = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form as any }, 30000)
@@ -2400,9 +2890,9 @@ export async function uploadMzappExpenseReceiptImage(
 ) {
   const urls = buildUrlCandidates('mzapp/expense-receipts/images/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
-  const compressedUri = await prepareImageUploadUri(file.uri)
+  const preparedFile = await prepareImageUpload(file)
   const form = new FormData()
-  form.append('file', { uri: compressedUri, name: file.name, type: file.mimeType } as any)
+  form.append('file', { uri: preparedFile.uri, name: preparedFile.name, type: preparedFile.mimeType } as any)
   let lastRes: Response | null = null
   for (const url of urls) {
     lastRes = await fetchWithTimeout(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form as any }, 30000)
@@ -2524,4 +3014,88 @@ export async function markWorkTask(
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as any
+}
+
+export type MaintenanceExecutorWorkflowAction = 'executor_complete' | 'executor_unfinished'
+
+export async function submitMaintenanceExecutorAction(
+  token: string,
+  params: {
+    domain: 'internal' | 'external'
+    recordId: string
+    action: MaintenanceExecutorWorkflowAction
+    completionPhotoUrls?: string[]
+    completionNote?: string | null
+    reason?: string | null
+    operationId: string
+  },
+) {
+  const recordId = String(params.recordId || '').trim()
+  if (!recordId) throw new Error('缺少维修记录ID')
+  const urls = buildUrlCandidates(`maintenance/workflow/${params.domain}/${encodeURIComponent(recordId)}/${params.action}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  const body = {
+    completion_photo_urls: Array.isArray(params.completionPhotoUrls) ? params.completionPhotoUrls : [],
+    completion_note: String(params.completionNote || '').trim() || null,
+    reason: String(params.reason || '').trim() || null,
+    operation_id: String(params.operationId || '').trim(),
+  }
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as {
+    ok: true
+    status: string
+    available_actions: string[]
+  }
+}
+
+export async function appendWorkTaskCompletionPhotos(
+  token: string,
+  taskId: string,
+  params: { photo_urls: string[] },
+) {
+  const urls = buildUrlCandidates(`mzapp/work-tasks/${encodeURIComponent(taskId)}/completion-photos`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: boolean; completion_photo_urls: string[] }
+}
+
+export async function updateWorkTaskPhotos(
+  token: string,
+  taskId: string,
+  params: { photo_urls: string[] },
+) {
+  const urls = buildUrlCandidates(`mzapp/work-tasks/${encodeURIComponent(taskId)}/photos`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: boolean; photo_urls: string[] }
 }

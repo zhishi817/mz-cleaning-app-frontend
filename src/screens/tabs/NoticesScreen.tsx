@@ -1,30 +1,37 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useIsFocused } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
-import { companyContentBody, companyContentSummary, companyGuideRoleLabel } from '../../lib/companyContent'
+import { companyContentBody, companyContentCategoryLabel, companyContentSummary, companyGuideRoleLabel } from '../../lib/companyContent'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
+import { layoutTokens } from '../../lib/theme'
 import { getJson, setJson } from '../../lib/storage'
 import { getNoticesSnapshot, initNoticesStore, markNoticeRead, refreshNotices, subscribeNotices, type Notice } from '../../lib/noticesStore'
 import { getPresentedNotice } from '../../lib/noticePresentation'
+import CleaningMediaImage from '../../components/CleaningMediaImage'
+import { isNoticeMediaReferenceEligible, resolveNoticeMediaContext } from '../../lib/noticeMedia'
 import { syncInboxNotifications } from '../../lib/notificationInbox'
 import { isTaskInspectorUser, isTaskManagerUser, roleNamesOf } from '../../lib/roles'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { getWorkTasksSnapshot, subscribeWorkTasks } from '../../lib/workTasksStore'
+import { navigationForWorkTaskAction, preferredNoticeActionForTask } from '../../lib/workTaskActions'
 import {
   listCompanyAnnouncementsForApp,
+  listCompanyDocsForApp,
   listCompanySecretsForApp,
   listCustomerServiceManualsForApp,
   listWarehouseGuidesForApp,
-  listWorkGuidesForApp,
   listWorkTasks,
   markInboxNotificationsRead,
   type CompanyAnnouncement,
+  type CompanyContentCategory,
+  type CompanyDocument,
+  type CompanyOfflinePassword,
   type CustomerServiceManual,
-  type CompanyGuide,
   type CompanyGuideRole,
   type WarehouseGuide,
   type WorkTask,
@@ -47,35 +54,41 @@ type SearchResult = {
   copyText?: string | null
   secretId?: string
   contentRaw?: string | null
+  docCategory?: CompanyContentCategory | null
   guideRole?: CompanyGuideRole | null
 }
 
 type SearchSection = {
-  key: 'property' | 'task' | 'announcement' | 'guide' | 'customer_service_manual' | 'warehouse_guide'
+  key: 'property' | 'secret' | 'task' | 'announcement' | 'company_doc' | 'warehouse_guide'
   title: string
   emptyText: string
   items: SearchResult[]
 }
 
-type CompanySecretSummary = {
-  id: string
-  title: string
-  username?: string | null
-  note?: string | null
-  secret?: string | null
-  updated_at?: string | null
-}
-
 type CompanyContentCache = {
   announcements: CompanyAnnouncement[]
-  workGuides: CompanyGuide[]
+  companyDocs?: CompanyDocument[]
+  workGuides?: CompanyDocument[]
   customerServiceManuals: CustomerServiceManual[]
   warehouseGuides: WarehouseGuide[]
-  secrets: CompanySecretSummary[]
+  secrets?: CompanyOfflinePassword[]
 }
 
 const COMPANY_CONTENT_CACHE_KEY = 'mzstay.notices.company-content.v1'
 const HISTORY_SEARCH_WINDOWS = [3, 6, 12] as const
+const PASSWORD_KIND_LABELS: Record<string, string> = {
+  office: '办公室密码',
+  mailbox: '信箱密码',
+  door_lock: '房门电子锁',
+  mailbox_lockbox: '信箱内密码盒',
+  garage_lockbox: '车库密码盒',
+  mailbox_key_lockbox: '存放信箱钥匙的密码盒',
+  locker: 'Locker',
+  backup_key: '备用钥匙密码盒',
+  company_rotating: '固定周期公司密码',
+  other: '其他',
+  password_box: '密码盒（历史类型）',
+}
 
 function formatTime(iso: string) {
   const d = new Date(iso)
@@ -151,6 +164,56 @@ function propertySearchSubtitle(task: WorkTask) {
   return [code, addr, wifiSsid ? `Wi-Fi ${wifiSsid}` : ''].filter(Boolean).join(' · ')
 }
 
+function passwordKindLabel(kind: string | null | undefined) {
+  const key = String(kind || '').trim()
+  return PASSWORD_KIND_LABELS[key] || '线下密码'
+}
+
+function offlinePasswordPropertyCodes(item: CompanyOfflinePassword) {
+  const codes = Array.isArray(item.property_codes)
+    ? item.property_codes.map((code) => String(code || '').trim()).filter(Boolean)
+    : []
+  const legacyCode = String(item.property_code || '').trim()
+  return Array.from(new Set([...codes, legacyCode].filter(Boolean)))
+}
+
+function offlinePasswordSecretText(item: CompanyOfflinePassword) {
+  const secret = String(item.secret || '').trim()
+  if (secret) return secret
+  if (item.has_key === false) return '暂不可用'
+  return '未配置'
+}
+
+function offlinePasswordBody(item: CompanyOfflinePassword) {
+  const lines: string[] = []
+  const kind = passwordKindLabel(item.secret_kind)
+  const codes = offlinePasswordPropertyCodes(item)
+  const box = String(item.box_number || '').trim()
+  const location = String(item.location || '').trim()
+  const note = String(item.note || '').trim()
+  const updatedAt = String(item.updated_at || '').trim()
+  lines.push(`类型：${kind}`)
+  if (codes.length) lines.push(`关联房源：${codes.join('、')}`)
+  if (box) lines.push(`密码盒编号：${box}`)
+  if (location) lines.push(`位置：${location}`)
+  lines.push(`密码：${offlinePasswordSecretText(item)}`)
+  if (note) lines.push(`备注：${note}`)
+  if (updatedAt) lines.push(`更新时间：${updatedAt}`)
+  return lines.join('\n')
+}
+
+function offlinePasswordSubtitle(item: CompanyOfflinePassword) {
+  const parts = [passwordKindLabel(item.secret_kind)]
+  const codes = offlinePasswordPropertyCodes(item)
+  const box = String(item.box_number || '').trim()
+  const location = String(item.location || '').trim()
+  if (codes.length) parts.push(`房源 ${codes.join('、')}`)
+  if (box) parts.push(`盒号 ${box}`)
+  if (location) parts.push(location)
+  parts.push(`密码：${offlinePasswordSecretText(item)}`)
+  return parts.filter(Boolean).join(' · ')
+}
+
 function announcementSubtitle(item: CompanyAnnouncement) {
   return `${item.urgent ? '紧急公告 · ' : ''}${item.published_at ? item.published_at : '已发布'}`
 }
@@ -166,28 +229,48 @@ function preferredGuideRoleOf(user: any): CompanyGuideRole {
   return currentGuideRoleOf(user) || 'cleaner'
 }
 
-function sortGuidesForRole(guides: CompanyGuide[], preferredRole: CompanyGuideRole) {
-  return guides
-    .map((guide, idx) => ({ guide, idx }))
+const COMPANY_DOC_CATEGORY_ORDER: CompanyContentCategory[] = ['starter_guide', 'role_guide', 'work_guide', 'company_rule', 'customer_service_manual']
+
+function sortCompanyDocsForRole(docs: CompanyDocument[], preferredRole: CompanyGuideRole) {
+  return docs
+    .map((doc, idx) => ({ doc, idx }))
     .sort((a, b) => {
       const rank = (role: CompanyGuideRole | null | undefined) => {
         if (role === preferredRole) return 0
         if (!role) return 1
         return 2
       }
-      const diff = rank(a.guide.guide_role) - rank(b.guide.guide_role)
-      if (diff !== 0) return diff
+      const roleDiff = rank(a.doc.guide_role) - rank(b.doc.guide_role)
+      if (roleDiff !== 0) return roleDiff
+      const categoryRank = (category: CompanyContentCategory | null | undefined) => {
+        const idx = COMPANY_DOC_CATEGORY_ORDER.indexOf(category as CompanyContentCategory)
+        return idx >= 0 ? idx : 99
+      }
+      const categoryDiff = categoryRank(a.doc.category) - categoryRank(b.doc.category)
+      if (categoryDiff !== 0) return categoryDiff
       return a.idx - b.idx
     })
-    .map((item) => item.guide)
+    .map((item) => item.doc)
 }
 
-function filterGuidesForCurrentRole(guides: CompanyGuide[], currentRole: CompanyGuideRole | null) {
-  if (!currentRole) return guides
-  return guides.filter((guide) => {
-    const role = guide.guide_role || null
+function filterCompanyDocsForCurrentRole(docs: CompanyDocument[], currentRole: CompanyGuideRole | null) {
+  if (!currentRole) return docs
+  return docs.filter((doc) => {
+    const role = doc.guide_role || null
     return !role || role === currentRole
   })
+}
+
+function mergeCompanyDocs(docRows: CompanyDocument[], manualRows: CustomerServiceManual[]) {
+  const docs = Array.isArray(docRows) ? docRows : []
+  const manuals = (Array.isArray(manualRows) ? manualRows : []).map((manual) => ({
+    ...manual,
+    page_type: 'doc' as const,
+    category: 'customer_service_manual' as const,
+  }))
+  if (!manuals.length) return docs
+  const docsWithoutManual = docs.filter((doc) => doc.category !== 'customer_service_manual')
+  return [...docsWithoutManual, ...manuals]
 }
 
 export default function NoticesScreen(props: Props) {
@@ -201,11 +284,12 @@ export default function NoticesScreen(props: Props) {
   const [loadingMore, setLoadingMore] = useState(false)
   const [showUnreadOnly, setShowUnreadOnly] = useState(false)
   const [query, setQuery] = useState('')
-  const [secrets, setSecrets] = useState<CompanySecretSummary[]>([])
+  const [secrets, setSecrets] = useState<CompanyOfflinePassword[]>([])
+  const [secretsAvailable, setSecretsAvailable] = useState(false)
   const [historyTasks, setHistoryTasks] = useState<WorkTask[]>([])
   const [announcements, setAnnouncements] = useState<CompanyAnnouncement[]>([])
   const [announcementIndex, setAnnouncementIndex] = useState(0)
-  const [workGuides, setWorkGuides] = useState<CompanyGuide[]>([])
+  const [companyDocs, setCompanyDocs] = useState<CompanyDocument[]>([])
   const [customerServiceManuals, setCustomerServiceManuals] = useState<CustomerServiceManual[]>([])
   const [warehouseGuides, setWarehouseGuides] = useState<WarehouseGuide[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
@@ -218,13 +302,13 @@ export default function NoticesScreen(props: Props) {
   const canSearchAllTaskHistory = isTaskManagerUser(user)
   const currentGuideRole = useMemo(() => currentGuideRoleOf(user), [user])
   const preferredGuideRole = useMemo(() => preferredGuideRoleOf(user), [user])
-  const visibleWorkGuides = useMemo(() => filterGuidesForCurrentRole(workGuides, currentGuideRole), [currentGuideRole, workGuides])
-  const orderedWorkGuides = useMemo(() => sortGuidesForRole(visibleWorkGuides, preferredGuideRole), [preferredGuideRole, visibleWorkGuides])
+  const visibleCompanyDocs = useMemo(() => filterCompanyDocsForCurrentRole(companyDocs, currentGuideRole), [companyDocs, currentGuideRole])
+  const orderedCompanyDocs = useMemo(() => sortCompanyDocsForRole(visibleCompanyDocs, preferredGuideRole), [preferredGuideRole, visibleCompanyDocs])
 
   const snap = getNoticesSnapshot()
   const hasAnyUnread = Object.keys(snap.unreadIds || {}).length > 0
   const announcementCardWidth = useMemo(() => Math.max(280, windowWidth - 32), [windowWidth])
-  const featuredGuides = orderedWorkGuides.slice(0, 5)
+  const featuredCompanyDocs = orderedCompanyDocs.slice(0, 8)
 
   useEffect(() => {
     if (!announcements.length) {
@@ -254,15 +338,15 @@ export default function NoticesScreen(props: Props) {
       await initNoticesStore()
       const cachedContent = await getJson<CompanyContentCache>(COMPANY_CONTENT_CACHE_KEY)
       if (cachedContent) {
-        if (Array.isArray(cachedContent.secrets)) setSecrets(cachedContent.secrets)
         if (Array.isArray(cachedContent.announcements)) setAnnouncements(cachedContent.announcements)
-        if (Array.isArray(cachedContent.workGuides)) setWorkGuides(cachedContent.workGuides)
+        const cachedDocs = Array.isArray(cachedContent.companyDocs) ? cachedContent.companyDocs : cachedContent.workGuides
+        const cachedManuals = Array.isArray(cachedContent.customerServiceManuals) ? cachedContent.customerServiceManuals : []
+        if (Array.isArray(cachedDocs)) setCompanyDocs(mergeCompanyDocs(cachedDocs, cachedManuals))
         if (Array.isArray(cachedContent.customerServiceManuals)) setCustomerServiceManuals(cachedContent.customerServiceManuals)
         if (Array.isArray(cachedContent.warehouseGuides)) setWarehouseGuides(cachedContent.warehouseGuides)
         companyContentLoadedRef.current =
-          Array.isArray(cachedContent.secrets) ||
           Array.isArray(cachedContent.announcements) ||
-          Array.isArray(cachedContent.workGuides) ||
+          Array.isArray(cachedDocs) ||
           Array.isArray(cachedContent.customerServiceManuals) ||
           Array.isArray(cachedContent.warehouseGuides)
       }
@@ -284,20 +368,26 @@ export default function NoticesScreen(props: Props) {
     const [secretRows, announceRows, guideRows, manualRows, warehouseRows] = await Promise.allSettled([
       listCompanySecretsForApp(token),
       listCompanyAnnouncementsForApp(token),
-      listWorkGuidesForApp(token),
+      listCompanyDocsForApp(token),
       listCustomerServiceManualsForApp(token),
       listWarehouseGuidesForApp(token),
     ])
-    if (secretRows.status === 'fulfilled' && Array.isArray(secretRows.value)) setSecrets(secretRows.value)
+    if (secretRows.status === 'fulfilled' && Array.isArray(secretRows.value)) {
+      setSecrets(secretRows.value)
+      setSecretsAvailable(true)
+    }
     if (announceRows.status === 'fulfilled' && Array.isArray(announceRows.value)) setAnnouncements(announceRows.value)
-    if (guideRows.status === 'fulfilled' && Array.isArray(guideRows.value)) setWorkGuides(guideRows.value)
     if (manualRows.status === 'fulfilled' && Array.isArray(manualRows.value)) setCustomerServiceManuals(manualRows.value)
     if (warehouseRows.status === 'fulfilled' && Array.isArray(warehouseRows.value)) setWarehouseGuides(warehouseRows.value)
-    const nextSecrets = secretRows.status === 'fulfilled' && Array.isArray(secretRows.value) ? secretRows.value : secrets
     const nextAnnouncements = announceRows.status === 'fulfilled' && Array.isArray(announceRows.value) ? announceRows.value : announcements
-    const nextWorkGuides = guideRows.status === 'fulfilled' && Array.isArray(guideRows.value) ? guideRows.value : workGuides
     const nextCustomerServiceManuals = manualRows.status === 'fulfilled' && Array.isArray(manualRows.value) ? manualRows.value : customerServiceManuals
+    const rawCompanyDocs = guideRows.status === 'fulfilled' && Array.isArray(guideRows.value) ? guideRows.value : companyDocs
+    const nextCompanyDocs = mergeCompanyDocs(rawCompanyDocs, nextCustomerServiceManuals)
     const nextWarehouseGuides = warehouseRows.status === 'fulfilled' && Array.isArray(warehouseRows.value) ? warehouseRows.value : warehouseGuides
+    if (
+      (guideRows.status === 'fulfilled' && Array.isArray(guideRows.value)) ||
+      (manualRows.status === 'fulfilled' && Array.isArray(manualRows.value))
+    ) setCompanyDocs(nextCompanyDocs)
     if (
       (secretRows.status === 'fulfilled' && Array.isArray(secretRows.value)) ||
       (announceRows.status === 'fulfilled' && Array.isArray(announceRows.value)) ||
@@ -306,9 +396,8 @@ export default function NoticesScreen(props: Props) {
       (warehouseRows.status === 'fulfilled' && Array.isArray(warehouseRows.value))
     ) {
       await setJson<CompanyContentCache>(COMPANY_CONTENT_CACHE_KEY, {
-        secrets: nextSecrets,
         announcements: nextAnnouncements,
-        workGuides: nextWorkGuides,
+        companyDocs: nextCompanyDocs,
         customerServiceManuals: nextCustomerServiceManuals,
         warehouseGuides: nextWarehouseGuides,
       })
@@ -444,10 +533,10 @@ export default function NoticesScreen(props: Props) {
     if (!q) return [] as SearchSection[]
     const workItems = getWorkTasksSnapshot().items || []
     const propertyResults: SearchResult[] = []
+    const secretResults: SearchResult[] = []
     const taskResults: SearchResult[] = []
     const announcementResults: SearchResult[] = []
-    const guideResults: SearchResult[] = []
-    const customerServiceManualResults: SearchResult[] = []
+    const companyDocResults: SearchResult[] = []
     const warehouseGuideResults: SearchResult[] = []
     const seen = new Set<string>()
 
@@ -476,6 +565,34 @@ export default function NoticesScreen(props: Props) {
         copyText: addr || null,
       })
       if (propertyResults.length >= 8) break
+    }
+
+    for (const secret of secrets) {
+      const title = String(secret.title || '').trim()
+      const kind = passwordKindLabel(secret.secret_kind)
+      const codes = offlinePasswordPropertyCodes(secret)
+      const propertyIds = Array.isArray(secret.property_ids)
+        ? secret.property_ids.map((id) => String(id || '').trim()).filter(Boolean)
+        : []
+      const box = String(secret.box_number || '').trim()
+      const location = String(secret.location || '').trim()
+      const note = String(secret.note || '').trim()
+      const status = String(secret.status || '').trim()
+      const hay = `${title} ${kind} ${codes.join(' ')} ${propertyIds.join(' ')} ${box} ${location} ${note} ${status}`.toLowerCase()
+      if (!hay.includes(q)) continue
+      const key = String(secret.id || '').trim()
+      if (!key || seen.has(`secret:${key}`)) continue
+      seen.add(`secret:${key}`)
+      secretResults.push({
+        id: `secret:${key}`,
+        kind: 'secret',
+        title: title || kind,
+        subtitle: offlinePasswordSubtitle(secret),
+        body: offlinePasswordBody(secret),
+        icon: 'key-outline',
+        secretId: key,
+      })
+      if (secretResults.length >= 12) break
     }
 
     for (const it of historyTasks) {
@@ -530,48 +647,29 @@ export default function NoticesScreen(props: Props) {
       if (announcementResults.length >= 8) break
     }
 
-    for (const guide of orderedWorkGuides) {
-      const title = String(guide.title || '').trim()
-      const body = companyContentBody(guide.content)
-      const summary = companyContentSummary(guide.content, '工作指南')
-      const roleLabel = companyGuideRoleLabel(guide.guide_role)
-      const hay = `${title} ${roleLabel} ${summary} ${body}`.toLowerCase()
+    for (const doc of orderedCompanyDocs) {
+      const title = String(doc.title || '').trim()
+      const body = companyContentBody(doc.content)
+      const categoryLabel = companyContentCategoryLabel(doc.category)
+      const summary = companyContentSummary(doc.content, categoryLabel)
+      const roleLabel = companyGuideRoleLabel(doc.guide_role)
+      const hay = `${title} ${categoryLabel} ${roleLabel} ${summary} ${body}`.toLowerCase()
       if (!hay.includes(q)) continue
-      const key = String(guide.id || '').trim()
-      if (!key || seen.has(`guide:${key}`)) continue
-      seen.add(`guide:${key}`)
-      guideResults.push({
-        id: `guide:${key}`,
+      const key = String(doc.id || '').trim()
+      if (!key || seen.has(`company-doc:${key}`)) continue
+      seen.add(`company-doc:${key}`)
+      companyDocResults.push({
+        id: `company-doc:${key}`,
         kind: 'guide',
-        title: title || '工作指南',
-        subtitle: roleLabel ? `${roleLabel} · ${summary}` : summary,
+        title: title || categoryLabel,
+        subtitle: [categoryLabel, roleLabel, summary].filter(Boolean).join(' · '),
         body,
-        contentRaw: guide.content || null,
-        guideRole: guide.guide_role || null,
+        contentRaw: doc.content || null,
+        docCategory: doc.category || null,
+        guideRole: doc.guide_role || null,
         icon: 'book-outline',
       })
-      if (guideResults.length >= 8) break
-    }
-
-    for (const manual of customerServiceManuals) {
-      const title = String(manual.title || '').trim()
-      const body = companyContentBody(manual.content)
-      const summary = companyContentSummary(manual.content, '客服手册')
-      const hay = `${title} ${summary} ${body}`.toLowerCase()
-      if (!hay.includes(q)) continue
-      const key = String(manual.id || '').trim()
-      if (!key || seen.has(`customer-service-manual:${key}`)) continue
-      seen.add(`customer-service-manual:${key}`)
-      customerServiceManualResults.push({
-        id: `customer-service-manual:${key}`,
-        kind: 'guide',
-        title: title || '客服手册',
-        subtitle: summary,
-        body,
-        contentRaw: manual.content || null,
-        icon: 'document-text-outline',
-      })
-      if (customerServiceManualResults.length >= 10) break
+      if (companyDocResults.length >= 12) break
     }
 
     for (const guide of warehouseGuides) {
@@ -597,26 +695,37 @@ export default function NoticesScreen(props: Props) {
 
     return [
       { key: 'property', title: '房源信息', emptyText: '没有匹配的房源信息，可试试房号、地址、Wi-Fi 或入住指南。', items: propertyResults },
+      ...(secretsAvailable || secretResults.length ? [{ key: 'secret' as const, title: '线下密码', emptyText: '没有匹配的线下密码。', items: secretResults }] : []),
       { key: 'task', title: '历史任务', emptyText: `最近 ${HISTORY_SEARCH_WINDOWS[historyWindowIndex]} 个月内没有匹配的历史任务。`, items: taskResults },
       { key: 'announcement', title: '公司公告', emptyText: '没有匹配的公司公告。', items: announcementResults },
-      { key: 'guide', title: '工作指南', emptyText: '没有匹配的工作指南。', items: guideResults },
-      { key: 'customer_service_manual', title: '客服手册/规定', emptyText: '没有匹配的客服手册或规定。', items: customerServiceManualResults },
+      { key: 'company_doc', title: '公司文档', emptyText: '没有匹配的公司文档。', items: companyDocResults },
       { key: 'warehouse_guide', title: '仓库指南', emptyText: '没有匹配的仓库指南。', items: warehouseGuideResults },
     ] satisfies SearchSection[]
-  }, [announcements, customerServiceManuals, historyTasks, historyWindowIndex, orderedWorkGuides, query, warehouseGuides])
+  }, [announcements, historyTasks, historyWindowIndex, orderedCompanyDocs, query, secrets, secretsAvailable, warehouseGuides])
 
   function openSearchResult(item: SearchResult) {
     if (item.kind === 'task' && item.taskId) {
       const isCleaningTask = String(item.taskSourceType || '').trim() === 'cleaning_tasks'
       const isInspection = isCleaningTask && String(item.taskKind || '').trim() === 'inspection'
-      const isManager = isTaskManagerUser(user)
-      const isInspector = isTaskInspectorUser(user)
-      if (isManager && isCleaningTask) {
+      const task = historyTasks.find((it) => String(it.id || '').trim() === item.taskId) || null
+      if (isTaskManagerUser(user) && isCleaningTask) {
         props.navigation.navigate('ManagerDailyTask', { taskId: item.taskId })
         return
       }
+      if (task && Array.isArray((task as any).available_actions)) {
+        const action = preferredNoticeActionForTask(task as any, {}, { roleNames: roleNamesOf(user) })
+        const route = action?.enabled ? navigationForWorkTaskAction(task as any, action) : null
+        if (route) {
+          props.navigation.navigate(route.screen as any, route.params as any)
+          return
+        }
+        props.navigation.navigate('TaskDetail', { id: item.taskId })
+        return
+      }
+      const isInspector = isTaskInspectorUser(user)
       if (isInspector && isInspection) {
-        props.navigation.navigate('InspectionPanel', { taskId: item.taskId })
+        const sourceId = String((task as any)?.source_id || '').trim()
+        props.navigation.navigate('InspectionPanel', { taskId: item.taskId, ...(sourceId ? { sourceId } : {}) })
         return
       }
       props.navigation.navigate('TaskDetail', { id: item.taskId })
@@ -628,6 +737,7 @@ export default function NoticesScreen(props: Props) {
       subtitle: item.subtitle,
       body: item.body,
       contentRaw: item.contentRaw || null,
+      docCategory: item.docCategory || null,
       guideRole: item.guideRole || null,
       url: item.url || null,
       copyText: item.copyText || null,
@@ -689,6 +799,8 @@ export default function NoticesScreen(props: Props) {
     const unread = !!getNoticesSnapshot().unreadIds[notice.id]
     const icon = notice.type === 'update' ? 'megaphone-outline' : notice.type === 'key' ? 'key-outline' : 'clipboard-outline'
     const img = notice.images[0] || null
+    const noticeData = (notice as any)?.data || {}
+    const noticeMedia = resolveNoticeMediaContext(noticeData)
     return (
       <Pressable
         onPress={() => {
@@ -708,7 +820,9 @@ export default function NoticesScreen(props: Props) {
             {notice.summary}
           </Text>
         </View>
-        {img ? <Image source={{ uri: img }} style={styles.noticeThumb} /> : null}
+        {img && noticeMedia && isNoticeMediaReferenceEligible(noticeData, img)
+          ? <CleaningMediaImage testID={`${noticeMedia.testIdPrefix}-thumbnail`} token={token} remoteReference={img} {...noticeMedia.access} variant="thumbnail" style={styles.noticeThumb} />
+          : null}
         <View style={styles.noticeRight}>
           <View style={styles.noticeTimeRow}>
             <Text style={styles.noticeTime}>{formatTime(notice.createdAt).split(' ')[1]}</Text>
@@ -724,7 +838,7 @@ export default function NoticesScreen(props: Props) {
     return (
       <>
         {renderAnnouncementRail()}
-        {renderGuideRail()}
+        {renderCompanyDocsRail()}
 
         <View style={styles.noticeSectionHead}>
           <Text style={styles.sectionTitle}>通知消息</Text>
@@ -766,6 +880,7 @@ export default function NoticesScreen(props: Props) {
             title: String(item.title || '公司公告'),
             subtitle: `${item.urgent ? '紧急公告 · ' : ''}${item.published_at ? formatTime(`${item.published_at}T00:00:00`).split(' ')[0] : '已发布'}`,
             body,
+            contentRaw: item.content || null,
           })
         }
         style={({ pressed }) => [styles.announcementCard, { width: announcementCardWidth }, pressed ? styles.rowPressed : null]}
@@ -850,31 +965,33 @@ export default function NoticesScreen(props: Props) {
     )
   }
 
-  function renderGuideRail() {
+  function renderCompanyDocsRail() {
     return (
       <View style={styles.sectionBlock}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>工作指南</Text>
+          <Text style={styles.sectionTitle}>公司文档</Text>
         </View>
-        {featuredGuides.length ? (
+        {featuredCompanyDocs.length ? (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.guideRail}>
-            {featuredGuides.map((guide) => {
-              const title = String(guide.title || '工作指南')
-              const body = companyContentBody(guide.content)
-              const summary = companyContentSummary(guide.content, '点击查看工作指南')
-              const roleLabel = companyGuideRoleLabel(guide.guide_role)
-              const isRecommended = !!currentGuideRole && guide.guide_role === currentGuideRole
+            {featuredCompanyDocs.map((doc) => {
+              const categoryLabel = companyContentCategoryLabel(doc.category)
+              const title = String(doc.title || categoryLabel)
+              const body = companyContentBody(doc.content)
+              const summary = companyContentSummary(doc.content, `点击查看${categoryLabel}`)
+              const roleLabel = companyGuideRoleLabel(doc.guide_role)
+              const isRecommended = !!currentGuideRole && doc.guide_role === currentGuideRole
               return (
                 <Pressable
-                  key={String(guide.id || title)}
+                  key={String(doc.id || title)}
                   onPress={() =>
                     props.navigation.navigate('InfoCenterDetail', {
                       kind: 'guide',
                       title,
-                      subtitle: guide.updated_at ? `更新于 ${formatTime(String(guide.updated_at)).replace('/', '-').replace('/', '-')}` : '工作指南',
+                      subtitle: doc.updated_at ? `${categoryLabel} · 更新于 ${formatTime(String(doc.updated_at)).replace('/', '-').replace('/', '-')}` : categoryLabel,
                       body,
-                      contentRaw: guide.content || null,
-                      guideRole: guide.guide_role || null,
+                      contentRaw: doc.content || null,
+                      docCategory: doc.category || null,
+                      guideRole: doc.guide_role || null,
                     })
                   }
                   style={({ pressed }) => [styles.guideCard, pressed ? styles.rowPressed : null]}
@@ -885,20 +1002,21 @@ export default function NoticesScreen(props: Props) {
                     </View>
                     <Ionicons name="chevron-forward" size={moderateScale(14)} color="#9CA3AF" />
                   </View>
-                  {roleLabel || isRecommended ? (
-                    <View style={styles.guideBadgeRow}>
-                      {roleLabel ? (
-                        <View style={styles.guideBadge}>
-                          <Text style={styles.guideBadgeText}>{roleLabel}</Text>
-                        </View>
-                      ) : null}
-                      {isRecommended ? (
-                        <View style={[styles.guideBadge, styles.guideBadgePrimary]}>
-                          <Text style={[styles.guideBadgeText, styles.guideBadgePrimaryText]}>适合你</Text>
-                        </View>
-                      ) : null}
+                  <View style={styles.guideBadgeRow}>
+                    <View style={styles.guideBadge}>
+                      <Text style={styles.guideBadgeText}>{categoryLabel}</Text>
                     </View>
-                  ) : null}
+                    {roleLabel ? (
+                      <View style={styles.guideBadge}>
+                        <Text style={styles.guideBadgeText}>{roleLabel}</Text>
+                      </View>
+                    ) : null}
+                    {isRecommended ? (
+                      <View style={[styles.guideBadge, styles.guideBadgePrimary]}>
+                        <Text style={[styles.guideBadgeText, styles.guideBadgePrimaryText]}>适合你</Text>
+                      </View>
+                    ) : null}
+                  </View>
                   <Text style={styles.guideTitle} numberOfLines={2}>
                     {title}
                   </Text>
@@ -915,8 +1033,8 @@ export default function NoticesScreen(props: Props) {
               <Ionicons name="book-outline" size={moderateScale(18)} color="#2563EB" />
             </View>
             <View style={styles.guidePlaceholderText}>
-              <Text style={styles.guidePlaceholderTitle}>工作指南暂未发布</Text>
-              <Text style={styles.guidePlaceholderSummary}>发布后会显示在这里，方便快速查看。</Text>
+              <Text style={styles.guidePlaceholderTitle}>公司文档暂未发布</Text>
+              <Text style={styles.guidePlaceholderSummary}>发布后会按制度、新手指南、角色说明和现场指南显示在这里。</Text>
             </View>
           </View>
         )}
@@ -948,7 +1066,7 @@ export default function NoticesScreen(props: Props) {
           value={query}
           onChangeText={setQuery}
           style={styles.searchInput}
-          placeholder="输入关键词搜索历史任务、客服手册、仓库指南、工作指南、公告、房源信息..."
+          placeholder="输入关键词搜索房源、线下密码、历史任务、公司文档、仓库指南、公告..."
           placeholderTextColor="#9CA3AF"
           autoCapitalize="none"
           autoCorrect={false}
@@ -966,7 +1084,7 @@ export default function NoticesScreen(props: Props) {
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           >
             {searchSections.map(renderSearchSection)}
-            {!hasAnySearchMatches ? <Text style={styles.emptyText}>暂无匹配内容，可试试房号、地址、Wi-Fi、客服规定、公告标题或指南关键词。</Text> : null}
+            {!hasAnySearchMatches ? <Text style={styles.emptyText}>暂无匹配内容，可试试房号、密码盒编号、位置、地址、Wi-Fi、客服规定、公告标题或指南关键词。</Text> : null}
           </ScrollView>
         </View>
       ) : (
@@ -1000,7 +1118,7 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#F6F7FB' },
   topBar: { paddingHorizontal: 16, paddingTop: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   pageTitle: { fontSize: moderateScale(22), fontWeight: '900', color: '#111827' },
-  bellBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  bellBtn: { width: layoutTokens.button.iconTouchSize, height: layoutTokens.button.iconTouchSize, borderRadius: layoutTokens.button.iconTouchSize / 2, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   bellDot: { position: 'absolute', right: 10, top: 10, width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#EF4444' },
 
   searchWrap: {
@@ -1185,14 +1303,15 @@ const styles = StyleSheet.create({
   searchEmptyText: { paddingVertical: 8, color: '#94A3B8', fontWeight: '700', fontSize: 12, lineHeight: 18 },
   searchMoreBtn: {
     marginTop: 2,
-    minHeight: 38,
+    minHeight: layoutTokens.button.height,
     borderRadius: 12,
     backgroundColor: '#EFF6FF',
     borderWidth: hairline(),
     borderColor: '#BFDBFE',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: layoutTokens.button.horizontalPadding,
+    paddingVertical: 0,
   },
   searchMoreBtnDisabled: { opacity: 0.7 },
   searchMoreBtnText: { color: '#2563EB', fontWeight: '900', fontSize: 13 },

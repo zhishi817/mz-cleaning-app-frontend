@@ -1,12 +1,42 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Image, ImageBackground, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
-import { defaultProfileFromUser, getProfile, setProfile, type Profile } from '../../lib/profileStore'
-import { getMyProfile, updateMyProfile, uploadMzappMedia } from '../../lib/api'
+import { defaultProfileFromUser, getProfile, PROFILE_DOCUMENT_PRESENT, profileDocumentPresence, setProfile, type Profile } from '../../lib/profileStore'
+import { getMyProfile, profileDocumentImageSource, type ProfileDocumentType, updateMyProfile, uploadMzappMedia } from '../../lib/api'
 import { hairline, moderateScale } from '../../lib/scale'
+import { layoutTokens } from '../../lib/theme'
+import AppButton from '../../components/ui/AppButton'
+
+const PROFILE_DOCUMENT_WATERMARK_LINES = [
+  '仅用于MZ Property（ABN：42 657 925 365）记录,不做任何其他用途。',
+  'For the records of MZ Property (ABN: 42 657 925 365) only, not for other purpose.',
+]
+const PROFILE_DOCUMENT_WATERMARK_ROWS = Array.from({ length: 11 }, (_, index) => index)
+
+function DocumentWatermarkOverlay() {
+  return (
+    <View pointerEvents="none" style={styles.documentWatermarkCanvas}>
+      {PROFILE_DOCUMENT_WATERMARK_ROWS.map((row) => {
+        const text = PROFILE_DOCUMENT_WATERMARK_LINES[row % PROFILE_DOCUMENT_WATERMARK_LINES.length]
+        return <Text key={row} style={styles.documentWatermarkLine}>{`${text}   ${text}`}</Text>
+      })}
+    </View>
+  )
+}
+
+type DocumentImageSource = { uri: string; headers?: { Authorization: string } }
+
+function DocumentWatermarkedPreview({ source, showPreviewWatermark, testID, onPress }: { source: DocumentImageSource; showPreviewWatermark: boolean; testID: string; onPress: () => void }) {
+  return (
+    <Pressable testID={testID} style={({ pressed }) => [styles.documentPreview, pressed ? styles.pressed : null]} onPress={onPress} accessibilityRole="button" accessibilityLabel="查看证件大图">
+      <Image source={source} style={styles.documentPreviewImage} resizeMode="cover" />
+      {showPreviewWatermark ? <DocumentWatermarkOverlay /> : null}
+    </Pressable>
+  )
+}
 
 function isValidName(name: string) {
   const n = name.trim()
@@ -47,6 +77,9 @@ function canEditComplianceFields(user: any) {
 }
 
 function profileFromRemote(remote: any, fallback: Profile): Profile {
+  const presenceFromRemote = (field: 'photo_id_uploaded' | 'visa_document_uploaded', cachedValue: string | null) => (
+    remote?.[field] === undefined ? profileDocumentPresence(cachedValue) : remote?.[field] ? PROFILE_DOCUMENT_PRESENT : null
+  )
   return {
     avatar_url: remote?.avatar_url || fallback.avatar_url || null,
     display_name: String(remote?.display_name || remote?.username || fallback.display_name || ''),
@@ -56,8 +89,24 @@ function profileFromRemote(remote: any, fallback: Profile): Profile {
     bank_bsb: String(remote?.bank_bsb || fallback.bank_bsb || ''),
     bank_account_number: String(remote?.bank_account_number || fallback.bank_account_number || ''),
     personal_abn: String(remote?.personal_abn || fallback.personal_abn || ''),
-    photo_id_url: remote?.photo_id_url || fallback.photo_id_url || null,
+    photo_id_url: presenceFromRemote('photo_id_uploaded', fallback.photo_id_url),
+    visa_document_url: presenceFromRemote('visa_document_uploaded', fallback.visa_document_url),
+    visa_grant_number: String(remote?.visa_grant_number || fallback.visa_grant_number || ''),
   }
+}
+
+function profileApiText(value: string) {
+  return String(value || '').trim()
+}
+
+function profileApiUrl(value: string | null) {
+  return String(value || '').trim()
+}
+
+function profileDocumentSource(token: string | null | undefined, type: ProfileDocumentType, localUri: string | null, persistedMarker: string | null): DocumentImageSource {
+  if (localUri) return { uri: localUri }
+  if (persistedMarker === PROFILE_DOCUMENT_PRESENT) return profileDocumentImageSource(token, type)
+  return { uri: '' }
 }
 
 async function pickSingleImage(t: (key: any) => string) {
@@ -81,10 +130,16 @@ export default function ProfileEditScreen() {
   const [saving, setSaving] = useState(false)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [uploadingPhotoId, setUploadingPhotoId] = useState(false)
+  const [uploadingVisaDocument, setUploadingVisaDocument] = useState(false)
   const [form, setForm] = useState<Profile>(() => defaultProfileFromUser(user))
   const [localAvatarUri, setLocalAvatarUri] = useState<string | null>(null)
   const [localPhotoIdUri, setLocalPhotoIdUri] = useState<string | null>(null)
+  const [localVisaDocumentUri, setLocalVisaDocumentUri] = useState<string | null>(null)
+  const [expandedDocument, setExpandedDocument] = useState<{ source: DocumentImageSource; showPreviewWatermark: boolean; title: string } | null>(null)
   const showComplianceFields = useMemo(() => canEditComplianceFields(user), [user])
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions()
+  const photoIdSource = profileDocumentSource(token, 'photo_id', localPhotoIdUri, form.photo_id_url)
+  const visaDocumentSource = profileDocumentSource(token, 'visa_document', localVisaDocumentUri, form.visa_document_url)
 
   const initials = useMemo(() => {
     const parts = form.display_name.trim().split(/\s+/g).filter(Boolean)
@@ -123,8 +178,8 @@ export default function ProfileEditScreen() {
       const next = profileFromRemote(updated, { ...form, avatar_url: up.url })
       setForm(next)
       await setProfile(user, next)
-    } catch {
-      Alert.alert(t('common_error'), t('profile_pick_failed'))
+    } catch (error: any) {
+      Alert.alert(t('common_error'), String(error?.message || t('profile_pick_failed')))
     } finally {
       setUploadingAvatar(false)
     }
@@ -143,16 +198,46 @@ export default function ProfileEditScreen() {
       setUploadingPhotoId(true)
       const name = String(asset?.fileName || uri.split('/').pop() || `photo-id-${Date.now()}.jpg`)
       const mimeType = String(asset?.mimeType || 'image/jpeg')
-      const up = await uploadMzappMedia(token, { uri, name, mimeType }, { watermark_mode: 'photo_id_full' })
-      const updated = await updateMyProfile(token, { photo_id_url: up.url })
-      const next = profileFromRemote(updated, { ...form, photo_id_url: up.url })
+      const up = await uploadMzappMedia(token, { uri, name, mimeType }, { watermark_mode: 'photo_id_full', profile_document_type: 'photo_id' })
+      if (!up.key) throw new Error('上传成功但未返回私有证件引用')
+      const updated = await updateMyProfile(token, { photo_id_url: up.key })
+      const next = profileFromRemote(updated, { ...form, photo_id_url: PROFILE_DOCUMENT_PRESENT })
       setForm(next)
       await setProfile(user, next)
+      setLocalPhotoIdUri(null)
       Alert.alert(t('common_ok'), t('common_saved'))
-    } catch {
-      Alert.alert(t('common_error'), t('profile_upload_failed'))
+    } catch (error: any) {
+      Alert.alert(t('common_error'), String(error?.message || t('profile_upload_failed')))
     } finally {
       setUploadingPhotoId(false)
+    }
+  }
+
+  async function pickVisaDocument() {
+    try {
+      const asset = await pickSingleImage(t)
+      const uri = String(asset?.uri || '').trim()
+      if (!uri) return
+      setLocalVisaDocumentUri(uri)
+      if (!token) {
+        Alert.alert(t('common_error'), '请先登录')
+        return
+      }
+      setUploadingVisaDocument(true)
+      const name = String(asset?.fileName || uri.split('/').pop() || `visa-document-${Date.now()}.jpg`)
+      const mimeType = String(asset?.mimeType || 'image/jpeg')
+      const up = await uploadMzappMedia(token, { uri, name, mimeType }, { watermark_mode: 'profile_document_full', profile_document_type: 'visa_document' })
+      if (!up.key) throw new Error('上传成功但未返回私有证件引用')
+      const updated = await updateMyProfile(token, { visa_document_url: up.key })
+      const next = profileFromRemote(updated, { ...form, visa_document_url: PROFILE_DOCUMENT_PRESENT })
+      setForm(next)
+      await setProfile(user, next)
+      setLocalVisaDocumentUri(null)
+      Alert.alert(t('common_ok'), t('common_saved'))
+    } catch (error: any) {
+      Alert.alert(t('common_error'), String(error?.message || t('profile_upload_failed')))
+    } finally {
+      setUploadingVisaDocument(false)
     }
   }
 
@@ -187,22 +272,22 @@ export default function ProfileEditScreen() {
       if (token) {
         const updated = await updateMyProfile(token, {
           display_name: cleaned.display_name,
-          phone_au: cleaned.phone_au || null,
-          avatar_url: cleaned.avatar_url,
-          legal_name: showComplianceFields ? (cleaned.legal_name || null) : undefined,
-          bank_account_name: showComplianceFields ? (cleaned.bank_account_name || null) : undefined,
-          bank_bsb: showComplianceFields ? (cleaned.bank_bsb || null) : undefined,
-          bank_account_number: showComplianceFields ? (cleaned.bank_account_number || null) : undefined,
-          personal_abn: showComplianceFields ? (cleaned.personal_abn || null) : undefined,
-          photo_id_url: showComplianceFields ? cleaned.photo_id_url : undefined,
+          phone_au: profileApiText(cleaned.phone_au),
+          avatar_url: profileApiUrl(cleaned.avatar_url),
+          legal_name: showComplianceFields ? profileApiText(cleaned.legal_name) : undefined,
+          bank_account_name: showComplianceFields ? profileApiText(cleaned.bank_account_name) : undefined,
+          bank_bsb: showComplianceFields ? profileApiText(cleaned.bank_bsb) : undefined,
+          bank_account_number: showComplianceFields ? profileApiText(cleaned.bank_account_number) : undefined,
+          personal_abn: showComplianceFields ? profileApiText(cleaned.personal_abn) : undefined,
+          visa_grant_number: showComplianceFields ? profileApiText(cleaned.visa_grant_number) : undefined,
         })
         Object.assign(cleaned, profileFromRemote(updated, cleaned))
       }
       await setProfile(user, cleaned)
       setForm(cleaned)
       Alert.alert(t('common_ok'), t('common_saved'))
-    } catch {
-      Alert.alert(t('common_error'), t('profile_save_failed'))
+    } catch (error: any) {
+      Alert.alert(t('common_error'), String(error?.message || t('profile_save_failed')))
     } finally {
       setSaving(false)
     }
@@ -309,8 +394,13 @@ export default function ProfileEditScreen() {
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>{t('profile_photo_id')}</Text>
               <Text style={styles.hint}>{t('profile_photo_id_hint')}</Text>
-              {localPhotoIdUri || form.photo_id_url ? (
-                <Image source={{ uri: localPhotoIdUri || form.photo_id_url || '' }} style={styles.photoIdImg} resizeMode="cover" />
+              {photoIdSource.uri ? (
+                <DocumentWatermarkedPreview
+                  source={photoIdSource}
+                  showPreviewWatermark={!!localPhotoIdUri}
+                  testID="profile-photo-id-preview"
+                  onPress={() => setExpandedDocument({ source: photoIdSource, showPreviewWatermark: !!localPhotoIdUri, title: t('profile_photo_id') })}
+                />
               ) : (
                 <View style={styles.photoIdPlaceholder}>
                   <Ionicons name="document-text-outline" size={24} color="#94A3B8" />
@@ -318,6 +408,7 @@ export default function ProfileEditScreen() {
                 </View>
               )}
               <Pressable
+                testID="profile-photo-id-upload"
                 onPress={pickPhotoId}
                 style={({ pressed }) => [styles.uploadBtn, pressed ? styles.pressed : null, uploadingPhotoId ? styles.actionDisabled : null]}
                 disabled={Platform.OS === 'web' || uploadingPhotoId}
@@ -326,13 +417,84 @@ export default function ProfileEditScreen() {
                 <Text style={styles.uploadBtnText}>{uploadingPhotoId ? t('task_uploading') : t('profile_photo_id_upload')}</Text>
               </Pressable>
             </View>
+
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t('profile_visa_information')}</Text>
+              <Text style={styles.hint}>{t('profile_visa_hint')}</Text>
+              <View style={styles.field}>
+                <Text style={styles.label}>{t('profile_visa_grant_number')}</Text>
+                <TextInput
+                  value={form.visa_grant_number}
+                  onChangeText={v => setField('visa_grant_number', v)}
+                  style={styles.input}
+                  placeholder={t('profile_visa_grant_number_placeholder')}
+                />
+              </View>
+              {visaDocumentSource.uri ? (
+                <DocumentWatermarkedPreview
+                  source={visaDocumentSource}
+                  showPreviewWatermark={!!localVisaDocumentUri}
+                  testID="profile-visa-document-preview"
+                  onPress={() => setExpandedDocument({ source: visaDocumentSource, showPreviewWatermark: !!localVisaDocumentUri, title: t('profile_visa_information') })}
+                />
+              ) : (
+                <View style={styles.photoIdPlaceholder}>
+                  <Ionicons name="document-text-outline" size={24} color="#94A3B8" />
+                  <Text style={styles.photoIdPlaceholderText}>{t('profile_visa_missing')}</Text>
+                </View>
+              )}
+              <Pressable
+                testID="profile-visa-document-upload"
+                onPress={pickVisaDocument}
+                style={({ pressed }) => [styles.uploadBtn, pressed ? styles.pressed : null, uploadingVisaDocument ? styles.actionDisabled : null]}
+                disabled={Platform.OS === 'web' || uploadingVisaDocument}
+              >
+                <Ionicons name="cloud-upload-outline" size={moderateScale(18)} color="#2563EB" />
+                <Text style={styles.uploadBtnText}>{uploadingVisaDocument ? t('task_uploading') : t('profile_visa_upload')}</Text>
+              </Pressable>
+            </View>
           </>
         ) : null}
 
-        <Pressable onPress={onSave} style={({ pressed }) => [styles.saveBtn, pressed ? styles.pressed : null, saving ? styles.saveDisabled : null]} disabled={saving}>
-          <Text style={styles.saveText}>{saving ? t('common_loading') : t('profile_save')}</Text>
-        </Pressable>
+        <AppButton label={t('profile_save')} loading={saving} disabled={saving} onPress={onSave} fullWidth style={styles.saveBtn} />
       </View>
+      <Modal visible={!!expandedDocument} transparent animationType="fade" onRequestClose={() => setExpandedDocument(null)}>
+        <View testID="profile-document-fullscreen" style={styles.documentFullscreenBackdrop}>
+          <Pressable testID="profile-document-fullscreen-backdrop" style={styles.documentFullscreenTapBackdrop} onPress={() => setExpandedDocument(null)} accessibilityRole="button" accessibilityLabel="关闭证件大图预览" />
+          {expandedDocument ? (
+            <View style={styles.documentFullscreenContent}>
+              <View style={styles.documentFullscreenTopBar}>
+                <Text style={styles.documentFullscreenTitle} numberOfLines={1}>{expandedDocument.title}</Text>
+                <Pressable testID="profile-document-fullscreen-close" onPress={() => setExpandedDocument(null)} style={({ pressed }) => [styles.documentFullscreenClose, pressed ? styles.pressed : null]} accessibilityRole="button" accessibilityLabel="关闭证件大图预览">
+                  <Ionicons name="close" size={moderateScale(22)} color="#FFFFFF" />
+                </Pressable>
+              </View>
+              <ScrollView
+                key={`profile-document:${expandedDocument.source.uri}`}
+                testID="profile-document-fullscreen-zoom"
+                style={styles.documentFullscreenScroll}
+                contentContainerStyle={styles.documentFullscreenScrollContent}
+                maximumZoomScale={4}
+                minimumZoomScale={1}
+                bouncesZoom
+                centerContent
+                showsHorizontalScrollIndicator={false}
+                showsVerticalScrollIndicator={false}
+              >
+                <ImageBackground
+                  source={expandedDocument.source}
+                  style={[styles.documentFullscreenImageWrap, { width: windowWidth, height: Math.max(320, windowHeight - 154) }]}
+                  imageStyle={styles.documentFullscreenImage}
+                  resizeMode="contain"
+                >
+                  {expandedDocument.showPreviewWatermark ? <DocumentWatermarkOverlay /> : null}
+                </ImageBackground>
+              </ScrollView>
+              <Text style={styles.documentFullscreenHint}>双指捏合可放大缩小，放大后拖动画面查看局部。</Text>
+            </View>
+          ) : null}
+        </View>
+      </Modal>
     </ScrollView>
   )
 }
@@ -359,10 +521,10 @@ const styles = StyleSheet.create({
   avatarImg: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#DBEAFE' },
   avatarText: { color: '#1D4ED8', fontSize: 18, fontWeight: '900' },
   avatarBtn: {
-    minHeight: 36,
+    minHeight: layoutTokens.button.height,
     borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: layoutTokens.button.horizontalPadding,
+    paddingVertical: 0,
     backgroundColor: '#EFF6FF',
     borderWidth: hairline(),
     borderColor: '#DBEAFE',
@@ -388,13 +550,41 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   hint: { marginTop: 8, color: '#6B7280', lineHeight: 20, fontWeight: '600' },
-  photoIdImg: {
+  documentPreview: {
     marginTop: 12,
     width: '100%',
     height: 180,
     borderRadius: 16,
     backgroundColor: '#E5E7EB',
+    overflow: 'hidden',
   },
+  documentPreviewImage: { width: '100%', height: '100%' },
+  documentWatermarkCanvas: {
+    position: 'absolute',
+    width: '165%',
+    height: '190%',
+    left: '-32%',
+    top: '-43%',
+    justifyContent: 'space-around',
+    transform: [{ rotate: '-24deg' }],
+  },
+  documentWatermarkLine: {
+    color: 'rgba(185, 28, 28, 0.58)',
+    fontSize: 11,
+    fontWeight: '900',
+    lineHeight: 17,
+  },
+  documentFullscreenBackdrop: { flex: 1, backgroundColor: 'rgba(2, 6, 23, 0.96)', paddingTop: 42, paddingBottom: 22 },
+  documentFullscreenTapBackdrop: { ...StyleSheet.absoluteFillObject },
+  documentFullscreenContent: { flex: 1 },
+  documentFullscreenTopBar: { paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  documentFullscreenTitle: { flex: 1, minWidth: 0, color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
+  documentFullscreenClose: { width: layoutTokens.button.iconTouchSize, height: layoutTokens.button.iconTouchSize, borderRadius: layoutTokens.button.iconTouchSize / 2, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
+  documentFullscreenScroll: { flex: 1, marginTop: 12 },
+  documentFullscreenScrollContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
+  documentFullscreenImageWrap: { overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  documentFullscreenImage: { width: '100%', height: '100%' },
+  documentFullscreenHint: { marginTop: 10, paddingHorizontal: 20, color: '#E5E7EB', fontSize: 12, textAlign: 'center' },
   photoIdPlaceholder: {
     marginTop: 12,
     height: 140,
@@ -409,10 +599,10 @@ const styles = StyleSheet.create({
   photoIdPlaceholderText: { color: '#64748B', fontWeight: '700' },
   uploadBtn: {
     marginTop: 12,
-    minHeight: 42,
+    minHeight: layoutTokens.button.height,
     borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingHorizontal: layoutTokens.button.horizontalPadding,
+    paddingVertical: 0,
     backgroundColor: '#EFF6FF',
     borderWidth: hairline(),
     borderColor: '#BFDBFE',
@@ -424,16 +614,8 @@ const styles = StyleSheet.create({
   uploadBtnText: { color: '#2563EB', fontWeight: '900', textAlign: 'center' },
   saveBtn: {
     marginTop: 20,
-    minHeight: 46,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    backgroundColor: '#2563EB',
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignSelf: 'stretch',
   },
-  saveDisabled: { backgroundColor: '#93C5FD' },
-  saveText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15, textAlign: 'center' },
   actionDisabled: { opacity: 0.6 },
   pressed: { opacity: 0.92 },
 })

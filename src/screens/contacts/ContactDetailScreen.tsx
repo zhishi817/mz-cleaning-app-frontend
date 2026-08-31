@@ -6,6 +6,7 @@ import { getContactsSnapshot, subscribeContactsSnapshot } from '../../lib/contac
 import { normalizeAuMobile } from '../../lib/phone'
 import { hairline, moderateScale } from '../../lib/scale'
 import type { ContactsStackParamList } from '../../navigation/RootNavigator'
+import { layoutTokens } from '../../lib/theme'
 
 type Props = NativeStackScreenProps<ContactsStackParamList, 'ContactDetail'>
 
@@ -113,8 +114,9 @@ const styles = StyleSheet.create({
     marginTop: 14,
     backgroundColor: '#2563EB',
     borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
+    minHeight: layoutTokens.button.height,
+    paddingVertical: 0,
+    paddingHorizontal: layoutTokens.button.horizontalPadding,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',

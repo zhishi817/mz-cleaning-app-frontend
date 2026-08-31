@@ -1,0 +1,236 @@
+const mockFileSet = new Set<string>(['file:///camera/lock-1.mov'])
+
+jest.mock('expo-file-system', () => {
+  class Directory {
+    uri: string
+
+    constructor(base: string, name: string) {
+      this.uri = `${String(base || '').replace(/\/+$/g, '')}/${String(name || '').replace(/^\/+/g, '')}`
+    }
+
+    create() {}
+  }
+
+  class File {
+    uri: string
+
+    constructor(parentOrUri: any, name?: string) {
+      if (parentOrUri && typeof parentOrUri === 'object' && 'uri' in parentOrUri && name) {
+        this.uri = `${String(parentOrUri.uri || '').replace(/\/+$/g, '')}/${String(name || '').replace(/^\/+/g, '')}`
+      } else {
+        this.uri = String(parentOrUri || '')
+      }
+    }
+
+    get exists() {
+      return mockFileSet.has(this.uri)
+    }
+
+    copy(target: { uri: string }) {
+      mockFileSet.add(String(target.uri || ''))
+    }
+
+    delete() {
+      mockFileSet.delete(this.uri)
+    }
+  }
+
+  return {
+    Directory,
+    File,
+    Paths: {
+      document: 'file:///documents',
+    },
+  }
+})
+
+jest.mock('./api', () => ({
+  ApiError: class ApiError extends Error {
+    status: number
+    code: string
+    retryable: boolean
+
+    constructor(message: string, status = 0, code = 'ERR', retryable = false) {
+      super(message)
+      this.status = status
+      this.code = code
+      this.retryable = retryable
+    }
+  },
+  isRetryableApiError: jest.fn(() => false),
+  uploadCleaningMedia: jest.fn(),
+  uploadCleaningVideo: jest.fn(),
+  uploadLockboxVideo: jest.fn(),
+  uploadSelfLockboxVideo: jest.fn(),
+}))
+
+function getAsyncStorage() {
+  return require('@react-native-async-storage/async-storage') as {
+    clear: () => Promise<void>
+  }
+}
+
+beforeEach(async () => {
+  jest.resetModules()
+  jest.clearAllMocks()
+  mockFileSet.clear()
+  mockFileSet.add('file:///camera/lock-1.mov')
+  await getAsyncStorage().clear()
+})
+
+test('retries lockbox business save without re-uploading the local video', async () => {
+  const api = require('./api') as {
+    uploadCleaningVideo: jest.Mock
+    uploadLockboxVideo: jest.Mock
+  }
+  api.uploadCleaningVideo.mockResolvedValue({ url: 'https://cdn.example.com/lock-1.mov' })
+  api.uploadLockboxVideo
+    .mockRejectedValueOnce(new Error('save lockbox failed'))
+    .mockResolvedValueOnce({ ok: true })
+
+  const queueMod = require('./inspectionMediaQueue') as typeof import('./inspectionMediaQueue')
+
+  await queueMod.enqueueInspectionMediaItem({
+    task_id: 'cleaning-task-1',
+    kind: 'lockbox_video',
+    source_uri: 'file:///camera/lock-1.mov',
+    name: 'lock-1.mov',
+    mime_type: 'video/quicktime',
+  })
+
+  const first = await queueMod.processInspectionMediaQueue('token-1')
+
+  expect(first).toEqual({ processed: 1, remaining: 1 })
+  expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
+  expect(api.uploadLockboxVideo).toHaveBeenCalledTimes(1)
+
+  const queuedAfterFirst = await queueMod.listInspectionMediaQueueItemsForTask('cleaning-task-1', ['lockbox_video'])
+  expect(queuedAfterFirst[0]).toMatchObject({
+    uploaded_url: 'https://cdn.example.com/lock-1.mov',
+    business_saved: false,
+    local_file_deleted_at: null,
+  })
+
+  const second = await queueMod.processInspectionMediaQueue('token-1')
+
+  expect(second).toEqual({ processed: 1, remaining: 0 })
+  expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
+  expect(api.uploadLockboxVideo).toHaveBeenCalledTimes(2)
+
+  const queuedAfterSecond = await queueMod.listInspectionMediaQueueItemsForTask('cleaning-task-1', ['lockbox_video'])
+  expect(queuedAfterSecond[0]).toMatchObject({
+    uploaded_url: 'https://cdn.example.com/lock-1.mov',
+    business_saved: true,
+  })
+  expect(queuedAfterSecond[0]?.local_file_deleted_at).toBeTruthy()
+})
+
+test('uses the self-complete business route while retaining the same local-first video queue', async () => {
+  const capturedAt = new Date().toISOString()
+  const api = require('./api') as {
+    uploadCleaningVideo: jest.Mock
+    uploadLockboxVideo: jest.Mock
+    uploadSelfLockboxVideo: jest.Mock
+  }
+  api.uploadCleaningVideo.mockResolvedValue({ url: 'https://cdn.example.com/self-complete-lock.mov' })
+  api.uploadSelfLockboxVideo.mockResolvedValue({ ok: true })
+
+  const queueMod = require('./inspectionMediaQueue') as typeof import('./inspectionMediaQueue')
+  await queueMod.enqueueInspectionMediaItem({
+    task_id: 'self-complete-task',
+    kind: 'lockbox_video',
+    source_uri: 'file:///camera/lock-1.mov',
+    name: 'self-complete-lock.mov',
+    mime_type: 'video/quicktime',
+    captured_at: capturedAt,
+    meta: { lockbox_submission_mode: 'self_complete' },
+  })
+
+  await queueMod.processInspectionMediaQueue('token-self-complete')
+
+  expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
+  expect(api.uploadSelfLockboxVideo).toHaveBeenCalledWith('token-self-complete', 'self-complete-task', {
+    media_url: 'https://cdn.example.com/self-complete-lock.mov',
+    captured_at: capturedAt,
+  })
+  expect(api.uploadLockboxVideo).not.toHaveBeenCalled()
+  const [queued] = await queueMod.listInspectionMediaQueueItemsForTask('self-complete-task', ['lockbox_video'])
+  expect(queued).toMatchObject({ business_saved: true, uploaded_url: 'https://cdn.example.com/self-complete-lock.mov' })
+})
+
+test('retries an interrupted uploading lockbox video after recovery', async () => {
+  const api = require('./api') as {
+    uploadCleaningVideo: jest.Mock
+    uploadLockboxVideo: jest.Mock
+  }
+  api.uploadCleaningVideo.mockResolvedValue({ url: 'https://cdn.example.com/lock-recovered.mov' })
+  api.uploadLockboxVideo.mockResolvedValue({ ok: true })
+
+  const queueMod = require('./inspectionMediaQueue') as typeof import('./inspectionMediaQueue')
+
+  const item = await queueMod.enqueueInspectionMediaItem({
+    task_id: 'cleaning-task-2',
+    kind: 'lockbox_video',
+    source_uri: 'file:///camera/lock-1.mov',
+    name: 'lock-1.mov',
+    mime_type: 'video/quicktime',
+  })
+  await queueMod.updateInspectionMediaItem(item.id, {
+    upload_status: 'uploading',
+    last_error: null,
+  })
+
+  const result = await queueMod.processInspectionMediaQueue('token-1')
+
+  expect(result).toEqual({ processed: 1, remaining: 0 })
+  expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
+  expect(api.uploadLockboxVideo).toHaveBeenCalledTimes(1)
+
+  const queuedAfterRecovery = await queueMod.listInspectionMediaQueueItemsForTask('cleaning-task-2', ['lockbox_video'])
+  expect(queuedAfterRecovery[0]).toMatchObject({
+    uploaded_url: 'https://cdn.example.com/lock-recovered.mov',
+    upload_status: 'uploaded',
+    business_saved: true,
+  })
+})
+
+test('marks a hung lockbox video upload as retryable after queue timeout', async () => {
+  jest.useFakeTimers()
+  const api = require('./api') as {
+    uploadCleaningVideo: jest.Mock
+    uploadLockboxVideo: jest.Mock
+    isRetryableApiError: jest.Mock
+  }
+  api.isRetryableApiError.mockImplementation((error: any) => !!error?.retryable)
+  api.uploadCleaningVideo.mockReturnValue(new Promise(() => {}))
+  api.uploadLockboxVideo.mockResolvedValue({ ok: true })
+
+  const queueMod = require('./inspectionMediaQueue') as typeof import('./inspectionMediaQueue')
+
+  await queueMod.enqueueInspectionMediaItem({
+    task_id: 'cleaning-task-timeout',
+    kind: 'lockbox_video',
+    source_uri: 'file:///camera/lock-1.mov',
+    name: 'lock-1.mov',
+    mime_type: 'video/quicktime',
+  })
+
+  const processing = queueMod.processInspectionMediaQueue('token-timeout')
+  await jest.advanceTimersByTimeAsync(75_100)
+  const result = await processing
+
+  expect(result).toEqual({ processed: 0, remaining: 1 })
+  expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
+  expect(api.uploadLockboxVideo).not.toHaveBeenCalled()
+
+  const queuedAfterTimeout = await queueMod.listInspectionMediaQueueItemsForTask('cleaning-task-timeout', ['lockbox_video'])
+  expect(queuedAfterTimeout[0]).toMatchObject({
+    upload_status: 'failed_retryable',
+    uploaded_url: null,
+    business_saved: false,
+  })
+  expect(queuedAfterTimeout[0].last_error).toContain('视频上传超时')
+  expect(queuedAfterTimeout[0].last_attempt_at).toBeTruthy()
+
+  jest.useRealTimers()
+})

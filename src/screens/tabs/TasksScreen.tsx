@@ -1,29 +1,62 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, AppState, Image, Linking, Modal, Pressable, RefreshControl, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
+import { Alert, AppState, Image, Linking, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { createCleaningOfflineTask, createManualCleaningTask, listCleaningAppPropertyCodes, reorderCleaningTasks, reorderWorkTasks } from '../../lib/api'
+import { layoutTokens } from '../../lib/theme'
+import { createCleaningOfflineTask, createManualCleaningTask, listCleaningAppPropertyCodes, listUsers, reorderMixedWorkTasks } from '../../lib/api'
 import { markGuestCheckedOutByOrder, markGuestCheckedOutByTasks } from '../../lib/api'
 import { listMzappAlerts, markMzappAlertRead } from '../../lib/api'
 import { getMyProfile } from '../../lib/api'
 import { listDayEndHandover } from '../../lib/api'
-import { listCleaningAppTasks } from '../../lib/api'
-import { createWarehouseKeyEvent, getWarehouseKeyStatus, type WarehouseKeyStatus } from '../../lib/api'
+import { listWorkTasks } from '../../lib/api'
+import { createWarehouseKeyEvent, getWarehouseKeyStatus, type WarehouseKeyStatus, type WorkTaskAvailableAction } from '../../lib/api'
 import { processDayEndHandoverQueue } from '../../lib/dayEndHandoverQueue'
-import { processKeyUploadQueue } from '../../lib/keyUploadQueue'
+import {
+  listKeyUploadQueueItems,
+  processKeyUploadQueue,
+  selectKeyPhotoEffectiveState,
+  subscribeKeyUploadQueue,
+} from '../../lib/keyUploadQueue'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import { getNoticesSnapshot, initNoticesStore, prependNotice, subscribeNotices } from '../../lib/noticesStore'
-import { getProfile, setProfile, type Profile } from '../../lib/profileStore'
-import { effectiveInspectionMode, inspectionModeLabel, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
+import { getProfile, PROFILE_DOCUMENT_PRESENT, profileDocumentPresence, setProfile, type Profile } from '../../lib/profileStore'
+import {
+  cleaningTaskTitleSuffix,
+  effectiveInspectionMode,
+  inspectionModeLabel,
+  inspectionScopeLabel,
+  isCheckinSiteExecutionTask,
+  isCleaningExecutionTask,
+  isInspectionExecutionTask,
+  isKeyHandoverExecutionTask,
+  isPasswordOnlyInspectionTask,
+  isSelfCompleteMode,
+  isStayoverTaskType,
+} from '../../lib/cleaningInspection'
 import { canSwitchTaskMode, isTaskManagerUser } from '../../lib/roles'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { resolveKeyRequirementTags } from '../../lib/keyRequirementTags'
 import { normalizeAuMobile } from '../../lib/phone'
+import { isPropertyFollowupTask, propertyFollowupTaskDetail, propertyFollowupTaskTitle } from '../../lib/propertyFollowupTaskDisplay'
+import {
+  allRelatedSourceIdsFromTask,
+  checkinTimeForDisplay,
+  checkoutTimeForDisplay,
+  executionTaskIdsForRole,
+  guestRequestForDisplay,
+  isEarlyCheckinDisplay,
+  isLateCheckinDisplay,
+  isLateCheckoutDisplay,
+  turnoverDisplayOf,
+} from '../../lib/turnoverDisplay'
+import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
+import { navigationForWorkTaskAction, primaryActionsForTask } from '../../lib/workTaskActions'
 import {
   activateWorkTasksRealtime,
   deactivateWorkTasksRealtime,
@@ -32,17 +65,32 @@ import {
   makeWorkTasksBucketKey,
   patchWorkTaskItem,
   patchWorkTaskItems,
-  refreshWorkTasksFromServer,
+  requestWorkTasksRefresh,
+  setWorkTasksRefreshForeground,
   subscribeWorkTasks,
   type WorkTaskItem,
   type WorkTasksView,
 } from '../../lib/workTasksStore'
-import type { TasksStackParamList } from '../../navigation/RootNavigator'
+import type { DayEndOverviewUser, DayEndRoleStats, DayEndTargetRole, TasksStackParamList } from '../../navigation/RootNavigator'
 
 type Period = 'today' | 'week' | 'month'
 type QuickCreateMode = 'checkout' | 'checkin' | 'offline'
+type QuickCreateOfflineTaskType = 'property' | 'company' | 'other'
 type QuickCreatePropertyOption = { id: string; code: string; region?: string | null }
+type QuickCreateUserOption = { id: string; username?: string | null; display_name?: string | null }
+type DayEndOverviewDisplayUser = DayEndOverviewUser & { displayRole: DayEndTargetRole }
 type Props = NativeStackScreenProps<TasksStackParamList, 'TasksList'>
+type TaskCacheHint = { message: string; lastSyncedAt: string | null } | null
+
+const QUICK_CREATE_OFFLINE_TASK_TYPES: { key: QuickCreateOfflineTaskType; label: string }[] = [
+  { key: 'property', label: '房源任务' },
+  { key: 'company', label: '公司任务' },
+  { key: 'other', label: '其他任务' },
+]
+
+function quickCreateUserName(user: QuickCreateUserOption) {
+  return String(user.display_name || user.username || user.id || '').trim() || user.id
+}
 
 function pad2(n: number) {
   return String(n).padStart(2, '0')
@@ -50,6 +98,21 @@ function pad2(n: number) {
 
 function ymd(d: Date) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+
+function formatSyncTimestamp(raw: string | null) {
+  const value = String(raw || '').trim()
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+}
+
+function buildTaskCacheHint(lastSyncedAt: string | null, failedRefresh = false): TaskCacheHint {
+  return {
+    message: failedRefresh ? '当前显示离线缓存，联网后下拉刷新。' : '已加载本地缓存，正在同步最新任务。',
+    lastSyncedAt: lastSyncedAt || null,
+  }
 }
 
 function parseYmd(value: string) {
@@ -78,6 +141,11 @@ function startOfWeekMonday(d: Date) {
   return nd
 }
 
+export function shouldScrollWeekRowToEnd(date: Date) {
+  const day = date.getDay()
+  return day === 0 || day >= 5
+}
+
 function daysInMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
 }
@@ -102,124 +170,216 @@ function isInspectorOnlyRole(roleNames: string[]) {
   return rs.includes('cleaning_inspector') && !rs.includes('cleaner') && !rs.includes('cleaner_inspector')
 }
 
-function checkoutTaskIdsFromTask(task: WorkTaskItem | null) {
-  if (!task || task.source_type !== 'cleaning_tasks') return []
-  return Array.from(
-    new Set(
-      [
-        ...(Array.isArray((task as any)?.cleaning_task_ids) ? (task as any).cleaning_task_ids : []),
-        ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
-        (task as any)?.source_id,
-      ]
-        .map((x) => String(x || '').trim())
-        .filter(Boolean),
-    ),
-  )
+function checkoutTaskIdsFromTask(task: WorkTaskItem | null, action?: WorkTaskAvailableAction | null) {
+  const actionSourceId = String(action?.source_id || '').trim()
+  if (actionSourceId) return [actionSourceId]
+  if (!task || !isCleaningExecutionTask(task)) return []
+  return executionTaskIdsForRole(task, 'cleaning')
 }
 
-function parseTimeMinutes(value: any) {
-  const raw = String(value || '').trim().toLowerCase()
-  if (!raw) return null
-  const s = raw.replace(/\s+/g, '')
-  const m12 = s.match(/^(\d{1,2})(?::(\d{1,2}))?(am|pm)$/)
-  if (m12) {
-    let hour = Number(m12[1] || 0)
-    const minute = Number(m12[2] || 0)
-    if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute < 0 || minute > 59) return null
-    hour = hour % 12
-    if (m12[3] === 'pm') hour += 12
-    return hour * 60 + minute
+function normalizeDayEndRoles(items: Array<string | DayEndTargetRole>) {
+  const roles = new Set<DayEndTargetRole>()
+  for (const item of items || []) {
+    if (item === 'cleaning' || item === 'inspection') roles.add(item)
   }
-  const m24 = s.match(/^(\d{1,2})(?::(\d{1,2}))?$/)
-  if (m24) {
-    const hour = Number(m24[1] || 0)
-    const minute = Number(m24[2] || 0)
-    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null
-    return hour * 60 + minute
+  return Array.from(roles.values()).sort()
+}
+
+function createDayEndRoleStats(): DayEndRoleStats {
+  return { assigned: 0, done: 0, pending: 0, activeRooms: [], doneRooms: [] }
+}
+
+function pushUniqueRoom(list: string[], roomCode: string) {
+  if (!roomCode || list.includes(roomCode)) return
+  list.push(roomCode)
+}
+
+function isInspectionWorkSubmitted(status0: any) {
+  const s = String(status0 || '').trim().toLowerCase()
+  return isDoneLikeStatus(s)
+}
+
+function applyDayEndRoleProgress(stats: DayEndRoleStats, status0: any, roomCode: string, isSubmitted: boolean) {
+  stats.assigned += 1
+  if (isSubmitted) {
+    stats.done += 1
+    pushUniqueRoom(stats.doneRooms, roomCode)
+    return
   }
-  return null
+  const status = String(status0 || '').trim().toLowerCase()
+  if (status === 'in_progress') {
+    pushUniqueRoom(stats.activeRooms, roomCode)
+    return
+  }
+  stats.pending += 1
 }
 
-function isEarlyCheckinTime(value: any) {
-  const mins = parseTimeMinutes(value)
-  return mins != null && mins < 15 * 60
+function formatDayEndRoleStats(label: string, stats?: DayEndRoleStats | null) {
+  if (!stats || stats.assigned <= 0) return ''
+  const parts = [`${label} ${stats.done}/${stats.assigned}`]
+  if (stats.activeRooms.length) parts.push(`进行中 ${stats.activeRooms.join('、')}`)
+  else if (stats.pending > 0) parts.push(`待处理 ${stats.pending}`)
+  if (stats.doneRooms.length) parts.push(`已完成 ${stats.doneRooms.join('、')}`)
+  return parts.join(' · ')
 }
 
-function isLateCheckoutTime(value: any) {
-  const mins = parseTimeMinutes(value)
-  return mins != null && mins > 10 * 60
+function dayEndRoleRank(roles: DayEndTargetRole[]) {
+  const normalized = normalizeDayEndRoles(roles)
+  if (normalized.includes('cleaning')) return 0
+  if (normalized.includes('inspection')) return 1
+  return 2
 }
 
-function buildDayEndOverviewBaseUsers(tasks: WorkTaskItem[]) {
-  const map = new Map<string, { userId: string; userName: string; roles: Set<string>; roomCodes: Set<string> }>()
+function compareDayEndOverviewUsers(a: DayEndOverviewUser, b: DayEndOverviewUser) {
+  const roleDelta = dayEndRoleRank(a.roles) - dayEndRoleRank(b.roles)
+  if (roleDelta) return roleDelta
+  const completionDelta = Number(a.complete === true) - Number(b.complete === true)
+  if (completionDelta) return completionDelta
+  return String(a.userName || a.userId || '').localeCompare(String(b.userName || b.userId || ''), 'en')
+}
+
+function compareDayEndOverviewDisplayUsers(a: DayEndOverviewDisplayUser, b: DayEndOverviewDisplayUser) {
+  const completionDelta = Number(a.complete === true) - Number(b.complete === true)
+  if (completionDelta) return completionDelta
+  return String(a.userName || a.userId || '').localeCompare(String(b.userName || b.userId || ''), 'en')
+}
+
+function buildDayEndOverviewDisplayUsers(users: DayEndOverviewUser[]): DayEndOverviewDisplayUser[] {
+  const cleaners: DayEndOverviewDisplayUser[] = []
+  const inspectors: DayEndOverviewDisplayUser[] = []
+  for (const entry of users || []) {
+    const cleaningAssigned = Number(entry.stats?.cleaning?.assigned || 0)
+    const inspectionAssigned = Number(entry.stats?.inspection?.assigned || 0)
+    if (cleaningAssigned > 0 || (cleaningAssigned <= 0 && entry.roles.includes('cleaning'))) {
+      cleaners.push({ ...entry, displayRole: 'cleaning' })
+    }
+    if (inspectionAssigned > 0 || (inspectionAssigned <= 0 && entry.roles.includes('inspection'))) {
+      inspectors.push({ ...entry, displayRole: 'inspection' })
+    }
+  }
+  return [
+    ...cleaners.sort(compareDayEndOverviewDisplayUsers),
+    ...inspectors.sort(compareDayEndOverviewDisplayUsers),
+  ]
+}
+
+function dayEndProgressIdentity(task: { id?: any; source_id?: any; title?: any; property?: { code?: any } | null }, code: string) {
+  return code || String(task.property?.code || task.title || '').trim() || String(task.source_id || task.id || '').trim()
+}
+
+function resolveCleaningProgressUserId(task: { task_kind?: any; assignee_id?: any; cleaner_id?: any; cleaner_name?: any; inspector_id?: any }) {
+  const cleanerId = String(task.cleaner_id || '').trim()
+  if (cleanerId) return cleanerId
+  const kind = String(task.task_kind || '').trim().toLowerCase()
+  const assigneeId = String(task.assignee_id || '').trim()
+  if (!assigneeId) return ''
+  if (kind === 'cleaning') return assigneeId
+  const cleanerName = String(task.cleaner_name || '').trim()
+  const inspectorId = String(task.inspector_id || '').trim()
+  if (cleanerName && assigneeId !== inspectorId) return assigneeId
+  return ''
+}
+
+function dayEndTargetContentLabel(roles: DayEndTargetRole[]) {
+  const hasCleaning = roles.includes('cleaning')
+  const hasInspection = roles.includes('inspection')
+  if (hasCleaning && hasInspection) return '清洁、检查与 Reject 床品'
+  if (hasInspection) return '消耗品与 Reject 床品'
+  return '备用钥匙、脏床品、仓库钥匙与 Reject 床品'
+}
+
+function buildDayEndOverviewBaseUsers(tasks: Array<{
+  task_kind?: any
+  execution_role?: any
+  execution_semantics?: any
+  source_type?: any
+  status?: any
+  cleaning_status?: any
+  inspection_status?: any
+  cleaning_task_ids?: any
+  inspection_task_ids?: any
+  assignee_id?: any
+  cleaner_id?: any
+  inspector_id?: any
+  assignee_name?: any
+  cleaner_name?: any
+  inspector_name?: any
+  id?: any
+  source_id?: any
+  title?: any
+  property?: { code?: any } | null
+}>): DayEndOverviewUser[] {
+  const map = new Map<string, { userId: string; userName: string; roles: Set<DayEndTargetRole>; roomCodes: Set<string>; stats: { cleaning: DayEndRoleStats; inspection: DayEndRoleStats } }>()
+  const seenRoleRooms = new Set<string>()
   for (const task of tasks || []) {
-    if (task.source_type !== 'cleaning_tasks') continue
-    const kind = String(task.task_kind || '').trim().toLowerCase()
     const st = String(task.status || '').trim().toLowerCase()
     if (st === 'cancelled' || st === 'canceled') continue
+    const kind = String(task.task_kind || '').trim().toLowerCase()
     const code = String(task.property?.code || '').trim()
-    if (kind === 'cleaning') {
-      const userId = String((task as any).cleaner_id || task.assignee_id || '').trim()
-      if (userId) {
-        const entry = map.get(userId) || { userId, userName: String((task as any).cleaner_name || '').trim(), roles: new Set<string>(), roomCodes: new Set<string>() }
-        entry.roles.add('cleaning')
-        if (!entry.userName) entry.userName = String((task as any).cleaner_name || '').trim()
-        if (code) entry.roomCodes.add(code)
-        map.set(userId, entry)
+    const hasCleaningWork =
+      isCleaningExecutionTask(task)
+      || (Array.isArray(task.cleaning_task_ids) && task.cleaning_task_ids.length > 0)
+      || !!String(task.cleaning_status || '').trim()
+    const hasInspectionWork =
+      isInspectionExecutionTask(task)
+      || (Array.isArray(task.inspection_task_ids) && task.inspection_task_ids.length > 0)
+      || !!String(task.inspection_status || '').trim()
+    if (hasCleaningWork) {
+      const cleanerId = resolveCleaningProgressUserId(task)
+      if (cleanerId) {
+        const cleaningStatus = String(task.cleaning_status || (kind === 'cleaning' ? task.status : '') || '').trim().toLowerCase()
+        const progressKey = ['cleaning', cleanerId, dayEndProgressIdentity(task, code)].join('|')
+        if (!seenRoleRooms.has(progressKey)) {
+          seenRoleRooms.add(progressKey)
+          const entry = map.get(cleanerId) || {
+            userId: cleanerId,
+            userName: String(task.cleaner_name || task.assignee_name || '').trim(),
+            roles: new Set<DayEndTargetRole>(),
+            roomCodes: new Set<string>(),
+            stats: { cleaning: createDayEndRoleStats(), inspection: createDayEndRoleStats() },
+          }
+          entry.roles.add('cleaning')
+          if (!entry.userName) entry.userName = String(task.cleaner_name || task.assignee_name || '').trim()
+          if (code) entry.roomCodes.add(code)
+          applyDayEndRoleProgress(entry.stats.cleaning, cleaningStatus, code, isCleaningWorkSubmitted(cleaningStatus))
+          map.set(cleanerId, entry)
+        }
       }
     }
-    if (kind === 'inspection') {
-      const userId = String((task as any).inspector_id || '').trim()
-      if (userId) {
-        const entry = map.get(userId) || { userId, userName: String((task as any).inspector_name || '').trim(), roles: new Set<string>(), roomCodes: new Set<string>() }
-        entry.roles.add('inspection')
-        if (!entry.userName) entry.userName = String((task as any).inspector_name || '').trim()
-        if (code) entry.roomCodes.add(code)
-        map.set(userId, entry)
+    if (hasInspectionWork) {
+      const inspectorId = String(task.inspector_id || (kind === 'inspection' ? task.assignee_id : '') || '').trim()
+      if (!inspectorId) continue
+      const inspectionStatus = String(task.inspection_status || (kind === 'inspection' ? task.status : '') || '').trim().toLowerCase()
+      const progressKey = ['inspection', inspectorId, dayEndProgressIdentity(task, code)].join('|')
+      if (seenRoleRooms.has(progressKey)) continue
+      seenRoleRooms.add(progressKey)
+      const entry = map.get(inspectorId) || {
+        userId: inspectorId,
+        userName: String(task.inspector_name || task.assignee_name || '').trim(),
+        roles: new Set<DayEndTargetRole>(),
+        roomCodes: new Set<string>(),
+        stats: { cleaning: createDayEndRoleStats(), inspection: createDayEndRoleStats() },
       }
+      entry.roles.add('inspection')
+      if (!entry.userName) entry.userName = String(task.inspector_name || task.assignee_name || '').trim()
+      if (code) entry.roomCodes.add(code)
+      applyDayEndRoleProgress(entry.stats.inspection, inspectionStatus, code, isInspectionWorkSubmitted(inspectionStatus))
+      map.set(inspectorId, entry)
     }
   }
   return Array.from(map.values())
     .map((entry) => ({
       userId: entry.userId,
       userName: entry.userName || entry.userId,
-      roles: Array.from(entry.roles.values()).sort(),
+      roles: normalizeDayEndRoles(Array.from(entry.roles.values())),
       roomCodes: Array.from(entry.roomCodes.values()).sort((a, b) => a.localeCompare(b, 'en')),
       complete: null,
+      stats: {
+        cleaning: { ...entry.stats.cleaning, activeRooms: entry.stats.cleaning.activeRooms.slice().sort((a, b) => a.localeCompare(b, 'en')), doneRooms: entry.stats.cleaning.doneRooms.slice().sort((a, b) => a.localeCompare(b, 'en')) },
+        inspection: { ...entry.stats.inspection, activeRooms: entry.stats.inspection.activeRooms.slice().sort((a, b) => a.localeCompare(b, 'en')), doneRooms: entry.stats.inspection.doneRooms.slice().sort((a, b) => a.localeCompare(b, 'en')) },
+      },
     }))
-    .sort((a, b) => a.userName.localeCompare(b.userName, 'en'))
-}
-
-function buildDayEndOverviewBaseUsersFromCleaningTasks(tasks: Array<any>) {
-  const map = new Map<string, { userId: string; userName: string; roles: Set<string>; roomCodes: Set<string> }>()
-  for (const task of tasks || []) {
-    const status = String(task?.status || '').trim().toLowerCase()
-    if (status === 'cancelled' || status === 'canceled') continue
-    const code = String(task?.property?.code || '').trim()
-    const cleanerId = String(task?.cleaner_id || task?.assignee_id || '').trim()
-    const inspectorId = String(task?.inspector_id || '').trim()
-    if (cleanerId) {
-      const entry = map.get(cleanerId) || { userId: cleanerId, userName: String(task?.cleaner_name || '').trim(), roles: new Set<string>(), roomCodes: new Set<string>() }
-      entry.roles.add('cleaning')
-      if (!entry.userName) entry.userName = String(task?.cleaner_name || '').trim()
-      if (code) entry.roomCodes.add(code)
-      map.set(cleanerId, entry)
-    }
-    if (inspectorId) {
-      const entry = map.get(inspectorId) || { userId: inspectorId, userName: String(task?.inspector_name || '').trim(), roles: new Set<string>(), roomCodes: new Set<string>() }
-      entry.roles.add('inspection')
-      if (!entry.userName) entry.userName = String(task?.inspector_name || '').trim()
-      if (code) entry.roomCodes.add(code)
-      map.set(inspectorId, entry)
-    }
-  }
-  return Array.from(map.values()).map((entry) => ({
-    userId: entry.userId,
-    userName: entry.userName || entry.userId,
-    roles: Array.from(entry.roles.values()).sort(),
-    roomCodes: Array.from(entry.roomCodes.values()).sort((a, b) => a.localeCompare(b, 'en')),
-    complete: false,
-  })).sort((a, b) => a.userName.localeCompare(b.userName, 'en'))
+    .sort(compareDayEndOverviewUsers)
 }
 
 function isCleaningWorkSubmitted(status0: any) {
@@ -265,7 +425,7 @@ function managerRegionRank(region0: string) {
 }
 
 function taskCleanerSortValue(task: WorkTaskItem) {
-  const cleanerName = String((task as any).cleaner_name || '').trim()
+  const cleanerName = String((task as any).executor_name || (task as any).cleaner_name || '').trim()
   const cleanerId = String((task as any).cleaner_id || task.assignee_id || '').trim()
   const inspectorName = String((task as any).inspector_name || '').trim()
   const inspectorId = String((task as any).inspector_id || '').trim()
@@ -279,6 +439,7 @@ function taskManagerSearchText(task: WorkTaskItem) {
     task.title,
     (task as any).region,
     task.property?.region,
+    (task as any).executor_name,
     (task as any).cleaner_name,
     (task as any).cleaner_id,
     task.assignee_id,
@@ -312,75 +473,39 @@ function compareManagerTaskGrouping(a: WorkTaskItem, b: WorkTaskItem) {
   return 0
 }
 
-function statusLabel(status: string) {
-  const s = String(status || '').trim().toLowerCase()
-  if (s === 'done' || s === 'completed') return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-  if (s === 'to_inspect') return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-  if (s === 'to_hang_keys') return { text: '待挂钥匙', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-  if (s === 'to_complete') return { text: '待完成', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-  if (s === 'keys_hung') return { text: '已挂钥匙', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-  if (s === 'in_progress') return { text: '进行中', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
-  if (s === 'assigned') return { text: '已分配', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
-  if (s === 'todo' || s === 'pending' || s === 'unassigned') return { text: '未分配', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-  if (s === 'cancelled' || s === 'canceled') return { text: '已取消', pill: styles.statusGray, textStyle: styles.statusTextGray }
-  return { text: '待处理', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
+function taskKindLabel(kind: string) {
+  const s = String(kind || '').trim().toLowerCase()
+  if (s === 'cleaning') return '清洁'
+  if (s === 'inspection') return '检查'
+  if (s === 'execution') return '执行'
+  if (s === 'maintenance') return '维修'
+  if (s === 'deep_cleaning') return '深清'
+  if (s === 'daily_necessities') return '日用品'
+  if (s === 'offline') return '线下'
+  if (s) return s
+  return '任务'
 }
 
-function statusLabelForTask(task: WorkTaskItem, roleNames: string[]) {
-  const s = String(task.status || '').trim().toLowerCase()
-  const meta = statusLabel(s)
-  const source = String(task.source_type || '').trim().toLowerCase()
-  const kind = String(task.task_kind || '').trim().toLowerCase()
-  if (source === 'cleaning_tasks' && kind === 'inspection') {
-    if (s === 'cleaned' || s === 'restock_pending' || s === 'restocked') {
-      return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-    }
-    return meta
-  }
-  if (source === 'cleaning_tasks' && kind === 'cleaning') {
-    const isCleanerView = isCleanerRole(roleNames)
-    const cleanerName = String((task as any).cleaner_name || '').trim()
-    const inspectorName = String((task as any).inspector_name || '').trim()
-    const hasExecutor = !!(cleanerName || inspectorName || String((task as any).assignee_id || '').trim() || String((task as any).inspector_id || '').trim())
-    const inspectionStatus = String((task as any).inspection_status || '').trim().toLowerCase()
-    const hasInspection = Array.isArray((task as any).inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
-    const inspectionMode = effectiveInspectionMode(task as any)
-    if (isDoneLikeStatus(s)) {
-      if (isCleanerView) return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-      if (inspectionMode === 'same_day' || inspectionMode === 'deferred' || hasInspection || inspectionStatus) {
-        if (inspectionStatus === 'keys_hung' || inspectionStatus === 'done' || inspectionStatus === 'completed') {
-          return { text: '已挂钥匙', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-        }
-        return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-      }
-      return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-    }
-    const checkedOutAt = String((task as any).checked_out_at || '').trim()
-    if (s === 'in_progress' || s === 'cleaning') return { text: '进行中', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
-    if (!hasExecutor && !checkedOutAt) return { text: '未分配', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-    if (s !== 'cancelled' && s !== 'canceled') {
-      if (checkedOutAt) return { text: '已退房', pill: styles.statusPurple, textStyle: styles.statusTextPurple }
-      return { text: '已分配', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
-    }
-    return meta
-  }
-  return meta
+function taskTagStylePair(tone: TaskTone) {
+  if (tone === 'special') return { container: styles.tagSpecial, text: styles.tagSpecialText }
+  if (tone === 'pending') return { container: styles.tagPending, text: styles.tagPendingText }
+  if (tone === 'danger') return { container: styles.tagDanger, text: styles.tagDangerText }
+  if (tone === 'success') return { container: styles.tagSuccess, text: styles.tagSuccessText }
+  if (tone === 'info') return { container: styles.tagInfo, text: styles.tagInfoText }
+  return { container: styles.tagNormal, text: styles.tagNormalText }
+}
+
+function statusPillStylePair(tone: TaskTone) {
+  if (tone === 'special') return { pill: styles.statusPurple, text: styles.statusTextPurple }
+  if (tone === 'pending') return { pill: styles.statusAmber, text: styles.statusTextAmber }
+  if (tone === 'success') return { pill: styles.statusGreen, text: styles.statusTextGreen }
+  if (tone === 'neutral') return { pill: styles.statusGray, text: styles.statusTextGray }
+  return { pill: styles.statusBlue, text: styles.statusTextBlue }
 }
 
 function isDoneLikeStatus(status0: string) {
   const s = String(status0 || '').trim().toLowerCase()
   return s === 'done' || s === 'completed' || s === 'ready' || s === 'keys_hung' || s === 'cleaned' || s === 'restock_pending' || s === 'restocked' || s === 'inspected'
-}
-
-function taskKindLabel(kind: string) {
-  const s = String(kind || '').trim().toLowerCase()
-  if (s === 'cleaning') return '清洁'
-  if (s === 'inspection') return '检查'
-  if (s === 'maintenance') return '维修'
-  if (s === 'deep_cleaning') return '深清'
-  if (s === 'offline') return '线下'
-  if (s) return s
-  return '任务'
 }
 
 function stripPhotoLines(text: any) {
@@ -419,33 +544,67 @@ function warehouseKeyEventText(action: string) {
   return '更新'
 }
 
-function warehouseKeyEventTimeText(value: any, currentDate: string) {
-  const raw = String(value || '').trim()
-  if (!raw) return ''
+export function formatWarehouseKeyLatestEvent(
+  event: Pick<WarehouseKeyStatus['events'][number], 'action' | 'actor_name' | 'created_at'> | null | undefined,
+  referenceDate = new Date(),
+) {
+  const action = warehouseKeyEventText(String(event?.action || ''))
+  const actorName = String(event?.actor_name || '').trim() || '未知'
+  const raw = String(event?.created_at || '').trim()
+  const baseText = `${actorName}${action}`
+  if (!raw) return baseText
   const normalized = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(raw)
     ? raw.replace(' ', 'T')
     : raw
   const d = new Date(normalized)
-  if (Number.isNaN(d.getTime())) return ''
+  if (Number.isNaN(d.getTime())) return baseText
+  const today = ymd(referenceDate)
+  const yesterday = ymd(addDays(referenceDate, -1))
   const date = ymd(d)
   const time = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
-  return date === String(currentDate || '').slice(0, 10) ? time : `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${time}`
+  if (date === today) return `${baseText} ${time}`
+  if (date === yesterday) return `昨天 ${baseText} ${time}`
+  return `${date} ${baseText} ${time}`
 }
 
 function isSouthbankCleaningTask(task: WorkTaskItem) {
-  if (task.source_type !== 'cleaning_tasks') return false
-  const kind = String(task.task_kind || '').trim().toLowerCase()
-  if (kind !== 'cleaning' && kind !== 'inspection') return false
+  if (!isCleaningExecutionTask(task) && !isInspectionExecutionTask(task) && !isKeyHandoverExecutionTask(task)) return false
   const status = String(task.status || '').trim().toLowerCase()
   if (status === 'cancelled' || status === 'canceled') return false
   const region = String(task.property?.region || '').trim().toLowerCase().replace(/\s+/g, '')
   return region.includes('southbank')
 }
 
+function isCleaningTaskAssignedToUser(task: WorkTaskItem, userId: string) {
+  const uid = String(userId || '').trim()
+  if (!uid) return false
+  const cleaning = isCleaningExecutionTask(task)
+  const inspection = isInspectionExecutionTask(task)
+  const handover = isKeyHandoverExecutionTask(task)
+  if (!cleaning && !inspection && !handover) return false
+  if (handover) return String(task.assignee_id || '').trim() === uid
+  if (inspection && !cleaning) return String((task as any).inspector_id || task.assignee_id || '').trim() === uid
+  if (cleaning && !inspection) return String((task as any).cleaner_id || task.assignee_id || '').trim() === uid
+  return String((task as any).cleaner_id || (task as any).inspector_id || task.assignee_id || '').trim() === uid
+}
+
+function hasMobileExecutor(task: WorkTaskItem) {
+  const cleaning = isCleaningExecutionTask(task)
+  const inspection = isInspectionExecutionTask(task)
+  const handover = isKeyHandoverExecutionTask(task)
+  if (!cleaning && !inspection && !handover) return !!String(task.assignee_id || '').trim()
+  if (handover) return !!String(task.assignee_id || '').trim()
+  if (inspection && !cleaning) return !!String((task as any).inspector_id || task.assignee_id || '').trim()
+  if (cleaning && !inspection) return !!String((task as any).cleaner_id || task.assignee_id || '').trim()
+  return !!String((task as any).cleaner_id || (task as any).inspector_id || task.assignee_id || '').trim()
+}
+
 export default function TasksScreen(props: Props) {
   const { status, user, token } = useAuth()
   const { locale, t } = useI18n()
-  const { width: windowWidth } = useWindowDimensions()
+  const { width: windowWidth, fontScale } = useWindowDimensions()
+  const prefersWrappedSegments = windowWidth < 360 || fontScale >= 1.25
+  const prefersCompactTaskHeader = windowWidth <= 390 || fontScale >= 1.1
   const roleNames = useMemo(() => {
     const arr = Array.isArray((user as any)?.roles) ? ((user as any).roles as any[]) : []
     const ids = arr.map((x) => String(x || '').trim()).filter(Boolean)
@@ -454,6 +613,7 @@ export default function TasksScreen(props: Props) {
     return Array.from(new Set(ids))
   }, [user])
   const canManagerMode = useMemo(() => isManagerRole(roleNames), [roleNames])
+  const canSeeDayEndOverview = useMemo(() => roleNames.includes('admin') || roleNames.includes('offline_manager'), [roleNames])
   const canTaskManagerView = useMemo(() => isTaskManagerUser(user), [user])
   const canSwitchMode = useMemo(() => canSwitchTaskMode(user), [user])
   const [mode, setMode] = useState<'cleaning' | 'manager'>('cleaning')
@@ -462,7 +622,7 @@ export default function TasksScreen(props: Props) {
   const [hasInit, setHasInit] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
-  const [view, setView] = useState<WorkTasksView>('mine')
+  const [view, setView] = useState<WorkTasksView>('all')
   const [reorderMode, setReorderMode] = useState(false)
   const [orderMarks, setOrderMarks] = useState<Record<string, string>>({})
   const [orderList, setOrderList] = useState<string[]>([])
@@ -471,10 +631,15 @@ export default function TasksScreen(props: Props) {
   const notifiedInspectionsRef = useRef<Record<string, boolean>>({})
   const [banner, setBanner] = useState<{ title: string; message: string } | null>(null)
   const [dayEndComplete, setDayEndComplete] = useState<boolean | null>(null)
-  const [dayEndOverviewUsers, setDayEndOverviewUsers] = useState<Array<{ userId: string; userName: string; roles: string[]; roomCodes: string[]; complete: boolean | null }>>([])
+  const [dayEndOverviewUsers, setDayEndOverviewUsers] = useState<DayEndOverviewUser[]>([])
+  const [dayEndOverviewLoading, setDayEndOverviewLoading] = useState(false)
+  const [staffProgressCollapsed, setStaffProgressCollapsed] = useState(true)
+  const [dayEndOverviewRevision, setDayEndOverviewRevision] = useState(0)
+  const dayEndOverviewByDateRef = useRef<Record<string, DayEndOverviewUser[]>>({})
   const [warehouseKey, setWarehouseKey] = useState<WarehouseKeyStatus | null>(null)
   const [warehouseKeyLoading, setWarehouseKeyLoading] = useState(false)
   const [warehouseKeyBusy, setWarehouseKeyBusy] = useState(false)
+  const [warehouseKeyExpanded, setWarehouseKeyExpanded] = useState(false)
   const [warehouseTransferOpen, setWarehouseTransferOpen] = useState(false)
   const [warehouseNote, setWarehouseNote] = useState('')
   const [quickCreateOpen, setQuickCreateOpen] = useState(false)
@@ -489,8 +654,11 @@ export default function TasksScreen(props: Props) {
   const [quickCreateGuestNote, setQuickCreateGuestNote] = useState('')
   const [quickCreateOfflineTitle, setQuickCreateOfflineTitle] = useState('')
   const [quickCreateOfflineContent, setQuickCreateOfflineContent] = useState('')
-  const [quickCreateUrgency, setQuickCreateUrgency] = useState<'low' | 'medium' | 'high' | 'urgent'>('medium')
+  const [quickCreateOfflineTaskType, setQuickCreateOfflineTaskType] = useState<QuickCreateOfflineTaskType>('other')
   const [quickCreatePropertyOptions, setQuickCreatePropertyOptions] = useState<QuickCreatePropertyOption[]>([])
+  const [quickCreateUsers, setQuickCreateUsers] = useState<QuickCreateUserOption[]>([])
+  const [quickCreateAssigneeId, setQuickCreateAssigneeId] = useState<string | null>(null)
+  const [quickCreateAssigneeOpen, setQuickCreateAssigneeOpen] = useState(false)
   const bannerTimerRef = useRef<any>(null)
   const [search, setSearch] = useState('')
   const weekRowRef = useRef<ScrollView>(null)
@@ -502,22 +670,87 @@ export default function TasksScreen(props: Props) {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [taskNoticeArmed, setTaskNoticeArmed] = useState(false)
   const [checkedOutPendingMap, setCheckedOutPendingMap] = useState<Record<string, boolean>>({})
+  const [taskCacheHint, setTaskCacheHint] = useState<TaskCacheHint>(null)
+  const [isShowingCachedTasks, setIsShowingCachedTasks] = useState(false)
+  const [collapsedTaskIds, setCollapsedTaskIds] = useState<Record<string, boolean>>({})
+  const [copiedFeedbackKey, setCopiedFeedbackKey] = useState<string | null>(null)
+  const copyFeedbackTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const allowDerivedTaskNotices = String(token || '').startsWith('local:')
+  const [keyQueueByTaskId, setKeyQueueByTaskId] = useState<Record<string, true>>({})
+
+  const reloadKeyQueueState = useCallback(async () => {
+    const items = await listKeyUploadQueueItems().catch(() => [])
+    const next: Record<string, true> = {}
+    for (const item of items || []) {
+      const key = String(item.cleaning_task_id || '').trim()
+      if (key) next[key] = true
+    }
+    setKeyQueueByTaskId(next)
+  }, [])
+
+  const handleTaskRefreshFailure = useCallback((message: string, preserveError: boolean) => {
+    const snapshot = getWorkTasksSnapshot()
+    const cachedItems = Array.isArray(snapshot.items) ? snapshot.items : []
+    if (cachedItems.length > 0) {
+      setIsShowingCachedTasks(true)
+      setTaskCacheHint(buildTaskCacheHint(snapshot.lastFullSyncTimestamp || null, true))
+      if (!preserveError) setLoadError(null)
+      return
+    }
+    setIsShowingCachedTasks(false)
+    setTaskCacheHint(null)
+    if (!preserveError) setLoadError(message)
+  }, [])
+
+  const toggleTaskCollapsed = useCallback((taskId: string) => {
+    setCollapsedTaskIds((prev) => {
+      const currentlyCollapsed = prev[taskId] ?? true
+      return { ...prev, [taskId]: !currentlyCollapsed }
+    })
+  }, [])
+
+  const flashCopiedFeedback = useCallback((key: string) => {
+    const prevTimer = copyFeedbackTimersRef.current[key]
+    if (prevTimer) clearTimeout(prevTimer)
+    setCopiedFeedbackKey(key)
+    copyFeedbackTimersRef.current[key] = setTimeout(() => {
+      setCopiedFeedbackKey((prev) => (prev === key ? null : prev))
+      delete copyFeedbackTimersRef.current[key]
+    }, 1600)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (bannerTimerRef.current) {
+        clearTimeout(bannerTimerRef.current)
+        bannerTimerRef.current = null
+      }
+      Object.values(copyFeedbackTimersRef.current).forEach((timer) => clearTimeout(timer))
+      copyFeedbackTimersRef.current = {}
+    }
+  }, [])
+
+  useEffect(() => {
+    void reloadKeyQueueState()
+    const unsubscribe = subscribeKeyUploadQueue(() => {
+      void reloadKeyQueueState()
+    })
+    return unsubscribe
+  }, [reloadKeyQueueState])
 
   function seedTaskNoticeBaseline(list: WorkTaskItem[]) {
     const next = { ...notifiedInspectionsRef.current }
     const isInspector = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
     if (isInspector && period === 'today') {
       for (const t of list) {
-        if (t.source_type === 'cleaning_tasks' && t.task_kind === 'inspection' && String(t.status || '').toLowerCase() === 'to_inspect') next[t.id] = true
+        if (isInspectionExecutionTask(t) && String(t.status || '').toLowerCase() === 'to_inspect') next[t.id] = true
       }
     }
     const role = String(user?.role || '')
     if (role === 'cleaning_inspector' || role === 'cleaner_inspector') {
       for (const t of list) {
         if (
-          t.source_type === 'cleaning_tasks' &&
-          t.task_kind === 'inspection' &&
+          isInspectionExecutionTask(t) &&
           String(t.status || '').toLowerCase() === 'in_progress' &&
           !!String((t as any).key_photo_url || '').trim()
         ) {
@@ -527,7 +760,7 @@ export default function TasksScreen(props: Props) {
     }
     if ((role === 'cleaner' || role === 'cleaner_inspector') && period === 'today') {
       for (const t of list) {
-        if (!(t.source_type === 'cleaning_tasks' && t.task_kind === 'cleaning')) continue
+        if (!isCleaningExecutionTask(t)) continue
         const raw = String((t as any).checked_out_at || '').trim()
         const ms = Date.parse(raw)
         if (raw && Number.isFinite(ms) && Date.now() - ms < 6 * 60 * 60 * 1000) next[`co:${t.id}`] = true
@@ -535,7 +768,7 @@ export default function TasksScreen(props: Props) {
     }
     if (canManagerMode && mode === 'manager' && period === 'today') {
       for (const t of list) {
-        if (t.source_type === 'cleaning_tasks' && t.task_kind === 'inspection' && String(t.status || '').toLowerCase() === 'keys_hung') {
+        if (isInspectionExecutionTask(t) && String(t.status || '').toLowerCase() === 'keys_hung') {
           next[`hung:${t.id}`] = true
         }
       }
@@ -549,8 +782,8 @@ export default function TasksScreen(props: Props) {
     return raw.includes('@') ? raw.split('@')[0] || raw : raw
   }, [user?.username])
   useEffect(() => {
-    if (!(canManagerMode && mode === 'manager' && period === 'today') && search) setSearch('')
-  }, [canManagerMode, mode, period, search])
+    if (!(canManagerMode && mode === 'manager') && search) setSearch('')
+  }, [canManagerMode, mode, search])
 
   useEffect(() => {
     let alive = true
@@ -573,7 +806,9 @@ export default function TasksScreen(props: Props) {
           bank_bsb: String(remote.bank_bsb || saved?.bank_bsb || ''),
           bank_account_number: String(remote.bank_account_number || saved?.bank_account_number || ''),
           personal_abn: String(remote.personal_abn || saved?.personal_abn || ''),
-          photo_id_url: remote.photo_id_url || saved?.photo_id_url || null,
+          photo_id_url: remote.photo_id_uploaded === undefined ? profileDocumentPresence(saved?.photo_id_url) : remote.photo_id_uploaded ? PROFILE_DOCUMENT_PRESENT : null,
+          visa_document_url: remote.visa_document_uploaded === undefined ? profileDocumentPresence(saved?.visa_document_url) : remote.visa_document_uploaded ? PROFILE_DOCUMENT_PRESENT : null,
+          visa_grant_number: String(remote.visa_grant_number || saved?.visa_grant_number || ''),
         }
         await setProfile(user, merged)
       } catch {}
@@ -611,7 +846,6 @@ export default function TasksScreen(props: Props) {
     }
     if (!canSwitchMode) {
       setMode('manager')
-      setView('all')
       return
     }
     ;(async () => {
@@ -632,7 +866,7 @@ export default function TasksScreen(props: Props) {
     }
     if (!canSwitchMode) {
       if (mode !== 'manager') setMode('manager')
-      if (view !== 'all') setView('all')
+      if (view !== 'all' && view !== 'mine') setView('all')
       return
     }
     if (mode === 'cleaning' && view !== 'mine') setView('mine')
@@ -672,30 +906,47 @@ export default function TasksScreen(props: Props) {
     return canManagerMode && mode === 'manager' ? view : 'mine'
   }, [canManagerMode, mode, view])
 
-  const refreshTasksData = useCallback(async (opts?: { silent?: boolean; preserveError?: boolean }) => {
+  const refreshTasksData = useCallback(async (opts?: { silent?: boolean; preserveError?: boolean; mode?: 'passive' | 'force'; reason?: string }) => {
     if (status !== 'signedIn' || !user?.id || !token) return
     const silent = opts?.silent === true
     const preserveError = opts?.preserveError === true
-    if (!silent) setRefreshing(true)
+    if (!silent) {
+      setRefreshing(true)
+      dayEndOverviewByDateRef.current = {}
+      setDayEndOverviewRevision((prev) => prev + 1)
+    }
     try {
       await Promise.all([processKeyUploadQueue(token), processDayEndHandoverQueue(token)])
-      await refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
-      await activateWorkTasksRealtime({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
+      await requestWorkTasksRefresh({
+        token,
+        userId: user.id,
+        date_from: range.date_from,
+        date_to: range.date_to,
+        view: effectiveView,
+        mode: opts?.mode || 'force',
+        reason: opts?.reason || 'tasks_screen_refresh',
+      })
+      const realtimeActive = await activateWorkTasksRealtime({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
+      if (!realtimeActive) return
       await maybeFetchSlaAlerts()
       seedTaskNoticeBaseline(getWorkTasksSnapshot().items || [])
       setTaskNoticeArmed(true)
+      setIsShowingCachedTasks(false)
+      setTaskCacheHint(null)
       setLoadError(null)
     } catch (e: any) {
-      if (!preserveError) setLoadError(String(e?.message || '加载失败'))
+      handleTaskRefreshFailure(String(e?.message || '加载失败'), preserveError)
       throw e
     } finally {
       if (!silent) setRefreshing(false)
     }
-  }, [effectiveView, range.date_from, range.date_to, status, token, user?.id])
+  }, [effectiveView, handleTaskRefreshFailure, range.date_from, range.date_to, status, token, user?.id])
 
   useEffect(() => {
     if (status === 'signedIn' && token && user?.id) return
     deactivateWorkTasksRealtime()
+    setTaskCacheHint(null)
+    setIsShowingCachedTasks(false)
   }, [status, token, user?.id])
 
   useEffect(() => {
@@ -705,27 +956,31 @@ export default function TasksScreen(props: Props) {
       setTaskNoticeArmed(false)
       await initNoticesStore().catch(() => null)
       const bucketKey = makeWorkTasksBucketKey({ userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
-      await initWorkTasksStore({ bucketKey })
-      if (cancelled) return
+      const hydrated = await initWorkTasksStore({ bucketKey, session: { token, userId: user.id } })
+      if (!hydrated || cancelled) return
+      const hydratedSnapshot = getWorkTasksSnapshot()
+      const hasCachedItems = Array.isArray(hydratedSnapshot.items) && hydratedSnapshot.items.length > 0
       setHasInit(true)
       setLoadError(null)
+      setIsShowingCachedTasks(hasCachedItems)
+      setTaskCacheHint(hasCachedItems ? buildTaskCacheHint(hydratedSnapshot.lastFullSyncTimestamp || null, false) : null)
       try {
-        await refreshTasksData({ silent: true })
+        await refreshTasksData({ silent: true, mode: 'force', reason: 'tasks_initial_load' })
       } catch (e: any) {
-        if (!cancelled) setLoadError(String(e?.message || '加载失败'))
+        if (!cancelled) handleTaskRefreshFailure(String((e as any)?.message || '加载失败'), false)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [effectiveView, range.date_from, range.date_to, refreshTasksData, status, token, user?.id])
+  }, [effectiveView, handleTaskRefreshFailure, range.date_from, range.date_to, refreshTasksData, status, token, user?.id])
 
   useEffect(() => {
     if (status !== 'signedIn' || !token || !user?.id) return
     const nav: any = props.navigation as any
     const onFocus = async () => {
       try {
-        await refreshTasksData({ silent: true, preserveError: true })
+        await refreshTasksData({ silent: true, preserveError: true, mode: 'passive', reason: 'tasks_screen_focus' })
       } catch {}
     }
     const unsub = nav && typeof nav.addListener === 'function' ? nav.addListener('focus', onFocus) : null
@@ -739,13 +994,15 @@ export default function TasksScreen(props: Props) {
   useEffect(() => {
     if (!token || !user?.id) return
     let cancelled = false
+    setWorkTasksRefreshForeground(AppState.currentState === 'active')
     const onAppActive = async () => {
       if (cancelled) return
       try {
-        await refreshTasksData({ silent: true, preserveError: true })
+        await refreshTasksData({ silent: true, preserveError: true, mode: 'passive', reason: 'tasks_app_active' })
       } catch {}
     }
     const sub = AppState.addEventListener('change', (nextState) => {
+      setWorkTasksRefreshForeground(nextState === 'active')
       if (nextState !== 'active') return
       void onAppActive()
     })
@@ -774,7 +1031,7 @@ export default function TasksScreen(props: Props) {
     const all = getWorkTasksSnapshot().items || []
     for (const task of all) {
       if (task.source_type !== 'cleaning_tasks') continue
-      const srcIds = Array.isArray((task as any).source_ids) ? ((task as any).source_ids as any[]).map(x => String(x)) : []
+      const srcIds = allRelatedSourceIdsFromTask(task)
       const srcId = String(task.source_id || '')
       for (const id of ids) {
         if (srcId === id || srcIds.includes(id)) return task
@@ -891,10 +1148,8 @@ export default function TasksScreen(props: Props) {
   useEffect(() => {
     if (period !== 'today') return
     const d = parseYmd(selectedDate)
-    const dow = d.getDay()
-    const isWeekend = dow === 0 || dow === 6
     const id = setTimeout(() => {
-      if (isWeekend) weekRowRef.current?.scrollToEnd({ animated: false })
+      if (shouldScrollWeekRowToEnd(d)) weekRowRef.current?.scrollToEnd({ animated: false })
       else weekRowRef.current?.scrollTo({ x: 0, y: 0, animated: false })
     }, 0)
     return () => clearTimeout(id)
@@ -989,7 +1244,12 @@ export default function TasksScreen(props: Props) {
   }
 
   const selectedTasks = useMemo(() => {
-    const list = (tasksByDate.get(selectedDate) || []).slice()
+    const list = (tasksByDate.get(selectedDate) || []).filter((task) => {
+      if (!(canManagerMode && mode === 'manager' && view === 'all')) return hasMobileExecutor(task)
+      if (isCleaningExecutionTask(task) || isInspectionExecutionTask(task) || isKeyHandoverExecutionTask(task)) return true
+      if (isPropertyFollowupTask(task)) return hasMobileExecutor(task)
+      return true
+    }).slice()
     list.sort((a, b) => {
       if (period === 'today') {
         const aStatus = String(a.status || '').trim().toLowerCase()
@@ -1007,9 +1267,11 @@ export default function TasksScreen(props: Props) {
       const sortDelta = taskSortIndexValue(a) - taskSortIndexValue(b)
       if (sortDelta) return sortDelta
 
-      const aIsCleaning = a.source_type === 'cleaning_tasks'
-      const bIsCleaning = b.source_type === 'cleaning_tasks'
-      if (!(aIsCleaning && bIsCleaning)) {
+      const aIsExecutionTask = isCleaningExecutionTask(a) || isInspectionExecutionTask(a) || isKeyHandoverExecutionTask(a)
+      const bIsExecutionTask = isCleaningExecutionTask(b) || isInspectionExecutionTask(b) || isKeyHandoverExecutionTask(b)
+      const aIsOfflineTask = String(a.task_kind || '').toLowerCase() === 'offline'
+      const bIsOfflineTask = String(b.task_kind || '').toLowerCase() === 'offline'
+      if (!(aIsExecutionTask && bIsExecutionTask) && !(aIsOfflineTask && bIsOfflineTask)) {
         const ur = urgencyRank(b.urgency) - urgencyRank(a.urgency)
         if (ur) return ur
       }
@@ -1017,20 +1279,24 @@ export default function TasksScreen(props: Props) {
       return String(a.title || '').localeCompare(String(b.title || ''))
     })
     return list
-  }, [canManagerMode, mode, period, selectedDate, tasksByDate])
+  }, [canManagerMode, mode, period, selectedDate, tasksByDate, view])
 
   const canReorder = useMemo(() => {
     if (roleNames.includes('cleaner') || roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')) return true
     if (canManagerMode && mode === 'manager') return false
-    return selectedTasks.some((task) => task.source_type !== 'cleaning_tasks')
+    return selectedTasks.some((task) => !isCleaningExecutionTask(task) && !isInspectionExecutionTask(task) && !isKeyHandoverExecutionTask(task))
   }, [canManagerMode, mode, selectedTasks, roleNames.join('|')])
 
   const isReorderableTask = useMemo(() => {
     return (task: WorkTaskItem) => {
-      if (task.source_type !== 'cleaning_tasks') return !(canManagerMode && mode === 'manager')
-      if (roleNames.includes('cleaner_inspector')) return task.task_kind === 'cleaning' || task.task_kind === 'inspection'
-      if (roleNames.includes('cleaning_inspector')) return task.task_kind === 'inspection'
-      if (roleNames.includes('cleaner')) return task.task_kind === 'cleaning'
+      const cleaning = isCleaningExecutionTask(task)
+      const inspection = isInspectionExecutionTask(task)
+      const handover = isKeyHandoverExecutionTask(task)
+      if (handover) return false
+      if (!cleaning && !inspection) return !(canManagerMode && mode === 'manager')
+      if (roleNames.includes('cleaner_inspector')) return cleaning || inspection
+      if (roleNames.includes('cleaning_inspector')) return inspection
+      if (roleNames.includes('cleaner')) return cleaning
       return false
     }
   }, [canManagerMode, mode, roleNames.join('|')])
@@ -1042,19 +1308,17 @@ export default function TasksScreen(props: Props) {
   }, [reorderMode, selectedDate])
 
   const renderTasks = useMemo(() => selectedTasks, [selectedTasks])
-  const dayEndDate = useMemo(() => ymd(new Date()), [])
+  const dayEndDate = selectedDate
+  const staffProgressTitle = dayEndDate === ymd(new Date()) ? '今日工作情况' : `${dayEndDate} 工作情况`
   const currentUserId = String((user as any)?.id || '').trim()
   const showWarehouseKeyCard = useMemo(() => {
     if (period !== 'today') return false
-    if (roleNames.includes('admin') || roleNames.includes('offline_manager')) return true
-    const southbankTasks = renderTasks.filter(isSouthbankCleaningTask)
-    if (!southbankTasks.length) return false
-    if (canManagerMode && mode === 'manager') return true
-    if (!(roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector') || roleNames.includes('cleaning_inspector'))) return false
-    return true
-  }, [canManagerMode, mode, period, renderTasks, roleNames.join('|')])
+    if (!currentUserId) return false
+    const managerCanViewSouthbankKeys = canSeeDayEndOverview && canManagerMode && mode === 'manager' && view === 'all'
+    return renderTasks.some((task) => isSouthbankCleaningTask(task) && (managerCanViewSouthbankKeys || isCleaningTaskAssignedToUser(task, currentUserId)))
+  }, [canManagerMode, canSeeDayEndOverview, currentUserId, mode, period, renderTasks, view])
   const loadWarehouseKey = useCallback(async () => {
-    if (!token || !showWarehouseKeyCard) return
+    if (!token || !showWarehouseKeyCard || !warehouseKeyExpanded) return
     setWarehouseKeyLoading(true)
     try {
       const data = await getWarehouseKeyStatus(token, { key_code: 'msq', date: dayEndDate })
@@ -1064,7 +1328,7 @@ export default function TasksScreen(props: Props) {
     } finally {
       setWarehouseKeyLoading(false)
     }
-  }, [dayEndDate, showWarehouseKeyCard, token])
+  }, [dayEndDate, showWarehouseKeyCard, token, warehouseKeyExpanded])
   const submitWarehouseKeyEvent = useCallback(async (action: 'borrow' | 'return' | 'handover', toUserId?: string) => {
     if (!token) return
     try {
@@ -1110,8 +1374,19 @@ export default function TasksScreen(props: Props) {
   }, [roleNames.join('|')])
   const isInspectorOnlySelf = useMemo(() => isInspectorOnlyRole(roleNames), [roleNames])
   useEffect(() => {
+    setWarehouseKeyExpanded(false)
+    setWarehouseTransferOpen(false)
+  }, [period, selectedDate])
+
+  useEffect(() => {
     if (!showWarehouseKeyCard) {
       setWarehouseKey(null)
+      setWarehouseKeyExpanded(false)
+      setWarehouseTransferOpen(false)
+      return
+    }
+    if (!warehouseKeyExpanded) {
+      setWarehouseTransferOpen(false)
       return
     }
     loadWarehouseKey()
@@ -1122,10 +1397,10 @@ export default function TasksScreen(props: Props) {
         if (typeof unsub === 'function') unsub()
       } catch {}
     }
-  }, [loadWarehouseKey, props.navigation, showWarehouseKeyCard])
+  }, [loadWarehouseKey, props.navigation, showWarehouseKeyCard, warehouseKeyExpanded])
 
   useEffect(() => {
-    if (!showWarehouseKeyCard) return
+    if (!showWarehouseKeyCard || !warehouseKeyExpanded) return
     let cancelled = false
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState !== 'active' || cancelled) return
@@ -1137,10 +1412,10 @@ export default function TasksScreen(props: Props) {
         sub.remove()
       } catch {}
     }
-  }, [loadWarehouseKey, showWarehouseKeyCard])
+  }, [loadWarehouseKey, showWarehouseKeyCard, warehouseKeyExpanded])
 
   useEffect(() => {
-    if (!showWarehouseKeyCard) return
+    if (!showWarehouseKeyCard || !warehouseKeyExpanded) return
     let cancelled = false
     const refreshForWarehouseNotice = () => {
       const notice = (getNoticesSnapshot().items || []).find((item) => {
@@ -1161,58 +1436,59 @@ export default function TasksScreen(props: Props) {
         unsub()
       } catch {}
     }
-  }, [loadWarehouseKey, showWarehouseKeyCard])
-  const cleanerTodayTasks = useMemo(() => {
-    if (period !== 'today') return []
-    return renderTasks.filter((t) => {
-      if (t.source_type !== 'cleaning_tasks') return false
-      if (String(t.task_kind || '').trim().toLowerCase() !== 'cleaning') return false
-      const st = String(t.status || '').trim().toLowerCase()
-      if (st === 'cancelled' || st === 'canceled') return false
-      return true
-    })
-  }, [period, renderTasks])
+  }, [loadWarehouseKey, showWarehouseKeyCard, warehouseKeyExpanded])
   const selfDayEndTasks = useMemo(() => {
     if (period !== 'today') return []
     return renderTasks.filter((t) => {
-      if (t.source_type !== 'cleaning_tasks') return false
-      const kind = String(t.task_kind || '').trim().toLowerCase()
       const st = String(t.status || '').trim().toLowerCase()
       if (st === 'cancelled' || st === 'canceled') return false
-      if (roleNames.includes('cleaner_inspector')) return kind === 'cleaning' || kind === 'inspection'
-      if (roleNames.includes('cleaning_inspector')) return kind === 'inspection'
-      if (roleNames.includes('cleaner')) return kind === 'cleaning'
+      if (roleNames.includes('cleaner_inspector')) return isCleaningExecutionTask(t) || isInspectionExecutionTask(t)
+      if (roleNames.includes('cleaning_inspector')) return isInspectionExecutionTask(t)
+      if (roleNames.includes('cleaner')) return isCleaningExecutionTask(t)
       return false
     })
   }, [period, renderTasks, roleNames.join('|')])
+  const selfDayEndRoles = useMemo(() => {
+    return normalizeDayEndRoles(
+      selfDayEndTasks.map((task) => {
+        return isInspectionExecutionTask(task) && !isCleaningExecutionTask(task) ? 'inspection' : 'cleaning'
+      }),
+    )
+  }, [selfDayEndTasks])
+  const dayEndOverviewDisplayUsers = useMemo(
+    () => buildDayEndOverviewDisplayUsers(dayEndOverviewUsers),
+    [dayEndOverviewUsers],
+  )
   const dayEndViewerTarget = useMemo(() => {
     const currentUserId = String((user as any)?.id || '').trim()
-    if ((isCleanerSelf || isInspectorSelf) && currentUserId) return { userId: currentUserId, userName: '' }
-    if (!canManagerMode) return { userId: '', userName: '' }
-    const pairs = cleanerTodayTasks
-      .map((t) => ({ userId: String(t.assignee_id || '').trim(), userName: String((t as any).cleaner_name || '').trim() }))
-      .filter((x) => !!x.userId)
-    const uniq = Array.from(new Map(pairs.map((x) => [x.userId, x])).values())
-    if (uniq.length !== 1) return { userId: '', userName: '' }
-    return uniq[0]
-  }, [canManagerMode, cleanerTodayTasks, isCleanerSelf, isInspectorSelf, user])
+    if ((isCleanerSelf || isInspectorSelf) && currentUserId) return { userId: currentUserId, userName: String((user as any)?.username || '').trim(), roles: selfDayEndRoles, roomCodes: [] as string[] }
+    if (!canSeeDayEndOverview || !(canManagerMode && mode === 'manager')) return { userId: '', userName: '', roles: [] as DayEndTargetRole[], roomCodes: [] as string[] }
+    if (dayEndOverviewUsers.length !== 1) return { userId: '', userName: '', roles: [] as DayEndTargetRole[], roomCodes: [] as string[] }
+    const [entry] = dayEndOverviewUsers
+    return { userId: entry.userId, userName: entry.userName, roles: entry.roles, roomCodes: entry.roomCodes }
+  }, [canManagerMode, canSeeDayEndOverview, dayEndOverviewUsers, isCleanerSelf, isInspectorSelf, mode, selfDayEndRoles, user])
+  const dayEndViewerRoles = useMemo(
+    () => ((isCleanerSelf || isInspectorSelf) ? selfDayEndRoles : normalizeDayEndRoles(dayEndViewerTarget.roles || [])),
+    [dayEndViewerTarget.roles, isCleanerSelf, isInspectorSelf, selfDayEndRoles],
+  )
+  const dayEndViewerInspectorOnly = dayEndViewerRoles.includes('inspection') && !dayEndViewerRoles.includes('cleaning')
+  const dayEndViewerHasCleaning = dayEndViewerRoles.includes('cleaning')
+  const dayEndViewerHasInspection = dayEndViewerRoles.includes('inspection')
   const dayEndTaskRoomCodes = useMemo(() => {
-    const sourceTasks = canManagerMode && !isCleanerSelf && !isInspectorSelf
-      ? cleanerTodayTasks.filter((t) => String(t.assignee_id || '').trim() === String(dayEndViewerTarget.userId || '').trim())
-      : selfDayEndTasks
+    if (canManagerMode && !isCleanerSelf && !isInspectorSelf) return (dayEndViewerTarget.roomCodes || []).slice().sort((a, b) => a.localeCompare(b, 'en'))
     return Array.from(
       new Set(
-        sourceTasks
+        selfDayEndTasks
           .map((t) => String(t.property?.code || '').trim())
           .filter(Boolean),
       ),
     ).sort((a, b) => a.localeCompare(b, 'en'))
-  }, [canManagerMode, cleanerTodayTasks, dayEndViewerTarget.userId, isCleanerSelf, isInspectorSelf, selfDayEndTasks])
+  }, [canManagerMode, dayEndViewerTarget.roomCodes, isCleanerSelf, isInspectorSelf, selfDayEndTasks])
 
   useEffect(() => {
     if (!token) return
     if (period !== 'today') return
-    if (!(isCleanerSelf || isInspectorSelf ? selfDayEndTasks.length : cleanerTodayTasks.length)) return
+    if (!(isCleanerSelf || isInspectorSelf ? selfDayEndTasks.length : dayEndViewerTarget.userId)) return
     if (!dayEndViewerTarget.userId) {
       setDayEndComplete(null)
       return
@@ -1239,20 +1515,35 @@ export default function TasksScreen(props: Props) {
         if (typeof unsub === 'function') unsub()
       } catch {}
     }
-  }, [canManagerMode, cleanerTodayTasks.length, dayEndDate, dayEndViewerTarget.userId, isCleanerSelf, isInspectorOnlySelf, isInspectorSelf, period, props.navigation, selfDayEndTasks.length, token])
+  }, [canManagerMode, dayEndDate, dayEndViewerTarget.userId, isCleanerSelf, isInspectorOnlySelf, isInspectorSelf, period, props.navigation, selfDayEndTasks.length, token])
   useEffect(() => {
-    if (!token || !(canManagerMode && mode === 'manager') || period !== 'today') {
+    if (!token || !canSeeDayEndOverview || !(canManagerMode && mode === 'manager')) {
       setDayEndOverviewUsers([])
+      setDayEndOverviewLoading(false)
+      return
+    }
+    if (staffProgressCollapsed) {
+      setDayEndOverviewLoading(false)
+      return
+    }
+    const cached = dayEndOverviewByDateRef.current[dayEndDate]
+    if (cached) {
+      setDayEndOverviewUsers(cached)
+      setDayEndOverviewLoading(false)
       return
     }
     let cancelled = false
     ;(async () => {
+      setDayEndOverviewUsers([])
+      setDayEndOverviewLoading(true)
       try {
-        const cleaningTasks = await listCleaningAppTasks(token, { date_from: dayEndDate, date_to: dayEndDate })
-        const baseUsers = buildDayEndOverviewBaseUsersFromCleaningTasks(cleaningTasks)
+        const tasks = await listWorkTasks(token, { date_from: dayEndDate, date_to: dayEndDate, view: 'all' })
+        const baseUsers = buildDayEndOverviewBaseUsers(tasks.filter((task) => isCleaningExecutionTask(task) || isInspectionExecutionTask(task)))
         if (cancelled) return
         if (!baseUsers.length) {
+          dayEndOverviewByDateRef.current[dayEndDate] = []
           setDayEndOverviewUsers([])
+          setDayEndOverviewLoading(false)
           return
         }
         setDayEndOverviewUsers(baseUsers)
@@ -1261,19 +1552,27 @@ export default function TasksScreen(props: Props) {
           const complete = !!(r as any)?.submitted_at
           return { ...entry, complete }
         }))
-        if (!cancelled) setDayEndOverviewUsers(rows.sort((a, b) => Number(a.complete) - Number(b.complete) || a.userName.localeCompare(b.userName, 'en')))
+        if (!cancelled) {
+          const overviewUsers = rows.sort(compareDayEndOverviewUsers)
+          dayEndOverviewByDateRef.current[dayEndDate] = overviewUsers
+          setDayEndOverviewUsers(overviewUsers)
+          setDayEndOverviewLoading(false)
+        }
       } catch {
-        if (!cancelled) setDayEndOverviewUsers((prev) => prev.map((entry) => ({ ...entry, complete: null })))
+        if (!cancelled) {
+          setDayEndOverviewUsers([])
+          setDayEndOverviewLoading(false)
+        }
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [canManagerMode, dayEndDate, mode, period, token])
+  }, [canManagerMode, canSeeDayEndOverview, dayEndDate, dayEndOverviewRevision, mode, staffProgressCollapsed, token])
   const visibleTasks = useMemo(() => {
     const q = search.trim().toLowerCase()
-    // The manager search input is labeled as "today's tasks", so it must stay within
-    // the currently selected day instead of falling back to the whole hydrated week.
+    // Manager search must stay within the currently selected day, even when the
+    // user is browsing the week/month containers.
     const base = renderTasks
     const filtered = q
       ? base.filter((t) => taskManagerSearchText(t).includes(q))
@@ -1294,9 +1593,11 @@ export default function TasksScreen(props: Props) {
       }
       const sortDelta = taskSortIndexValue(a) - taskSortIndexValue(b)
       if (sortDelta) return sortDelta
-      const aIsCleaning = a.source_type === 'cleaning_tasks'
-      const bIsCleaning = b.source_type === 'cleaning_tasks'
-      if (!(aIsCleaning && bIsCleaning)) {
+      const aIsExecutionTask = isCleaningExecutionTask(a) || isInspectionExecutionTask(a) || isKeyHandoverExecutionTask(a)
+      const bIsExecutionTask = isCleaningExecutionTask(b) || isInspectionExecutionTask(b) || isKeyHandoverExecutionTask(b)
+      const aIsOfflineTask = String(a.task_kind || '').toLowerCase() === 'offline'
+      const bIsOfflineTask = String(b.task_kind || '').toLowerCase() === 'offline'
+      if (!(aIsExecutionTask && bIsExecutionTask) && !(aIsOfflineTask && bIsOfflineTask)) {
         const ur = urgencyRank(b.urgency) - urgencyRank(a.urgency)
         if (ur) return ur
       }
@@ -1304,7 +1605,7 @@ export default function TasksScreen(props: Props) {
     })
     if (canManagerMode && mode === 'manager') {
       const keyOf = (t: WorkTaskItem) => {
-        if (t.source_type !== 'cleaning_tasks') return ''
+        if (!isCleaningExecutionTask(t) && !isInspectionExecutionTask(t) && !isKeyHandoverExecutionTask(t)) return ''
         const d = String(t.scheduled_date || (t as any).date || '').slice(0, 10)
         const code = String(t.property?.code || '').trim()
         const pid = String(t.property_id || '').trim()
@@ -1317,7 +1618,7 @@ export default function TasksScreen(props: Props) {
         const s = String(t.status || '').trim().toLowerCase()
         return s === 'done' || s === 'completed' || s === 'keys_hung'
       }
-      const isCleaningKind = (t: WorkTaskItem) => String(t.task_kind || '').trim().toLowerCase() === 'cleaning'
+      const isCleaningKind = (t: WorkTaskItem) => isCleaningExecutionTask(t)
       const pick = (a: WorkTaskItem, b: WorkTaskItem) => {
         const aDone = isDone(a)
         const bDone = isDone(b)
@@ -1349,31 +1650,84 @@ export default function TasksScreen(props: Props) {
       return deduped
     }
     return list
-  }, [renderTasks, search, canManagerMode, mode, period])
-  const showDayEndCard = period === 'today' && (isCleanerSelf || isInspectorSelf ? selfDayEndTasks.length > 0 : cleanerTodayTasks.length > 0) && !!dayEndViewerTarget.userId
+  }, [renderTasks, search, canManagerMode, mode])
+  const showDayEndCard = period === 'today'
+    && (isCleanerSelf || isInspectorSelf ? selfDayEndTasks.length > 0 : false)
+    && !!dayEndViewerTarget.userId
   const dayEndInsertIndex = useMemo(() => {
     if (!showDayEndCard) return -1
     const eligibleIndexes = visibleTasks
       .map((task, index) => ({ task, index }))
       .filter(({ task }) => {
-        if (task.source_type !== 'cleaning_tasks') return false
-        const kind = String(task.task_kind || '').trim().toLowerCase()
-        if (canManagerMode && !isCleanerSelf && !isInspectorSelf) return kind === 'cleaning'
-        if (roleNames.includes('cleaner_inspector')) return kind === 'cleaning' || kind === 'inspection'
-        if (roleNames.includes('cleaning_inspector')) return kind === 'inspection'
-        if (roleNames.includes('cleaner')) return kind === 'cleaning'
+        const cleaning = isCleaningExecutionTask(task)
+        const inspection = isInspectionExecutionTask(task)
+        if (!cleaning && !inspection) return isReorderableTask(task)
+        if (canManagerMode && !isCleanerSelf && !isInspectorSelf) return cleaning
+        if (roleNames.includes('cleaner_inspector')) return cleaning || inspection
+        if (roleNames.includes('cleaning_inspector')) return inspection
+        if (roleNames.includes('cleaner')) return cleaning
         return false
       })
     if (!eligibleIndexes.length) return -1
     const firstDone = eligibleIndexes.find(({ task }) => isDoneLikeStatus(String(task.status || '')))
     if (firstDone) return firstDone.index
     return eligibleIndexes[eligibleIndexes.length - 1].index + 1
-  }, [canManagerMode, isCleanerSelf, isInspectorSelf, roleNames, showDayEndCard, visibleTasks])
+  }, [canManagerMode, isCleanerSelf, isInspectorSelf, isReorderableTask, roleNames, showDayEndCard, visibleTasks])
 
 function showBanner(title: string, message: string) {
     setBanner({ title, message })
     if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current)
     bannerTimerRef.current = setTimeout(() => setBanner(null), 4000)
+  }
+
+  async function toggleGuestCheckedOut(task: WorkTaskItem, action?: WorkTaskAvailableAction) {
+    if (!token || !user?.id) return
+    const taskDate = String(task.scheduled_date || (task as any).date || '')
+    if (isBeforeToday(taskDate)) return
+    const checkedOutAt = String((task as any).checked_out_at || '').trim()
+    const nextCheckedOutAt = checkedOutAt ? null : new Date().toISOString()
+    try {
+      const taskIds = checkoutTaskIdsFromTask(task, action)
+      setCheckedOutPendingMap((prev) => ({ ...prev, [task.id]: true }))
+      await patchWorkTaskItem(String(task.id), { checked_out_at: nextCheckedOutAt } as any)
+      if (taskIds.length) {
+        await markGuestCheckedOutByTasks(token, { task_ids: taskIds, action: checkedOutAt ? 'unset' : 'set' })
+      } else {
+        const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
+        if (!orderId) throw new Error('缺少订单ID')
+        await markGuestCheckedOutByOrder(token, { order_id: orderId, action: checkedOutAt ? 'unset' : 'set' })
+      }
+      showBanner('已标记', checkedOutAt ? '已取消退房' : '已标记已退房')
+    } catch (e: any) {
+      await patchWorkTaskItem(String(task.id), { checked_out_at: checkedOutAt || null } as any)
+      showBanner('失败', String(e?.message || '提交失败'))
+    } finally {
+      setCheckedOutPendingMap((prev) => {
+        const next = { ...prev }
+        delete next[task.id]
+        return next
+      })
+    }
+  }
+
+  function handleTaskActionPress(task: WorkTaskItem, action: WorkTaskAvailableAction) {
+    if (!action.enabled) return
+    if (action.id === 'mark_guest_checkout') return void toggleGuestCheckedOut(task, action)
+    const route = navigationForWorkTaskAction(task, action)
+    if (route) props.navigation.navigate(route.screen as any, route.params as any)
+  }
+
+  function openDayEndScreen(params?: { userId?: string; userName?: string; taskRoomCodes?: string[]; targetRoles?: DayEndTargetRole[]; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; overviewMode?: boolean; overviewUsers?: DayEndOverviewUser[] }) {
+    props.navigation.navigate('DayEndBackupKeys', {
+      date: dayEndDate,
+      ...(params?.focus ? { focus: params.focus } : {}),
+      ...(params?.taskRoomCodes?.length ? { taskRoomCodes: params.taskRoomCodes } : {}),
+      ...(params?.targetRoles?.length ? { targetRoles: params.targetRoles } : {}),
+      ...(params?.userId ? { userId: params.userId } : {}),
+      ...(params?.userName ? { userName: params.userName } : {}),
+      ...(params?.overviewMode ? { overviewMode: true } : {}),
+      ...(params?.overviewUsers?.length ? { overviewUsers: params.overviewUsers } : {}),
+    })
   }
 
   function openQuickCreate(mode0: QuickCreateMode = 'checkin') {
@@ -1387,7 +1741,9 @@ function showBanner(title: string, message: string) {
     setQuickCreateGuestNote('')
     setQuickCreateOfflineTitle('')
     setQuickCreateOfflineContent('')
-    setQuickCreateUrgency('medium')
+    setQuickCreateOfflineTaskType('other')
+    setQuickCreateAssigneeId(null)
+    setQuickCreateAssigneeOpen(false)
     setQuickCreateOpen(true)
   }
 
@@ -1415,20 +1771,23 @@ function showBanner(title: string, message: string) {
           return
         }
         const propertyOption = property ? resolveQuickCreateProperty(property) : null
+        if (quickCreateOfflineTaskType === 'property' && !propertyOption) {
+          Alert.alert(t('common_error'), '房源任务需要从房号提示中选择房号')
+          return
+        }
         if (property && !propertyOption) {
           Alert.alert(t('common_error'), '请从房号提示中选择房号')
           return
         }
         await createCleaningOfflineTask(token, {
           date,
-          task_type: 'other',
+          task_type: quickCreateOfflineTaskType,
           title,
           content: String(quickCreateOfflineContent || '').trim(),
           kind: 'manual',
           status: 'todo',
-          urgency: quickCreateUrgency,
           property_id: propertyOption?.id || null,
-          assignee_id: null,
+          assignee_id: quickCreateAssigneeId,
         })
       } else {
         if (!property) {
@@ -1471,12 +1830,21 @@ function showBanner(title: string, message: string) {
     if (!quickCreateOpen || !token) return
     let cancelled = false
     ;(async () => {
-      try {
-        const rows = await listCleaningAppPropertyCodes(token)
-        if (!cancelled) setQuickCreatePropertyOptions(rows)
-      } catch {
-        if (!cancelled) setQuickCreatePropertyOptions([])
-      }
+      const [propertyRows, userRows] = await Promise.all([
+        listCleaningAppPropertyCodes(token).catch(() => []),
+        listUsers(token).catch(() => []),
+      ])
+      if (cancelled) return
+      setQuickCreatePropertyOptions(propertyRows)
+      const users = (Array.isArray(userRows) ? userRows : [])
+        .map((item) => ({
+          id: String(item?.id || '').trim(),
+          username: item?.username == null ? null : String(item.username),
+          display_name: item?.display_name == null ? null : String(item.display_name),
+        }))
+        .filter((item) => !!item.id)
+        .sort((a, b) => quickCreateUserName(a).localeCompare(quickCreateUserName(b), 'en'))
+      setQuickCreateUsers(users)
     })()
     return () => {
       cancelled = true
@@ -1490,6 +1858,7 @@ function showBanner(title: string, message: string) {
     const assigneeId = String(task.assignee_id || '').trim()
     const cleanerId = String((task as any)?.cleaner_id || '').trim()
     const inspectorId = String((task as any)?.inspector_id || '').trim()
+    if (isKeyHandoverExecutionTask(task)) return assigneeId === uid
     if (kind === 'inspection') return assigneeId === uid || inspectorId === uid
     if (kind === 'cleaning') return assigneeId === uid || cleanerId === uid
     return assigneeId === uid
@@ -1505,7 +1874,7 @@ function showBanner(title: string, message: string) {
     ;(async () => {
       await initNoticesStore().catch(() => null)
       const existing = new Set(getNoticesSnapshot().items.map(n => n.id))
-      const toInspect = renderTasks.filter(t => t.source_type === 'cleaning_tasks' && t.task_kind === 'inspection' && isTaskOwnedByCurrentUser(t) && String(t.status || '').toLowerCase() === 'to_inspect')
+      const toInspect = renderTasks.filter(t => isInspectionExecutionTask(t) && isTaskOwnedByCurrentUser(t) && String(t.status || '').toLowerCase() === 'to_inspect')
       const fresh = toInspect.filter(t => !notifiedInspectionsRef.current[t.id] && !existing.has(`insp:to_inspect:${t.id}`))
       if (!fresh.length || cancelled) return
       for (const t of fresh) notifiedInspectionsRef.current[t.id] = true
@@ -1540,8 +1909,7 @@ function showBanner(title: string, message: string) {
     if (period !== 'today') return
     const keysUploaded = renderTasks.filter(
       t =>
-        t.source_type === 'cleaning_tasks' &&
-        t.task_kind === 'inspection' &&
+        isInspectionExecutionTask(t) &&
         isTaskOwnedByCurrentUser(t) &&
         String(t.status || '').toLowerCase() === 'in_progress' &&
         !!String((t as any).key_photo_url || '').trim(),
@@ -1584,7 +1952,7 @@ function showBanner(title: string, message: string) {
     if (period !== 'today') return
     const checkedOut = renderTasks.filter(
       t => {
-        if (!(t.source_type === 'cleaning_tasks' && t.task_kind === 'cleaning')) return false
+        if (!isCleaningExecutionTask(t)) return false
         if (!isTaskOwnedByCurrentUser(t)) return false
         const raw = String((t as any).checked_out_at || '').trim()
         if (!raw) return false
@@ -1628,7 +1996,7 @@ function showBanner(title: string, message: string) {
     if (!taskNoticeArmed) return
     if (!(canManagerMode && mode === 'manager')) return
     if (period !== 'today') return
-    const hung = renderTasks.filter(t => t.source_type === 'cleaning_tasks' && t.task_kind === 'inspection' && String(t.status || '').toLowerCase() === 'keys_hung')
+    const hung = renderTasks.filter(t => isInspectionExecutionTask(t) && String(t.status || '').toLowerCase() === 'keys_hung')
     let cancelled = false
     ;(async () => {
       await initNoticesStore().catch(() => null)
@@ -1673,42 +2041,48 @@ function showBanner(title: string, message: string) {
       if (orderList.length !== n) throw new Error(`请按顺序点选全部任务（已选 ${orderList.length}/${n}）`)
       const mapById = new Map<string, WorkTaskItem>()
       for (const t of reorderable) mapById.set(t.id, t)
-      const marks: Array<{ task: WorkTaskItem; mark: number }> = []
+      const marks: { task: WorkTaskItem; mark: number }[] = []
       for (let i = 0; i < orderList.length; i++) {
         const id = String(orderList[i] || '').trim()
         const task = mapById.get(id)
         if (!task) throw new Error('排序选择包含无效任务')
         marks.push({ task, mark: i + 1 })
       }
-      const cleanerGroups: string[][] = []
-      const inspectorGroups: string[][] = []
-      const workTaskIds: string[] = []
-      const localPatches: Array<{ id: string; patch: Partial<WorkTaskItem> }> = []
+      const reorderItems: { kind: 'work' | 'cleaner' | 'inspector'; ids: string[]; sort_index: number }[] = []
+      const localPatches: { id: string; patch: Partial<WorkTaskItem> }[] = []
       for (const { task, mark } of marks) {
         if (!isReorderableTask(task)) continue
-        if (task.source_type !== 'cleaning_tasks') {
-          workTaskIds.push(String(task.id))
+        const cleaning = isCleaningExecutionTask(task)
+        const inspection = isInspectionExecutionTask(task)
+        if (!cleaning && !inspection) {
+          reorderItems.push({ kind: 'work', ids: [String(task.id)], sort_index: mark })
           localPatches.push({ id: String(task.id), patch: { sort_index: mark } as Partial<WorkTaskItem> })
           continue
         }
-        const ids = Array.isArray((task as any).source_ids) && (task as any).source_ids.length ? (task as any).source_ids.map((x: any) => String(x)) : [String(task.source_id)]
-        if (task.task_kind === 'cleaning') {
-          cleanerGroups.push(ids)
+        if (cleaning) {
+          const ids = executionTaskIdsForRole(task, 'cleaning')
+          if (ids.length) reorderItems.push({ kind: 'cleaner', ids, sort_index: mark })
           localPatches.push({ id: String(task.id), patch: { sort_index: mark, sort_index_cleaner: mark } as Partial<WorkTaskItem> })
-        } else if (task.task_kind === 'inspection') {
-          inspectorGroups.push(ids)
+        }
+        if (inspection) {
+          const ids = executionTaskIdsForRole(task, 'inspection')
+          if (ids.length) reorderItems.push({ kind: 'inspector', ids, sort_index: mark })
           localPatches.push({ id: String(task.id), patch: { sort_index: mark, sort_index_inspector: mark } as Partial<WorkTaskItem> })
         }
       }
-      await Promise.all([
-        workTaskIds.length ? reorderWorkTasks(token, { date: selectedDate, task_ids: workTaskIds }) : Promise.resolve(null),
-        cleanerGroups.length ? reorderCleaningTasks(token, { kind: 'cleaner', date: selectedDate, groups: cleanerGroups }) : Promise.resolve(null),
-        inspectorGroups.length ? reorderCleaningTasks(token, { kind: 'inspector', date: selectedDate, groups: inspectorGroups }) : Promise.resolve(null),
-      ])
+      await reorderMixedWorkTasks(token, { date: selectedDate, items: reorderItems })
       await patchWorkTaskItems(localPatches)
       setReorderMode(false)
       showBanner('已保存', '顺序已保存')
-      void refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: canManagerMode && mode === 'manager' ? view : 'mine' }).catch(() => null)
+      void requestWorkTasksRefresh({
+        token,
+        userId: user.id,
+        date_from: range.date_from,
+        date_to: range.date_to,
+        view: canManagerMode && mode === 'manager' ? view : 'mine',
+        mode: 'force',
+        reason: 'mixed_reorder_saved',
+      }).catch(() => null)
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
     } finally {
@@ -1738,10 +2112,7 @@ function showBanner(title: string, message: string) {
   const warehouseIsHeldByMe = !!currentUserId && !!warehouseHolderId && warehouseHolderId === currentUserId
   const warehouseStatus = warehouseKeyStatusText(String(warehouseKeyRow?.status || 'available'))
   const warehouseLatest = warehouseKeyEvents[0] || null
-  const warehouseLatestTime = warehouseKeyEventTimeText(
-    warehouseLatest?.created_at || warehouseKeyRow?.updated_at,
-    dayEndDate,
-  )
+  const warehouseLatestText = formatWarehouseKeyLatestEvent(warehouseLatest)
   const quickCreatePropertyMatches = useMemo(() => {
     const q = String(quickCreateProperty || '').trim().toLowerCase()
     if (!q) return []
@@ -1750,6 +2121,10 @@ function showBanner(title: string, message: string) {
     })
     return rows.slice(0, 20)
   }, [quickCreateProperty, quickCreatePropertyOptions])
+  const quickCreateAssignee = useMemo(
+    () => quickCreateUsers.find((item) => item.id === quickCreateAssigneeId) || null,
+    [quickCreateAssigneeId, quickCreateUsers],
+  )
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -1798,13 +2173,13 @@ function showBanner(title: string, message: string) {
           </Pressable>
         ) : null}
         <View style={styles.segmentWrap}>
-          <View style={styles.segment}>
+          <View style={[styles.segment, prefersWrappedSegments ? styles.segmentWrapResponsive : null]}>
             <Pressable
               onPress={() => {
                 setPeriod('today')
                 setSelectedDate(ymd(new Date()))
               }}
-              style={({ pressed }) => [styles.segmentItem, period === 'today' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
+              style={({ pressed }) => [styles.segmentItem, prefersWrappedSegments ? styles.segmentItemResponsive : null, period === 'today' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
             >
               <Text style={[styles.segmentText, period === 'today' ? styles.segmentTextActive : null]}>{t('tasks_period_today')}</Text>
             </Pressable>
@@ -1813,7 +2188,7 @@ function showBanner(title: string, message: string) {
                 setPeriod('week')
                 setSelectedDate(ymd(new Date()))
               }}
-              style={({ pressed }) => [styles.segmentItem, period === 'week' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
+              style={({ pressed }) => [styles.segmentItem, prefersWrappedSegments ? styles.segmentItemResponsive : null, period === 'week' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
             >
               <Text style={[styles.segmentText, period === 'week' ? styles.segmentTextActive : null]}>{t('tasks_period_week')}</Text>
             </Pressable>
@@ -1822,7 +2197,7 @@ function showBanner(title: string, message: string) {
                 setPeriod('month')
                 setSelectedDate(ymd(new Date()))
               }}
-              style={({ pressed }) => [styles.segmentItem, period === 'month' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
+              style={({ pressed }) => [styles.segmentItem, prefersWrappedSegments ? styles.segmentItemResponsive : null, period === 'month' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
             >
               <Text style={[styles.segmentText, period === 'month' ? styles.segmentTextActive : null]}>{t('tasks_period_month')}</Text>
             </Pressable>
@@ -1912,13 +2287,13 @@ function showBanner(title: string, message: string) {
 
         {canSwitchMode ? (
           <View style={[styles.segmentWrap, { marginTop: 10 }]}>
-            <View style={styles.segment}>
+            <View style={[styles.segment, prefersWrappedSegments ? styles.segmentWrapResponsive : null]}>
               <Pressable
                 onPress={() => {
                   setMode('cleaning')
                   setView('mine')
                 }}
-                style={({ pressed }) => [styles.segmentItem, mode === 'cleaning' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
+                style={({ pressed }) => [styles.segmentItem, prefersWrappedSegments ? styles.segmentItemResponsive : null, mode === 'cleaning' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
               >
                 <Text style={[styles.segmentText, mode === 'cleaning' ? styles.segmentTextActive : null]}>清洁</Text>
               </Pressable>
@@ -1927,7 +2302,7 @@ function showBanner(title: string, message: string) {
                   setMode('manager')
                   setView('all')
                 }}
-                style={({ pressed }) => [styles.segmentItem, mode === 'manager' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
+                style={({ pressed }) => [styles.segmentItem, prefersWrappedSegments ? styles.segmentItemResponsive : null, mode === 'manager' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
               >
                 <Text style={[styles.segmentText, mode === 'manager' ? styles.segmentTextActive : null]}>管理</Text>
               </Pressable>
@@ -1935,39 +2310,73 @@ function showBanner(title: string, message: string) {
           </View>
         ) : null}
 
-        {canManagerMode && mode === 'manager' && period === 'today' ? (
-          <Pressable
-            onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, overviewMode: true, overviewUsers: dayEndOverviewUsers.map((entry) => ({ ...entry, complete: null })) })}
-            style={({ pressed }) => [styles.dayEndOverviewCard, pressed ? styles.segmentPressed : null]}
-          >
-            <View style={styles.dayEndOverviewIcon}>
-              <Ionicons name="albums-outline" size={moderateScale(17)} color="#2563EB" />
-            </View>
-            <View style={styles.dayEndOverviewBody}>
-              <View style={styles.dayEndOverviewMeta}>
-                <Text style={styles.dayEndOverviewMetaText}>日终交接</Text>
+        {canSeeDayEndOverview && canManagerMode && mode === 'manager' ? (
+          <View style={styles.staffProgressCard}>
+            <Pressable
+              accessibilityLabel="staff-progress-toggle"
+              onPress={() => setStaffProgressCollapsed((prev) => !prev)}
+              style={({ pressed }) => [styles.staffProgressHeader, pressed ? styles.segmentPressed : null]}
+            >
+              <View style={styles.staffProgressHeaderMain}>
+                <Text style={styles.staffProgressTitle}>{staffProgressTitle}</Text>
+                <Text style={styles.staffProgressHint}>查看清洁与检查进度</Text>
               </View>
-              <Text style={styles.dayEndOverviewTitle}>今日日终交接总览</Text>
-              <Text style={styles.dayEndOverviewMsg} numberOfLines={2}>
-                {dayEndOverviewUsers.length
-                  ? `查看今天 ${dayEndOverviewUsers.length} 位清洁/检查人员的提交状态与内容。`
-                  : '查看今天清洁和检查人员的日终交接提交状态。'}
-              </Text>
-            </View>
-            <View style={styles.dayEndOverviewArrow}>
-              <Ionicons name="chevron-forward" size={moderateScale(16)} color="#2563EB" />
-            </View>
-          </Pressable>
+              <Ionicons
+                name={staffProgressCollapsed ? 'chevron-down' : 'chevron-up'}
+                size={moderateScale(18)}
+                color="#6B7280"
+              />
+            </Pressable>
+            {!staffProgressCollapsed ? (
+              <>
+                <View style={styles.staffProgressList}>
+                  {dayEndOverviewLoading && !dayEndOverviewUsers.length ? (
+                    <Text style={styles.staffProgressEmpty}>正在加载 {dayEndDate} 的人员工作情况...</Text>
+                  ) : null}
+                  {!dayEndOverviewLoading && !dayEndOverviewDisplayUsers.length ? (
+                    <Text style={styles.staffProgressEmpty}>{dayEndDate} 暂无清洁或检查任务。</Text>
+                  ) : null}
+                  {dayEndOverviewDisplayUsers.map((entry) => {
+                    const cleaningLine = entry.displayRole === 'cleaning' ? formatDayEndRoleStats('清洁', entry.stats?.cleaning) : ''
+                    const inspectionLine = entry.displayRole === 'inspection' ? formatDayEndRoleStats('检查', entry.stats?.inspection) : ''
+                    return (
+                      <Pressable
+                        key={`${entry.displayRole}:${entry.userId}`}
+                        onPress={() => openDayEndScreen({ userId: entry.userId, userName: entry.userName, taskRoomCodes: entry.roomCodes, targetRoles: [entry.displayRole] })}
+                        style={({ pressed }) => [styles.staffProgressItem, pressed ? styles.segmentPressed : null]}
+                      >
+                        <View style={styles.staffProgressMain}>
+                          <View style={styles.staffProgressNameRow}>
+                            <Text style={styles.staffProgressName}>{entry.userName || entry.userId}</Text>
+                            <Text style={styles.staffProgressMeta}>
+                              {entry.displayRole === 'inspection' ? '检查人员' : '清洁人员'}
+                            </Text>
+                          </View>
+                          {cleaningLine ? <Text style={styles.staffProgressLine}>{cleaningLine}</Text> : null}
+                          {inspectionLine ? <Text style={styles.staffProgressLine}>{inspectionLine}</Text> : null}
+                        </View>
+                        <View style={[styles.staffProgressStatusPill, entry.complete == null ? styles.staffProgressStatusGray : (entry.complete ? styles.staffProgressStatusGreen : styles.staffProgressStatusAmber)]}>
+                          <Text style={[styles.staffProgressStatusText, entry.complete == null ? styles.staffProgressStatusTextGray : (entry.complete ? styles.staffProgressStatusTextGreen : styles.staffProgressStatusTextAmber)]}>
+                            {entry.complete == null ? '待同步' : (entry.complete ? '已交接' : '未交接')}
+                          </Text>
+                        </View>
+                      </Pressable>
+                    )
+                  })}
+                </View>
+              </>
+            ) : null}
+          </View>
         ) : null}
 
-        {canManagerMode && mode === 'manager' && period === 'today' ? (
+        {canManagerMode && mode === 'manager' ? (
           <View style={styles.searchWrap}>
             <Ionicons name="search-outline" size={moderateScale(16)} color="#9CA3AF" />
             <TextInput
               value={search}
               onChangeText={setSearch}
               style={styles.searchInput}
-              placeholder="搜索今日任务（房号/地址/清洁/检查）"
+              placeholder={period === 'today' ? '搜索今日任务（房号/地址/清洁/检查）' : period === 'week' ? '搜索本周当前日期任务（房号/地址/清洁/检查）' : '搜索本月当前日期任务（房号/地址/清洁/检查）'}
               placeholderTextColor="#9CA3AF"
             />
             {search.trim() ? (
@@ -2022,74 +2431,94 @@ function showBanner(title: string, message: string) {
 
         {showWarehouseKeyCard ? (
           <View style={styles.warehouseKeyCard}>
-            <View style={styles.taskTitleRow}>
-              <View style={styles.warehouseKeyIcon}>
-                <Ionicons name="key-outline" size={moderateScale(16)} color="#047857" />
-              </View>
-              <Text style={styles.taskTitle} numberOfLines={1}>MSQ 仓库钥匙</Text>
-              <View style={[styles.statusPill, warehouseIsHeldByMe ? styles.statusBlue : String(warehouseKeyRow?.status || '') === 'available' ? styles.statusGreen : styles.statusAmber]}>
-                <Text style={[styles.statusText, warehouseIsHeldByMe ? styles.statusTextBlue : String(warehouseKeyRow?.status || '') === 'available' ? styles.statusTextGreen : styles.statusTextAmber]}>
-                  {warehouseKeyLoading && !warehouseKeyRow ? '加载中' : warehouseStatus}
-                </Text>
-              </View>
-            </View>
-            <Text style={styles.summary} numberOfLines={2}>
-              {warehouseHolderName
-                ? `当前持有人：${warehouseHolderName}${warehouseIsHeldByMe ? '（我）' : ''}`
-                : '当前没有记录持有人。'}
-            </Text>
-            {warehouseHolderName ? (
-              <View style={styles.warehousePhoneRow}>
-                <Ionicons name="call-outline" size={moderateScale(14)} color="#047857" />
-                <Text style={styles.warehousePhoneText} numberOfLines={1}>
-                  {warehouseHolderPhone || '手机号未填写'}
-                </Text>
-                {warehouseHolderPhone ? (
-                  <Pressable
-                    onPress={callWarehouseKeyHolder}
-                    style={({ pressed }) => [styles.warehouseCallBtn, pressed ? styles.segmentPressed : null]}
-                  >
-                    <Text style={styles.warehouseCallText}>打电话</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-            ) : null}
-            {warehouseLatest ? (
-              <Text style={styles.warehouseKeyMeta} numberOfLines={2}>
-                最近：{warehouseKeyEventText(String(warehouseLatest.action || ''))}{warehouseLatestTime ? ` ${warehouseLatestTime}` : ''} · {String(warehouseLatest.actor_name || '').trim() || '未知'}{warehouseLatest.to_name ? ` → ${warehouseLatest.to_name}` : ''}
-              </Text>
-            ) : null}
-            <View style={styles.actionsRow}>
-              <Pressable
-                disabled={warehouseKeyBusy || warehouseIsHeldByMe}
-                onPress={() => submitWarehouseKeyEvent('borrow')}
-                style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, warehouseKeyBusy || warehouseIsHeldByMe ? styles.actionBtnDisabled : null]}
-              >
-                <Text style={[styles.actionText, warehouseKeyBusy || warehouseIsHeldByMe ? { color: '#6B7280' } : null]}>{warehouseIsHeldByMe ? '已由我持有' : '借钥匙'}</Text>
-              </Pressable>
-              <Pressable
-                disabled={warehouseKeyBusy || String(warehouseKeyRow?.status || '') === 'available'}
-                onPress={() => submitWarehouseKeyEvent('return')}
-                style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, warehouseKeyBusy || String(warehouseKeyRow?.status || '') === 'available' ? styles.actionBtnDisabled : null]}
-              >
-                <Text style={[styles.actionText, warehouseKeyBusy || String(warehouseKeyRow?.status || '') === 'available' ? { color: '#6B7280' } : null]}>还钥匙</Text>
-              </Pressable>
-              <Pressable
-                disabled={warehouseKeyBusy || !warehouseKeyCandidates.length}
-                onPress={() => setWarehouseTransferOpen(true)}
-                style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, warehouseKeyBusy || !warehouseKeyCandidates.length ? styles.actionBtnDisabled : null]}
-              >
-                <Text style={[styles.actionText, warehouseKeyBusy || !warehouseKeyCandidates.length ? { color: '#6B7280' } : null]}>转交同事</Text>
-              </Pressable>
-            </View>
             <Pressable
-              disabled={warehouseKeyLoading}
-              onPress={loadWarehouseKey}
-              style={({ pressed }) => [styles.warehouseRefresh, pressed ? styles.segmentPressed : null]}
+              onPress={() => setWarehouseKeyExpanded((prev) => !prev)}
+              style={({ pressed }) => [styles.warehouseKeyHeader, pressed ? styles.segmentPressed : null]}
             >
-              <Ionicons name="refresh-outline" size={moderateScale(14)} color="#047857" />
-              <Text style={styles.warehouseRefreshText}>{warehouseKeyLoading ? '刷新中' : '刷新状态'}</Text>
+              <View style={styles.warehouseKeyHeaderMain}>
+                <View style={styles.warehouseKeyIcon}>
+                  <Ionicons name="key-outline" size={moderateScale(16)} color="#047857" />
+                </View>
+                <Text style={styles.taskTitle} numberOfLines={1}>MSQ 仓库钥匙</Text>
+              </View>
+              {warehouseKeyExpanded ? (
+                <View style={[styles.statusPill, warehouseIsHeldByMe ? styles.statusBlue : String(warehouseKeyRow?.status || '') === 'available' ? styles.statusGreen : styles.statusAmber]}>
+                  <Text style={[styles.statusText, warehouseIsHeldByMe ? styles.statusTextBlue : String(warehouseKeyRow?.status || '') === 'available' ? styles.statusTextGreen : styles.statusTextAmber]}>
+                    {warehouseKeyLoading && !warehouseKeyRow ? '加载中' : warehouseStatus}
+                  </Text>
+                </View>
+              ) : (
+                <View style={[styles.statusPill, styles.statusGreen]}>
+                  <Text style={[styles.statusText, styles.statusTextGreen]}>已收起</Text>
+                </View>
+              )}
+              <Ionicons name={warehouseKeyExpanded ? 'chevron-up' : 'chevron-down'} size={moderateScale(16)} color="#047857" />
             </Pressable>
+            {warehouseKeyExpanded ? (
+              <>
+                <Text style={styles.summary} numberOfLines={2}>
+                  {warehouseHolderName
+                    ? `当前持有人：${warehouseHolderName}${warehouseIsHeldByMe ? '（我）' : ''}`
+                    : '当前没有记录持有人。'}
+                </Text>
+                {warehouseHolderName ? (
+                  <View style={styles.warehousePhoneRow}>
+                    <Ionicons name="call-outline" size={moderateScale(14)} color="#047857" />
+                    <Text style={styles.warehousePhoneText} numberOfLines={1}>
+                      {warehouseHolderPhone || '手机号未填写'}
+                    </Text>
+                    {warehouseHolderPhone ? (
+                      <Pressable
+                        onPress={callWarehouseKeyHolder}
+                        style={({ pressed }) => [styles.warehouseCallBtn, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={styles.warehouseCallText}>打电话</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ) : null}
+                {warehouseLatest ? (
+                  <Text style={styles.warehouseKeyMeta} numberOfLines={2}>
+                    {warehouseLatestText}
+                  </Text>
+                ) : null}
+                <View style={styles.actionsRow}>
+                  <Pressable
+                    disabled={warehouseKeyBusy || warehouseIsHeldByMe}
+                    onPress={() => submitWarehouseKeyEvent('borrow')}
+                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, warehouseKeyBusy || warehouseIsHeldByMe ? styles.actionBtnDisabled : null]}
+                  >
+                    <Text style={[styles.actionText, warehouseKeyBusy || warehouseIsHeldByMe ? { color: '#6B7280' } : null]}>{warehouseIsHeldByMe ? '已由我持有' : '借钥匙'}</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={warehouseKeyBusy || String(warehouseKeyRow?.status || '') === 'available'}
+                    onPress={() => submitWarehouseKeyEvent('return')}
+                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, warehouseKeyBusy || String(warehouseKeyRow?.status || '') === 'available' ? styles.actionBtnDisabled : null]}
+                  >
+                    <Text style={[styles.actionText, warehouseKeyBusy || String(warehouseKeyRow?.status || '') === 'available' ? { color: '#6B7280' } : null]}>还钥匙</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={warehouseKeyBusy || !warehouseKeyCandidates.length}
+                    onPress={() => setWarehouseTransferOpen(true)}
+                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, warehouseKeyBusy || !warehouseKeyCandidates.length ? styles.actionBtnDisabled : null]}
+                  >
+                    <Text style={[styles.actionText, warehouseKeyBusy || !warehouseKeyCandidates.length ? { color: '#6B7280' } : null]}>转交同事</Text>
+                  </Pressable>
+                </View>
+                <Pressable
+                  disabled={warehouseKeyLoading}
+                  onPress={loadWarehouseKey}
+                  style={({ pressed }) => [styles.warehouseRefresh, pressed ? styles.segmentPressed : null]}
+                >
+                  <Ionicons name="refresh-outline" size={moderateScale(14)} color="#047857" />
+                  <Text style={styles.warehouseRefreshText}>{warehouseKeyLoading ? '刷新中' : '刷新状态'}</Text>
+                </Pressable>
+              </>
+            ) : (
+              <Text style={styles.summary} numberOfLines={2}>
+                如需查看或操作 MSQ 仓库钥匙，请点击展开。
+              </Text>
+            )}
           </View>
         ) : null}
 
@@ -2168,8 +2597,29 @@ function showBanner(title: string, message: string) {
                   <Text style={styles.createLabel}>日期</Text>
                   <TextInput value={quickCreateDate} onChangeText={setQuickCreateDate} editable={!quickCreateBusy} style={styles.createInput} placeholder="YYYY-MM-DD" placeholderTextColor="#9CA3AF" />
                 </View>
+                {quickCreateMode === 'offline' ? (
+                  <View style={styles.createField}>
+                    <Text style={styles.createLabel}>任务类型</Text>
+                    <View style={styles.createModeRow}>
+                      {QUICK_CREATE_OFFLINE_TASK_TYPES.map((item) => (
+                        <Pressable
+                          key={item.key}
+                          disabled={quickCreateBusy}
+                          onPress={() => setQuickCreateOfflineTaskType(item.key)}
+                          style={({ pressed }) => [styles.createModeBtn, quickCreateOfflineTaskType === item.key ? styles.createModeBtnOn : null, pressed ? styles.segmentPressed : null]}
+                        >
+                          <Text style={[styles.createModeText, quickCreateOfflineTaskType === item.key ? styles.createModeTextOn : null]}>{item.label}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
                 <View style={styles.createField}>
-                  <Text style={styles.createLabel}>{quickCreateMode === 'offline' ? '房号（可选）' : '房号'}</Text>
+                  <Text style={styles.createLabel}>
+                    {quickCreateMode === 'offline'
+                      ? (quickCreateOfflineTaskType === 'property' ? '房号' : '房号（可选）')
+                      : '房号'}
+                  </Text>
                   <TextInput value={quickCreateProperty} onChangeText={setQuickCreateProperty} editable={!quickCreateBusy} style={styles.createInput} placeholder="例如 2607" placeholderTextColor="#9CA3AF" autoCapitalize="characters" />
                   {quickCreatePropertyMatches.length ? (
                     <View style={styles.propertySuggestList}>
@@ -2198,24 +2648,64 @@ function showBanner(title: string, message: string) {
                       <TextInput value={quickCreateOfflineContent} onChangeText={setQuickCreateOfflineContent} editable={!quickCreateBusy} style={[styles.createInput, styles.createTextArea]} placeholder="补充说明" placeholderTextColor="#9CA3AF" multiline />
                     </View>
                     <View style={styles.createField}>
-                      <Text style={styles.createLabel}>紧急度</Text>
-                      <View style={styles.createModeRow}>
-                        {[
-                          { key: 'low', label: '低' },
-                          { key: 'medium', label: '中' },
-                          { key: 'high', label: '高' },
-                          { key: 'urgent', label: '紧急' },
-                        ].map((item) => (
-                          <Pressable
-                            key={item.key}
-                            disabled={quickCreateBusy}
-                            onPress={() => setQuickCreateUrgency(item.key as any)}
-                            style={({ pressed }) => [styles.createModeBtn, quickCreateUrgency === item.key ? styles.createModeBtnOn : null, pressed ? styles.segmentPressed : null]}
+                      <Text style={styles.createLabel}>执行人</Text>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="quick-create-assignee"
+                        disabled={quickCreateBusy}
+                        onPress={() => setQuickCreateAssigneeOpen((prev) => !prev)}
+                        style={({ pressed }) => [styles.createInput, styles.createSelect, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={[styles.createSelectText, !quickCreateAssignee ? styles.createSelectPlaceholder : null]} numberOfLines={1}>
+                          {quickCreateAssignee ? quickCreateUserName(quickCreateAssignee) : '未分配'}
+                        </Text>
+                        <Ionicons name={quickCreateAssigneeOpen ? 'chevron-up' : 'chevron-down'} size={moderateScale(16)} color="#6B7280" />
+                      </Pressable>
+                      {quickCreateAssigneeOpen ? (
+                        <View testID="quick-create-assignee-options" style={styles.createAssigneeList}>
+                          <ScrollView
+                            style={styles.createAssigneeScroll}
+                            contentContainerStyle={styles.createAssigneeScrollContent}
+                            nestedScrollEnabled
+                            showsVerticalScrollIndicator
+                            keyboardShouldPersistTaps="handled"
                           >
-                            <Text style={[styles.createModeText, quickCreateUrgency === item.key ? styles.createModeTextOn : null]}>{item.label}</Text>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="quick-create-assignee-none"
+                            disabled={quickCreateBusy}
+                            onPress={() => {
+                              setQuickCreateAssigneeId(null)
+                              setQuickCreateAssigneeOpen(false)
+                            }}
+                            style={({ pressed }) => [styles.createAssigneeItem, !quickCreateAssignee ? styles.createAssigneeItemOn : null, pressed ? styles.segmentPressed : null]}
+                          >
+                            <Text style={styles.createAssigneeName}>未分配</Text>
+                            {!quickCreateAssignee ? <Ionicons name="checkmark" size={moderateScale(16)} color="#2563EB" /> : null}
                           </Pressable>
-                        ))}
-                      </View>
+                          {quickCreateUsers.map((item) => {
+                            const selected = item.id === quickCreateAssigneeId
+                            return (
+                              <Pressable
+                                key={item.id}
+                                accessibilityRole="button"
+                                accessibilityLabel={`quick-create-assignee-${item.id}`}
+                                disabled={quickCreateBusy}
+                                onPress={() => {
+                                  setQuickCreateAssigneeId(item.id)
+                                  setQuickCreateAssigneeOpen(false)
+                                }}
+                                style={({ pressed }) => [styles.createAssigneeItem, selected ? styles.createAssigneeItemOn : null, pressed ? styles.segmentPressed : null]}
+                              >
+                                <Text style={styles.createAssigneeName} numberOfLines={1}>{quickCreateUserName(item)}</Text>
+                                {selected ? <Ionicons name="checkmark" size={moderateScale(16)} color="#2563EB" /> : null}
+                              </Pressable>
+                            )
+                          })}
+                          {!quickCreateUsers.length ? <Text style={styles.createAssigneeEmpty}>暂无可选执行人</Text> : null}
+                          </ScrollView>
+                        </View>
+                      ) : null}
                     </View>
                   </>
                 ) : (
@@ -2253,6 +2743,16 @@ function showBanner(title: string, message: string) {
           </View>
         </Modal>
 
+        {taskCacheHint ? (
+          <View style={styles.cacheHintCard}>
+            <View style={styles.cacheHintHeader}>
+              <Text style={styles.cacheHintTitle}>{isShowingCachedTasks ? '本地缓存' : '正在同步'}</Text>
+              <Text style={styles.cacheHintMeta}>{taskCacheHint.lastSyncedAt ? `上次同步 ${formatSyncTimestamp(taskCacheHint.lastSyncedAt)}` : '等待首次同步'}</Text>
+            </View>
+            <Text style={styles.cacheHintText}>{taskCacheHint.message}</Text>
+          </View>
+        ) : null}
+
         {!hasInit ? (
           <View style={styles.emptyCard}>
             <Text style={styles.emptyText}>{t('common_loading')}</Text>
@@ -2260,6 +2760,9 @@ function showBanner(title: string, message: string) {
         ) : loadError ? (
           <View style={styles.emptyCard}>
             <Text style={styles.emptyText}>{loadError}</Text>
+            <Pressable onPress={() => { void refreshTasksData() }} style={({ pressed }) => [styles.emptyRetryBtn, pressed ? styles.segmentPressed : null]}>
+              <Text style={styles.emptyRetryText}>重试</Text>
+            </Pressable>
           </View>
         ) : visibleTasks.length === 0 ? (
           <View style={styles.emptyCard}>
@@ -2269,33 +2772,56 @@ function showBanner(title: string, message: string) {
           <View style={{ marginTop: 10, gap: 12 }}>
             {visibleTasks.map((task, taskIndex) => {
               const shouldRenderDayEndBefore = showDayEndCard && dayEndInsertIndex === taskIndex
-              const meta = statusLabelForTask(task, roleNames)
+              const meta = getTaskStatusMeta(task, roleNames, user?.id)
+              const metaStyles = statusPillStylePair(meta.tone)
               const kind = taskKindLabel(task.task_kind)
               const addr = task.property?.address || ''
               const code = task.property?.code || ''
               const unitType = task.property?.unit_type || ''
               const region = task.property?.region || ''
-              const checkoutTime = String(task.start_time || '').trim()
-              const checkinTime = String(task.end_time || '').trim()
+              const checkoutTime = checkoutTimeForDisplay(task)
+              const checkinTime = checkinTimeForDisplay(task)
               const guideUrl = normalizeHttpUrl(task.property?.access_guide_link)
-              const oldCode = String((task as any).old_code || '').trim()
-              const newCode = String((task as any).new_code || '').trim()
-              const guestSpecialRequest = String((task as any).guest_special_request || (task as any).note || '').trim()
+              const wifiSsid = String(task.property?.wifi_ssid || '').trim()
+              const wifiPassword = String(task.property?.wifi_password || '').trim()
+              const hasWifiInfo = !!(wifiSsid || wifiPassword)
+              const turnoverDisplay = turnoverDisplayOf(task)
+              const oldCode = String(turnoverDisplay?.old_code || (task as any).old_code || '').trim()
+              const newCode = String(turnoverDisplay?.new_code || (task as any).new_code || '').trim()
+              const guestSpecialRequest = guestRequestForDisplay(task)
               const guestLuggage = (task as any).guest_luggage || null
-              const urgency = urgencyMeta(task.urgency)
               const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
+              const urgency = isOfflineTask ? null : urgencyMeta(task.urgency)
               const detailPreview = !isOfflineTask && task.source_type !== 'cleaning_tasks' ? stripPhotoLines(task.summary) : ''
               const showSummary = !!detailPreview
               const isCleaningSource = task.source_type === 'cleaning_tasks'
               const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
               const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
-              const isCleaningSubmitted = isCleaningTask && isCleaningWorkSubmitted(task.status)
-              const hasKeyPhoto = !!String((task as any)?.key_photo_url || '').trim()
+              const isKeyHandoverTask = isKeyHandoverExecutionTask(task)
+              const keyPhotoState = selectKeyPhotoEffectiveState({
+                key_photo_url: String((task as any)?.key_photo_url || '').trim(),
+                has_local_pending: !!keyQueueByTaskId[String((task as any)?.source_id || '').trim()],
+              })
               const taskType = String((task as any).task_type || '').trim().toLowerCase()
+              const isCheckinSiteExecution = isCheckinSiteExecutionTask(task as any)
               const isStayoverTask = isCleaningTask && isStayoverTaskType(taskType)
               const isCheckoutTask = taskType === 'checkout_clean' || !!checkoutTime
+              const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
+              const inspectionScopeTag = isPasswordOnlyInspection
+                ? '仅改密码'
+                : isCheckinSiteExecution
+                  ? inspectionScopeLabel((task as any).inspection_scope)
+                  : null
               const inspectionMode = effectiveInspectionMode(task as any)
               const inspectionPlanLabel = inspectionModeLabel(inspectionMode, String((task as any).inspection_due_date || '').trim() || null)
+              const stayoverTagStyles = taskTagStylePair('normal')
+              const kindTagStyles = taskTagStylePair(getTaskKindTone(task.task_kind))
+              const inspectionPlanTagStyles = taskTagStylePair(getInspectionModeTone(inspectionMode))
+              const inspectionScopeTagStyles = taskTagStylePair(getInspectionScopeTone(isPasswordOnlyInspection))
+              const checkoutTagStyles = taskTagStylePair('danger')
+              const checkinTagStyles = taskTagStylePair('pending')
+              const lateCheckoutTagStyles = taskTagStylePair('danger')
+              const earlyCheckinTagStyles = taskTagStylePair('info')
               const isSelfCompleteEligible = isCleaningTask && isSelfCompleteMode(task as any) && (isCheckoutTask || isStayoverTask)
               const isDirectCompleteEligible = isCleaningTask && (isSelfCompleteEligible || isStayoverTask)
               const isPendingInspectionDecision = isCleaningTask && !isStayoverTask && inspectionMode === 'pending_decision'
@@ -2303,11 +2829,38 @@ function showBanner(title: string, message: string) {
               const checkedOutAt = String((task as any).checked_out_at || '').trim()
               const isCheckedOut = !!checkedOutAt
               const isHistoricalTask = isBeforeToday(String(task.scheduled_date || (task as any).date || ''))
-              const canEditManagerFields = roleNames.includes('customer_service') || roleNames.includes('admin') || roleNames.includes('offline_manager')
               const isManager = canManagerMode && mode === 'manager'
               const isInspectorUser = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
+              const taskPrimaryActions = primaryActionsForTask(task, { roleNames, limit: 2 })
+              const renderPrimaryAction = (action: WorkTaskAvailableAction) => {
+                const checkedOutVisual = action.id === 'mark_guest_checkout' && !!checkedOutAt
+                const localDisabled =
+                  (action.id === 'upload_key_photo' && keyPhotoState !== 'missing')
+                  || (action.id === 'mark_guest_checkout' && (!token || isHistoricalTask || !!checkedOutPendingMap[task.id]))
+                const disabled = !action.enabled || localDisabled
+                const label = action.id === 'upload_key_photo'
+                  ? (keyPhotoState === 'recorded' ? '钥匙已记录' : keyPhotoState === 'pending_sync' ? '钥匙待同步' : action.label)
+                  : action.id === 'mark_guest_checkout' && checkedOutPendingMap[task.id]
+                    ? '提交中...'
+                    : action.label
+                return (
+                  <Pressable
+                    key={`${action.id}:${action.target || ''}:${action.label}`}
+                    testID={`task-action-${task.id}-${action.id}`}
+                    onPress={() => {
+                      if (disabled) return
+                      handleTaskActionPress(task, action)
+                    }}
+                    disabled={disabled}
+                    style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, checkedOutVisual || disabled ? styles.actionBtnDisabled : null]}
+                  >
+                    <Text style={[styles.actionText, checkedOutVisual || disabled ? { color: '#6B7280' } : null]}>{label}</Text>
+                  </Pressable>
+                )
+              }
               const cleanerName = String((task as any).cleaner_name || '').trim()
               const inspectorName = String((task as any).inspector_name || '').trim()
+              const executorName = String((task as any).executor_name || (task as any).assignee_name || ((isKeyHandoverTask || isCheckinSiteExecution) ? (cleanerName || inspectorName) : '') || task.assignee_id || '').trim()
               const cleanerExecName = cleanerName || '-'
               const inspectorExecName = isDirectCompleteEligible || isPendingInspectionDecision ? '无' : (inspectorName || '-')
               const cleanerOrderRaw = (task as any).sort_index_cleaner
@@ -2345,32 +2898,54 @@ function showBanner(title: string, message: string) {
               })()
               const hasCheckout = !!checkoutTime
               const hasCheckin = !!checkinTime
-              const isLateCheckout = hasCheckout && isLateCheckoutTime(checkoutTime)
-              const isEarlyCheckin = hasCheckin && isEarlyCheckinTime(checkinTime)
-              const titleSuffix = hasCheckout || hasCheckin ? `${hasCheckout ? '退房' : ''}${hasCheckout && hasCheckin ? ' ' : ''}${hasCheckin ? '入住' : ''}` : ''
-              const title2 = `${code || task.title || '-'}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
+              const isLateCheckout = hasCheckout && isLateCheckoutDisplay(task, checkoutTime)
+              const isEarlyCheckin = hasCheckin && isEarlyCheckinDisplay(task, checkinTime)
+              const isLateCheckin = hasCheckin && isLateCheckinDisplay(task, checkinTime)
+              const titleSuffix = cleaningTaskTitleSuffix(task as any)
+              const taskCollapsed = collapsedTaskIds[String(task.id)] ?? true
+              const addressCopied = copiedFeedbackKey === `address:${task.id}`
+              const wifiCopied = copiedFeedbackKey === `wifi:${task.id}`
+              const offlineTitleRaw = String(task.title || '').trim()
+              const offlineTitleSuffix = isOfflineTask && offlineTitleRaw && (!code || (!offlineTitleRaw.includes(code) && offlineTitleRaw !== code))
+                ? offlineTitleRaw
+                : ''
+              const followupTitle = isPropertyFollowupTask(task) ? propertyFollowupTaskTitle(task) : ''
+              const title2 = isOfflineTask
+                ? [code || '', offlineTitleSuffix].filter(Boolean).join(' ').trim() || offlineTitleRaw || '-'
+                : isPropertyFollowupTask(task) && followupTitle
+                  ? [code || '', followupTitle || task.title || '任务'].filter(Boolean).join(' · ').trim()
+                : `${code || task.title || '-'}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
               const keyRequirementTags = resolveKeyRequirementTags(task, { hasCheckout, hasCheckin, isCheckedOut })
               const checkoutSets = keyRequirementTags.checkoutSets
               const checkinSets = keyRequirementTags.checkinSets
               const showCheckout = isCleaningSource && keyRequirementTags.showCheckout
               const showCheckin = isCleaningSource && keyRequirementTags.showCheckin
-              const selfInspectorOnlyUser = isInspectorOnlyRole(roleNames)
               const offlineDetail = (() => {
                 if (!isOfflineTask) return null
-                const t1 = String(task.title || '').trim()
-                if (t1 && (!code || t1 !== code) && t1 !== title2) return t1
                 const s1 = stripPhotoLines(task.summary)
                 if (s1) return s1
+                const t1 = String(task.title || '').trim()
+                if (t1 && (!code || t1 !== code) && t1 !== title2) return t1
                 if (!t1) return null
                 if (code && t1 === code) return null
                 if (t1 === title2) return null
                 return t1
               })()
+              const standaloneTaskDetail = isOfflineTask
+                ? offlineDetail
+                : (!isCleaningSource ? propertyFollowupTaskDetail(task, detailPreview) : '')
+              const showStandaloneTaskLayout = !isCleaningSource && (isOfflineTask || isPropertyFollowupTask(task) || !!standaloneTaskDetail)
+              const standaloneAssigneeName = String((task as any).assignee_name || (task as any).cleaner_name || (task as any).inspector_name || '').trim()
+                || (String(task.assignee_id || '').trim() ? String(task.assignee_id || '').trim() : '未分配')
               return (
                 <React.Fragment key={task.id}>
                   {shouldRenderDayEndBefore ? (
                     <Pressable
-                      onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, taskRoomCodes: dayEndTaskRoomCodes, ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }) })}
+                      onPress={() => openDayEndScreen({
+                        taskRoomCodes: dayEndTaskRoomCodes,
+                        targetRoles: dayEndViewerRoles,
+                        ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }),
+                      })}
                       style={({ pressed }) => [styles.taskCard, styles.dayEndTaskCard, pressed ? styles.segmentPressed : null]}
                     >
                       <View style={styles.taskTitleRow}>
@@ -2388,28 +2963,44 @@ function showBanner(title: string, message: string) {
                         {isCleanerSelf || isInspectorSelf
                           ? (dayEndComplete
                             ? '今天的日终交接已提交，可进入查看详情。'
-                            : (selfInspectorOnlyUser ? '请拍剩余消耗品并完成 Reject 床品登记。' : '请根据今天实际任务完成日终交接。'))
+                            : (dayEndViewerInspectorOnly
+                              ? '请拍剩余消耗品并完成 Reject 床品登记。'
+                              : (dayEndViewerHasCleaning && dayEndViewerHasInspection
+                                ? '请完成备用钥匙、脏床品、剩余消耗品与 Reject 床品登记。'
+                                : '请根据今天实际任务完成日终交接。')))
                           : (dayEndViewerTarget.userName
-                            ? `查看 ${dayEndViewerTarget.userName} 今日的钥匙与脏床品交接记录。`
-                            : '查看今日的钥匙与脏床品交接记录。')}
+                            ? `查看 ${dayEndViewerTarget.userName} 今日的${dayEndTargetContentLabel(dayEndViewerRoles)}交接记录。`
+                            : `查看今日的${dayEndTargetContentLabel(dayEndViewerRoles)}交接记录。`)}
                       </Text>
                       <View style={styles.actionsRow}>
                         <Pressable
-                          onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, focus: selfInspectorOnlyUser ? 'consumable' : 'key', taskRoomCodes: dayEndTaskRoomCodes, ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }) })}
+                          onPress={() => openDayEndScreen({
+                            focus: dayEndViewerInspectorOnly ? 'consumable' : 'key',
+                            taskRoomCodes: dayEndTaskRoomCodes,
+                            targetRoles: dayEndViewerRoles,
+                            ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }),
+                          })}
                           style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
                         >
-                          <Text style={styles.actionText}>{selfInspectorOnlyUser ? '上传剩余消耗品' : '上传备用钥匙'}</Text>
+                          <Text style={styles.actionText}>{dayEndViewerInspectorOnly ? '上传剩余消耗品' : '上传备用钥匙'}</Text>
                         </Pressable>
                         <Pressable
-                          onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, focus: selfInspectorOnlyUser ? 'reject' : 'dirty', taskRoomCodes: dayEndTaskRoomCodes, ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }) })}
+                          onPress={() => openDayEndScreen({
+                            focus: dayEndViewerInspectorOnly ? 'reject' : 'dirty',
+                            taskRoomCodes: dayEndTaskRoomCodes,
+                            targetRoles: dayEndViewerRoles,
+                            ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }),
+                          })}
                           style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
                         >
-                          <Text style={styles.actionText}>{selfInspectorOnlyUser ? '登记 Reject床品' : '上传脏床品照片'}</Text>
+                          <Text style={styles.actionText}>{dayEndViewerInspectorOnly ? '登记 Reject床品' : '上传脏床品照片'}</Text>
                         </Pressable>
                       </View>
                     </Pressable>
                   ) : null}
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`task-card-${task.id}`}
                     onPress={() => {
                     if (reorderMode && isReorderableTask(task)) {
                       setOrderList((prev) => {
@@ -2420,74 +3011,107 @@ function showBanner(title: string, message: string) {
                       })
                       return
                     }
-                    const isManager0 = canTaskManagerView
-                    const isInspector0 = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
-                    const isInspection0 = task.source_type === 'cleaning_tasks' && task.task_kind === 'inspection'
-                    const isCleaningTask0 = task.source_type === 'cleaning_tasks'
-                    if (isManager0 && isCleaningTask0) {
+                    const isCleaningTask0 = isCleaningExecutionTask(task) || isInspectionExecutionTask(task) || isKeyHandoverExecutionTask(task)
+                    if (view === 'all' && canTaskManagerView && isCleaningTask0) {
                       props.navigation.navigate('ManagerDailyTask', { taskId: task.id })
                       return
                     }
+                    if (Array.isArray((task as any).available_actions)) {
+                      props.navigation.navigate('TaskDetail', { id: task.id })
+                      return
+                    }
+                    const isInspector0 = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
+                    const isInspection0 = isInspectionExecutionTask(task)
                     if (isInspector0 && isInspection0) {
-                      props.navigation.navigate('InspectionPanel', { taskId: task.id })
+                      const sourceId = String((task as any)?.source_id || '').trim()
+                      props.navigation.navigate('InspectionPanel', { taskId: task.id, ...(sourceId ? { sourceId } : {}) })
                       return
                     }
                     props.navigation.navigate('TaskDetail', { id: task.id })
                   }}
                     style={({ pressed }) => [styles.taskCard, pressed ? styles.segmentPressed : null]}
                   >
-                  <View style={styles.taskTitleRow}>
-                    {!isManager && (isReorderableTask(task) || sortIndex != null) ? (
-                      <View style={[styles.orderPill, reorderMode && isReorderableTask(task) ? styles.orderPillActive : null]}>
-                        <Text style={[styles.orderPillText, reorderMode && isReorderableTask(task) ? styles.orderPillTextActive : null]}>
-                          {reorderMode && isReorderableTask(task) ? (selectedMark || '·') : sortIndex == null ? '·' : String(sortIndex)}
-                        </Text>
+                  <View style={styles.taskHeroRow}>
+                    <View style={styles.taskHeroMain}>
+                      <View style={styles.taskTitleRow}>
+                        <View style={styles.taskTitleMain}>
+                          {!isManager && (isReorderableTask(task) || sortIndex != null) ? (
+                            <View style={[styles.orderPill, reorderMode && isReorderableTask(task) ? styles.orderPillActive : null]}>
+                              <Text style={[styles.orderPillText, reorderMode && isReorderableTask(task) ? styles.orderPillTextActive : null]}>
+                                {reorderMode && isReorderableTask(task) ? (selectedMark || '·') : sortIndex == null ? '·' : String(sortIndex)}
+                              </Text>
+                            </View>
+                          ) : null}
+                          <Text style={[styles.taskTitle, prefersCompactTaskHeader ? styles.taskTitleCompact : null]} numberOfLines={prefersCompactTaskHeader ? 3 : 2}>
+                            {title2}
+                          </Text>
+                        </View>
                       </View>
-                    ) : null}
-                    <Text style={styles.taskTitle} numberOfLines={2}>
-                      {title2}
-                    </Text>
-                    <View style={[styles.statusPill, meta.pill]}>
-                      <Text style={[styles.statusText, meta.textStyle]}>{meta.text}</Text>
+                    </View>
+                    <View style={[styles.taskHeroAside, prefersCompactTaskHeader ? styles.taskHeroAsideCompact : null]}>
+                      <View style={[styles.statusPill, metaStyles.pill]}>
+                        <Text style={[styles.statusText, metaStyles.text]}>{meta.text}</Text>
+                      </View>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`task-collapse-${task.id}`}
+                        accessibilityHint={taskCollapsed ? '展开任务详情' : '收起任务详情'}
+                        onPress={() => toggleTaskCollapsed(String(task.id))}
+                        hitSlop={8}
+                        style={({ pressed }) => [styles.collapseBtn, pressed ? styles.segmentPressed : null]}
+                      >
+                        <Text style={styles.collapseBtnText}>{taskCollapsed ? '展开' : '收起'}</Text>
+                        <Ionicons name={taskCollapsed ? 'chevron-down' : 'chevron-up'} size={moderateScale(16)} color="#6B7280" />
+                      </Pressable>
                     </View>
                   </View>
 
                   <View style={styles.taskSubRow}>
                     {isStayoverTask ? (
-                      <View style={styles.tag}>
-                        <Text style={styles.tagText}>入住中清洁</Text>
+                      <View style={stayoverTagStyles.container}>
+                        <Text style={stayoverTagStyles.text}>入住中清洁</Text>
                       </View>
                     ) : (
                       <>
-                        <View style={styles.tag}>
-                          <Text style={styles.tagText}>{kind}</Text>
+                        <View style={kindTagStyles.container}>
+                          <Text style={kindTagStyles.text}>{isKeyHandoverTask || isCheckinSiteExecution ? '执行' : kind}</Text>
                         </View>
                         {showCheckout ? (
-                          <View style={styles.tagKey}>
-                            <Text style={styles.tagKeyText}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
+                          <View style={checkoutTagStyles.container}>
+                            <Text style={checkoutTagStyles.text}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
                           </View>
                         ) : null}
                         {showCheckin ? (
-                          <View style={styles.tagWarn}>
-                            <Text style={styles.tagWarnText}>{`需挂${checkinSets}套钥匙`}</Text>
+                          <View style={checkinTagStyles.container}>
+                            <Text style={checkinTagStyles.text}>{`需挂${checkinSets}套钥匙`}</Text>
                           </View>
                         ) : null}
                         {isLateCheckout ? (
-                          <View style={styles.tagLate}>
-                            <Text style={styles.tagLateText}>晚退房</Text>
+                          <View style={lateCheckoutTagStyles.container}>
+                            <Text style={lateCheckoutTagStyles.text}>晚退房</Text>
                           </View>
                         ) : null}
                         {isEarlyCheckin ? (
-                          <View style={styles.tagWarn}>
-                            <Text style={styles.tagWarnText}>早入住</Text>
+                          <View style={earlyCheckinTagStyles.container}>
+                            <Text style={earlyCheckinTagStyles.text}>早入住</Text>
+                          </View>
+                        ) : null}
+                        {isLateCheckin ? (
+                          <View style={earlyCheckinTagStyles.container}>
+                            <Text style={earlyCheckinTagStyles.text}>晚入住</Text>
                           </View>
                         ) : null}
                         {showInspectionPlanTag ? (
-                          <View style={inspectionMode === 'pending_decision' ? styles.tagWarn : styles.tag}>
-                            <Text style={inspectionMode === 'pending_decision' ? styles.tagWarnText : styles.tagText}>{inspectionPlanLabel}</Text>
+                          <View style={inspectionPlanTagStyles.container}>
+                            <Text style={inspectionPlanTagStyles.text}>{inspectionPlanLabel}</Text>
                           </View>
                         ) : null}
-                        {urgency ? (
+                        {inspectionScopeTag ? (
+                          <View style={inspectionScopeTagStyles.container}>
+                            <Text style={inspectionScopeTagStyles.text}>{inspectionScopeTag}</Text>
+                          </View>
+                        ) : null}
+                        {!isOfflineTask && urgency ? (
                           <View style={[styles.urgencyPill, urgency.pill]}>
                             <Text style={[styles.urgencyText, urgency.textStyle]}>{urgency.text}</Text>
                           </View>
@@ -2496,31 +3120,57 @@ function showBanner(title: string, message: string) {
                     )}
                   </View>
 
-                  {isCleaningSource ? (
+                  {taskCollapsed && guestSpecialRequest ? (
+                    <View style={styles.collapsedGuestRequest}>
+                      <Ionicons name="chatbubble-ellipses-outline" size={moderateScale(16)} color="#2563EB" />
+                      <View style={styles.collapsedGuestRequestTextWrap}>
+                        <Text style={styles.collapsedGuestRequestLabel}>客人需求</Text>
+                        <Text style={styles.collapsedGuestRequestText} numberOfLines={2}>
+                          {guestSpecialRequest}
+                        </Text>
+                      </View>
+                    </View>
+                  ) : null}
+
+                  {!taskCollapsed && isCleaningSource ? (
                     <>
                       <View style={styles.execCard}>
                         <Text style={styles.execLabel}>执行人员</Text>
-                        <View style={styles.execPeople}>
-                          <View style={styles.execPerson}>
-                            <View style={styles.execBadgeClean}>
-                              <Text style={styles.execBadgeText}>清</Text>
-                            </View>
-                            <View style={styles.execPersonText}>
-                              <Text style={[styles.execPersonRole, styles.execPersonRoleClean]}>清洁</Text>
-                              <Text style={styles.execPersonName} numberOfLines={1}>{cleanerExecName}</Text>
-                            </View>
-                          </View>
-                          <View style={styles.execPerson}>
-                            <View style={styles.execBadgeInspect}>
-                              <Text style={styles.execBadgeText}>检</Text>
-                            </View>
-                            <View style={styles.execPersonText}>
-                              <Text style={[styles.execPersonRole, styles.execPersonRoleInspect]}>检查</Text>
-                              <Text style={styles.execPersonName} numberOfLines={1}>{inspectorExecName}</Text>
+                        {isKeyHandoverTask || isCheckinSiteExecution ? (
+                          <View style={styles.execPeople}>
+                            <View style={styles.execPerson}>
+                              <View style={styles.execBadgeExecute}>
+                                <Text style={styles.execBadgeText}>执</Text>
+                              </View>
+                              <View style={styles.execPersonText}>
+                                <Text style={[styles.execPersonRole, styles.execPersonRoleExecute]}>执行</Text>
+                                <Text style={styles.execPersonName} numberOfLines={1}>{executorName || '-'}</Text>
+                              </View>
                             </View>
                           </View>
-                        </View>
-                        {isManager || isInspectorUser ? (
+                        ) : (
+                          <View style={styles.execPeople}>
+                            <View style={styles.execPerson}>
+                              <View style={styles.execBadgeClean}>
+                                <Text style={styles.execBadgeText}>清</Text>
+                              </View>
+                              <View style={styles.execPersonText}>
+                                <Text style={[styles.execPersonRole, styles.execPersonRoleClean]}>清洁</Text>
+                                <Text style={styles.execPersonName} numberOfLines={1}>{cleanerExecName}</Text>
+                              </View>
+                            </View>
+                            <View style={styles.execPerson}>
+                              <View style={styles.execBadgeInspect}>
+                                <Text style={styles.execBadgeText}>检</Text>
+                              </View>
+                              <View style={styles.execPersonText}>
+                                <Text style={[styles.execPersonRole, styles.execPersonRoleInspect]}>检查</Text>
+                                <Text style={styles.execPersonName} numberOfLines={1}>{inspectorExecName}</Text>
+                              </View>
+                            </View>
+                          </View>
+                        )}
+                        {!isKeyHandoverTask && !isCheckinSiteExecution && (isManager || isInspectorUser) ? (
                           <View style={styles.execOrderRow}>
                             <Text style={styles.execOrder} numberOfLines={1}>
                               {`清洁顺序：${cleanerOrderN == null ? '-' : String(cleanerOrderN)}`}
@@ -2533,9 +3183,12 @@ function showBanner(title: string, message: string) {
                       </View>
 
                       {!isOfflineTask && unitType ? (
-                        <View style={styles.unitTypeRow}>
-                          <Ionicons name="bed-outline" size={moderateScale(24)} color="#6366F1" />
-                          <View style={styles.unitTypeCell}>
+                        <View style={styles.detailRowCard}>
+                          <View style={[styles.detailIconWrap, styles.detailIconIndigo]}>
+                            <Ionicons name="bed-outline" size={moderateScale(18)} color="#6366F1" />
+                          </View>
+                          <View style={styles.detailRowContent}>
+                            <Text style={styles.detailRowLabel}>户型</Text>
                             <Text style={styles.unitTypeText}>{unitType}</Text>
                           </View>
                         </View>
@@ -2543,71 +3196,165 @@ function showBanner(title: string, message: string) {
 
                       {addr ? (
                         <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={addressCopied ? `address-copied-${task.id}` : `address-copy-${task.id}`}
                           onPress={async () => {
                             try {
                               await Clipboard.setStringAsync(addr)
+                              flashCopiedFeedback(`address:${task.id}`)
                               showBanner('已复制', '地址已复制')
                             } catch {
                               showBanner('复制失败', '复制失败')
                             }
                           }}
-                          style={({ pressed }) => [styles.addrRow, pressed ? styles.segmentPressed : null]}
+                          style={({ pressed }) => [styles.detailRowCard, pressed ? styles.segmentPressed : null]}
                         >
-                          <Ionicons name="location-outline" size={moderateScale(22)} color="#2563EB" />
-                          <Text style={styles.addrText} numberOfLines={2}>
-                            {addr}
-                          </Text>
-                          <Ionicons name="copy-outline" size={moderateScale(18)} color="#9CA3AF" />
+                          <View style={[styles.detailIconWrap, styles.detailIconBlue]}>
+                            <Ionicons name="location-outline" size={moderateScale(18)} color="#2563EB" />
+                          </View>
+                          <View style={styles.detailRowContent}>
+                            <Text style={styles.detailRowLabel}>地址</Text>
+                            <Text style={styles.addrText} numberOfLines={2}>
+                              {addr}
+                            </Text>
+                          </View>
+                          <View style={[styles.copyAffordance, addressCopied ? styles.copyAffordanceDone : null]}>
+                            <Ionicons name={addressCopied ? 'checkmark-circle' : 'copy-outline'} size={moderateScale(18)} color={addressCopied ? '#047857' : '#9CA3AF'} />
+                            {addressCopied ? <Text style={styles.copyAffordanceText}>已复制</Text> : null}
+                          </View>
                         </Pressable>
                       ) : null}
 
-                      <View style={styles.timeRow}>
-                        <Ionicons name="time-outline" size={moderateScale(26)} color="#16A34A" />
-                        <View style={styles.timeCell}>
-                          <Text style={styles.timeLabel}>退房时间</Text>
-                          <Text style={styles.timeValue}>{checkoutTime || '-'}</Text>
+                      {hasWifiInfo ? (
+                        wifiPassword ? (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={wifiCopied ? `wifi-copied-${task.id}` : `wifi-copy-${task.id}`}
+                            onPress={async () => {
+                              try {
+                                await Clipboard.setStringAsync(wifiPassword)
+                                flashCopiedFeedback(`wifi:${task.id}`)
+                                showBanner('已复制', 'Wi-Fi 密码已复制')
+                              } catch {
+                                showBanner('复制失败', '复制失败')
+                              }
+                            }}
+                            style={({ pressed }) => [styles.detailRowCard, styles.detailRowCardAccent, pressed ? styles.segmentPressed : null]}
+                          >
+                            <View style={[styles.detailIconWrap, styles.detailIconTeal]}>
+                              <Ionicons name="wifi-outline" size={moderateScale(18)} color="#0F766E" />
+                            </View>
+                            <View style={styles.detailRowContent}>
+                              <Text style={styles.detailRowLabelTeal}>Wi-Fi</Text>
+                              <View style={styles.detailSplitRow}>
+                                <View style={styles.detailSplitCell}>
+                                  <Text style={styles.wifiLabel}>名称</Text>
+                                  <Text style={styles.wifiValue} numberOfLines={1}>{wifiSsid || '-'}</Text>
+                                </View>
+                                <View style={[styles.detailSplitDivider, styles.detailSplitDividerTeal]} />
+                                <View style={styles.detailSplitCell}>
+                                  <Text style={styles.wifiLabel}>密码</Text>
+                                  <Text style={styles.wifiValue} numberOfLines={1}>{wifiPassword || '-'}</Text>
+                                </View>
+                              </View>
+                            </View>
+                            <View style={[styles.copyAffordance, wifiCopied ? styles.copyAffordanceDone : null]}>
+                              <Ionicons name={wifiCopied ? 'checkmark-circle' : 'copy-outline'} size={moderateScale(18)} color={wifiCopied ? '#047857' : '#9CA3AF'} />
+                              {wifiCopied ? <Text style={styles.copyAffordanceText}>已复制</Text> : null}
+                            </View>
+                          </Pressable>
+                        ) : (
+                          <View style={[styles.detailRowCard, styles.detailRowCardAccent]}>
+                            <View style={[styles.detailIconWrap, styles.detailIconTeal]}>
+                              <Ionicons name="wifi-outline" size={moderateScale(18)} color="#0F766E" />
+                            </View>
+                            <View style={styles.detailRowContent}>
+                              <Text style={styles.detailRowLabelTeal}>Wi-Fi</Text>
+                              <View style={styles.detailSplitRow}>
+                                <View style={styles.detailSplitCell}>
+                                  <Text style={styles.wifiLabel}>名称</Text>
+                                  <Text style={styles.wifiValue} numberOfLines={1}>{wifiSsid || '-'}</Text>
+                                </View>
+                                <View style={[styles.detailSplitDivider, styles.detailSplitDividerTeal]} />
+                                <View style={styles.detailSplitCell}>
+                                  <Text style={styles.wifiLabel}>密码</Text>
+                                  <Text style={styles.wifiValue} numberOfLines={1}>-</Text>
+                                </View>
+                              </View>
+                            </View>
+                          </View>
+                        )
+                      ) : null}
+
+                      <View style={styles.detailRowCard}>
+                        <View style={[styles.detailIconWrap, styles.detailIconGreen]}>
+                          <Ionicons name="time-outline" size={moderateScale(18)} color="#16A34A" />
                         </View>
-                        <View style={styles.timeDivider} />
-                        <View style={styles.timeCell}>
-                          <Text style={styles.timeLabel}>入住时间</Text>
-                          <Text style={styles.timeValue}>{checkinTime || '-'}</Text>
+                        <View style={styles.detailRowContent}>
+                          <Text style={styles.detailRowLabel}>时间</Text>
+                          <View style={styles.detailSplitRow}>
+                            <View style={styles.detailSplitCell}>
+                              <Text style={styles.timeLabel}>退房时间</Text>
+                              <Text style={styles.timeValue}>{checkoutTime || '-'}</Text>
+                            </View>
+                            <View style={styles.detailSplitDivider} />
+                            <View style={styles.detailSplitCell}>
+                              <Text style={styles.timeLabel}>入住时间</Text>
+                              <Text style={styles.timeValue}>{checkinTime || '-'}</Text>
+                            </View>
+                          </View>
                         </View>
                       </View>
 
                       {stayedNights != null || remainingNights != null ? (
-                        <View style={styles.timeRow}>
-                          <Ionicons name="moon-outline" size={moderateScale(26)} color="#2563EB" />
-                          <View style={styles.timeCell}>
-                            <Text style={styles.timeLabel}>已住晚数</Text>
-                            <Text style={styles.timeValue}>{stayedNights == null ? '-' : `${stayedNights}`}</Text>
+                        <View style={styles.detailRowCard}>
+                          <View style={[styles.detailIconWrap, styles.detailIconBlue]}>
+                            <Ionicons name="moon-outline" size={moderateScale(18)} color="#2563EB" />
                           </View>
-                          <View style={styles.timeDivider} />
-                          <View style={styles.timeCell}>
-                            <Text style={styles.timeLabel}>待住晚数</Text>
-                            <Text style={styles.timeValue}>{remainingNights == null ? '-' : `${remainingNights}`}</Text>
+                          <View style={styles.detailRowContent}>
+                            <Text style={styles.detailRowLabel}>入住晚数</Text>
+                            <View style={styles.detailSplitRow}>
+                              <View style={styles.detailSplitCell}>
+                                <Text style={styles.timeLabel}>已住晚数</Text>
+                                <Text style={styles.timeValue}>{stayedNights == null ? '-' : `${stayedNights}`}</Text>
+                              </View>
+                              <View style={styles.detailSplitDivider} />
+                              <View style={styles.detailSplitCell}>
+                                <Text style={styles.timeLabel}>待住晚数</Text>
+                                <Text style={styles.timeValue}>{remainingNights == null ? '-' : `${remainingNights}`}</Text>
+                              </View>
+                            </View>
                           </View>
                         </View>
                       ) : null}
 
-                      <View style={styles.pwRowNew}>
-                        <Ionicons name="key-outline" size={moderateScale(22)} color="#F59E0B" />
-                        <View style={styles.pwCell}>
-                          <Text style={styles.pwLabel}>旧密码：</Text>
-                          <Text style={styles.pwValue}>{oldCode || '-'}</Text>
+                      <View style={styles.detailRowCard}>
+                        <View style={[styles.detailIconWrap, styles.detailIconAmber]}>
+                          <Ionicons name="key-outline" size={moderateScale(18)} color="#D97706" />
                         </View>
-                        <View style={styles.pwCell}>
-                          <Text style={styles.pwLabel}>新密码：</Text>
-                          <Text style={styles.pwValue}>{newCode || '-'}</Text>
+                        <View style={styles.detailRowContent}>
+                          <Text style={styles.detailRowLabel}>门锁密码</Text>
+                          <View style={styles.detailSplitRow}>
+                            <View style={styles.detailSplitCell}>
+                              <Text style={styles.pwLabel}>旧密码</Text>
+                              <Text style={styles.pwValue}>{oldCode || '-'}</Text>
+                            </View>
+                            <View style={styles.detailSplitDivider} />
+                            <View style={styles.detailSplitCell}>
+                              <Text style={styles.pwLabel}>新密码</Text>
+                              <Text style={styles.pwValue}>{newCode || '-'}</Text>
+                            </View>
+                          </View>
                         </View>
                       </View>
 
                       {guestSpecialRequest ? (
-                        <View style={styles.guestRow}>
-                          <View style={styles.guestIconWrap}>
-                            <Ionicons name="chatbubble-ellipses-outline" size={moderateScale(20)} color="#2563EB" />
+                        <View style={styles.detailRowCard}>
+                          <View style={[styles.detailIconWrap, styles.detailIconBlue]}>
+                            <Ionicons name="chatbubble-ellipses-outline" size={moderateScale(18)} color="#2563EB" />
                           </View>
-                          <View style={styles.guestCell}>
-                            <Text style={styles.guestLabel}>客人需求：</Text>
+                          <View style={styles.detailRowContent}>
+                            <Text style={styles.detailRowLabel}>客人需求</Text>
                             <Text style={styles.guestValue} numberOfLines={3}>
                               {guestSpecialRequest}
                             </Text>
@@ -2634,32 +3381,111 @@ function showBanner(title: string, message: string) {
                                 showBanner('打开失败', '打开失败')
                               }
                             }}
-                            style={({ pressed }) => [styles.guideCard, pressed ? styles.segmentPressed : null]}
+                            style={({ pressed }) => [styles.detailRowCard, pressed ? styles.segmentPressed : null]}
                           >
-                            <Ionicons name="open-outline" size={moderateScale(20)} color="#2563EB" />
-                            <Text style={styles.guideText} numberOfLines={1}>
-                              查看入住指南
-                            </Text>
+                            <View style={[styles.detailIconWrap, styles.detailIconBlue]}>
+                              <Ionicons name="open-outline" size={moderateScale(18)} color="#2563EB" />
+                            </View>
+                            <View style={styles.detailRowContent}>
+                              <Text style={styles.detailRowLabel}>入住指南</Text>
+                              <Text style={styles.guideText} numberOfLines={1}>
+                                查看入住指南
+                              </Text>
+                            </View>
                             <Ionicons name="chevron-forward" size={moderateScale(18)} color="#9CA3AF" />
                           </Pressable>
                         ) : (
-                          <View style={styles.guideCard}>
-                            <Ionicons name="open-outline" size={moderateScale(20)} color="#9CA3AF" />
-                            <Text style={[styles.guideText, { color: '#9CA3AF' }]} numberOfLines={1}>
-                              无入住指南，请联系管理员
-                            </Text>
+                          <View style={styles.detailRowCard}>
+                            <View style={[styles.detailIconWrap, styles.detailIconMuted]}>
+                              <Ionicons name="open-outline" size={moderateScale(18)} color="#9CA3AF" />
+                            </View>
+                            <View style={styles.detailRowContent}>
+                              <Text style={styles.detailRowLabel}>入住指南</Text>
+                              <Text style={[styles.guideText, { color: '#9CA3AF' }]} numberOfLines={1}>
+                                无入住指南，请联系管理员
+                              </Text>
+                            </View>
                             <Ionicons name="chevron-forward" size={moderateScale(18)} color="#E5E7EB" />
                           </View>
                         )
                       ) : null}
                     </>
-                  ) : (
+                  ) : !taskCollapsed && showStandaloneTaskLayout ? (
                     <>
-                      {!isOfflineTask && addr ? (
+                      {standaloneTaskDetail ? (
+                        <View style={[styles.detailRowCard, styles.detailRowCardPrimary]}>
+                          <View style={[styles.detailIconWrap, styles.detailIconIndigo]}>
+                            <Ionicons name="document-text-outline" size={moderateScale(18)} color="#4F46E5" />
+                          </View>
+                          <View style={styles.detailRowContent}>
+                            <Text style={styles.detailRowLabel}>任务内容</Text>
+                            <Text style={styles.primaryDetailText} numberOfLines={4}>
+                              {standaloneTaskDetail}
+                            </Text>
+                          </View>
+                        </View>
+                      ) : null}
+
+                      <View style={styles.detailRowCard}>
+                        <View style={[styles.detailIconWrap, styles.detailIconBlue]}>
+                          <Ionicons name="person-outline" size={moderateScale(18)} color="#2563EB" />
+                        </View>
+                        <View style={styles.detailRowContent}>
+                          <Text style={styles.detailRowLabel}>执行人员</Text>
+                          <Text style={styles.addrText} numberOfLines={1}>
+                            {standaloneAssigneeName}
+                          </Text>
+                        </View>
+                        {sortIndex != null ? (
+                          <View style={styles.copyAffordance}>
+                            <Text style={styles.copyAffordanceText} numberOfLines={1}>
+                              {`执行顺序：${String(sortIndex)}`}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
+
+                      {addr ? (
                         <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={addressCopied ? `address-copied-${task.id}` : `address-copy-${task.id}`}
                           onPress={async () => {
                             try {
                               await Clipboard.setStringAsync(addr)
+                              flashCopiedFeedback(`address:${task.id}`)
+                              showBanner('已复制', '地址已复制')
+                            } catch {
+                              showBanner('复制失败', '复制失败')
+                            }
+                          }}
+                          style={({ pressed }) => [styles.detailRowCard, pressed ? styles.segmentPressed : null]}
+                        >
+                          <View style={[styles.detailIconWrap, styles.detailIconMuted]}>
+                            <Ionicons name="location-outline" size={moderateScale(18)} color="#6B7280" />
+                          </View>
+                          <View style={styles.detailRowContent}>
+                            <Text style={styles.detailRowLabel}>房源地址</Text>
+                            <Text style={styles.addrText} numberOfLines={2}>
+                              {addr}
+                            </Text>
+                          </View>
+                          <View style={[styles.copyAffordance, addressCopied ? styles.copyAffordanceDone : null]}>
+                            <Ionicons name={addressCopied ? 'checkmark-circle' : 'copy-outline'} size={moderateScale(18)} color={addressCopied ? '#047857' : '#9CA3AF'} />
+                            {addressCopied ? <Text style={styles.copyAffordanceText}>已复制</Text> : null}
+                          </View>
+                        </Pressable>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      {!taskCollapsed && !isOfflineTask && addr ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={addressCopied ? `address-copied-${task.id}` : `address-copy-${task.id}`}
+                          onPress={async () => {
+                            try {
+                              await Clipboard.setStringAsync(addr)
+                              flashCopiedFeedback(`address:${task.id}`)
                               showBanner('已复制', '地址已复制')
                             } catch {
                               showBanner('复制失败', '复制失败')
@@ -2671,131 +3497,31 @@ function showBanner(title: string, message: string) {
                           <Text style={styles.addr} numberOfLines={2}>
                             {addr}
                           </Text>
-                          <Ionicons name="copy-outline" size={moderateScale(14)} color="#9CA3AF" />
+                          <View style={[styles.copyAffordance, addressCopied ? styles.copyAffordanceDone : null]}>
+                            <Ionicons name={addressCopied ? 'checkmark-circle' : 'copy-outline'} size={moderateScale(14)} color={addressCopied ? '#047857' : '#9CA3AF'} />
+                            {addressCopied ? <Text style={styles.copyAffordanceText}>已复制</Text> : null}
+                          </View>
                         </Pressable>
                       ) : null}
                     </>
                   )}
 
-                  {isOfflineTask && offlineDetail ? (
-                    <View style={styles.row}>
-                      <Ionicons name="list-outline" size={moderateScale(14)} color="#9CA3AF" />
-                      <Text style={styles.addr} numberOfLines={3}>
-                        {offlineDetail}
-                      </Text>
-                    </View>
-                  ) : null}
-
-                  {restockSummary ? (
+                  {!taskCollapsed && restockSummary ? (
                     <View style={styles.row}>
                       <Ionicons name="cube-outline" size={moderateScale(14)} color="#9CA3AF" />
                       <Text style={styles.addr} numberOfLines={2}>{`待补消耗品：${restockSummary}`}</Text>
                     </View>
                   ) : null}
 
-                  {showSummary ? (
+                  {!taskCollapsed && showSummary && !showStandaloneTaskLayout ? (
                     <Text style={styles.summary} numberOfLines={3}>
                       {detailPreview}
                     </Text>
                   ) : null}
 
-                  {isCleaningSource && isManager ? (
+                  {!taskCollapsed && taskPrimaryActions.length ? (
                     <View style={styles.actionsRow}>
-                      {canEditManagerFields && isCheckoutTask ? (
-                        <Pressable
-                          onPress={async () => {
-                            if (isHistoricalTask) return
-                            if (!token || !user?.id) return
-                            try {
-                                  const nextCheckedOutAt = isCheckedOut ? null : new Date().toISOString()
-                                  const taskIds = checkoutTaskIdsFromTask(task)
-                                  setCheckedOutPendingMap((prev) => ({ ...prev, [task.id]: true }))
-                                  await patchWorkTaskItem(String(task.id), { checked_out_at: nextCheckedOutAt } as any)
-                                  if (taskIds.length) {
-                                    await markGuestCheckedOutByTasks(token, { task_ids: taskIds, action: isCheckedOut ? 'unset' : 'set' })
-                                  } else {
-                                    const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
-                                    if (!orderId) throw new Error('缺少订单ID')
-                                    await markGuestCheckedOutByOrder(token, { order_id: orderId, action: isCheckedOut ? 'unset' : 'set' })
-                                  }
-                                  showBanner('已标记', isCheckedOut ? '已取消退房' : '已标记已退房')
-                            } catch (e: any) {
-                              await patchWorkTaskItem(String(task.id), { checked_out_at: checkedOutAt || null } as any)
-                              showBanner('失败', String(e?.message || '提交失败'))
-                            } finally {
-                              setCheckedOutPendingMap((prev) => {
-                                const next = { ...prev }
-                                delete next[task.id]
-                                return next
-                              })
-                            }
-                          }}
-                          disabled={!token || isHistoricalTask || !!checkedOutPendingMap[task.id]}
-                          style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, isCheckedOut || isHistoricalTask || !!checkedOutPendingMap[task.id] ? styles.actionBtnDisabled : null]}
-                        >
-                          <Text style={[styles.actionText, isCheckedOut || isHistoricalTask || !!checkedOutPendingMap[task.id] ? { color: '#6B7280' } : null]}>{checkedOutPendingMap[task.id] ? '提交中...' : isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
-                        </Pressable>
-                      ) : null}
-                      <Pressable
-                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                      >
-                        <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-                      </Pressable>
-                    </View>
-                  ) : isInspectionTask && isInspectorUser ? (
-                    <View style={styles.actionsRow}>
-                      <Pressable
-                        onPress={() => props.navigation.navigate('InspectionPanel', { taskId: task.id })}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                      >
-                        <Text style={styles.actionText}>检查与补充</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => props.navigation.navigate('InspectionComplete', { taskId: task.id })}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                      >
-                        <Text style={styles.actionText}>标记已完成</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                      >
-                        <Text style={styles.actionText}>房源问题反馈</Text>
-                      </Pressable>
-                    </View>
-                  ) : isCleaningTask ? (
-                    <View style={styles.actionsRow}>
-                      {!isCleaningSubmitted && !isStayoverTask ? (
-                        <Pressable
-                          onPress={() => props.navigation.navigate('TaskDetail', { id: task.id, action: 'upload_key' })}
-                          disabled={hasKeyPhoto}
-                          style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, hasKeyPhoto ? styles.actionBtnDisabled : null]}
-                        >
-                          <Text style={[styles.actionText, hasKeyPhoto ? { color: '#6B7280' } : null]}>{hasKeyPhoto ? '钥匙记录' : t('tasks_btn_upload_key')}</Text>
-                        </Pressable>
-                      ) : null}
-                      <Pressable
-                        onPress={() => {
-                          if (isPendingInspectionDecision) return
-                          props.navigation.navigate(isDirectCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)
-                        }}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null, isPendingInspectionDecision ? styles.actionBtnDisabled : null]}
-                      >
-                        <Text style={styles.actionText}>
-                          {isPendingInspectionDecision
-                            ? '待确认检查安排'
-                            : isCleaningSubmitted
-                              ? (isDirectCompleteEligible ? '完成记录' : '补品记录')
-                              : (isStayoverTask ? '标记已完成' : (isSelfCompleteEligible ? '补充与完成' : '补品填报'))}
-                        </Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                        style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
-                      >
-                        <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-                      </Pressable>
+                      {taskPrimaryActions.map(renderPrimaryAction)}
                     </View>
                   ) : null}
                   </Pressable>
@@ -2804,7 +3530,11 @@ function showBanner(title: string, message: string) {
             })}
             {showDayEndCard && dayEndInsertIndex === visibleTasks.length ? (
               <Pressable
-                onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, taskRoomCodes: dayEndTaskRoomCodes, ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }) })}
+                onPress={() => openDayEndScreen({
+                  taskRoomCodes: dayEndTaskRoomCodes,
+                  targetRoles: dayEndViewerRoles,
+                  ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }),
+                })}
                 style={({ pressed }) => [styles.taskCard, styles.dayEndTaskCard, pressed ? styles.segmentPressed : null]}
               >
                 <View style={styles.taskTitleRow}>
@@ -2822,23 +3552,37 @@ function showBanner(title: string, message: string) {
                   {isCleanerSelf || isInspectorSelf
                     ? (dayEndComplete
                       ? '今天的日终交接已提交，可进入查看详情。'
-                      : (isInspectorOnlySelf ? '请拍剩余消耗品并完成 Reject 床品登记。' : '请根据今天实际任务完成日终交接。'))
+                      : (dayEndViewerInspectorOnly
+                        ? '请拍剩余消耗品并完成 Reject 床品登记。'
+                        : (dayEndViewerHasCleaning && dayEndViewerHasInspection
+                          ? '请完成备用钥匙、脏床品、剩余消耗品与 Reject 床品登记。'
+                          : '请根据今天实际任务完成日终交接。')))
                     : (dayEndViewerTarget.userName
-                      ? `查看 ${dayEndViewerTarget.userName} 今日的钥匙与脏床品交接记录。`
-                      : '查看今日的钥匙与脏床品交接记录。')}
+                      ? `查看 ${dayEndViewerTarget.userName} 今日的${dayEndTargetContentLabel(dayEndViewerRoles)}交接记录。`
+                      : `查看今日的${dayEndTargetContentLabel(dayEndViewerRoles)}交接记录。`)}
                 </Text>
                 <View style={styles.actionsRow}>
                   <Pressable
-                    onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, focus: isInspectorOnlySelf ? 'consumable' : 'key', taskRoomCodes: dayEndTaskRoomCodes, ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }) })}
+                    onPress={() => openDayEndScreen({
+                      focus: dayEndViewerInspectorOnly ? 'consumable' : 'key',
+                      taskRoomCodes: dayEndTaskRoomCodes,
+                      targetRoles: dayEndViewerRoles,
+                      ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }),
+                    })}
                     style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
                   >
-                    <Text style={styles.actionText}>{isInspectorOnlySelf ? '上传剩余消耗品' : '上传备用钥匙'}</Text>
+                    <Text style={styles.actionText}>{dayEndViewerInspectorOnly ? '上传剩余消耗品' : '上传备用钥匙'}</Text>
                   </Pressable>
                   <Pressable
-                    onPress={() => props.navigation.navigate('DayEndBackupKeys', { date: dayEndDate, focus: isInspectorOnlySelf ? 'reject' : 'dirty', taskRoomCodes: dayEndTaskRoomCodes, ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }) })}
+                    onPress={() => openDayEndScreen({
+                      focus: dayEndViewerInspectorOnly ? 'reject' : 'dirty',
+                      taskRoomCodes: dayEndTaskRoomCodes,
+                      targetRoles: dayEndViewerRoles,
+                      ...((isCleanerSelf || isInspectorSelf) ? {} : { userId: dayEndViewerTarget.userId, userName: dayEndViewerTarget.userName || undefined }),
+                    })}
                     style={({ pressed }) => [styles.actionBtn, pressed ? styles.segmentPressed : null]}
                   >
-                    <Text style={styles.actionText}>{isInspectorOnlySelf ? '登记 Reject床品' : '上传脏床品照片'}</Text>
+                    <Text style={styles.actionText}>{dayEndViewerInspectorOnly ? '登记 Reject床品' : '上传脏床品照片'}</Text>
                   </Pressable>
                 </View>
               </Pressable>
@@ -2889,24 +3633,47 @@ const styles = StyleSheet.create({
   dayEndOverviewTitle: { marginTop: 6, fontWeight: '900', fontSize: 15, color: '#111827' },
   dayEndOverviewMsg: { marginTop: 4, color: '#4B5563', fontWeight: '700', lineHeight: 18 },
   dayEndOverviewArrow: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#EAF2FF', alignItems: 'center', justifyContent: 'center' },
+  staffProgressCard: { marginTop: 10, backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14, borderWidth: hairline(), borderColor: '#E5E7EB', gap: 12 },
+  staffProgressHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, borderRadius: 14 },
+  staffProgressHeaderMain: { flex: 1, minWidth: 0 },
+  staffProgressTitle: { fontSize: 15, fontWeight: '900', color: '#111827' },
+  staffProgressHint: { fontSize: 12, fontWeight: '700', color: '#6B7280' },
+  staffProgressList: { gap: 10 },
+  staffProgressItem: { borderRadius: 14, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F9FAFB', padding: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  staffProgressMain: { flex: 1, minWidth: 0, gap: 4 },
+  staffProgressNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  staffProgressName: { fontSize: 14, fontWeight: '900', color: '#111827' },
+  staffProgressMeta: { fontSize: 11, fontWeight: '800', color: '#2563EB', backgroundColor: '#EAF2FF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 },
+  staffProgressLine: { fontSize: 12, lineHeight: 18, fontWeight: '700', color: '#4B5563' },
+  staffProgressEmpty: { fontSize: 13, lineHeight: 20, fontWeight: '700', color: '#6B7280' },
+  staffProgressStatusPill: { minWidth: 58, height: 28, borderRadius: 14, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  staffProgressStatusText: { fontSize: 11, fontWeight: '900' },
+  staffProgressStatusGray: { backgroundColor: '#E5E7EB' },
+  staffProgressStatusGreen: { backgroundColor: '#DCFCE7' },
+  staffProgressStatusAmber: { backgroundColor: '#FEF3C7' },
+  staffProgressStatusTextGray: { color: '#6B7280' },
+  staffProgressStatusTextGreen: { color: '#166534' },
+  staffProgressStatusTextAmber: { color: '#92400E' },
   dayEndCard: { marginBottom: 12, backgroundColor: '#F8FBFF', borderRadius: 18, padding: 14, borderWidth: hairline(), borderColor: '#DCEAFE', flexDirection: 'row', alignItems: 'center', gap: 12 },
   dayEndTitle: { fontWeight: '900', color: '#111827' },
   dayEndTaskCard: { backgroundColor: '#F8FBFF', borderColor: '#DCEAFE' },
   dayEndMsg: { marginTop: 4, color: '#4B5563', fontWeight: '700' },
   warehouseKeyCard: { marginTop: 10, backgroundColor: '#F0FDF4', borderRadius: 18, padding: 14, borderWidth: hairline(), borderColor: '#BBF7D0' },
+  warehouseKeyHeader: { minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  warehouseKeyHeaderMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 },
   warehouseKeyIcon: { width: 26, height: 26, borderRadius: 13, borderWidth: hairline(), borderColor: '#A7F3D0', backgroundColor: '#D1FAE5', alignItems: 'center', justifyContent: 'center' },
   warehousePhoneRow: { marginTop: 8, minHeight: 34, borderRadius: 12, backgroundColor: '#DCFCE7', paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
   warehousePhoneText: { flex: 1, minWidth: 0, color: '#065F46', fontSize: moderateScale(12), fontWeight: '900' },
-  warehouseCallBtn: { minHeight: 26, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#047857', alignItems: 'center', justifyContent: 'center' },
+  warehouseCallBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 10, backgroundColor: '#047857', alignItems: 'center', justifyContent: 'center' },
   warehouseCallText: { color: '#FFFFFF', fontSize: moderateScale(11), fontWeight: '900' },
   warehouseKeyMeta: { marginTop: 6, color: '#047857', fontSize: moderateScale(12), fontWeight: '800', lineHeight: moderateScale(17) },
-  warehouseRefresh: { alignSelf: 'flex-start', marginTop: 10, minHeight: 30, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#DCFCE7', flexDirection: 'row', alignItems: 'center', gap: 6 },
+  warehouseRefresh: { alignSelf: 'flex-start', marginTop: 10, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 12, backgroundColor: '#DCFCE7', flexDirection: 'row', alignItems: 'center', gap: 6 },
   warehouseRefreshText: { color: '#047857', fontSize: moderateScale(12), fontWeight: '900' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(17, 24, 39, 0.42)', justifyContent: 'center', padding: 18 },
   transferModal: { maxHeight: '78%', backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14 },
   transferHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   transferTitle: { flex: 1, minWidth: 0, fontSize: moderateScale(17), lineHeight: moderateScale(22), fontWeight: '900', color: '#111827' },
-  transferClose: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  transferClose: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   transferNote: { marginTop: 12, minHeight: 42, borderRadius: 12, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#E5E7EB', paddingHorizontal: 12, color: '#111827', fontWeight: '800' },
   transferList: { marginTop: 12 },
   transferOption: { minHeight: 58, borderRadius: 14, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6', padding: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -2918,26 +3685,38 @@ const styles = StyleSheet.create({
   createTaskModal: { maxHeight: '86%', backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14 },
   createTaskBody: { marginTop: 12, maxHeight: 520 },
   createModeRow: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  createModeBtn: { flexGrow: 1, minHeight: 34, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  createModeBtn: { flexGrow: 1, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   createModeBtnOn: { backgroundColor: '#DBEAFE', borderWidth: hairline(), borderColor: '#93C5FD' },
   createModeText: { color: '#6B7280', fontSize: moderateScale(12), fontWeight: '900' },
   createModeTextOn: { color: '#1D4ED8' },
   createField: { gap: 6 },
   createLabel: { color: '#4B5563', fontSize: moderateScale(12), fontWeight: '900' },
   createInput: { minHeight: 42, borderRadius: 12, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#E5E7EB', paddingHorizontal: 12, color: '#111827', fontWeight: '800' },
+  createSelect: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  createSelectText: { flex: 1, minWidth: 0, color: '#111827', fontWeight: '800' },
+  createSelectPlaceholder: { color: '#9CA3AF' },
   createTextArea: { minHeight: 82, paddingTop: 10, textAlignVertical: 'top' },
   createHint: { color: '#9CA3AF', fontSize: moderateScale(12), fontWeight: '700', lineHeight: moderateScale(17) },
-  createSubmitBtn: { marginTop: 12, minHeight: 42, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  createSubmitBtn: { marginTop: 12, minHeight: layoutTokens.button.height, borderRadius: layoutTokens.button.radius, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0 },
   propertySuggestList: { marginTop: 2, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' },
-  propertySuggestItem: { minHeight: 36, paddingHorizontal: 12, justifyContent: 'center', borderBottomWidth: hairline(), borderBottomColor: '#F3F4F6' },
+  propertySuggestItem: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, justifyContent: 'center', borderBottomWidth: hairline(), borderBottomColor: '#F3F4F6' },
   propertySuggestText: { color: '#111827', fontSize: moderateScale(13), fontWeight: '800' },
+  createAssigneeList: { height: 190, marginTop: 2, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' },
+  createAssigneeScroll: { flex: 1 },
+  createAssigneeScrollContent: { paddingVertical: 2 },
+  createAssigneeItem: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, borderBottomWidth: hairline(), borderBottomColor: '#F3F4F6' },
+  createAssigneeItemOn: { backgroundColor: '#EFF6FF' },
+  createAssigneeName: { color: '#111827', fontSize: moderateScale(13), fontWeight: '900' },
+  createAssigneeEmpty: { padding: 12, color: '#9CA3AF', fontSize: moderateScale(12), fontWeight: '700' },
   searchWrap: { marginTop: 10, height: 44, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#EEF0F6', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
   searchInput: { flex: 1, minWidth: 0, height: 44, color: '#111827', fontWeight: '800' },
-  searchClear: { height: 44, width: 34, alignItems: 'center', justifyContent: 'center' },
+  searchClear: { minHeight: 44, width: 44, alignItems: 'center', justifyContent: 'center' },
 
   segmentWrap: { backgroundColor: '#F2F4F8', borderRadius: 14, padding: 8 },
   segment: { flexDirection: 'row', gap: 8 },
-  segmentItem: { flex: 1, height: moderateScale(38), borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  segmentWrapResponsive: { flexWrap: 'wrap' },
+  segmentItem: { flex: 1, minHeight: layoutTokens.button.height, paddingVertical: 0, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  segmentItemResponsive: { flexBasis: 96 },
   segmentItemActive: {
     backgroundColor: '#FFFFFF',
     shadowColor: '#000',
@@ -2953,11 +3732,12 @@ const styles = StyleSheet.create({
   weekPager: { marginTop: 14 },
   weekPage: { flexDirection: 'row', gap: 10, paddingRight: 2 },
   weekRow: { gap: 10, marginTop: 14, paddingRight: 2 },
-  weekCard: { width: moderateScale(64) },
+  weekCard: { width: moderateScale(72) },
   weekCardFlex: { flex: 1, width: 0 },
   weekCardInner: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
+    minHeight: moderateScale(96),
     paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
@@ -2976,7 +3756,7 @@ const styles = StyleSheet.create({
 
   monthWrap: { marginTop: 14 },
   monthNavRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 10 },
-  monthNavBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingHorizontal: 8, height: 32, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#EEF0F6' },
+  monthNavBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, minHeight: 44, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#EEF0F6' },
   monthNavBtnText: { fontWeight: '900', color: '#111827', fontSize: 12 },
   monthTitle: { fontWeight: '900', color: '#111827' },
   monthHeader: { flexDirection: 'row', paddingHorizontal: 4, marginBottom: 8 },
@@ -2984,7 +3764,7 @@ const styles = StyleSheet.create({
   monthGrid: { flexDirection: 'row', flexWrap: 'wrap' },
   monthCell: { width: '14.2857%', paddingVertical: 6, paddingHorizontal: 4 },
   monthCellInner: {
-    height: moderateScale(44),
+    minHeight: moderateScale(52),
     borderRadius: 12,
     backgroundColor: '#FFFFFF',
     borderWidth: hairline(),
@@ -3008,43 +3788,75 @@ const styles = StyleSheet.create({
   sectionCount: { flexShrink: 1, fontSize: moderateScale(12), fontWeight: '700', color: '#9CA3AF' },
   sectionRight: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1, flexWrap: 'wrap', justifyContent: 'flex-end' },
   viewSegment: { flexDirection: 'row', gap: 6, backgroundColor: '#F2F4F8', borderRadius: 14, padding: 4 },
-  viewSegmentItem: { height: 28, paddingHorizontal: 10, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  viewSegmentItem: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   viewSegmentItemActive: { backgroundColor: '#FFFFFF' },
   viewSegmentText: { fontSize: moderateScale(12), fontWeight: '800', color: '#6B7280' },
   viewSegmentTextActive: { color: '#111827' },
-  addTaskBtn: { height: 30, paddingHorizontal: 10, borderRadius: 11, backgroundColor: '#2563EB', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  addTaskBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 11, backgroundColor: '#2563EB', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
   addTaskBtnText: { fontSize: moderateScale(12), fontWeight: '900', color: '#FFFFFF' },
-  reorderBtn: { height: 28, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  reorderBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 10, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   reorderBtnDisabled: { backgroundColor: '#E5E7EB' },
   reorderBtnText: { fontSize: moderateScale(12), fontWeight: '900', color: '#111827' },
 
+  cacheHintCard: { marginTop: 10, backgroundColor: '#EFF6FF', borderRadius: 16, padding: 14, borderWidth: hairline(), borderColor: '#DBEAFE', gap: 6 },
+  cacheHintHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
+  cacheHintTitle: { fontSize: moderateScale(12), fontWeight: '900', color: '#2563EB' },
+  cacheHintMeta: { fontSize: moderateScale(11), fontWeight: '700', color: '#4B5563' },
+  cacheHintText: { color: '#1D4ED8', fontWeight: '800' },
   emptyCard: { marginTop: 10, backgroundColor: '#FFFFFF', borderRadius: 18, padding: 18, borderWidth: hairline(), borderColor: '#EEF0F6' },
   emptyText: { color: '#9CA3AF', fontWeight: '800' },
+  emptyRetryBtn: { marginTop: 12, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', alignSelf: 'flex-start' },
+  emptyRetryText: { color: '#FFFFFF', fontWeight: '900' },
 
-  taskCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14, borderWidth: hairline(), borderColor: '#EEF0F6' },
+  taskCard: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 16, borderWidth: hairline(), borderColor: '#E8EDF5', shadowColor: '#0F172A', shadowOpacity: 0.04, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1 },
+  taskHeroRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  taskHeroMain: { flex: 1, minWidth: 0 },
   taskTitleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
-  taskTitle: { flex: 1, minWidth: 0, flexShrink: 1, fontSize: moderateScale(18), lineHeight: moderateScale(23), fontWeight: '900', color: '#111827' },
+  taskTitleRowCompact: { flexDirection: 'column', alignItems: 'stretch' },
+  taskTitleMain: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, flex: 1, minWidth: 0 },
+  taskTitleMainCompact: { width: '100%' },
+  taskTitle: { flex: 1, minWidth: 0, flexShrink: 1, fontSize: moderateScale(17), lineHeight: moderateScale(22), fontWeight: '900', color: '#111827' },
+  taskTitleCompact: { fontSize: moderateScale(16), lineHeight: moderateScale(21) },
+  taskHeroMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  taskHeroAside: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexShrink: 0, flexWrap: 'nowrap', alignSelf: 'flex-start' },
+  taskHeroAsideCompact: { gap: 6 },
+  collapseBtn: { minHeight: layoutTokens.button.height, minWidth: 72, paddingHorizontal: 12, paddingVertical: 0, borderRadius: 18, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#E5E7EB', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, flexShrink: 0, alignSelf: 'center' },
+  collapseBtnText: { color: '#6B7280', fontSize: moderateScale(12), fontWeight: '800' },
+  collapsedGuestRequest: { marginTop: 10, borderRadius: 14, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  collapsedGuestRequestTextWrap: { flex: 1, minWidth: 0 },
+  collapsedGuestRequestLabel: { color: '#1D4ED8', fontSize: moderateScale(11), fontWeight: '800' },
+  collapsedGuestRequestText: { marginTop: 2, color: '#111827', fontSize: moderateScale(13), lineHeight: moderateScale(18), fontWeight: '700' },
   orderPill: { width: 26, height: 26, borderRadius: 13, borderWidth: hairline(), borderColor: '#DBEAFE', backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' },
   orderPillActive: { borderColor: '#2563EB', backgroundColor: '#2563EB' },
   orderPillText: { fontSize: 12, fontWeight: '900', color: '#2563EB' },
   orderPillTextActive: { color: '#FFFFFF' },
   orderInput: { width: 44, height: 30, borderRadius: 10, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 8, fontWeight: '900', color: '#111827', textAlign: 'center' },
-  statusPill: { minHeight: 26, paddingHorizontal: 10, paddingVertical: 3, borderRadius: 13, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  statusText: { fontSize: 12, fontWeight: '900', textAlign: 'center' },
-  statusBlue: { backgroundColor: '#DBEAFE' },
-  statusAmber: { backgroundColor: '#FEF3C7' },
-  statusGreen: { backgroundColor: '#DCFCE7' },
-  statusPurple: { backgroundColor: '#EDE9FE' },
-  statusGray: { backgroundColor: '#F3F4F6' },
-  statusTextBlue: { color: '#2563EB' },
-  statusTextAmber: { color: '#B45309' },
-  statusTextGreen: { color: '#16A34A' },
-  statusTextPurple: { color: '#7C3AED' },
-  statusTextGray: { color: '#6B7280' },
-  taskSubRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  tag: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
-  tagText: { fontSize: 11, fontWeight: '900', color: '#2563EB' },
-  urgencyPill: { paddingHorizontal: 10, height: 24, borderRadius: 12, borderWidth: hairline(), alignItems: 'center', justifyContent: 'center' },
+  statusPill: { minHeight: 36, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 18, alignItems: 'center', justifyContent: 'center', flexShrink: 0, alignSelf: 'center' },
+  statusText: { fontSize: 12, fontWeight: '900', lineHeight: 16, textAlign: 'center' },
+  statusBlue: { backgroundColor: TASK_TONE_COLORS.normal.bg },
+  statusAmber: { backgroundColor: TASK_TONE_COLORS.pending.bg },
+  statusGreen: { backgroundColor: TASK_TONE_COLORS.success.bg },
+  statusPurple: { backgroundColor: TASK_TONE_COLORS.special.bg },
+  statusGray: { backgroundColor: TASK_TONE_COLORS.neutral.bg },
+  statusTextBlue: { color: TASK_TONE_COLORS.normal.text },
+  statusTextAmber: { color: TASK_TONE_COLORS.pending.text },
+  statusTextGreen: { color: TASK_TONE_COLORS.success.text },
+  statusTextPurple: { color: TASK_TONE_COLORS.special.text },
+  statusTextGray: { color: TASK_TONE_COLORS.neutral.text },
+  taskSubRow: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  tagNormal: { paddingHorizontal: 10, minHeight: 24, paddingVertical: 4, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.normal.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.normal.border, alignItems: 'center', justifyContent: 'center' },
+  tagNormalText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.normal.text },
+  tagSpecial: { paddingHorizontal: 10, minHeight: 24, paddingVertical: 4, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.special.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.special.border, alignItems: 'center', justifyContent: 'center' },
+  tagSpecialText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.special.text },
+  tagPending: { paddingHorizontal: 10, minHeight: 24, paddingVertical: 4, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.pending.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.pending.border, alignItems: 'center', justifyContent: 'center' },
+  tagPendingText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.pending.text },
+  tagDanger: { paddingHorizontal: 10, minHeight: 24, paddingVertical: 4, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.danger.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.danger.border, alignItems: 'center', justifyContent: 'center' },
+  tagDangerText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.danger.text },
+  tagSuccess: { paddingHorizontal: 10, minHeight: 24, paddingVertical: 4, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.success.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.success.border, alignItems: 'center', justifyContent: 'center' },
+  tagSuccessText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.success.text },
+  tagInfo: { paddingHorizontal: 10, minHeight: 24, paddingVertical: 4, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.info.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.info.border, alignItems: 'center', justifyContent: 'center' },
+  tagInfoText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.info.text },
+  urgencyPill: { paddingHorizontal: 10, minHeight: 24, paddingVertical: 4, borderRadius: 12, borderWidth: hairline(), alignItems: 'center', justifyContent: 'center' },
   urgencyText: { fontSize: 11, fontWeight: '900' },
   urgencyUrgent: { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5' },
   urgencyUrgentText: { color: '#B91C1C' },
@@ -3054,57 +3866,63 @@ const styles = StyleSheet.create({
   urgencyMediumText: { color: '#1D4ED8' },
   urgencyLow: { backgroundColor: '#F3F4F6', borderColor: '#D1D5DB' },
   urgencyLowText: { color: '#4B5563' },
-  tagGray: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  tagGray: { paddingHorizontal: 10, minHeight: 24, paddingVertical: 4, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   tagGrayText: { fontSize: 11, fontWeight: '800', color: '#6B7280' },
-  tagKey: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
-  tagKeyText: { fontSize: 11, fontWeight: '900', color: '#B91C1C' },
-  tagWarn: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FFFBEB', borderWidth: hairline(), borderColor: '#FDE68A', alignItems: 'center', justifyContent: 'center' },
-  tagWarnText: { fontSize: 11, fontWeight: '900', color: '#B45309' },
-  tagLate: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#F3E8FF', borderWidth: hairline(), borderColor: '#D8B4FE', alignItems: 'center', justifyContent: 'center' },
-  tagLateText: { fontSize: 11, fontWeight: '900', color: '#7C3AED' },
   row: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 },
   addr: { flex: 1, minWidth: 0, flexShrink: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600' },
   linkInline: { flex: 1, minWidth: 0, flexShrink: 1, color: '#2563EB', fontSize: moderateScale(13), fontWeight: '800' },
-  execCard: { marginTop: 12, padding: 12, borderRadius: 18, backgroundColor: '#F3F4F6', gap: 8 },
-  execLabel: { color: '#6B7280', fontWeight: '600', fontSize: moderateScale(12) },
+  execCard: { marginTop: 14, padding: 14, borderRadius: 18, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#E5E7EB', gap: 10 },
+  execLabel: { color: '#6B7280', fontWeight: '700', fontSize: moderateScale(12) },
   execPeople: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  execPerson: { flexGrow: 1, flexShrink: 1, flexBasis: 130, minWidth: 120, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  execBadgeClean: { width: 32, height: 32, borderRadius: 16, flexShrink: 0, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
-  execBadgeInspect: { width: 32, height: 32, borderRadius: 16, flexShrink: 0, backgroundColor: '#7C3AED', alignItems: 'center', justifyContent: 'center' },
+  execPerson: { flexGrow: 1, flexShrink: 1, flexBasis: 140, minWidth: 128, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 16, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E5E7EB' },
+  execBadgeClean: { width: 36, height: 36, borderRadius: 18, flexShrink: 0, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  execBadgeInspect: { width: 36, height: 36, borderRadius: 18, flexShrink: 0, backgroundColor: '#7C3AED', alignItems: 'center', justifyContent: 'center' },
+  execBadgeExecute: { width: 36, height: 36, borderRadius: 18, flexShrink: 0, backgroundColor: '#0F766E', alignItems: 'center', justifyContent: 'center' },
   execBadgeText: { color: '#FFFFFF', fontWeight: '800', fontSize: 13 },
   execPersonText: { flex: 1, minWidth: 0 },
   execPersonRole: { fontWeight: '800', fontSize: moderateScale(11), lineHeight: moderateScale(15) },
   execPersonRoleClean: { color: '#2563EB' },
   execPersonRoleInspect: { color: '#7C3AED' },
-  execPersonName: { minWidth: 0, flexShrink: 1, color: '#111827', fontWeight: '700', fontSize: moderateScale(13), lineHeight: moderateScale(18) },
-  execOrderRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, columnGap: 16 },
+  execPersonRoleExecute: { color: '#0F766E' },
+  execPersonName: { minWidth: 0, flexShrink: 1, color: '#111827', fontWeight: '800', fontSize: moderateScale(13), lineHeight: moderateScale(18) },
+  execOrderRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, columnGap: 16, paddingHorizontal: 4 },
   execOrder: { flexGrow: 1, flexBasis: 120, color: '#6B7280', fontWeight: '600', fontSize: moderateScale(11), lineHeight: moderateScale(16) },
-  unitTypeRow: { alignSelf: 'flex-start', marginTop: 12, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, backgroundColor: '#F8FAFC', flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '100%' },
-  unitTypeCell: { flexShrink: 1, minWidth: 0 },
+  detailRowCard: { marginTop: 14, borderRadius: 16, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#E5E7EB', paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 12, minWidth: 0 },
+  detailRowCardPrimary: { backgroundColor: '#EEF2FF', borderColor: '#C7D2FE' },
+  detailRowCardAccent: { backgroundColor: '#F0FDFA', borderColor: '#99F6E4' },
+  detailIconWrap: { width: moderateScale(34), height: moderateScale(34), borderRadius: moderateScale(17), alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  detailIconBlue: { backgroundColor: '#DBEAFE' },
+  detailIconIndigo: { backgroundColor: '#EEF2FF' },
+  detailIconTeal: { backgroundColor: '#CCFBF1' },
+  detailIconGreen: { backgroundColor: '#DCFCE7' },
+  detailIconAmber: { backgroundColor: '#FEF3C7' },
+  detailIconMuted: { backgroundColor: '#F3F4F6' },
+  detailRowContent: { flex: 1, minWidth: 0 },
+  detailRowLabel: { color: '#9CA3AF', fontWeight: '700', fontSize: moderateScale(12) },
+  detailRowLabelTeal: { color: '#0F766E', fontWeight: '700', fontSize: moderateScale(12) },
+  detailSplitRow: { marginTop: 6, flexDirection: 'row', alignItems: 'stretch', gap: 12, minWidth: 0 },
+  detailSplitCell: { flex: 1, minWidth: 0 },
+  detailSplitDivider: { width: hairline(), alignSelf: 'stretch', backgroundColor: '#E5E7EB' },
+  detailSplitDividerTeal: { backgroundColor: '#99F6E4' },
   unitTypeText: { flexShrink: 1, color: '#111827', fontSize: moderateScale(13), fontWeight: '600' },
-  addrRow: { marginTop: 16, flexDirection: 'row', alignItems: 'flex-start', gap: 10, minWidth: 0 },
-  addrText: { flex: 1, minWidth: 0, flexShrink: 1, color: '#111827', fontSize: moderateScale(13), fontWeight: '600', lineHeight: moderateScale(19) },
-  timeRow: { marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  timeCell: { flex: 1, minWidth: 0 },
+  addrText: { color: '#111827', fontSize: moderateScale(13), fontWeight: '600', lineHeight: moderateScale(19) },
+  copyAffordance: { minHeight: layoutTokens.button.height, paddingHorizontal: 12, paddingVertical: 0, borderRadius: 999, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, flexShrink: 0 },
+  copyAffordanceDone: { borderColor: '#A7F3D0', backgroundColor: '#ECFDF5' },
+  copyAffordanceText: { color: '#047857', fontSize: moderateScale(11), fontWeight: '900' },
+  wifiLabel: { color: '#0F766E', fontWeight: '700', fontSize: moderateScale(12) },
+  wifiValue: { marginTop: 2, color: '#111827', fontWeight: '600', fontSize: moderateScale(13) },
   timeLabel: { color: '#9CA3AF', fontWeight: '600', fontSize: moderateScale(12) },
   timeValue: { marginTop: 2, color: '#111827', fontWeight: '600', fontSize: moderateScale(13) },
-  timeDivider: { width: hairline(), height: 44, backgroundColor: '#EEF0F6' },
-  pwRowNew: { marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  pwCell: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 6 },
-  pwLabel: { flexShrink: 0, color: '#9CA3AF', fontWeight: '600', fontSize: moderateScale(12) },
-  pwValue: { flex: 1, minWidth: 0, flexShrink: 1, color: '#111827', fontWeight: '600', fontSize: moderateScale(13) },
-  guestRow: { marginTop: 14, flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  guestIconWrap: { width: moderateScale(20), height: moderateScale(20), marginTop: 2, alignItems: 'center', justifyContent: 'center' },
-  guestCell: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
-  guestLabel: { flexShrink: 0, color: '#9CA3AF', fontWeight: '600', fontSize: moderateScale(12), lineHeight: moderateScale(19) },
-  guestValue: { flex: 1, minWidth: 0, color: '#111827', fontWeight: '600', fontSize: moderateScale(13), flexShrink: 1, lineHeight: moderateScale(19) },
-  guideCard: { marginTop: 16, height: 62, borderRadius: 18, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6', paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  pwLabel: { color: '#9CA3AF', fontWeight: '600', fontSize: moderateScale(12) },
+  pwValue: { marginTop: 2, color: '#111827', fontWeight: '600', fontSize: moderateScale(13) },
+  primaryDetailText: { marginTop: 4, color: '#111827', fontWeight: '800', fontSize: moderateScale(14), lineHeight: moderateScale(20) },
+  guestValue: { marginTop: 4, color: '#111827', fontWeight: '600', fontSize: moderateScale(13), lineHeight: moderateScale(19) },
   guideText: { flex: 1, minWidth: 0, color: '#2563EB', fontWeight: '600', fontSize: moderateScale(13) },
   pwRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6 },
   pwText: { flex: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '700' },
   summary: { marginTop: 10, color: '#374151', fontWeight: '700', lineHeight: 18 },
   actionsRow: { marginTop: 12, flexDirection: 'row', gap: 10, flexWrap: 'wrap', alignItems: 'stretch' },
-  actionBtn: { flex: 1, flexGrow: 1, flexShrink: 1, minWidth: 128, minHeight: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10, paddingVertical: 8 },
+  actionBtn: { flex: 1, flexGrow: 1, flexShrink: 1, minWidth: 128, minHeight: layoutTokens.button.height, borderRadius: layoutTokens.button.radius, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0 },
   actionBtnDisabled: { backgroundColor: '#E5E7EB' },
   actionText: { flexShrink: 1, fontWeight: '900', color: '#FFFFFF', fontSize: 12, lineHeight: 16, textAlign: 'center' },
 })

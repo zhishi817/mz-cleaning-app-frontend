@@ -1,16 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import * as ImagePicker from 'expo-image-picker'
 import { Ionicons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { API_BASE_URL } from '../../config/env'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
-import { listCleaningAppLinenTypes, listCleaningAppPropertyCodes, listCleaningAppTasks, listDayEndBackupKeys, listDayEndHandover, uploadCleaningMedia, uploadDayEndHandover } from '../../lib/api'
+import { isRetryableApiError, listCleaningAppLinenTypes, listCleaningAppPropertyCodes, listCleaningAppTasks, listDayEndBackupKeys, listDayEndHandover, listWorkTasks, uploadCleaningMedia, uploadDayEndHandover } from '../../lib/api'
 import { clearDayEndHandoverDraft, getDayEndHandoverDraft, persistDayEndDraftPhoto, saveDayEndHandoverDraft, type DayEndHandoverDraft, type DayEndRejectDraftItem } from '../../lib/dayEndHandoverQueue'
-import type { TasksStackParamList } from '../../navigation/RootNavigator'
+import { cleaningMediaReference } from '../../lib/cleaningMedia'
+import CleaningMediaImage from '../../components/CleaningMediaImage'
+import CleaningMediaPreview from '../../components/CleaningMediaPreview'
+import type { DayEndOverviewUser, DayEndRoleStats, DayEndTargetRole, TasksStackParamList } from '../../navigation/RootNavigator'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'DayEndBackupKeys'>
 
@@ -49,20 +51,8 @@ const FALLBACK_LINEN_TYPES: LinenTypeOption[] = [
 let cachedLinenTypeOptions: LinenTypeOption[] | null = null
 let cachedPropertyCodeOptions: Array<{ id: string; code: string }> | null = null
 
-function normalizeBase(raw: string) {
-  return String(raw || '').trim().replace(/\/+$/g, '')
-}
-
-function toAbsoluteUrl(rawUrl: any) {
-  const s = String(rawUrl || '').trim()
-  if (!s) return ''
-  if (/^(https?:|file:|content:|asset-library:|data:|ph:)/i.test(s)) return s
-  const base = normalizeBase(API_BASE_URL)
-  const stripAuth = base.replace(/\/auth\/?$/g, '')
-  const stripApi = stripAuth.replace(/\/api\/?$/g, '')
-  const root = stripApi || stripAuth || base
-  if (!root) return s
-  return `${root}${s.startsWith('/') ? s : `/${s}`}`
+function isLocalDayEndDraftUri(value: string | null | undefined) {
+  return /^file:\/\//i.test(String(value || '').trim())
 }
 
 function makeLocalId(prefix: string) {
@@ -113,13 +103,9 @@ function mergeRejectItems(remoteItems: RejectItemState[], draftItems: RejectItem
 }
 
 function isNetworkishError(e: any) {
-  const m = String(e?.message || e || '').toLowerCase()
-  if (!m) return false
-  if (m.includes('network request failed')) return true
-  if (m.includes('timeout')) return true
-  if (m.includes('timed out')) return true
-  if (m.includes('aborted')) return true
-  return false
+  if (isRetryableApiError(e)) return true
+  const code = String(e?.code || '').trim().toUpperCase()
+  return code === 'TIMEOUT' || code === 'NETWORK_ERROR'
 }
 
 function roleNamesOf(user: any): string[] {
@@ -181,15 +167,46 @@ async function loadLinenTypeOptionsCached(token: string) {
   return next
 }
 
-function addDays(base: string, delta: number) {
-  const raw = String(base || '').slice(0, 10)
-  const dt = new Date(`${raw}T00:00:00`)
-  if (Number.isNaN(dt.getTime())) return raw
-  dt.setDate(dt.getDate() + delta)
-  const y = dt.getFullYear()
-  const m = String(dt.getMonth() + 1).padStart(2, '0')
-  const d = String(dt.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
+function normalizeDayEndRoles(items: any[]): DayEndTargetRole[] {
+  const roles = new Set<DayEndTargetRole>()
+  for (const item of Array.isArray(items) ? items : []) {
+    if (item === 'cleaning' || item === 'inspection') roles.add(item)
+  }
+  return Array.from(roles.values()).sort()
+}
+
+function roleStatsLine(label: string, stats?: DayEndRoleStats | null) {
+  if (!stats || stats.assigned <= 0) return ''
+  const parts = [`${label} ${stats.done}/${stats.assigned}`]
+  if (stats.activeRooms.length) parts.push(`进行中 ${stats.activeRooms.join('、')}`)
+  else if (stats.pending > 0) parts.push(`待处理 ${stats.pending}`)
+  if (stats.doneRooms.length) parts.push(`已完成 ${stats.doneRooms.join('、')}`)
+  return parts.join(' · ')
+}
+
+function buildResolvedDayEndMeta(tasks: Array<any>, userId0: string) {
+  const userId = String(userId0 || '').trim()
+  const roles = new Set<DayEndTargetRole>()
+  const roomCodes = new Set<string>()
+  if (!userId) return { roles: [] as DayEndTargetRole[], roomCodes: [] as string[] }
+  for (const task of tasks || []) {
+    if (String(task?.source_type || '').trim() !== 'cleaning_tasks') continue
+    const status = String(task?.status || '').trim().toLowerCase()
+    if (status === 'cancelled' || status === 'canceled') continue
+    const kind = String(task?.task_kind || '').trim().toLowerCase()
+    const assignedUserId = kind === 'inspection'
+      ? String(task?.inspector_id || task?.assignee_id || '').trim()
+      : String(task?.cleaner_id || task?.assignee_id || '').trim()
+    if (assignedUserId !== userId) continue
+    if (kind === 'inspection') roles.add('inspection')
+    else if (kind === 'cleaning') roles.add('cleaning')
+    const code = String(task?.property?.code || '').trim()
+    if (code) roomCodes.add(code)
+  }
+  return {
+    roles: Array.from(roles.values()).sort(),
+    roomCodes: Array.from(roomCodes.values()).sort((a, b) => a.localeCompare(b, 'en')),
+  }
 }
 
 export default function DayEndBackupKeysScreen(props: Props) {
@@ -210,7 +227,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
   const [linenTypeOptions, setLinenTypeOptions] = useState<LinenTypeOption[]>(FALLBACK_LINEN_TYPES)
   const [propertyCodeOptions, setPropertyCodeOptions] = useState<Array<{ id: string; code: string }>>([])
   const [draftReady, setDraftReady] = useState(false)
-  const [viewerUrls, setViewerUrls] = useState<string[]>([])
+  const [viewerPhotos, setViewerPhotos] = useState<PhotoItem[]>([])
   const [viewerIndex, setViewerIndex] = useState(0)
   const persistEnabledRef = useRef(false)
   const lastLoadAlertRef = useRef('')
@@ -222,9 +239,15 @@ export default function DayEndBackupKeysScreen(props: Props) {
   const targetUserId = String(props.route.params.userId || '').trim()
   const targetUserName = String(props.route.params.userName || '').trim()
   const focus = props.route.params.focus
-  const taskRoomCodes = Array.isArray(props.route.params.taskRoomCodes) ? props.route.params.taskRoomCodes : []
+  const routeTaskRoomCodes = useMemo(() => (Array.isArray(props.route.params.taskRoomCodes) ? props.route.params.taskRoomCodes : []), [props.route.params.taskRoomCodes])
+  const routeTargetRoles = useMemo(() => normalizeDayEndRoles(props.route.params.targetRoles || []), [props.route.params.targetRoles])
+  const routeTaskRoomCodesKey = routeTaskRoomCodes.join('|')
+  const routeTargetRolesKey = routeTargetRoles.join('|')
   const overviewMode = props.route.params.overviewMode === true
-  const overviewUsers = Array.isArray(props.route.params.overviewUsers) ? props.route.params.overviewUsers : []
+  const overviewUsers = useMemo(
+    () => (Array.isArray(props.route.params.overviewUsers) ? props.route.params.overviewUsers : []) as DayEndOverviewUser[],
+    [props.route.params.overviewUsers],
+  )
   const overviewUsersPending = useMemo(
     () => overviewUsers.map((entry) => ({ ...entry, complete: null as boolean | null })),
     [overviewUsers],
@@ -233,14 +256,63 @@ export default function DayEndBackupKeysScreen(props: Props) {
   const roleNames = useMemo(() => roleNamesOf(user), [user])
   const isCleanerSelf = useMemo(() => roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector'), [roleNames])
   const isInspectorSelf = useMemo(() => roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector'), [roleNames])
-  const isInspectorOnlySelf = useMemo(() => roleNames.includes('cleaning_inspector') && !roleNames.includes('cleaner') && !roleNames.includes('cleaner_inspector'), [roleNames])
   const isManagerViewer = useMemo(() => canManageDayEnd(roleNames), [roleNames])
   const viewingOtherUser = !!targetUserId && targetUserId !== currentUserId
   const isOverviewMode = isManagerViewer && overviewMode && !targetUserId
+  const fallbackSelfRoles = useMemo(
+    () => normalizeDayEndRoles([isCleanerSelf ? 'cleaning' : '', isInspectorSelf ? 'inspection' : '']),
+    [isCleanerSelf, isInspectorSelf],
+  )
+  const [resolvedTargetRoles, setResolvedTargetRoles] = useState<DayEndTargetRole[]>(() => routeTargetRoles.length ? routeTargetRoles : fallbackSelfRoles)
+  const [resolvedTaskRoomCodes, setResolvedTaskRoomCodes] = useState<string[]>(() => dedupePropertyCodeOptions(routeTaskRoomCodes.map((code, idx) => ({ id: `task_${idx}_${code}`, code }))).map((item) => item.code))
+  const effectiveRoles = useMemo(
+    () => (resolvedTargetRoles.length ? resolvedTargetRoles : fallbackSelfRoles),
+    [fallbackSelfRoles, resolvedTargetRoles],
+  )
+  const effectiveHasCleaning = effectiveRoles.includes('cleaning')
+  const effectiveHasInspection = effectiveRoles.includes('inspection')
+  const effectiveInspectorOnly = effectiveHasInspection && !effectiveHasCleaning
+  const consumableSectionIndex = effectiveHasCleaning ? 4 : 1
+  const rejectSectionIndex = effectiveHasCleaning ? (effectiveHasInspection ? 5 : 4) : 2
   const canEdit = (isCleanerSelf || isInspectorSelf) && !viewingOtherUser
   const canView = canEdit || isManagerViewer
-  const canSubmit = canEdit && (isInspectorOnlySelf ? photoPayload(consumableItems).length > 0 : (photoPayload(keyItems).length > 0 && photoPayload(returnWashItems).length > 0)) && rejectItems.every(rejectItemComplete)
+  const canSubmit = canEdit
+    && (!effectiveHasCleaning || (photoPayload(keyItems).length > 0 && photoPayload(returnWashItems).length > 0))
+    && (!effectiveHasInspection || photoPayload(consumableItems).length > 0)
+    && rejectItems.every(rejectItemComplete)
   const [overviewRows, setOverviewRows] = useState(() => overviewUsersPending)
+
+  useEffect(() => {
+    if (routeTargetRoles.length) {
+      setResolvedTargetRoles(routeTargetRoles)
+      return
+    }
+    if (!token || isOverviewMode) return
+    const lookupUserId = String(targetUserId || currentUserId || '').trim()
+    if (!lookupUserId || !date) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const tasks = await listWorkTasks(token, { date_from: date, date_to: date, view: 'all' })
+        if (cancelled) return
+        const next = buildResolvedDayEndMeta(tasks, lookupUserId)
+        if (next.roles.length) setResolvedTargetRoles(next.roles)
+        else if (!targetUserId) setResolvedTargetRoles(fallbackSelfRoles)
+        if (next.roomCodes.length && !routeTaskRoomCodes.length) setResolvedTaskRoomCodes(next.roomCodes)
+      } catch {
+        if (!cancelled && !targetUserId) setResolvedTargetRoles(fallbackSelfRoles)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [currentUserId, date, fallbackSelfRoles, isOverviewMode, routeTargetRoles, routeTargetRolesKey, routeTaskRoomCodes.length, targetUserId, token])
+
+  useEffect(() => {
+    if (routeTaskRoomCodes.length) {
+      setResolvedTaskRoomCodes(dedupePropertyCodeOptions(routeTaskRoomCodes.map((code, idx) => ({ id: `task_${idx}_${code}`, code }))).map((item) => item.code))
+    }
+  }, [routeTaskRoomCodes, routeTaskRoomCodesKey])
 
   const buildDraft = useCallback(
     (params?: { pendingSubmit?: boolean; nextKeyItems?: PhotoItem[]; nextReturnWashItems?: PhotoItem[]; nextWarehouseKeyItems?: PhotoItem[]; nextWarehouseKeyNotUsed?: boolean; nextConsumableItems?: PhotoItem[]; nextRejectItems?: RejectItemState[] }): DayEndHandoverDraft => ({
@@ -334,7 +406,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
         setLoading(false)
       }
 
-      const taskRoomOptions = dedupePropertyCodeOptions(taskRoomCodes.map((code, idx) => ({ id: `task_${idx}_${code}`, code })))
+      const taskRoomOptions = dedupePropertyCodeOptions(resolvedTaskRoomCodes.map((code, idx) => ({ id: `task_${idx}_${code}`, code })))
       const linenPromise = loadLinenTypeOptionsCached(token).catch(() => [] as LinenTypeOption[])
       const propertyCodePromise = (async () => {
         if (taskRoomOptions.length) return taskRoomOptions
@@ -407,7 +479,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
       setDraftReady(true)
       setLoading(false)
     }
-  }, [applyLoadedData, canEdit, canView, currentUserId, date, isOverviewMode, t, targetUserId, taskRoomCodes, token])
+  }, [applyLoadedData, canEdit, canView, currentUserId, date, isOverviewMode, resolvedTaskRoomCodes, t, targetUserId, token])
 
   useEffect(() => {
     load()
@@ -434,7 +506,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [date, isOverviewMode, overviewUsers, token])
+  }, [date, isOverviewMode, overviewUsers, overviewUsersPending, token])
 
   useEffect(() => {
     if (!focus) return
@@ -498,22 +570,22 @@ export default function DayEndBackupKeysScreen(props: Props) {
   }
 
   function openPhotoViewer(items: PhotoItem[], index: number) {
-    const urls = (items || [])
-      .map((item) => toAbsoluteUrl(item.uploaded_url || item.uri))
-      .filter(Boolean)
-    if (!urls.length) return
-    setViewerUrls(urls)
-    setViewerIndex(Math.max(0, Math.min(index, urls.length - 1)))
+    const photos = (items || []).filter((item) => !!String(item.uploaded_url || item.uri || '').trim())
+    if (!photos.length) return
+    const currentId = String(items?.[index]?.id || '').trim()
+    const nextIndex = Math.max(0, photos.findIndex((item) => item.id === currentId))
+    setViewerPhotos(photos)
+    setViewerIndex(nextIndex)
   }
 
   function closePhotoViewer() {
-    setViewerUrls([])
+    setViewerPhotos([])
     setViewerIndex(0)
   }
 
   function movePhotoViewer(delta: number) {
     setViewerIndex((prev) => {
-      const count = viewerUrls.length
+      const count = viewerPhotos.length
       if (!count) return 0
       return (prev + delta + count) % count
     })
@@ -565,11 +637,11 @@ export default function DayEndBackupKeysScreen(props: Props) {
     if (section === 'warehouse_key' && !warehouseKeyNotUsed && !photoPayload(warehouseKeyItems).length) return '请上传仓库钥匙照片，或选择今天未使用仓库钥匙'
     if (section === 'consumable' && !photoPayload(consumableItems).length) return '请先上传剩余消耗品照片'
     if ((section === 'reject' || section === 'all') && !rejectItems.every(rejectItemComplete)) return '请补全 Reject 床品登记'
-    if (section === 'all' && !isInspectorOnlySelf) {
+    if (section === 'all' && effectiveHasCleaning) {
       if (!photoPayload(keyItems).length) return '请先上传备用钥匙照片'
       if (!photoPayload(returnWashItems).length) return '请先上传脏床品照片'
     }
-    if (section === 'all' && isInspectorOnlySelf && !photoPayload(consumableItems).length) return '请先上传剩余消耗品照片'
+    if (section === 'all' && effectiveHasInspection && !photoPayload(consumableItems).length) return '请先上传剩余消耗品照片'
     return ''
   }
 
@@ -636,8 +708,21 @@ export default function DayEndBackupKeysScreen(props: Props) {
     if (!uri) return
     const capturedAt = new Date().toISOString()
     const watermarkText = buildWatermarkText(kind, capturedAt)
-    const tempId = makeLocalId(kind)
-    const tempItem: PhotoItem = { id: tempId, uri, captured_at: capturedAt, uploaded_url: null, watermark_text: watermarkText }
+    let tempItem: PhotoItem
+    try {
+      tempItem = await persistDayEndDraftPhoto({
+        user_id: currentUserId,
+        date,
+        bucket: kind,
+        source_uri: uri,
+        captured_at: capturedAt,
+        watermark_text: watermarkText,
+      })
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '本地照片保存失败，请重新拍摄'))
+      return
+    }
+    const tempId = tempItem.id
     persistEnabledRef.current = true
     if (kind === 'key') setKeyItems((prev) => [tempItem, ...prev])
     else if (kind === 'return_wash') setReturnWashItems((prev) => [tempItem, ...prev])
@@ -650,62 +735,47 @@ export default function DayEndBackupKeysScreen(props: Props) {
 
     setUploading(true)
     try {
-      const name = String(a.fileName || uri.split('/').pop() || `${kind}-${Date.now()}.jpg`)
+      const name = String(a.fileName || tempItem.uri.split('/').pop() || `${kind}-${Date.now()}.jpg`)
       const mimeType = String(a.mimeType || 'image/jpeg')
       const purpose = kind === 'key' ? 'backup_key_return' : kind === 'return_wash' ? 'return_wash_linen' : kind === 'warehouse_key' ? 'warehouse_key_return' : kind === 'consumable' ? 'remaining_consumables' : 'reject_linen_return'
-      const up = await uploadCleaningMedia(token, { uri, name, mimeType }, { purpose, captured_at: capturedAt, watermark: '1', watermark_text: watermarkText })
+      const up = await uploadCleaningMedia(token, { uri: tempItem.uri, name, mimeType }, { purpose, media_id: tempId, captured_at: capturedAt, watermark: '1', watermark_text: watermarkText })
+      const remoteReference = cleaningMediaReference(up)
       if (kind === 'key') {
         setKeyItems((prev) => {
-          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: up.url } : x))
+          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: remoteReference } : x))
           persistSectionAfterCapture('key', { nextKeyItems: next })
           return next
         })
       } else if (kind === 'return_wash') {
         setReturnWashItems((prev) => {
-          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: up.url } : x))
+          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: remoteReference } : x))
           persistSectionAfterCapture('return_wash', { nextReturnWashItems: next })
           return next
         })
       } else if (kind === 'warehouse_key') {
         setWarehouseKeyItems((prev) => {
-          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: up.url } : x))
+          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: remoteReference } : x))
           persistSectionAfterCapture('warehouse_key', { nextWarehouseKeyItems: next, nextWarehouseKeyNotUsed: false })
           return next
         })
       } else if (kind === 'consumable') {
         setConsumableItems((prev) => {
-          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: up.url } : x))
+          const next = prev.map((x) => (x.id === tempId ? { ...x, uploaded_url: remoteReference } : x))
           persistSectionAfterCapture('consumable', { nextConsumableItems: next })
           return next
         })
       }
       else if (rejectItemId) {
-        updateRejectPhotos(rejectItemId, (photos) => photos.map((x) => (x.id === tempId ? { ...x, uploaded_url: up.url } : x)))
+        updateRejectPhotos(rejectItemId, (photos) => photos.map((x) => (x.id === tempId ? { ...x, uploaded_url: remoteReference } : x)))
       }
       promptContinueCapture(kind, rejectItemId)
     } catch (e: any) {
-      if (!isNetworkishError(e)) {
-        if (kind === 'key') setKeyItems((prev) => prev.filter((x) => x.id !== tempId))
-        else if (kind === 'return_wash') setReturnWashItems((prev) => prev.filter((x) => x.id !== tempId))
-        else if (kind === 'warehouse_key') setWarehouseKeyItems((prev) => prev.filter((x) => x.id !== tempId))
-        else if (kind === 'consumable') setConsumableItems((prev) => prev.filter((x) => x.id !== tempId))
-        else if (rejectItemId) updateRejectPhotos(rejectItemId, (photos) => photos.filter((x) => x.id !== tempId))
-        Alert.alert(t('common_error'), String(e?.message || '上传失败'))
-        return
-      }
-      try {
-        const queued = await persistDayEndDraftPhoto({ user_id: currentUserId, date, bucket: kind, source_uri: uri, captured_at: capturedAt, watermark_text: watermarkText })
-        if (kind === 'key') setKeyItems((prev) => prev.map((x) => (x.id === tempId ? queued : x)))
-        else if (kind === 'return_wash') setReturnWashItems((prev) => prev.map((x) => (x.id === tempId ? queued : x)))
-        else if (kind === 'warehouse_key') setWarehouseKeyItems((prev) => prev.map((x) => (x.id === tempId ? queued : x)))
-        else if (kind === 'consumable') setConsumableItems((prev) => prev.map((x) => (x.id === tempId ? queued : x)))
-        else if (rejectItemId) {
-          updateRejectPhotos(rejectItemId, (photos) => photos.map((x) => (x.id === tempId ? queued : x)))
-        }
-        Alert.alert(t('common_ok'), '已离线保存，网络恢复后自动上传')
-      } catch (e2: any) {
-        Alert.alert(t('common_error'), String(e2?.message || e?.message || '保存失败'))
-      }
+      Alert.alert(
+        isNetworkishError(e) ? t('common_ok') : t('common_error'),
+        isNetworkishError(e)
+          ? '照片已离线保存，网络恢复后可再次提交。'
+          : `${String(e?.message || '上传失败')}；照片已保留在本机，请删除后重新拍摄。`,
+      )
     } finally {
       setUploading(false)
     }
@@ -713,7 +783,15 @@ export default function DayEndBackupKeysScreen(props: Props) {
 
   async function onSubmit() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
-    if (!canSubmit) return Alert.alert(t('common_error'), isInspectorOnlySelf ? '请先上传剩余消耗品照片，并补全 Reject 床品登记' : '请先上传备用钥匙照片、脏床品照片，并补全 Reject 床品登记')
+    if (!canSubmit) {
+      const missing = [
+        effectiveHasCleaning ? '备用钥匙照片' : '',
+        effectiveHasCleaning ? '脏床品照片' : '',
+        effectiveHasInspection ? '剩余消耗品照片' : '',
+        'Reject 床品登记',
+      ].filter(Boolean).join('、')
+      return Alert.alert(t('common_error'), `请先补全${missing}`)
+    }
     if (uploading || submitting) return
     setSubmitting(true)
     try {
@@ -744,7 +822,13 @@ export default function DayEndBackupKeysScreen(props: Props) {
       } catch (e: any) {
         const msg = String(e?.message || '')
         if (msg.includes('后端未部署该接口')) {
-          throw new Error(isInspectorOnlySelf ? '后端还没部署新版检查员日终交接接口，当前页面只能先查看/拍照暂存，暂时无法正式提交剩余消耗品和 Reject 床品登记。' : '后端还没部署新版日终交接接口，当前页面只能先查看/拍照暂存，暂时无法正式提交脏床品和 Reject 床品登记。')
+          throw new Error(
+            effectiveInspectorOnly
+              ? '后端还没部署新版检查员日终交接接口，当前页面只能先查看/拍照暂存，暂时无法正式提交剩余消耗品和 Reject 床品登记。'
+              : (effectiveHasCleaning && effectiveHasInspection
+                ? '后端还没部署新版清洁/检查日终交接接口，当前页面只能先查看/拍照暂存，暂时无法正式提交完整的日终交接记录。'
+                : '后端还没部署新版日终交接接口，当前页面只能先查看/拍照暂存，暂时无法正式提交脏床品和 Reject 床品登记。'),
+          )
         }
         throw e
       }
@@ -765,10 +849,18 @@ export default function DayEndBackupKeysScreen(props: Props) {
         {items.map((it, index) => (
           <View key={it.id} style={styles.gridItem}>
             <Pressable onPress={() => openPhotoViewer(items, index)} style={({ pressed }) => [styles.gridImgPress, pressed ? styles.pressed : null]}>
-              <Image source={{ uri: toAbsoluteUrl(it.uploaded_url || it.uri) }} style={styles.gridImg} resizeMode="contain" />
+              <CleaningMediaImage
+                token={token}
+                localUri={isLocalDayEndDraftUri(it.uri) ? it.uri : undefined}
+                remoteReference={it.uploaded_url || it.uri}
+                dayEndUserId={targetUserId || currentUserId}
+                dayEndDate={date}
+                style={styles.gridImg}
+                resizeMode="contain"
+              />
             </Pressable>
             <View style={styles.gridFoot}>
-              <Text style={styles.gridMeta} numberOfLines={1}>{it.uploaded_url ? '已上传' : '已离线保存'}</Text>
+              <Text style={styles.gridMeta} numberOfLines={1}>{it.uploaded_url ? '已上传，待提交关联' : '已离线保存'}</Text>
               {canEdit ? (
                 <Pressable onPress={() => onRemove(it.id)} style={({ pressed }) => [styles.removeBtn, pressed ? styles.pressed : null]} disabled={uploading || submitting}>
                   <Text style={styles.removeText}>删除</Text>
@@ -812,6 +904,37 @@ export default function DayEndBackupKeysScreen(props: Props) {
     })
   }
 
+  function renderConsumableCard() {
+    return (
+      <View
+        style={styles.card}
+        onLayout={(e) => {
+          const y = e?.nativeEvent?.layout?.y
+          setAnchorY((prev) => ({ ...prev, consumable: typeof y === 'number' ? y : prev.consumable }))
+        }}
+      >
+        <Text style={styles.sectionTitle}>{`${consumableSectionIndex}. 剩余消耗品照片`}</Text>
+        <Text style={styles.mutedSmall}>至少上传 1 张，拍当天检查结束后自己剩余的消耗品。</Text>
+        {canEdit ? (
+          <Pressable onPress={() => captureAndUpload('consumable')} style={({ pressed }) => [styles.sectionBtn, pressed ? styles.pressed : null]} disabled={uploading || submitting}>
+            <Ionicons name="camera-outline" size={moderateScale(16)} color="#2563EB" />
+            <Text style={styles.sectionBtnText}>{consumableItems.length ? '继续拍剩余消耗品' : '拍剩余消耗品'}</Text>
+          </Pressable>
+        ) : null}
+        {renderPhotoGrid(consumableItems, (id) => setConsumableItems((prev) => prev.filter((x) => x.id !== id)))}
+        {canEdit ? (
+          <Pressable
+            onPress={() => onSubmitSection('consumable')}
+            disabled={!photoPayload(consumableItems).length || uploading || submitting || !!submittingSection}
+            style={({ pressed }) => [styles.sectionSubmitBtn, pressed ? styles.pressed : null, !photoPayload(consumableItems).length || uploading || submitting || !!submittingSection ? styles.sectionSubmitDisabled : null]}
+          >
+            <Text style={styles.sectionSubmitText}>{submittingSection === 'consumable' ? t('common_loading') : '保存剩余消耗品照片'}</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    )
+  }
+
   if (!canView) {
     return (
       <View style={[styles.page, styles.center]}>
@@ -837,13 +960,15 @@ export default function DayEndBackupKeysScreen(props: Props) {
               {overviewRows.map((item) => (
                 <Pressable
                   key={item.userId}
-                  onPress={() => props.navigation.push('DayEndBackupKeys', { date, userId: item.userId, userName: item.userName, taskRoomCodes: item.roomCodes })}
+                  onPress={() => props.navigation.push('DayEndBackupKeys', { date, userId: item.userId, userName: item.userName, taskRoomCodes: item.roomCodes, targetRoles: item.roles })}
                   style={({ pressed }) => [styles.overviewItem, pressed ? styles.pressed : null]}
                 >
                   <View style={styles.overviewMain}>
                     <Text style={styles.overviewName}>{item.userName || item.userId}</Text>
                     <Text style={styles.overviewMeta}>{item.roles.includes('cleaning') && item.roles.includes('inspection') ? '清洁 + 检查' : item.roles.includes('inspection') ? '检查' : '清洁'}</Text>
                     {item.roomCodes.length ? <Text style={styles.overviewRooms} numberOfLines={2}>{`房号：${item.roomCodes.join('、')}`}</Text> : null}
+                    {roleStatsLine('清洁', item.stats?.cleaning) ? <Text style={styles.overviewProgress}>{roleStatsLine('清洁', item.stats?.cleaning)}</Text> : null}
+                    {roleStatsLine('检查', item.stats?.inspection) ? <Text style={styles.overviewProgress}>{roleStatsLine('检查', item.stats?.inspection)}</Text> : null}
                   </View>
                   <View style={[styles.overviewStatusPill, item.complete == null ? styles.overviewStatusGray : (item.complete ? styles.overviewStatusGreen : styles.overviewStatusAmber)]}>
                     <Text style={[styles.overviewStatusText, item.complete == null ? styles.overviewStatusTextGray : (item.complete ? styles.overviewStatusTextGreen : styles.overviewStatusTextAmber)]}>{item.complete == null ? '加载中' : (item.complete ? '已提交' : '未提交')}</Text>
@@ -859,41 +984,22 @@ export default function DayEndBackupKeysScreen(props: Props) {
         <Text style={styles.title}>日终交接</Text>
         <Text style={styles.mutedSmall}>{`日期：${date || '-'}`}</Text>
         {targetUserName ? <Text style={styles.mutedSmall}>{`人员：${targetUserName}`}</Text> : null}
-        <Text style={styles.mutedSmall}>{isInspectorOnlySelf ? '完成当天检查任务后，请提交自己剩余消耗品照片，并完成 Reject 床品登记。' : '完成当天清洁任务后，请提交备用钥匙照片、脏床品照片，以及 Reject 床品登记。'}</Text>
-        {taskRoomCodes.length ? <Text style={styles.mutedSmall}>{`今日任务房号：${taskRoomCodes.join('、')}`}</Text> : null}
+        <Text style={styles.mutedSmall}>
+          {effectiveHasCleaning && effectiveHasInspection
+            ? '完成当天清洁和检查任务后，请提交备用钥匙、脏床品、仓库钥匙记录、剩余消耗品，以及 Reject 床品登记。'
+            : (effectiveInspectorOnly
+              ? '完成当天检查任务后，请提交剩余消耗品照片，并完成 Reject 床品登记。'
+              : '完成当天清洁任务后，请提交备用钥匙、脏床品、仓库钥匙记录，以及 Reject 床品登记。')}
+        </Text>
+        {resolvedTaskRoomCodes.length ? <Text style={styles.mutedSmall}>{`今日任务房号：${resolvedTaskRoomCodes.join('、')}`}</Text> : null}
         {!canEdit ? <Text style={styles.mutedSmall}>当前为查看模式。</Text> : null}
         {loading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
         {loadError ? <Text style={styles.errorText}>{loadError}</Text> : null}
       </View>
 
-      {isInspectorOnlySelf ? (
-        <View
-          style={styles.card}
-          onLayout={(e) => {
-            const y = e?.nativeEvent?.layout?.y
-            setAnchorY((prev) => ({ ...prev, consumable: typeof y === 'number' ? y : prev.consumable }))
-          }}
-        >
-          <Text style={styles.sectionTitle}>1. 剩余消耗品照片</Text>
-          <Text style={styles.mutedSmall}>至少上传 1 张，拍当天检查结束后自己剩余的消耗品。</Text>
-          {canEdit ? (
-            <Pressable onPress={() => captureAndUpload('consumable')} style={({ pressed }) => [styles.sectionBtn, pressed ? styles.pressed : null]} disabled={uploading || submitting}>
-              <Ionicons name="camera-outline" size={moderateScale(16)} color="#2563EB" />
-              <Text style={styles.sectionBtnText}>{consumableItems.length ? '继续拍剩余消耗品' : '拍剩余消耗品'}</Text>
-            </Pressable>
-          ) : null}
-          {renderPhotoGrid(consumableItems, (id) => setConsumableItems((prev) => prev.filter((x) => x.id !== id)))}
-          {canEdit ? (
-            <Pressable
-              onPress={() => onSubmitSection('consumable')}
-              disabled={!photoPayload(consumableItems).length || uploading || submitting || !!submittingSection}
-              style={({ pressed }) => [styles.sectionSubmitBtn, pressed ? styles.pressed : null, !photoPayload(consumableItems).length || uploading || submitting || !!submittingSection ? styles.sectionSubmitDisabled : null]}
-            >
-              <Text style={styles.sectionSubmitText}>{submittingSection === 'consumable' ? t('common_loading') : '保存剩余消耗品照片'}</Text>
-            </Pressable>
-          ) : null}
-        </View>
-      ) : (
+      {!effectiveHasCleaning && effectiveHasInspection ? renderConsumableCard() : null}
+
+      {effectiveHasCleaning ? (
         <>
           <View
             style={styles.card}
@@ -991,7 +1097,9 @@ export default function DayEndBackupKeysScreen(props: Props) {
             ) : null}
           </View>
         </>
-      )}
+      ) : null}
+
+      {effectiveHasCleaning && effectiveHasInspection ? renderConsumableCard() : null}
 
       <View
         style={styles.card}
@@ -1000,7 +1108,7 @@ export default function DayEndBackupKeysScreen(props: Props) {
           setAnchorY((prev) => ({ ...prev, reject: typeof y === 'number' ? y : prev.reject }))
         }}
       >
-        <Text style={styles.sectionTitle}>{isInspectorOnlySelf ? '2. Reject 床品登记' : '4. Reject 床品登记'}</Text>
+        <Text style={styles.sectionTitle}>{`${rejectSectionIndex}. Reject 床品登记`}</Text>
         <Text style={styles.mutedSmall}>不合格床品要退给工厂退款时，在仓库登记床品类型、数量、使用房号，并上传不合格床品退回照片。</Text>
         {canEdit ? (
           <Pressable
@@ -1090,24 +1198,31 @@ export default function DayEndBackupKeysScreen(props: Props) {
         </>
       )}
     </ScrollView>
-    <Modal visible={!!viewerUrls.length} transparent animationType="fade" onRequestClose={closePhotoViewer}>
+    <Modal visible={!!viewerPhotos.length} transparent animationType="fade" onRequestClose={closePhotoViewer}>
       <View style={styles.viewerBackdrop}>
         <View style={[styles.viewerTop, { paddingTop: Math.max(insets.top, 12) }]}>
-          <Text style={styles.viewerCount}>{viewerUrls.length ? `${viewerIndex + 1} / ${viewerUrls.length}` : ''}</Text>
+          <Text style={styles.viewerCount}>{viewerPhotos.length ? `${viewerIndex + 1} / ${viewerPhotos.length}` : ''}</Text>
           <Pressable onPress={closePhotoViewer} style={({ pressed }) => [styles.viewerCloseBtn, pressed ? styles.pressed : null]}>
             <Text style={styles.viewerCloseText}>关闭</Text>
           </Pressable>
         </View>
         <View style={styles.viewerBody}>
-          {viewerUrls.length > 1 ? (
+          {viewerPhotos.length > 1 ? (
             <Pressable onPress={() => movePhotoViewer(-1)} style={({ pressed }) => [styles.viewerNavBtn, styles.viewerNavLeft, pressed ? styles.pressed : null]}>
               <Ionicons name="chevron-back" size={moderateScale(28)} color="#FFFFFF" />
             </Pressable>
           ) : null}
-          {viewerUrls[viewerIndex] ? (
-            <Image source={{ uri: viewerUrls[viewerIndex] }} style={styles.viewerImage} resizeMode="contain" />
+          {viewerPhotos[viewerIndex] ? (
+            <CleaningMediaPreview
+              token={token}
+              localUri={isLocalDayEndDraftUri(viewerPhotos[viewerIndex].uri) ? viewerPhotos[viewerIndex].uri : undefined}
+              reference={viewerPhotos[viewerIndex].uploaded_url || viewerPhotos[viewerIndex].uri}
+              dayEndUserId={targetUserId || currentUserId}
+              dayEndDate={date}
+              style={styles.viewerImage}
+            />
           ) : null}
-          {viewerUrls.length > 1 ? (
+          {viewerPhotos.length > 1 ? (
             <Pressable onPress={() => movePhotoViewer(1)} style={({ pressed }) => [styles.viewerNavBtn, styles.viewerNavRight, pressed ? styles.pressed : null]}>
               <Ionicons name="chevron-forward" size={moderateScale(28)} color="#FFFFFF" />
             </Pressable>
@@ -1129,19 +1244,19 @@ const styles = StyleSheet.create({
   muted: { marginTop: 10, color: '#6B7280', fontWeight: '700' },
   mutedSmall: { marginTop: 8, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   errorText: { marginTop: 8, color: '#B91C1C', fontWeight: '800', fontSize: 12 },
-  sectionBtn: { marginTop: 12, minHeight: 40, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
+  sectionBtn: { marginTop: 12, minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
   sectionBtnText: { color: '#2563EB', fontWeight: '900', textAlign: 'center' },
   sectionBtnSelected: { backgroundColor: '#ECFDF5', borderColor: '#BBF7D0' },
   sectionBtnSelectedText: { color: '#16A34A' },
   sectionActionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   sectionActionBtn: { flexGrow: 1, flexBasis: '47%', minWidth: 130 },
-  sectionSubmitBtn: { marginTop: 12, minHeight: 42, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
+  sectionSubmitBtn: { marginTop: 12, minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 12, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
   sectionSubmitDisabled: { backgroundColor: '#A7F3D0' },
   sectionSubmitText: { color: '#FFFFFF', fontWeight: '900', textAlign: 'center' },
   grid: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  gridItem: { flexBasis: '47%', flexGrow: 1, minWidth: 120, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F9FAFB' },
-  gridImgPress: { width: '100%', height: 160, backgroundColor: '#F3F4F6' },
-  gridImg: { width: '100%', height: 160, backgroundColor: '#F3F4F6' },
+  gridItem: { width: 96, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F9FAFB' },
+  gridImgPress: { width: 96, height: 96, backgroundColor: '#F3F4F6' },
+  gridImg: { width: 96, height: 96, backgroundColor: '#F3F4F6' },
   gridFoot: { padding: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
   gridMeta: { color: '#6B7280', fontWeight: '800', flex: 1, minWidth: 0 },
   removeBtn: { height: 28, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
@@ -1152,7 +1267,7 @@ const styles = StyleSheet.create({
   rejectTitle: { flex: 1, minWidth: 0, fontSize: 14, fontWeight: '900', color: '#111827' },
   fieldLabel: { marginTop: 10, color: '#374151', fontWeight: '800', fontSize: 12 },
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
-  chip: { height: 34, paddingHorizontal: 12, borderRadius: 17, borderWidth: hairline(), borderColor: '#D1D5DB', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+  chip: { minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 17, borderWidth: hairline(), borderColor: '#D1D5DB', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
   chipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
   chipText: { color: '#374151', fontWeight: '800', fontSize: 12 },
   chipTextActive: { color: '#FFFFFF' },
@@ -1163,9 +1278,9 @@ const styles = StyleSheet.create({
   suggestRow: { minHeight: 40, justifyContent: 'center', paddingHorizontal: 12, borderBottomWidth: hairline(), borderBottomColor: '#EEF0F6' },
   suggestText: { color: '#111827', fontWeight: '800' },
   inlineRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' },
-  addPhotoBtn: { minHeight: 32, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', flexDirection: 'row', alignItems: 'center', gap: 6 },
+  addPhotoBtn: { minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 16, borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', flexDirection: 'row', alignItems: 'center', gap: 6 },
   addPhotoText: { color: '#2563EB', fontWeight: '900', fontSize: 12, textAlign: 'center' },
-  submitBtn: { marginTop: 4, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
+  submitBtn: { marginTop: 4, minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 12, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
   submitBtnDisabled: { backgroundColor: '#A7F3D0' },
   submitText: { color: '#FFFFFF', fontWeight: '900', textAlign: 'center' },
   overviewList: { gap: 10 },
@@ -1174,6 +1289,7 @@ const styles = StyleSheet.create({
   overviewName: { color: '#111827', fontWeight: '900', fontSize: 14 },
   overviewMeta: { marginTop: 4, color: '#2563EB', fontWeight: '800', fontSize: 12 },
   overviewRooms: { marginTop: 6, color: '#6B7280', fontWeight: '700', fontSize: 12, lineHeight: 18 },
+  overviewProgress: { marginTop: 4, color: '#4B5563', fontWeight: '700', fontSize: 12, lineHeight: 18 },
   overviewStatusPill: { minWidth: 64, minHeight: 28, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 4, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   overviewStatusGray: { backgroundColor: '#E5E7EB' },
   overviewStatusGreen: { backgroundColor: '#DCFCE7' },
@@ -1186,7 +1302,7 @@ const styles = StyleSheet.create({
   viewerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)' },
   viewerTop: { minHeight: 56, paddingHorizontal: 16, paddingBottom: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   viewerCount: { color: '#FFFFFF', fontWeight: '900', fontSize: 13 },
-  viewerCloseBtn: { minHeight: 36, paddingHorizontal: 14, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
+  viewerCloseBtn: { minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
   viewerCloseText: { color: '#FFFFFF', fontWeight: '900' },
   viewerBody: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   viewerImage: { width: '100%', height: '100%' },

@@ -111,6 +111,10 @@ function resolveActorName(data: any) {
   return cleanText(data?.actor_name || data?.actor_user_name || data?.updated_by_name)
 }
 
+function resolveAssigneeName(data: any, relatedTask: any) {
+  return cleanText(data?.assignee_name || relatedTask?.assignee_name || relatedTask?.cleaner_name || data?.assignee_id || relatedTask?.assignee_id)
+}
+
 function resolveGuestSpecialRequest(data: any, relatedTask: any) {
   const hasDirectValue = Object.prototype.hasOwnProperty.call(data || {}, 'guest_special_request')
   return cleanText(hasDirectValue ? data?.guest_special_request : relatedTask?.guest_special_request)
@@ -146,6 +150,11 @@ function getRestockEntriesFromNoticeData(data: any) {
       return { label, photoUrl, qty, needRestock }
     })
     .filter((item: any) => !!item && item.needRestock)
+}
+
+function summarizeRestockLabels(items: Array<{ label: string; qty: number | null }>) {
+  const labels = items.map((item) => (item.qty != null ? `${item.label} x${item.qty}` : item.label))
+  return labels.length ? labels.join('、') : ''
 }
 
 export function getPresentedNotice(notice: Notice) {
@@ -185,12 +194,13 @@ export function getPresentedNotice(notice: Notice) {
     'keys_hung',
     'self_completed',
     'restock_proof_saved',
+    'restock_sufficient_confirmed',
     'ready',
     'key_upload_reminder',
     'key_upload_sla',
   ])
   if (cleaningTaskKinds.has(kind)) {
-    addDetail(contentLines, '时间', taskDate)
+    addDetail(contentLines, '任务日期', taskDate)
     addDetail(contentLines, '操作人', actorName || '系统')
     addDetail(contentLines, '任务要求', guestSpecialRequest || '无')
     if (keysRequired && keysRequired > 1) addDetail(contentLines, '钥匙要求', `需挂 ${keysRequired} 套钥匙`)
@@ -218,25 +228,32 @@ export function getPresentedNotice(notice: Notice) {
       .filter((line) => /^(退房时间|入住时间|旧密码|新密码|客人需求|需挂钥匙套数|需要挂钥匙数)[:：]/.test(line))
       .every((line) => /^(需挂钥匙套数|需要挂钥匙数)[:：]/.test(line))
     title = eventTitle(propertyCode, keysOnly ? '钥匙要求已修改' : '任务要求已修改')
-    summary = changes[0] || '任务信息已更新'
+    summary = [taskDate, changes[0] || '任务信息已更新'].filter(Boolean).join(' · ')
     for (const change of changes) addDetail(contentLines, '变更', change)
   } else if (kind === 'consumables_submitted' || kind === 'consumables_updated') {
     title = eventTitle(propertyCode, kind === 'consumables_updated' ? '补品记录已更新' : '清洁已完成')
-    const restockLabels = restockEntries.map((item: { label: string; qty: number | null }) => (item.qty != null ? `${item.label} x${item.qty}` : item.label))
-    summary = restockLabels.length ? `${restockLabels.length} 项需要补货` : (kind === 'consumables_updated' ? '补品记录已更新' : '待检查')
-    if (restockLabels.length) addDetail(contentLines, '待补货', restockLabels.join('、'))
-  } else if (kind === 'inspection_complete' || kind === 'keys_hung') {
+    const restockSummary = summarizeRestockLabels(restockEntries)
+    summary = restockSummary ? `待补货：${restockSummary}` : (kind === 'consumables_updated' ? '补品记录已更新' : '现场消耗品已提交，待检查')
+    if (restockSummary) addDetail(contentLines, '待补货', restockSummary)
+  } else if (kind === 'inspection_complete') {
+    title = eventTitle(propertyCode, '检查已完成')
+    const restockSummary = summarizeRestockLabels(restockEntries)
+    summary = restockSummary ? `待补货：${restockSummary}` : '现场消耗品已确认充足'
+    if (restockSummary) addDetail(contentLines, '待补货', restockSummary)
+  } else if (kind === 'keys_hung') {
     title = eventTitle(propertyCode, '房间已挂钥匙')
     summary = '挂钥匙视频已上传，房间钥匙已挂好'
   } else if (kind === 'issue_reported') {
     title = eventTitle(propertyCode, '发现房源问题')
     summary = cleanText((data as any).issue_title) || cleanText(notice.summary).replace(/^收到新的问题反馈[:：]\s*/, '') || '请查看问题详情'
+    addDetail(contentLines, '房源', propertyCode)
     addDetail(contentLines, '问题', summary)
     addDetail(contentLines, '严重程度', (data as any).severity)
     addDetail(contentLines, '问题详情', (data as any).issue_detail)
   } else if (kind === 'restock_done') {
     title = eventTitle(propertyCode, '补货已完成')
-    summary = '等待检查'
+    const restockSummary = summarizeRestockLabels(restockEntries)
+    summary = restockSummary ? `已补货：${restockSummary}` : '补货完成，等待检查'
   } else if (kind === 'completion_photos_saved') {
     title = eventTitle(propertyCode, '房间照片已提交')
     summary = '清洁完成照片已上传'
@@ -248,7 +265,11 @@ export function getPresentedNotice(notice: Notice) {
     summary = '等待检查或确认'
   } else if (kind === 'restock_proof_saved') {
     title = eventTitle(propertyCode, '补货凭证已提交')
-    summary = '补货证明已上传'
+    const restockSummary = summarizeRestockLabels(restockEntries)
+    summary = restockSummary ? `补货凭证：${restockSummary}` : '补货证明已上传'
+  } else if (kind === 'restock_sufficient_confirmed') {
+    title = eventTitle(propertyCode, '消耗品已确认充足')
+    summary = '检查员已确认现场消耗品充足'
   } else if (kind === 'ready') {
     title = eventTitle(propertyCode, '房源可入住')
     summary = '房源已完成准备'
@@ -276,11 +297,26 @@ export function getPresentedNotice(notice: Notice) {
     const targetName = cleanText((data as any).target_user_name)
     summary = [targetName, taskDate].filter(Boolean).join(' · ') || '请及时跟进'
   } else if (kind === 'work_task_updated') {
-    title = eventTitle(propertyCode, '任务已更新')
-    summary = cleanText((data as any).task_title) || cleanText(notice.summary) || '请查看最新任务内容'
+    const taskTitle = cleanText((data as any).task_title || relatedTask?.title)
+    const taskSummary = cleanText((data as any).task_summary || relatedTask?.summary)
+    const assigneeName = resolveAssigneeName(data, relatedTask)
+    title = eventTitle(propertyCode || taskTitle, '线下任务已更新')
+    summary = taskSummary || taskTitle || cleanText(notice.summary) || '请查看最新任务内容'
+    addDetail(contentLines, '任务日期', taskDate)
+    addDetail(contentLines, '执行人员', assigneeName || '未分配')
+    addDetail(contentLines, '任务标题', taskTitle)
+    addDetail(contentLines, '任务内容', taskSummary)
+    addDetail(contentLines, '状态', cleanText((data as any).status))
   } else if (kind === 'work_task_completed') {
-    title = eventTitle(propertyCode, '任务已完成')
-    summary = cleanText((data as any).task_title) || cleanText(notice.summary) || '任务已标记完成'
+    const taskTitle = cleanText((data as any).task_title || relatedTask?.title)
+    const taskSummary = cleanText((data as any).task_summary || relatedTask?.summary)
+    const assigneeName = resolveAssigneeName(data, relatedTask)
+    title = eventTitle(propertyCode || taskTitle, '线下任务已完成')
+    summary = taskSummary || taskTitle || cleanText(notice.summary) || '任务已标记完成'
+    addDetail(contentLines, '任务日期', taskDate)
+    addDetail(contentLines, '执行人员', assigneeName || '未分配')
+    addDetail(contentLines, '任务标题', taskTitle)
+    addDetail(contentLines, '任务内容', taskSummary)
   } else {
     if (propertyCode && !title.includes(propertyCode)) title = eventTitle(propertyCode, title.replace(/^[^：]+[:：]\s*/, ''))
     summary = summary || '请查看详情'
@@ -302,6 +338,7 @@ export function getPresentedNotice(notice: Notice) {
     'keys_hung',
     'self_completed',
     'restock_proof_saved',
+    'restock_sufficient_confirmed',
     'ready',
     'guest_luggage_updated',
     'guest_luggage_deleted',

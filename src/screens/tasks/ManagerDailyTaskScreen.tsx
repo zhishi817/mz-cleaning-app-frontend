@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import { ResizeMode, Video } from 'expo-av'
@@ -24,11 +24,27 @@ import { useI18n } from '../../lib/i18n'
 import { prependNotice } from '../../lib/noticesStore'
 import { hasAnyRole } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
-import { findWorkTaskItemByAnyId, patchWorkTaskItem, refreshWorkTasksFromServer, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
+import { getEffectiveTaskStatus, isTaskWorkflowProgressStatus } from '../../lib/taskVisualTheme'
+import { findWorkTaskItemByAnyId, patchWorkTaskItem, requestWorkTasksRefresh, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
+import {
+  completionPhotoTaskIdsFromTask,
+  inspectionPhotoTaskIdsFromTask,
+  managerGuestLuggagePhotoDisplayItems,
+  mergeManagerCompletionPhotoItems,
+  mergeManagerLivingRoomPhotoUrls,
+  managerDailyTaskPhotoLoadIssue,
+  type ManagerDailyTaskPhotoLoadIssue,
+  type ManagerDailyTaskPhotoSource,
+} from '../../lib/managerDailyTaskPhotos'
+import { executionTaskIdsForRole } from '../../lib/turnoverDisplay'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
+import CleaningMediaImage from '../../components/CleaningMediaImage'
+import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'ManagerDailyTask'>
+
+const PHOTO_LOAD_FOCUS_REUSE_MS = 30_000
 
 function normalizeBase(base: string) {
   return String(base || '').trim().replace(/\/+$/g, '')
@@ -55,7 +71,10 @@ const AREA_LABEL: Record<string, string> = {
   sofa: '沙发',
   bedroom: '卧室',
   kitchen: '厨房',
-  shower_drain: '淋浴房下水口',
+  shower_drain: '浴室下水口',
+  remote_tv: '电视和空调遥控器',
+  remote_ac: '电视和空调遥控器（旧记录）',
+  remote_controls: '电视和空调遥控器（旧记录）',
   vacuum_used: '吸尘器使用后',
 }
 
@@ -98,6 +117,13 @@ function addDays(d: Date, days: number) {
   return nd
 }
 
+function buildDetailFallbackRange(base = new Date()) {
+  return {
+    date_from: ymd(addDays(base, -7)),
+    date_to: ymd(addDays(base, 7)),
+  }
+}
+
 function buildCleaningSummary(checkoutTime: string | null, checkinTime: string | null) {
   const checkout = String(checkoutTime || '').trim()
   const checkin = String(checkinTime || '').trim()
@@ -113,10 +139,14 @@ function isDoneLikeStatusZh(status0: string) {
 }
 
 function statusLabelZh(status: string, task?: WorkTaskItem | null) {
-  const s = String(status || '').trim().toLowerCase()
+  const s = getEffectiveTaskStatus(task, status)
   const source = String(task?.source_type || '').trim().toLowerCase()
   const kind = String(task?.task_kind || '').trim().toLowerCase()
-  if (source === 'cleaning_tasks' && kind === 'inspection' && (s === 'cleaned' || s === 'restock_pending' || s === 'restocked')) return '待检查'
+  if (source === 'cleaning_tasks' && kind === 'inspection') {
+    if (s === 'cleaned' || s === 'restock_pending' || s === 'restocked') return '待检查'
+    const checkedOutAt = String((task as any)?.checked_out_at || '').trim()
+    if (checkedOutAt && !isTaskWorkflowProgressStatus(s) && !isDoneLikeStatusZh(s) && s !== 'cancelled' && s !== 'canceled') return '已退房'
+  }
   if (source === 'cleaning_tasks' && kind === 'cleaning') {
     const taskType = String((task as any)?.task_type || '').trim().toLowerCase()
     const isStayoverTask = isStayoverTaskType(taskType)
@@ -167,37 +197,11 @@ function isBeforeToday(taskDate0: any) {
 
 function checkoutTaskIdsFromTask(task: WorkTaskItem | null) {
   if (!task || task.source_type !== 'cleaning_tasks') return []
-  return Array.from(
-    new Set(
-      [
-        ...(Array.isArray((task as any)?.cleaning_task_ids) ? (task as any).cleaning_task_ids : []),
-        ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
-        (task as any)?.source_id,
-      ]
-        .map((x) => String(x || '').trim())
-        .filter(Boolean),
-    ),
-  )
+  return executionTaskIdsForRole(task, 'cleaning')
 }
 
 function cleaningTaskIdsFromTask(task: WorkTaskItem | null) {
-  if (!task || task.source_type !== 'cleaning_tasks') return []
-  const ids = [
-    ...(Array.isArray((task as any)?.cleaning_task_ids) ? (task as any).cleaning_task_ids : []),
-    ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
-    (task as any)?.source_id,
-  ]
-  return uniqueTextList(ids)
-}
-
-function inspectionTaskIdsFromTask(task: WorkTaskItem | null) {
-  if (!task || task.source_type !== 'cleaning_tasks') return []
-  const ids = [
-    ...(Array.isArray((task as any)?.inspection_task_ids) ? (task as any).inspection_task_ids : []),
-    ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
-    (task as any)?.source_id,
-  ]
-  return uniqueTextList(ids)
+  return completionPhotoTaskIdsFromTask(task)
 }
 
 function mergeConsumableRows(rows: any[]) {
@@ -291,12 +295,14 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const [guestNote, setGuestNote] = useState('')
   const [luggageNote, setLuggageNote] = useState('')
   const [luggagePhotoUrls, setLuggagePhotoUrls] = useState<string[]>([])
+  const [luggageLocalPreviewByUrl, setLuggageLocalPreviewByUrl] = useState<Record<string, string>>({})
   const [luggageSaving, setLuggageSaving] = useState(false)
   const [luggageUploading, setLuggageUploading] = useState(false)
   const [keysRequired, setKeysRequired] = useState(1)
   const [keysDirty, setKeysDirty] = useState(false)
 
   const [photosLoading, setPhotosLoading] = useState(false)
+  const [photoLoadIssues, setPhotoLoadIssues] = useState<ManagerDailyTaskPhotoLoadIssue[]>([])
   const [consumableItems, setConsumableItems] = useState<Array<{ item_id: string; photo_url?: string | null; photo_urls?: string[]; item_label?: string | null; status?: string | null; note?: string | null; need_restock?: boolean }>>([])
   const [livingRoomPhotoUrls, setLivingRoomPhotoUrls] = useState<string[]>([])
   const [completionItems, setCompletionItems] = useState<Array<{ area: string; url: string; note?: string | null }>>([])
@@ -306,6 +312,9 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const syncedTaskIdRef = useRef<string>('')
   const syncedLuggageVersionRef = useRef<string>('')
+  const photoLoadInFlightKeyRef = useRef<string>('')
+  const photoLoadInFlightPromiseRef = useRef<Promise<void> | null>(null)
+  const lastPhotoLoadRef = useRef<{ key: string; at: number } | null>(null)
 
   useEffect(() => {
     const currentTaskId = String(task?.id || '').trim()
@@ -333,6 +342,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     syncedLuggageVersionRef.current = syncVersion
     setLuggageNote(String((task as any)?.guest_luggage?.note || '').trim())
     setLuggagePhotoUrls(normalizeUrlList((task as any)?.guest_luggage?.photo_urls).slice(0, 3))
+    setLuggageLocalPreviewByUrl({})
   }, [task?.id, (task as any)?.guest_luggage?.version])
 
   useEffect(() => {
@@ -340,11 +350,9 @@ export default function ManagerDailyTaskScreen(props: Props) {
     if (!token || !user?.id) return
     let cancelled = false
     const view: WorkTasksView = 'all'
-    const now = new Date()
-    const date_from = ymd(addDays(now, -45))
-    const date_to = ymd(addDays(now, 45))
+    const { date_from, date_to } = buildDetailFallbackRange()
     setResolvingRemote(true)
-    refreshWorkTasksFromServer({ token, userId: String(user.id), date_from, date_to, view })
+    requestWorkTasksRefresh({ token, userId: String(user.id), date_from, date_to, view, mode: 'force', reason: 'manager_task_fallback' })
       .catch(() => null)
       .finally(() => {
         if (!cancelled) setResolvingRemote(false)
@@ -354,14 +362,21 @@ export default function ManagerDailyTaskScreen(props: Props) {
     }
   }, [task, token, user?.id, props.route.params.taskId])
 
-  const inspectionTaskIds = useMemo(() => inspectionTaskIdsFromTask(task), [task])
+  const inspectionTaskIds = useMemo(() => inspectionPhotoTaskIdsFromTask(task), [task])
   const cleaningTaskIds = useMemo(() => cleaningTaskIdsFromTask(task), [task])
   const inspectionTaskIdsKey = inspectionTaskIds.join('|')
   const cleaningTaskIdsKey = cleaningTaskIds.join('|')
 
-  const loadTaskPhotos = useCallback(async () => {
+  const loadTaskPhotos = useCallback(async (opts?: { reuseRecent?: boolean }) => {
     if (!token) return
-    if (!inspectionTaskIds.length && !cleaningTaskIds.length) {
+    const loadKey = `${String(user?.id || '')}|${cleaningTaskIdsKey}|${inspectionTaskIdsKey}`
+    const lastLoad = lastPhotoLoadRef.current
+    if (opts?.reuseRecent && lastLoad?.key === loadKey && Date.now() - lastLoad.at < PHOTO_LOAD_FOCUS_REUSE_MS) return
+    if (photoLoadInFlightPromiseRef.current && photoLoadInFlightKeyRef.current === loadKey) return photoLoadInFlightPromiseRef.current
+    const cleaningIds = cleaningTaskIdsKey ? cleaningTaskIdsKey.split('|').filter(Boolean) : []
+    const inspectionIds = inspectionTaskIdsKey ? inspectionTaskIdsKey.split('|').filter(Boolean) : []
+    if (!inspectionIds.length && !cleaningIds.length) {
+      setPhotoLoadIssues([])
       setConsumableItems([])
       setLivingRoomPhotoUrls([])
       setCompletionItems([])
@@ -369,57 +384,86 @@ export default function ManagerDailyTaskScreen(props: Props) {
       setRestockProofs([])
       return
     }
-    setPhotosLoading(true)
-    try {
-      const [consumablesResps, completionResps, inspectionResps, restockResps] = await Promise.all([
-        Promise.all(cleaningTaskIds.map((id) => getCleaningConsumables(token, id).catch(() => null))),
-        Promise.all(cleaningTaskIds.map((id) => getCompletionPhotos(token, id).catch(() => null))),
-        Promise.all(inspectionTaskIds.map((id) => getInspectionPhotos(token, id).catch(() => null))),
-        Promise.all(cleaningTaskIds.map((id) => getRestockProof(token, id).catch(() => null))),
-      ])
 
-      setLivingRoomPhotoUrls(uniqueTextList(consumablesResps.flatMap((resp) => normalizeUrlList((resp as any)?.living_room_photo_url))))
-      setConsumableItems(mergeConsumableRows(consumablesResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))))
+    let run: Promise<void> | undefined = undefined
+    run = (async () => {
+      setPhotosLoading(true)
+      setPhotoLoadIssues([])
+      try {
+        async function loadMany<T>(source: ManagerDailyTaskPhotoSource, ids: string[], loader: (id: string) => Promise<T>) {
+          const settled = await Promise.all(ids.map(async (taskId) => {
+            try {
+              return { response: await loader(taskId), issue: null }
+            } catch (error) {
+              return { response: null, issue: managerDailyTaskPhotoLoadIssue(source, taskId, error) }
+            }
+          }))
+          return {
+            responses: settled.map((item) => item.response),
+            issues: settled.map((item) => item.issue).filter(Boolean) as ManagerDailyTaskPhotoLoadIssue[],
+          }
+        }
 
-      const completion = completionResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))
-      const seenCompletion = new Set<string>()
-      setCompletionItems(
-        completion
-          .map((x) => ({ area: String(x.area || '').trim(), url: String(x.url || '').trim(), note: x.note ?? null }))
-          .filter((x) => {
-            if (!x.url) return false
-            const key = `${x.area}|${x.url}`
-            if (seenCompletion.has(key)) return false
-            seenCompletion.add(key)
-            return true
-          }),
-      )
+        const [consumablesResult, completionResult, inspectionResult, restockResult] = await Promise.all([
+          loadMany('consumables', cleaningIds, (id) => getCleaningConsumables(token, id)),
+          loadMany('completion', cleaningIds, (id) => getCompletionPhotos(token, id)),
+          loadMany('inspection', inspectionIds, (id) => getInspectionPhotos(token, id)),
+          loadMany('restock', cleaningIds, (id) => getRestockProof(token, id)),
+        ])
+        const issues = [
+          ...consumablesResult.issues,
+          ...completionResult.issues,
+          ...inspectionResult.issues,
+          ...restockResult.issues,
+        ]
+        setPhotoLoadIssues(issues)
 
-      const items = inspectionResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))
-      const seenInspection = new Set<string>()
-      setInspectionItems(
-        items
-          .map((x) => ({ area: String(x.area || '').trim(), url: String(x.url || '').trim(), note: x.note ?? null }))
-          .filter((x) => {
-            if (!x.url) return false
-            const key = `${x.area}|${x.url}`
-            if (seenInspection.has(key)) return false
-            seenInspection.add(key)
-            return true
-          }),
-      )
+        if (!consumablesResult.issues.length) {
+          const consumablesResps = consumablesResult.responses
+          setLivingRoomPhotoUrls(mergeManagerLivingRoomPhotoUrls(consumablesResps))
+          setConsumableItems(mergeConsumableRows(consumablesResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))))
+        }
 
-      setRestockProofs(mergeRestockProofRows(restockResps.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))))
-    } catch {
-      setConsumableItems([])
-      setLivingRoomPhotoUrls([])
-      setCompletionItems([])
-      setInspectionItems([])
-      setRestockProofs([])
-    } finally {
-      setPhotosLoading(false)
-    }
-  }, [cleaningTaskIdsKey, inspectionTaskIdsKey, token])
+        // 合并卡可能关联多个清洁任务；其中一个历史 ID 读取失败时，仍要展示其他任务已成功读取的完成照片。
+        setCompletionItems(mergeManagerCompletionPhotoItems(completionResult.responses))
+
+        if (!inspectionResult.issues.length) {
+          const items = inspectionResult.responses.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))
+          const seenInspection = new Set<string>()
+          setInspectionItems(
+            items
+              .map((x) => ({ area: String(x.area || '').trim(), url: String(x.url || '').trim(), note: x.note ?? null }))
+              .filter((x) => {
+                if (!x.url) return false
+                const key = `${x.area}|${x.url}`
+                if (seenInspection.has(key)) return false
+                seenInspection.add(key)
+                return true
+              }),
+          )
+        }
+
+        if (!restockResult.issues.length) {
+          setRestockProofs(mergeRestockProofRows(restockResult.responses.flatMap((resp) => (Array.isArray((resp as any)?.items) ? (resp as any).items : []))))
+        }
+        if (!issues.length) lastPhotoLoadRef.current = { key: loadKey, at: Date.now() }
+        else lastPhotoLoadRef.current = null
+      } catch {
+        setPhotoLoadIssues([managerDailyTaskPhotoLoadIssue('unknown', cleaningIds[0] || inspectionIds[0] || '-', new Error('照片读取失败，请重试'))])
+        lastPhotoLoadRef.current = null
+      } finally {
+        if (run && photoLoadInFlightPromiseRef.current === run) {
+          photoLoadInFlightPromiseRef.current = null
+          photoLoadInFlightKeyRef.current = ''
+          setPhotosLoading(false)
+        }
+      }
+    })()
+
+    photoLoadInFlightKeyRef.current = loadKey
+    photoLoadInFlightPromiseRef.current = run
+    return run
+  }, [cleaningTaskIdsKey, inspectionTaskIdsKey, token, user?.id])
 
   useEffect(() => {
     void loadTaskPhotos()
@@ -428,7 +472,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
   useEffect(() => {
     const nav: any = props.navigation as any
     if (!nav || typeof nav.addListener !== 'function') return
-    const unsub = nav.addListener('focus', () => void loadTaskPhotos())
+    const unsub = nav.addListener('focus', () => void loadTaskPhotos({ reuseRecent: true }))
     return unsub
   }, [loadTaskPhotos, props.navigation])
 
@@ -436,8 +480,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!task) return
     if (!canEditManagerFields) return
-    const ids = Array.isArray((task as any)?.source_ids) && (task as any).source_ids.length ? (task as any).source_ids : [String((task as any)?.source_id || '')]
-    const taskIds = ids.map((x: any) => String(x || '').trim()).filter(Boolean)
+    const taskIds = executionTaskIdsForRole(task, task.task_kind)
     try {
       setSaving(true)
       const norm = (v: any) => String(v ?? '').replace(/\s+/g, ' ').trim()
@@ -554,10 +597,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
         }).catch(() => null)
       }
       if (token && user?.id) {
-        const now = new Date()
-        const date_from = ymd(addDays(now, -45))
-        const date_to = ymd(addDays(now, 45))
-        refreshWorkTasksFromServer({ token, userId: String(user.id), date_from, date_to, view: 'all' }).catch(() => null)
+        const { date_from, date_to } = buildDetailFallbackRange()
+        requestWorkTasksRefresh({ token, userId: String(user.id), date_from, date_to, view: 'all', mode: 'force', reason: 'manager_task_saved' }).catch(() => null)
       }
       setKeysDirty(false)
       const skippedAll = !saveResult || saveResult?.skipped
@@ -590,16 +631,25 @@ export default function ManagerDailyTaskScreen(props: Props) {
           })
       if (picked.canceled || !picked.assets?.length) return
       setLuggageUploading(true)
-      const uploaded: string[] = []
+      const uploaded: { remoteReference: string; localUri: string }[] = []
       for (const asset of picked.assets.slice(0, remaining)) {
         const uri = String(asset.uri || '').trim()
         if (!uri) continue
         const name = String(asset.fileName || uri.split('/').pop() || `guest-luggage-${Date.now()}.jpg`)
         const mimeType = String(asset.mimeType || 'image/jpeg')
         const result = await uploadMzappMedia(token, { uri, name, mimeType }, { purpose: 'guest_luggage' })
-        uploaded.push(result.url)
+        const remoteReference = String(result.url || '').trim()
+        if (remoteReference) uploaded.push({ remoteReference, localUri: uri })
       }
-      if (uploaded.length) setLuggagePhotoUrls((prev) => uniqueTextList([...prev, ...uploaded]).slice(0, 3))
+      if (uploaded.length) {
+        const references = uploaded.map((item) => item.remoteReference)
+        setLuggagePhotoUrls((prev) => uniqueTextList([...prev, ...references]).slice(0, 3))
+        setLuggageLocalPreviewByUrl((prev) => {
+          const next = { ...prev }
+          for (const item of uploaded) next[item.remoteReference] = item.localUri
+          return next
+        })
+      }
     } catch (error: any) {
       Alert.alert('上传失败', String(error?.message || '请稍后重试'))
     } finally {
@@ -609,19 +659,21 @@ export default function ManagerDailyTaskScreen(props: Props) {
 
   async function saveLuggage() {
     if (!token || !task || luggageSaving) return
-    if (!luggagePhotoUrls.length) return Alert.alert('请上传照片', '当天任务临时通知至少需要 1 张照片。')
+    const note = luggageNote.trim()
+    if (!note && !luggagePhotoUrls.length) return Alert.alert('请填写通知内容', '当天任务临时通知需要填写说明或上传照片。')
     const taskIds = cleaningTaskIdsFromTask(task)
     if (!taskIds.length) return Alert.alert('保存失败', '缺少清洁任务 ID')
     try {
       setLuggageSaving(true)
       const result = await saveGuestLuggageNotice(token, {
         task_ids: taskIds,
-        note: luggageNote.trim() || null,
+        note: note || null,
         photo_urls: luggagePhotoUrls.slice(0, 3),
       })
       await patchWorkTaskItem(task.id, { guest_luggage: result.guest_luggage } as any)
       setLuggageNote(String(result.guest_luggage.note || ''))
       setLuggagePhotoUrls(result.guest_luggage.photo_urls || [])
+      setLuggageLocalPreviewByUrl({})
       Alert.alert('已保存', '已通知相关清洁、检查、admin 和线下经理。')
     } catch (error: any) {
       Alert.alert('保存失败', String(error?.message || '请稍后重试'))
@@ -639,6 +691,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
       await patchWorkTaskItem(task.id, { guest_luggage: null } as any)
       setLuggageNote('')
       setLuggagePhotoUrls([])
+      setLuggageLocalPreviewByUrl({})
       Alert.alert('已移除', '当天任务临时通知已移除。')
     } catch (error: any) {
       Alert.alert('移除失败', String(error?.message || '请稍后重试'))
@@ -674,6 +727,11 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const canEditGeneralInfo = canEditManagerFields && !saving && !isHistoricalTask
   const canEditLuggage = hasAnyRole(user, ['customer_service', 'admin', 'offline_manager']) && isTodayTask
   const canEditKeysOnly = canEditManagerFields && !saving
+  const luggagePhotoItems = managerGuestLuggagePhotoDisplayItems(
+    luggagePhotoUrls,
+    luggageLocalPreviewByUrl,
+    (task as any)?.guest_luggage?.id,
+  )
 
   const uncleanPhotos = inspectionItems.filter((x) => x.area === 'unclean')
   const roomPhotoAreas = ['living', 'sofa', 'bedroom', 'kitchen'] as const
@@ -682,7 +740,6 @@ export default function ManagerDailyTaskScreen(props: Props) {
     cleanerItems: completionItems.filter((x) => x.area === a),
     inspectorItems: inspectionItems.filter((x) => x.area === a),
   }))
-  const livingRoomPhotoUrl = livingRoomPhotoUrls[0] || null
   const remoteTvRow = consumableItems.find((x) => x.item_id === 'remote_tv') || null
   const remoteAcRow = consumableItems.find((x) => x.item_id === 'remote_ac') || null
   const remoteTvPhotoUrl = normalizeUrlList(remoteTvRow?.photo_urls, remoteTvRow?.photo_url)[0] || null
@@ -704,8 +761,10 @@ export default function ManagerDailyTaskScreen(props: Props) {
       groups.push({ key, label, urls })
     }
     addGroup('living-room-photo', '客厅照片', livingRoomPhotoUrls)
-    for (const area of ['toilet', 'living', 'sofa', 'bedroom', 'kitchen', 'shower_drain', 'vacuum_used']) {
-      const urls = completionItems.filter((x) => x.area === area).map((x) => x.url)
+    for (const area of ['toilet', 'living', 'sofa', 'bedroom', 'kitchen', 'shower_drain', 'remote_tv', 'vacuum_used']) {
+      const urls = completionItems
+        .filter((x) => x.area === area || (area === 'remote_tv' && (x.area === 'remote_controls' || x.area === 'remote_ac')))
+        .map((x) => x.url)
       addGroup(`completion-${area}`, AREA_LABEL[area] || area, urls)
     }
     for (const itemId of Object.keys(CLEANING_SCENE_PHOTO_LABEL)) {
@@ -734,6 +793,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
       }
     })
   })()
+  const hasPhotoLoadIssue = (source: ManagerDailyTaskPhotoSource) => photoLoadIssues.some((issue) => issue.source === source)
+  const photoEmptyText = (source: ManagerDailyTaskPhotoSource, fallback = '暂无') => hasPhotoLoadIssue(source) ? '读取失败，未判定为无照片' : fallback
 
   async function onToggleCheckedOut() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
@@ -790,6 +851,25 @@ export default function ManagerDailyTaskScreen(props: Props) {
             </Text>
           </View>
         </View>
+
+        {photoLoadIssues.length ? (
+          <View testID="manager-photo-load-issues" style={styles.photoIssueCard}>
+            <Text style={styles.photoIssueTitle}>照片读取失败，不能判定为“没有照片”</Text>
+            {photoLoadIssues.map((issue) => (
+              <Text key={`${issue.source}-${issue.task_id}-${issue.status}-${issue.code || ''}`} style={styles.photoIssueText}>
+                {`${issue.source_label} · 任务 ID ${issue.task_id}：${issue.message}`}
+              </Text>
+            ))}
+            <Pressable
+              testID="manager-photo-retry"
+              onPress={() => void loadTaskPhotos()}
+              disabled={photosLoading}
+              style={({ pressed }) => [styles.photoRetryButton, pressed ? styles.pressed : null, photosLoading ? styles.photoRetryButtonDisabled : null]}
+            >
+              <Text style={styles.photoRetryText}>{photosLoading ? '读取中...' : '重试读取照片'}</Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         <View style={styles.card}>
           <View style={styles.sectionHead}>
@@ -887,12 +967,25 @@ export default function ManagerDailyTaskScreen(props: Props) {
             multiline
           />
           <View style={styles.luggagePhotos}>
-            {luggagePhotoUrls.map((url, index) => (
-              <View key={`${url}-${index}`} style={styles.luggagePhotoItem}>
-                <Image source={{ uri: toAbsoluteUrl(url) }} style={styles.luggagePhoto} />
+            {luggagePhotoItems.map((photo, index) => (
+              <View key={`${photo.remoteReference}-${index}`} style={styles.luggagePhotoItem}>
+                <CleaningMediaImage
+                  token={token}
+                  localUri={photo.localUri}
+                  remoteReference={photo.remoteReference}
+                  guestLuggageId={photo.guestLuggageId}
+                  style={styles.luggagePhoto}
+                />
                 {canEditLuggage ? (
                   <Pressable
-                    onPress={() => setLuggagePhotoUrls((prev) => prev.filter((_, itemIndex) => itemIndex !== index))}
+                    onPress={() => {
+                      setLuggagePhotoUrls((prev) => prev.filter((_, itemIndex) => itemIndex !== index))
+                      setLuggageLocalPreviewByUrl((prev) => {
+                        const next = { ...prev }
+                        delete next[photo.remoteReference]
+                        return next
+                      })
+                    }}
                     style={({ pressed }) => [styles.luggageRemovePhoto, pressed ? styles.pressed : null]}
                   >
                     <Ionicons name="close-circle" size={moderateScale(22)} color="#DC2626" />
@@ -919,13 +1012,13 @@ export default function ManagerDailyTaskScreen(props: Props) {
               </Pressable>
             </View>
           ) : null}
-          <Text style={styles.mutedSmall}>{`已选择 ${luggagePhotoUrls.length}/3 张，至少需要 1 张。`}</Text>
+          <Text style={styles.mutedSmall}>{`已选择 ${luggagePhotoUrls.length}/3 张，照片可选。`}</Text>
           {canEditLuggage ? (
             <View style={styles.luggageActions}>
               <Pressable
                 onPress={saveLuggage}
-                disabled={luggageSaving || luggageUploading || !luggagePhotoUrls.length}
-                style={({ pressed }) => [styles.primaryBtnFull, luggageSaving || luggageUploading || !luggagePhotoUrls.length ? styles.primaryBtnDisabled : null, pressed ? styles.pressed : null]}
+                disabled={luggageSaving || luggageUploading || (!luggageNote.trim() && !luggagePhotoUrls.length)}
+                style={({ pressed }) => [styles.primaryBtnFull, luggageSaving || luggageUploading || (!luggageNote.trim() && !luggagePhotoUrls.length) ? styles.primaryBtnDisabled : null, pressed ? styles.pressed : null]}
               >
                 <Text style={styles.primaryText}>{luggageSaving ? '保存中...' : '保存并通知'}</Text>
               </Pressable>
@@ -945,6 +1038,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
           ) : null}
           <GuestLuggageCard
             notice={(task as any)?.guest_luggage || null}
+            token={token}
             showAcknowledgementSummary
             compact
           />
@@ -962,7 +1056,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
               }}
               style={({ pressed }) => [styles.mediaThumbWrap, pressed ? styles.pressed : null]}
             >
-              <Image source={{ uri: toAbsoluteUrl((task as any)?.key_photo_url) }} style={styles.mediaThumb} />
+              <CleaningMediaImage token={token} remoteReference={(task as any)?.key_photo_url} style={styles.mediaThumb} resizeMode="contain" />
               <Text style={styles.mediaLabel}>钥匙照片</Text>
             </Pressable>
           ) : null}
@@ -991,12 +1085,12 @@ export default function ManagerDailyTaskScreen(props: Props) {
                     }}
                     style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                   >
-                    <Image source={{ uri: toAbsoluteUrl(x.url) }} style={styles.gridImg} />
+                    <CleaningMediaImage token={token} remoteReference={x.url} style={styles.gridImg} />
                   </Pressable>
                 ))}
               </View>
             ) : (
-              <Text style={styles.mutedSmall}>暂无</Text>
+              <Text style={styles.mutedSmall}>{photoEmptyText('inspection')}</Text>
             )}
           </View>
         ) : null}
@@ -1007,18 +1101,23 @@ export default function ManagerDailyTaskScreen(props: Props) {
           <View style={styles.mediaStack}>
             <View style={styles.mediaSection}>
               <Text style={styles.columnTitle}>客厅照片</Text>
-              {livingRoomPhotoUrl ? (
-                <Pressable
-                  onPress={() => {
-                    setViewerUrl(livingRoomPhotoUrl)
-                    setViewerOpen(true)
-                  }}
-                  style={({ pressed }) => [styles.fullWidthMediaCard, pressed ? styles.pressed : null]}
-                >
-                  <Image source={{ uri: toAbsoluteUrl(livingRoomPhotoUrl) }} style={styles.fullWidthImg} />
-                </Pressable>
+              {livingRoomPhotoUrls.length ? (
+                <View style={styles.grid}>
+                  {livingRoomPhotoUrls.map((url, idx) => (
+                    <Pressable
+                      key={`${url}-${idx}`}
+                      onPress={() => {
+                        setViewerUrl(url)
+                        setViewerOpen(true)
+                      }}
+                      style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
+                    >
+                      <CleaningMediaImage token={token} remoteReference={url} style={styles.gridImg} />
+                    </Pressable>
+                  ))}
+                </View>
               ) : (
-                <Text style={styles.mutedSmall}>暂无</Text>
+                <Text style={styles.mutedSmall}>{photoEmptyText('consumables')}</Text>
               )}
             </View>
             <View style={styles.mediaSection}>
@@ -1033,7 +1132,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <Image source={{ uri: toAbsoluteUrl(remoteTvPhotoUrl) }} style={styles.gridImg} />
+                      <CleaningMediaImage token={token} remoteReference={remoteTvPhotoUrl} style={styles.gridImg} />
                       <Text style={styles.mediaLabel}>电视遥控器</Text>
                     </Pressable>
                   ) : null}
@@ -1045,13 +1144,13 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <Image source={{ uri: toAbsoluteUrl(remoteAcPhotoUrl) }} style={styles.gridImg} />
+                      <CleaningMediaImage token={token} remoteReference={remoteAcPhotoUrl} style={styles.gridImg} />
                       <Text style={styles.mediaLabel}>空调遥控器</Text>
                     </Pressable>
                   ) : null}
                 </View>
               ) : (
-                <Text style={styles.mutedSmall}>暂无</Text>
+                <Text style={styles.mutedSmall}>{photoEmptyText('consumables')}</Text>
               )}
             </View>
           </View>
@@ -1061,27 +1160,23 @@ export default function ManagerDailyTaskScreen(props: Props) {
           <Text style={styles.sectionTitle}>清洁完成照片</Text>
           {photosLoading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
           {cleanerCompletionPhotoGroups.length ? (
-            cleanerCompletionPhotoGroups.map((g) => (
-              <View key={g.key} style={styles.group}>
-                <Text style={styles.groupTitle}>{g.label}</Text>
-                <View style={styles.grid}>
-                  {g.urls.map((url, idx) => (
-                    <Pressable
-                      key={`${g.key}-${url}-${idx}`}
-                      onPress={() => {
-                        setViewerUrl(url)
-                        setViewerOpen(true)
-                      }}
-                      style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
-                    >
-                      <Image source={{ uri: toAbsoluteUrl(url) }} style={styles.gridImg} />
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
-            ))
+            <View style={styles.grid}>
+              {cleanerCompletionPhotoGroups.flatMap((g) => g.urls.map((url, idx) => (
+                <Pressable
+                  key={`${g.key}-${url}-${idx}`}
+                  onPress={() => {
+                    setViewerUrl(url)
+                    setViewerOpen(true)
+                  }}
+                  style={({ pressed }) => [styles.gridItem, styles.completionPhotoItem, pressed ? styles.pressed : null]}
+                >
+                  <CleaningMediaImage token={token} remoteReference={url} style={styles.gridImg} />
+                  <Text style={styles.photoGalleryLabel} numberOfLines={2}>{g.label}</Text>
+                </Pressable>
+              )))}
+            </View>
           ) : (
-            <Text style={styles.mutedSmall}>暂无</Text>
+            <Text style={styles.mutedSmall}>{photoEmptyText('completion')}</Text>
           )}
         </View>
 
@@ -1102,12 +1197,12 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <Image source={{ uri: toAbsoluteUrl(x.url) }} style={styles.gridImg} />
+                  <CleaningMediaImage token={token} remoteReference={x.url} style={styles.gridImg} />
                     </Pressable>
                   ))}
                 </View>
               ) : (
-                <Text style={styles.mutedSmall}>暂无</Text>
+                <Text style={styles.mutedSmall}>{photoEmptyText('inspection')}</Text>
               )}
             </View>
           ))}
@@ -1136,12 +1231,12 @@ export default function ManagerDailyTaskScreen(props: Props) {
                               }}
                               style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                             >
-                              <Image source={{ uri: toAbsoluteUrl(photoUrl) }} style={styles.gridImg} />
+                              <CleaningMediaImage token={token} remoteReference={photoUrl} style={styles.gridImg} />
                             </Pressable>
                           ))}
                         </View>
                       ) : (
-                        <Text style={styles.mutedSmall}>暂无</Text>
+                        <Text style={styles.mutedSmall}>{photoEmptyText('consumables')}</Text>
                       )}
                     </View>
                     <View style={styles.mediaSection}>
@@ -1157,12 +1252,12 @@ export default function ManagerDailyTaskScreen(props: Props) {
                               }}
                               style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                             >
-                              <Image source={{ uri: toAbsoluteUrl(photoUrl) }} style={styles.gridImg} />
+                              <CleaningMediaImage token={token} remoteReference={photoUrl} style={styles.gridImg} />
                             </Pressable>
                           ))}
                         </View>
                       ) : (
-                        <Text style={styles.mutedSmall}>暂无</Text>
+                        <Text style={styles.mutedSmall}>{photoEmptyText('restock')}</Text>
                       )}
                     </View>
                   </View>
@@ -1170,7 +1265,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
               )
             })
           ) : (
-            <Text style={styles.mutedSmall}>暂无补品照片记录</Text>
+            <Text style={styles.mutedSmall}>{photoEmptyText('restock', '暂无补品照片记录')}</Text>
           )}
         </View>
         ) : null}
@@ -1196,9 +1291,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
             <Text style={styles.viewerCloseText}>点击任意位置关闭</Text>
           </View>
           {viewerUrl ? (
-            <View style={{ flex: 1 }} pointerEvents="none">
-              <Image source={{ uri: toAbsoluteUrl(viewerUrl) }} style={styles.viewerImg} resizeMode="contain" />
-            </View>
+            <CleaningMediaPreview token={token} reference={viewerUrl} style={styles.viewerImg} />
           ) : null}
         </Pressable>
       </Modal>
@@ -1226,6 +1319,12 @@ const styles = StyleSheet.create({
   sectionTitle: { color: '#111827', fontWeight: '900' },
   muted: { color: '#6B7280', fontWeight: '700' },
   mutedSmall: { marginTop: 8, color: '#6B7280', fontWeight: '700', fontSize: 12 },
+  photoIssueCard: { marginBottom: 12, padding: 12, borderRadius: 14, backgroundColor: '#FFF7ED', borderWidth: hairline(), borderColor: '#FDBA74' },
+  photoIssueTitle: { color: '#9A3412', fontWeight: '900', fontSize: 13 },
+  photoIssueText: { marginTop: 6, color: '#9A3412', fontWeight: '700', fontSize: 12, lineHeight: 18 },
+  photoRetryButton: { marginTop: 10, minHeight: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 0 },
+  photoRetryButtonDisabled: { backgroundColor: '#93C5FD' },
+  photoRetryText: { color: '#FFFFFF', fontWeight: '900' },
   field: { marginTop: 10 },
   fieldCompact: { marginTop: 8 },
   label: { color: '#111827', fontWeight: '900', marginBottom: 8 },
@@ -1236,18 +1335,18 @@ const styles = StyleSheet.create({
   row2Compact: { marginTop: 8, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   formHalf: { flex: 1, minWidth: 130 },
   pillsRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
-  pillBtn: { flex: 1, height: 40, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  pillBtn: { flex: 1, minHeight: 44, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   pillBtnOn: { backgroundColor: '#EFF6FF', borderColor: '#DBEAFE' },
   pillBtnText: { color: '#6B7280', fontWeight: '900' },
   pillBtnTextOn: { color: '#2563EB' },
 
-  checkoutBtn: { marginTop: 10, height: 40, borderRadius: 12, backgroundColor: '#E0F2FE', borderWidth: hairline(), borderColor: '#BAE6FD', alignItems: 'center', justifyContent: 'center' },
+  checkoutBtn: { marginTop: 10, minHeight: 44, borderRadius: 12, backgroundColor: '#E0F2FE', borderWidth: hairline(), borderColor: '#BAE6FD', alignItems: 'center', justifyContent: 'center' },
   checkoutBtnDisabled: { backgroundColor: '#BAE6FD' },
   checkoutText: { color: '#0369A1', fontWeight: '900' },
 
-  grayBtnFull: { marginTop: 10, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  grayBtnFull: { marginTop: 10, minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   grayText: { color: '#111827', fontWeight: '900', textAlign: 'center' },
-  primaryBtnFull: { marginTop: 12, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  primaryBtnFull: { marginTop: 12, minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   primaryBtnDisabled: { backgroundColor: '#93C5FD' },
   primaryText: { color: '#FFFFFF', fontWeight: '900', textAlign: 'center' },
   pressed: { opacity: 0.92 },
@@ -1259,8 +1358,8 @@ const styles = StyleSheet.create({
   luggageAddButton: { flex: 1, minWidth: 130, marginTop: 0 },
   luggageActions: { marginTop: 2 },
 
-  mediaThumbWrap: { marginTop: 10, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
-  mediaThumb: { width: '100%', height: 180 },
+  mediaThumbWrap: { width: '100%', marginTop: 10, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#0B0F17', paddingBottom: 10 },
+  mediaThumb: { width: '100%', height: 220, backgroundColor: '#0B0F17' },
   mediaLabel: { marginTop: 8, color: '#6B7280', fontWeight: '800' },
   videoWrap: { marginTop: 10, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#0B0F17', paddingBottom: 10 },
   video: { width: '100%', height: 220, backgroundColor: '#0B0F17' },
@@ -1270,11 +1369,13 @@ const styles = StyleSheet.create({
   mediaStack: { marginTop: 10, gap: 12 },
   mediaSection: { minWidth: 0 },
   columnTitle: { color: '#6B7280', fontWeight: '800', fontSize: 12, marginBottom: 8 },
-  fullWidthMediaCard: { borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
-  fullWidthImg: { width: '100%', height: 180, backgroundColor: '#F3F4F6' },
+  fullWidthMediaCard: { width: 96, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
+  fullWidthImg: { width: 96, height: 96, backgroundColor: '#F3F4F6' },
   grid: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  gridItem: { flexBasis: '47%', flexGrow: 1, minWidth: 120, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
-  gridImg: { width: '100%', height: 160, backgroundColor: '#F3F4F6' },
+  gridItem: { width: 96, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
+  gridImg: { width: 96, height: 96, backgroundColor: '#F3F4F6' },
+  completionPhotoItem: { backgroundColor: '#FFFFFF' },
+  photoGalleryLabel: { paddingHorizontal: 5, paddingVertical: 5, color: '#374151', fontSize: 10, lineHeight: 12, fontWeight: '800' },
 
   viewerMask: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)' },
   viewerTopRow: { position: 'absolute', top: 0, left: 0, right: 0, height: 54, paddingHorizontal: 12, justifyContent: 'center', zIndex: 2 },

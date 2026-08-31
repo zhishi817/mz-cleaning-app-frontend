@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ActivityIndicator, Alert, Dimensions, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Alert, Dimensions, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useIsFocused } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
@@ -7,7 +7,15 @@ import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
+import {
+  clearInspectionPanelFeedbackDraft,
+  getInspectionPanelFeedbackDraft,
+  setInspectionPanelFeedbackDraft,
+  type InspectionPanelFeedbackPhotoMetaMap,
+} from '../../lib/inspectionPanelFeedbackDraft'
+import { deleteDraftMedia, draftFileExists, draftMimeTypeFrom, persistCompressedDraftMedia } from '../../lib/localMediaDrafts'
 import { hairline, moderateScale } from '../../lib/scale'
+import { layoutTokens } from '../../lib/theme'
 import { getJson, remove as removeStorage, setJson } from '../../lib/storage'
 import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
 import {
@@ -15,8 +23,10 @@ import {
   createPropertyFeedback,
   createPropertyFeedbackBatch,
   createPropertyFeedbackProject,
+  deletePropertyFeedback,
   listDailyNecessityOptions,
   listPropertyFeedbacks,
+  movePropertyFeedback,
   updatePropertyFeedback,
   updatePropertyFeedbackProject,
   uploadCleaningMedia,
@@ -26,6 +36,10 @@ import {
 } from '../../lib/api'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import { API_BASE_URL } from '../../config/env'
+import { cleaningMediaReference } from '../../lib/cleaningMedia'
+import CleaningMediaImage from '../../components/CleaningMediaImage'
+import CleaningMediaPreview from '../../components/CleaningMediaPreview'
+import AppButton from '../../components/ui/AppButton'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'FeedbackForm'>
 type Kind = 'maintenance' | 'deep_cleaning' | 'daily_necessities'
@@ -35,6 +49,20 @@ type AreaOption = (typeof AREA_OPTIONS)[number]
 type DeepCleaningAreaOption = (typeof DEEP_CLEANING_AREA_OPTIONS)[number]
 type DailyStatusOption = (typeof DAILY_STATUS_OPTIONS)[number]['value']
 type PhotoUploadOptions = { continuousCamera?: boolean }
+type FeedbackSubmissionStage = 'create' | 'project' | 'complete'
+type FeedbackSubmissionState = {
+  feedbackId?: string
+  projectId?: string
+  stage?: FeedbackSubmissionStage
+  error?: string
+}
+type LocalFeedbackPhotoMeta = {
+  name: string
+  mimeType: string
+  capturedAt: string
+  watermarkText: string
+  mediaId: string
+}
 
 type MaintenanceDraft = {
   clientId: string
@@ -44,6 +72,7 @@ type MaintenanceDraft = {
   submitAsCompleted: boolean
   completionNote: string
   completionAfterPhotos: string[]
+  submission?: FeedbackSubmissionState
 }
 
 type DeepCleaningDraft = {
@@ -56,6 +85,7 @@ type DeepCleaningDraft = {
   completionAfterPhotos: string[]
   completionStartedAt: string | null
   completionEndedAt: string | null
+  submission?: FeedbackSubmissionState
 }
 
 type DailyDraft = {
@@ -79,8 +109,10 @@ const DAILY_STATUS_OPTIONS = [
 const DAILY_OPTIONS_CACHE_KEY = 'feedback_daily_necessity_options_v1'
 const FEEDBACK_HISTORY_CACHE_TTL_MS = 3 * 60 * 1000
 const FEEDBACK_DRAFT_CACHE_VERSION = 1
-function feedbackHistoryCacheKey(propertyId: string, propertyCode: string) {
-  return `feedback_history_open_${String(propertyId || '').trim()}_${String(propertyCode || '').trim()}`
+const FEEDBACK_HISTORY_LOAD_ERROR = '历史反馈暂时无法加载，请稍后重试。'
+function feedbackHistoryCacheKey(propertyId: string, propertyCode: string, userId: string) {
+  const owner = String(userId || '').trim() || 'anon'
+  return `feedback_history_open_${owner}_${String(propertyId || '').trim()}_${String(propertyCode || '').trim()}`
 }
 
 function feedbackDraftCacheKey(propertyId: string, propertyCode: string, taskId: string, userId: string) {
@@ -98,10 +130,12 @@ type FeedbackHistoryCache = {
 
 type FeedbackFormDraftCache = {
   version: number
-  kind: Kind
+  kind: Kind | null
   maintenanceDrafts?: MaintenanceDraft[]
   deepCleaningDrafts?: DeepCleaningDraft[]
   dailyDrafts?: DailyDraft[]
+  localPreviewByReference?: Record<string, string>
+  localPhotoMetaByUri?: Record<string, LocalFeedbackPhotoMeta>
   updated_at: number
 }
 
@@ -122,6 +156,10 @@ function toAbsoluteUrl(rawUrl: any) {
   if (s0.startsWith('/')) return `${root}${s0}`
   if (/^[\w.-]+\.[a-z]{2,}/i.test(s0)) return `https://${s0}`
   return s0
+}
+
+function isLocalFeedbackDraftReference(reference: string) {
+  return String(reference || '').trim().startsWith('file://')
 }
 
 function normalizeUrls(raw: any): string[] {
@@ -224,6 +262,12 @@ function statusLabel(item?: PropertyFeedback | null) {
   if (s === 'resolved') return '已完成'
   if (s === 'in_progress') return '处理中'
   return '待处理'
+}
+
+function feedbackKindLabel(kind: PropertyFeedback['kind']) {
+  if (kind === 'deep_cleaning') return '深度清洁'
+  if (kind === 'daily_necessities') return '日用品反馈'
+  return '房源维修'
 }
 
 function projectStatusLabel(item?: PropertyFeedbackProject | null, feedback?: PropertyFeedback | null) {
@@ -405,6 +449,14 @@ function normalizeMaintenanceDraft(raw: any): MaintenanceDraft {
     submitAsCompleted: !!raw?.submitAsCompleted,
     completionNote: String(raw?.completionNote || ''),
     completionAfterPhotos: normalizeUrls(raw?.completionAfterPhotos),
+    submission: raw?.submission && typeof raw.submission === 'object'
+      ? {
+          feedbackId: String(raw.submission.feedbackId || '').trim() || undefined,
+          projectId: String(raw.submission.projectId || '').trim() || undefined,
+          stage: raw.submission.stage === 'create' || raw.submission.stage === 'project' || raw.submission.stage === 'complete' ? raw.submission.stage : undefined,
+          error: String(raw.submission.error || '').trim() || undefined,
+        }
+      : undefined,
   }
 }
 
@@ -420,6 +472,14 @@ function normalizeDeepCleaningDraft(raw: any): DeepCleaningDraft {
     completionAfterPhotos: normalizeUrls(raw?.completionAfterPhotos),
     completionStartedAt: String(raw?.completionStartedAt || '').trim() || null,
     completionEndedAt: String(raw?.completionEndedAt || '').trim() || null,
+    submission: raw?.submission && typeof raw.submission === 'object'
+      ? {
+          feedbackId: String(raw.submission.feedbackId || '').trim() || undefined,
+          projectId: String(raw.submission.projectId || '').trim() || undefined,
+          stage: raw.submission.stage === 'create' || raw.submission.stage === 'project' || raw.submission.stage === 'complete' ? raw.submission.stage : undefined,
+          error: String(raw.submission.error || '').trim() || undefined,
+        }
+      : undefined,
   }
 }
 
@@ -462,11 +522,12 @@ export default function FeedbackFormScreen(props: Props) {
   const insets = useSafeAreaInsets()
   const isFocused = useIsFocused()
 
-  const [kind, setKind] = useState<Kind>('maintenance')
+  const [kind, setKind] = useState<Kind | null>(null)
   const [maintenanceDrafts, setMaintenanceDrafts] = useState<MaintenanceDraft[]>([buildMaintenanceDraft()])
   const [deepCleaningDrafts, setDeepCleaningDrafts] = useState<DeepCleaningDraft[]>([buildDeepCleaningDraft()])
   const [dailyDrafts, setDailyDrafts] = useState<DailyDraft[]>([buildDailyDraft()])
   const [submitting, setSubmitting] = useState(false)
+  const [kindError, setKindError] = useState(false)
 
   const [pending, setPending] = useState<PropertyFeedback[]>([])
   const [resolved, setResolved] = useState<PropertyFeedback[]>([])
@@ -479,6 +540,7 @@ export default function FeedbackFormScreen(props: Props) {
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerUrls, setViewerUrls] = useState<string[]>([])
   const [viewerIndex, setViewerIndex] = useState(0)
+  const [viewerAccessTaskId, setViewerAccessTaskId] = useState<string | null>(null)
 
   const [actionOpen, setActionOpen] = useState(false)
   const [actionMode, setActionMode] = useState<ActionMode>('create')
@@ -494,7 +556,6 @@ export default function FeedbackFormScreen(props: Props) {
   const [dailyEditOpen, setDailyEditOpen] = useState(false)
   const [dailyEditItem, setDailyEditItem] = useState<PropertyFeedback | null>(null)
   const [dailyEditSaving, setDailyEditSaving] = useState(false)
-  const [dailyEditStatus, setDailyEditStatus] = useState<(typeof DAILY_STATUS_OPTIONS)[number]['value']>('need_replace')
   const [dailyEditItemName, setDailyEditItemName] = useState('')
   const [dailyEditItemSku, setDailyEditItemSku] = useState<string | null>(null)
   const [dailyEditQty, setDailyEditQty] = useState('1')
@@ -507,29 +568,44 @@ export default function FeedbackFormScreen(props: Props) {
   const [recordEditOpen, setRecordEditOpen] = useState(false)
   const [recordEditFeedback, setRecordEditFeedback] = useState<PropertyFeedback | null>(null)
   const [recordEditSaving, setRecordEditSaving] = useState(false)
+  const [moveOpen, setMoveOpen] = useState(false)
+  const [moveItem, setMoveItem] = useState<PropertyFeedback | null>(null)
+  const [moveTargetKind, setMoveTargetKind] = useState<Kind>('maintenance')
+  const [moveSaving, setMoveSaving] = useState(false)
+  const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null)
 
   const task = useMemo(() => getWorkTasksSnapshot().items.find((x) => x.id === props.route.params.taskId) || null, [props.route.params.taskId])
   const propertyId = String(task?.property_id || task?.property?.id || '').trim()
   const propertyCode = String(task?.property?.code || '').trim()
   const taskId = String(task?.id || props.route.params.taskId || '').trim()
+  const feedbackSourceTaskId = String((task as any)?.source_id || task?.id || '').trim()
+  const isInspectionPanelBatchMode = props.route.params.source === 'inspection_panel_batch'
   const userKey = String((user as any)?.id || (user as any)?.username || (user as any)?.email || '').trim()
   const draftCacheKey = useMemo(() => feedbackDraftCacheKey(propertyId, propertyCode, taskId, userKey), [propertyId, propertyCode, taskId, userKey])
   const historyCacheRef = useRef<FeedbackHistoryCache | null>(null)
   const historyRefreshRef = useRef<Promise<void> | null>(null)
+  const scrollRef = useRef<ScrollView>(null)
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedDraftRef = useRef('')
   const [draftCacheHydrated, setDraftCacheHydrated] = useState(false)
+  const [panelPhotoMeta, setPanelPhotoMeta] = useState<InspectionPanelFeedbackPhotoMetaMap>({})
+  const [localPreviewByReference, setLocalPreviewByReference] = useState<Record<string, string>>({})
+  const [localPhotoMetaByUri, setLocalPhotoMetaByUri] = useState<Record<string, LocalFeedbackPhotoMeta>>({})
 
   const persistFeedbackDraftSnapshot = useCallback(async (snapshot?: {
-    kind?: Kind
+    kind?: Kind | null
     maintenanceDrafts?: MaintenanceDraft[]
     deepCleaningDrafts?: DeepCleaningDraft[]
     dailyDrafts?: DailyDraft[]
+    localPreviewByReference?: Record<string, string>
+    localPhotoMetaByUri?: Record<string, LocalFeedbackPhotoMeta>
   }) => {
     const nextKind = snapshot?.kind || kind
     const nextMaintenance = snapshot?.maintenanceDrafts || maintenanceDrafts
     const nextDeepCleaning = snapshot?.deepCleaningDrafts || deepCleaningDrafts
     const nextDaily = snapshot?.dailyDrafts || dailyDrafts
+    const nextLocalPreviews = snapshot?.localPreviewByReference ?? localPreviewByReference
+    const nextLocalPhotoMeta = snapshot?.localPhotoMetaByUri ?? localPhotoMetaByUri
     const hasContent =
       nextMaintenance.some(hasMaintenanceDraftContent) ||
       nextDeepCleaning.some(hasDeepCleaningDraftContent) ||
@@ -537,25 +613,47 @@ export default function FeedbackFormScreen(props: Props) {
 
     if (!hasContent) {
       lastSavedDraftRef.current = ''
-      await removeStorage(draftCacheKey).catch(() => null)
+      if (isInspectionPanelBatchMode) {
+        await clearInspectionPanelFeedbackDraft(taskId).catch(() => null)
+      } else {
+        await removeStorage(draftCacheKey).catch(() => null)
+      }
       return
     }
 
-    const payload: FeedbackFormDraftCache = {
-      version: FEEDBACK_DRAFT_CACHE_VERSION,
-      kind: nextKind,
-      maintenanceDrafts: nextMaintenance,
-      deepCleaningDrafts: nextDeepCleaning,
-      dailyDrafts: nextDaily,
-      updated_at: Date.now(),
-    }
+    if (!nextKind) return
+
+    const payload = isInspectionPanelBatchMode
+      ? {
+          kind: nextKind,
+          maintenanceDrafts: nextMaintenance.map((draft) => ({ ...draft, client_item_id: draft.clientId })),
+          deepCleaningDrafts: nextDeepCleaning.map((draft) => ({ ...draft, client_item_id: draft.clientId })),
+          dailyDrafts: nextDaily.map((draft) => ({ ...draft, client_item_id: draft.clientId })),
+          photo_meta: panelPhotoMeta,
+        }
+      : {
+          version: FEEDBACK_DRAFT_CACHE_VERSION,
+          kind: nextKind,
+          maintenanceDrafts: nextMaintenance,
+          deepCleaningDrafts: nextDeepCleaning,
+          dailyDrafts: nextDaily,
+          localPreviewByReference: nextLocalPreviews,
+          localPhotoMetaByUri: nextLocalPhotoMeta,
+          updated_at: Date.now(),
+        }
     const serialized = JSON.stringify(payload)
     if (serialized === lastSavedDraftRef.current) return
     lastSavedDraftRef.current = serialized
+    if (isInspectionPanelBatchMode) {
+      await setInspectionPanelFeedbackDraft(taskId, payload as any).catch(() => {
+        lastSavedDraftRef.current = ''
+      })
+      return
+    }
     await setJson(draftCacheKey, payload).catch(() => {
       lastSavedDraftRef.current = ''
     })
-  }, [dailyDrafts, deepCleaningDrafts, draftCacheKey, kind, maintenanceDrafts])
+  }, [dailyDrafts, deepCleaningDrafts, draftCacheKey, isInspectionPanelBatchMode, kind, localPhotoMetaByUri, localPreviewByReference, maintenanceDrafts, panelPhotoMeta, taskId])
 
   useEffect(() => {
     let cancelled = false
@@ -563,6 +661,31 @@ export default function FeedbackFormScreen(props: Props) {
     lastSavedDraftRef.current = ''
     ;(async () => {
       try {
+        if (isInspectionPanelBatchMode) {
+          const cached = await getInspectionPanelFeedbackDraft(taskId)
+          if (cancelled || !cached) return
+          if (cached.kind === 'maintenance' || cached.kind === 'deep_cleaning' || cached.kind === 'daily_necessities') {
+            setKind(cached.kind)
+          }
+          if (Array.isArray(cached.maintenanceDrafts) && cached.maintenanceDrafts.length) {
+            setMaintenanceDrafts(cached.maintenanceDrafts.map(normalizeMaintenanceDraft))
+          }
+          if (Array.isArray(cached.deepCleaningDrafts) && cached.deepCleaningDrafts.length) {
+            setDeepCleaningDrafts(cached.deepCleaningDrafts.map(normalizeDeepCleaningDraft))
+          }
+          if (Array.isArray(cached.dailyDrafts) && cached.dailyDrafts.length) {
+            setDailyDrafts(cached.dailyDrafts.map(normalizeDailyDraft))
+          }
+          setPanelPhotoMeta(cached.photo_meta || {})
+          lastSavedDraftRef.current = JSON.stringify({
+            kind: cached.kind,
+            maintenanceDrafts: cached.maintenanceDrafts,
+            deepCleaningDrafts: cached.deepCleaningDrafts,
+            dailyDrafts: cached.dailyDrafts,
+            photo_meta: cached.photo_meta || {},
+          })
+          return
+        }
         const cached = await getJson<FeedbackFormDraftCache>(draftCacheKey)
         if (cancelled || !cached || cached.version !== FEEDBACK_DRAFT_CACHE_VERSION) return
         if (cached.kind === 'maintenance' || cached.kind === 'deep_cleaning' || cached.kind === 'daily_necessities') {
@@ -577,6 +700,33 @@ export default function FeedbackFormScreen(props: Props) {
         if (Array.isArray(cached.dailyDrafts) && cached.dailyDrafts.length) {
           setDailyDrafts(cached.dailyDrafts.map(normalizeDailyDraft))
         }
+        const savedLocalPreviews = cached.localPreviewByReference && typeof cached.localPreviewByReference === 'object'
+          ? Object.entries(cached.localPreviewByReference).reduce<Record<string, string>>((next, [reference, localUri]) => {
+              const safeReference = String(reference || '').trim()
+              const safeLocalUri = String(localUri || '').trim()
+              if (safeReference && safeLocalUri && draftFileExists(safeLocalUri)) next[safeReference] = safeLocalUri
+              return next
+            }, {})
+          : {}
+        const savedLocalPhotoMeta = cached.localPhotoMetaByUri && typeof cached.localPhotoMetaByUri === 'object'
+          ? Object.entries(cached.localPhotoMetaByUri).reduce<Record<string, LocalFeedbackPhotoMeta>>((next, [localUri, value]) => {
+              const safeLocalUri = String(localUri || '').trim()
+              if (!safeLocalUri || !draftFileExists(safeLocalUri) || !value || typeof value !== 'object') return next
+              const capturedAt = String(value.capturedAt || '').trim()
+              const mediaId = String(value.mediaId || '').trim()
+              if (!capturedAt || !mediaId) return next
+              next[safeLocalUri] = {
+                name: String(value.name || '').trim() || `feedback-${mediaId}.jpg`,
+                mimeType: String(value.mimeType || '').trim() || 'image/jpeg',
+                capturedAt,
+                watermarkText: String(value.watermarkText || '').trim(),
+                mediaId,
+              }
+              return next
+            }, {})
+          : {}
+        setLocalPreviewByReference(savedLocalPreviews)
+        setLocalPhotoMetaByUri(savedLocalPhotoMeta)
         lastSavedDraftRef.current = JSON.stringify(cached)
       } catch {
       } finally {
@@ -586,7 +736,7 @@ export default function FeedbackFormScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [draftCacheKey])
+  }, [draftCacheKey, isInspectionPanelBatchMode, taskId])
 
   useEffect(() => {
     return () => {
@@ -604,7 +754,7 @@ export default function FeedbackFormScreen(props: Props) {
   }, [draftCacheHydrated, persistFeedbackDraftSnapshot])
 
   useEffect(() => {
-    const title = kind === 'maintenance' ? '房源维修' : kind === 'deep_cleaning' ? '深度清洁' : '日用品反馈'
+    const title = kind === 'maintenance' ? '房源维修' : kind === 'deep_cleaning' ? '深度清洁' : kind === 'daily_necessities' ? '日用品反馈' : '问题反馈'
     props.navigation.setOptions({ title })
   }, [props.navigation, kind])
 
@@ -612,7 +762,7 @@ export default function FeedbackFormScreen(props: Props) {
     let cancelled = false
     ;(async () => {
       try {
-        const cached = await getJson<FeedbackHistoryCache | PropertyFeedback[]>(feedbackHistoryCacheKey(propertyId, propertyCode))
+        const cached = await getJson<FeedbackHistoryCache | PropertyFeedback[]>(feedbackHistoryCacheKey(propertyId, propertyCode, userKey))
         if (cancelled || !cached) return
         if (Array.isArray(cached)) {
           const normalized = { pending: uniqFeedbacks(cached), resolved: [], updated_at: 0 }
@@ -635,10 +785,10 @@ export default function FeedbackFormScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [propertyId, propertyCode])
+  }, [propertyId, propertyCode, userKey])
 
   async function refreshLists(options?: { force?: boolean; silent?: boolean }) {
-    if (!token || (!propertyId && !propertyCode)) return
+    if (!token || (!propertyId && !propertyCode) || !feedbackSourceTaskId) return
     const force = !!options?.force
     const cache = historyCacheRef.current
     const now = Date.now()
@@ -665,14 +815,20 @@ export default function FeedbackFormScreen(props: Props) {
             return status !== 'resolved' && status !== 'replaced' && status !== 'no_action'
           }),
         )
-        const nextResolved = uniqFeedbacks((Array.isArray(resolvedList) ? resolvedList : []).filter((x) => x.kind !== 'daily_necessities'))
+        const nextResolved = uniqFeedbacks([
+          ...(Array.isArray(resolvedList) ? resolvedList : []).filter((x) => x.kind !== 'daily_necessities'),
+          ...(Array.isArray(dailyList) ? dailyList : []).filter((x) => {
+            const status = String(x?.status || '').trim()
+            return status === 'replaced' || status === 'no_action'
+          }),
+        ])
         setPending(nextPending)
         setResolved(nextResolved)
         const nextCache = { pending: nextPending, resolved: nextResolved, updated_at: Date.now() }
         historyCacheRef.current = nextCache
-        void setJson(feedbackHistoryCacheKey(propertyId, propertyCode), nextCache)
-      } catch (e: any) {
-        setListError(String(e?.message || '加载失败'))
+        void setJson(feedbackHistoryCacheKey(propertyId, propertyCode, userKey), nextCache)
+      } catch {
+        setListError(FEEDBACK_HISTORY_LOAD_ERROR)
         if (!cache?.pending.length) setPending([])
         if (!cache?.resolved.length) setResolved([])
       } finally {
@@ -692,7 +848,7 @@ export default function FeedbackFormScreen(props: Props) {
     const cache = historyCacheRef.current
     const hasCache = !!(cache && (cache.pending.length || cache.resolved.length))
     void refreshLists({ silent: hasCache })
-  }, [token, propertyId, propertyCode, isFocused])
+  }, [token, propertyId, propertyCode, feedbackSourceTaskId, isFocused])
 
   useEffect(() => {
     let cancelled = false
@@ -710,9 +866,18 @@ export default function FeedbackFormScreen(props: Props) {
 
   function resetCreateForm(nextKind: Kind) {
     setKind(nextKind)
+    setKindError(false)
     if (nextKind === 'maintenance' && !maintenanceDrafts.length) setMaintenanceDrafts([buildMaintenanceDraft()])
     if (nextKind === 'deep_cleaning' && !deepCleaningDrafts.length) setDeepCleaningDrafts([buildDeepCleaningDraft()])
     if (nextKind === 'daily_necessities' && !dailyDrafts.length) setDailyDrafts([buildDailyDraft()])
+  }
+
+  function requireFeedbackKind() {
+    if (kind) return true
+    setKindError(true)
+    scrollRef.current?.scrollTo({ y: 0, animated: true })
+    Alert.alert(t('common_error'), '请先选择反馈类型')
+    return false
   }
 
   function updateMaintenanceDraft(clientId: string, updater: (draft: MaintenanceDraft) => MaintenanceDraft) {
@@ -728,6 +893,7 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   useEffect(() => {
+    if (isInspectionPanelBatchMode) return
     if (!token) return
     let cancelled = false
     ;(async () => {
@@ -742,7 +908,7 @@ export default function FeedbackFormScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [token])
+  }, [isInspectionPanelBatchMode, token])
 
   function dailySuggestKey(mode: 'draft' | 'edit', clientId?: string) {
     return mode === 'draft' ? `draft:${String(clientId || '').trim()}` : 'edit'
@@ -774,15 +940,46 @@ export default function FeedbackFormScreen(props: Props) {
     setActiveDailySuggestTarget(null)
   }
 
+  function discardLocalPreviews(references: string[]) {
+    if (!references.length) return
+    setLocalPreviewByReference((prev) => {
+      const next = { ...prev }
+      references.forEach((reference) => {
+        const localUri = isLocalFeedbackDraftReference(reference) ? reference : next[reference]
+        if (localUri) deleteDraftMedia(localUri)
+        delete next[reference]
+      })
+      return next
+    })
+    setLocalPhotoMetaByUri((prev) => {
+      const next = { ...prev }
+      references.forEach((reference) => {
+        const localUri = isLocalFeedbackDraftReference(reference) ? reference : localPreviewByReference[reference]
+        if (localUri) delete next[localUri]
+      })
+      return next
+    })
+  }
+
+  function draftPhotoReferences(draft: Pick<MaintenanceDraft | DeepCleaningDraft, 'media' | 'completionAfterPhotos'>) {
+    return [...draft.media, ...draft.completionAfterPhotos]
+  }
+
   function removeMaintenanceDraft(clientId: string) {
+    const removed = maintenanceDrafts.find((draft) => draft.clientId === clientId)
+    if (removed && maintenanceDrafts.length > 1) discardLocalPreviews(draftPhotoReferences(removed))
     setMaintenanceDrafts((prev) => (prev.length > 1 ? prev.filter((draft) => draft.clientId !== clientId) : prev))
   }
 
   function removeDeepCleaningDraft(clientId: string) {
+    const removed = deepCleaningDrafts.find((draft) => draft.clientId === clientId)
+    if (removed && deepCleaningDrafts.length > 1) discardLocalPreviews(draftPhotoReferences(removed))
     setDeepCleaningDrafts((prev) => (prev.length > 1 ? prev.filter((draft) => draft.clientId !== clientId) : prev))
   }
 
   function removeDeepCleaningPhoto(clientId: string, field: 'media' | 'completionAfterPhotos', photoIndex: number) {
+    const removedReference = deepCleaningDrafts.find((draft) => draft.clientId === clientId)?.[field][photoIndex]
+    if (removedReference) discardLocalPreviews([removedReference])
     const next = deepCleaningDrafts.map((draft) => (
       draft.clientId === clientId
         ? { ...draft, [field]: draft[field].filter((_, idx) => idx !== photoIndex) }
@@ -793,6 +990,8 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   function removeMaintenancePhoto(clientId: string, field: 'media' | 'completionAfterPhotos', photoIndex: number) {
+    const removedReference = maintenanceDrafts.find((draft) => draft.clientId === clientId)?.[field][photoIndex]
+    if (removedReference) discardLocalPreviews([removedReference])
     updateMaintenanceDraft(clientId, (draft) => ({
       ...draft,
       [field]: draft[field].filter((_, idx) => idx !== photoIndex),
@@ -800,10 +999,14 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   function removeDailyDraft(clientId: string) {
+    const removed = dailyDrafts.find((draft) => draft.clientId === clientId)
+    if (removed && dailyDrafts.length > 1) discardLocalPreviews(removed.media)
     setDailyDrafts((prev) => (prev.length > 1 ? prev.filter((draft) => draft.clientId !== clientId) : prev))
   }
 
   function removeDailyDraftPhoto(clientId: string, photoIndex: number) {
+    const removedReference = dailyDrafts.find((draft) => draft.clientId === clientId)?.media[photoIndex]
+    if (removedReference) discardLocalPreviews([removedReference])
     updateDailyDraft(clientId, (draft) => ({
       ...draft,
       media: draft.media.filter((_, idx) => idx !== photoIndex),
@@ -836,7 +1039,6 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   async function uploadPhotoUrls(source: 'camera' | 'library', options: PhotoUploadOptions = {}): Promise<string[]> {
-    if (!token) return []
     const ok = source === 'camera' ? await ensureCameraPerm() : await ensureLibraryPerm()
     if (!ok) {
       Alert.alert(t('common_error'), source === 'camera' ? '请先开启相机权限' : '请先开启相册权限')
@@ -856,20 +1058,210 @@ export default function FeedbackFormScreen(props: Props) {
           const uri = String(asset?.uri || '').trim()
           if (!uri) continue
           const capturedAt = new Date().toISOString()
-          const up = await uploadCleaningMedia(
-            token,
-            { uri, name: String(asset?.fileName || uri.split('/').pop() || `feedback-${Date.now()}.jpg`), mimeType: String(asset?.mimeType || 'image/jpeg') },
-            { watermark: '1', purpose: 'feedback', property_code: propertyCode, captured_at: capturedAt, watermark_text: buildWatermarkText(capturedAt) },
-          )
-          if (up?.url) uploaded.push(up.url)
+          if (isInspectionPanelBatchMode) {
+            const fallbackName = String(asset?.fileName || uri.split('/').pop() || `feedback-${Date.now()}`)
+            const resolvedMimeType = draftMimeTypeFrom(fallbackName, String(asset?.mimeType || ''), uri)
+            const persisted = await persistCompressedDraftMedia({
+              dirName: 'mzstay-inspection-feedback-drafts',
+              prefix: 'feedback',
+              sourceUri: uri,
+              name: fallbackName,
+              mimeType: resolvedMimeType,
+              kind: 'photo',
+            })
+            uploaded.push(persisted.localUri)
+            setPanelPhotoMeta((prev) => ({
+              ...prev,
+              [persisted.localUri]: {
+                media_id: `feedback-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+                name: persisted.name,
+                mime_type: persisted.mimeType,
+                captured_at: capturedAt,
+                watermark_text: buildWatermarkText(capturedAt),
+              },
+            }))
+            continue
+          }
+          const fallbackName = String(asset?.fileName || uri.split('/').pop() || `feedback-${Date.now()}.jpg`)
+          const persisted = await persistCompressedDraftMedia({
+            dirName: 'mzstay-feedback-drafts',
+            prefix: 'feedback',
+            sourceUri: uri,
+            name: fallbackName,
+            mimeType: draftMimeTypeFrom(fallbackName, String(asset?.mimeType || ''), uri),
+            kind: 'photo',
+            maxWidth: 1920,
+            quality: 0.76,
+          })
+          const mediaId = `feedback-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+          setLocalPhotoMetaByUri((prev) => ({
+            ...prev,
+            [persisted.localUri]: {
+              name: persisted.name,
+              mimeType: persisted.mimeType,
+              capturedAt,
+              watermarkText: buildWatermarkText(capturedAt),
+              mediaId,
+            },
+          }))
+          uploaded.push(persisted.localUri)
         }
         keepCapturing = continuousCamera
       }
       return uploaded
     } catch (e: any) {
-      Alert.alert(t('common_error'), String(e?.message || '上传失败'))
+      Alert.alert(t('common_error'), String(e?.message || (isInspectionPanelBatchMode ? '保存失败' : '上传失败')))
       return uploaded
     }
+  }
+
+  function fallbackLocalFeedbackPhotoMeta(localUri: string): LocalFeedbackPhotoMeta {
+    const capturedAt = new Date().toISOString()
+    const mediaId = `feedback-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+    const name = String(localUri.split('/').pop() || `feedback-${mediaId}.jpg`).trim()
+    return {
+      name,
+      mimeType: draftMimeTypeFrom(name, '', localUri),
+      capturedAt,
+      watermarkText: buildWatermarkText(capturedAt),
+      mediaId,
+    }
+  }
+
+  async function resolvePendingFeedbackMedia(targetKind: Kind) {
+    if (!token) throw new Error('登录已失效，请重新登录后提交')
+    let nextMaintenanceDrafts = maintenanceDrafts
+    let nextDeepCleaningDrafts = deepCleaningDrafts
+    let nextDailyDrafts = dailyDrafts
+    const nextLocalPreviews = { ...localPreviewByReference }
+    const nextLocalPhotoMeta = { ...localPhotoMetaByUri }
+
+    const persistResolvedState = async () => {
+      setMaintenanceDrafts(nextMaintenanceDrafts)
+      setDeepCleaningDrafts(nextDeepCleaningDrafts)
+      setDailyDrafts(nextDailyDrafts)
+      setLocalPreviewByReference(nextLocalPreviews)
+      setLocalPhotoMetaByUri(nextLocalPhotoMeta)
+      await persistFeedbackDraftSnapshot({
+        maintenanceDrafts: nextMaintenanceDrafts,
+        deepCleaningDrafts: nextDeepCleaningDrafts,
+        dailyDrafts: nextDailyDrafts,
+        localPreviewByReference: nextLocalPreviews,
+        localPhotoMetaByUri: nextLocalPhotoMeta,
+      })
+    }
+
+    const resolveReferences = async (references: string[], onResolved: (nextReferences: string[]) => Promise<void>) => {
+      const nextReferences = [...references]
+      for (let index = 0; index < nextReferences.length; index += 1) {
+        const localUri = nextReferences[index]
+        if (!isLocalFeedbackDraftReference(localUri)) continue
+        if (!draftFileExists(localUri)) throw new Error('本地照片已丢失，请重新拍摄')
+        const existingPhotoMeta = nextLocalPhotoMeta[localUri]
+        const photoMeta = existingPhotoMeta || fallbackLocalFeedbackPhotoMeta(localUri)
+        nextLocalPhotoMeta[localUri] = photoMeta
+        if (!existingPhotoMeta) await persistResolvedState()
+        const uploaded = await uploadCleaningMedia(
+          token,
+          { uri: localUri, name: photoMeta.name, mimeType: photoMeta.mimeType },
+          {
+            watermark: '1',
+            purpose: 'feedback',
+            property_code: propertyCode,
+            task_id: feedbackSourceTaskId || taskId,
+            media_id: photoMeta.mediaId,
+            captured_at: photoMeta.capturedAt,
+            watermark_text: photoMeta.watermarkText,
+          },
+          { skipImageCompression: true },
+        )
+        const remoteReference = cleaningMediaReference(uploaded)
+        if (!remoteReference) throw new Error('上传成功但未返回媒体引用')
+        nextReferences[index] = remoteReference
+        nextLocalPreviews[remoteReference] = localUri
+        await onResolved(nextReferences)
+      }
+      return nextReferences
+    }
+
+    if (targetKind === 'maintenance') for (const initialDraft of nextMaintenanceDrafts) {
+      let draft = initialDraft
+      const media = await resolveReferences(draft.media, async (nextReferences) => {
+        draft = { ...draft, media: nextReferences }
+        nextMaintenanceDrafts = nextMaintenanceDrafts.map((item) => (item.clientId === draft.clientId ? draft : item))
+        await persistResolvedState()
+      })
+      draft = { ...draft, media }
+      const completionAfterPhotos = await resolveReferences(draft.completionAfterPhotos, async (nextReferences) => {
+        draft = { ...draft, completionAfterPhotos: nextReferences }
+        nextMaintenanceDrafts = nextMaintenanceDrafts.map((item) => (item.clientId === draft.clientId ? draft : item))
+        await persistResolvedState()
+      })
+      draft = { ...draft, completionAfterPhotos }
+    }
+
+    if (targetKind === 'deep_cleaning') for (const initialDraft of nextDeepCleaningDrafts) {
+      let draft = initialDraft
+      const media = await resolveReferences(draft.media, async (nextReferences) => {
+        draft = { ...draft, media: nextReferences }
+        nextDeepCleaningDrafts = nextDeepCleaningDrafts.map((item) => (item.clientId === draft.clientId ? draft : item))
+        await persistResolvedState()
+      })
+      draft = { ...draft, media }
+      const completionAfterPhotos = await resolveReferences(draft.completionAfterPhotos, async (nextReferences) => {
+        draft = { ...draft, completionAfterPhotos: nextReferences }
+        nextDeepCleaningDrafts = nextDeepCleaningDrafts.map((item) => (item.clientId === draft.clientId ? draft : item))
+        await persistResolvedState()
+      })
+      draft = { ...draft, completionAfterPhotos }
+    }
+
+    if (targetKind === 'daily_necessities') for (const initialDraft of nextDailyDrafts) {
+      let draft = initialDraft
+      const media = await resolveReferences(draft.media, async (nextReferences) => {
+        draft = { ...draft, media: nextReferences }
+        nextDailyDrafts = nextDailyDrafts.map((item) => (item.clientId === draft.clientId ? draft : item))
+        await persistResolvedState()
+      })
+      draft = { ...draft, media }
+    }
+
+    return { nextMaintenanceDrafts, nextDeepCleaningDrafts, nextDailyDrafts, nextLocalPreviews, nextLocalPhotoMeta }
+  }
+
+  async function resolveTransientFeedbackReferences(references: string[]) {
+    if (!token) throw new Error('登录已失效，请重新登录后提交')
+    const nextReferences = [...references]
+    const nextLocalPreviews = { ...localPreviewByReference }
+    const nextLocalPhotoMeta = { ...localPhotoMetaByUri }
+    for (let index = 0; index < nextReferences.length; index += 1) {
+      const localUri = nextReferences[index]
+      if (!isLocalFeedbackDraftReference(localUri)) continue
+      if (!draftFileExists(localUri)) throw new Error('本地照片已丢失，请重新拍摄')
+      const photoMeta = nextLocalPhotoMeta[localUri] || fallbackLocalFeedbackPhotoMeta(localUri)
+      nextLocalPhotoMeta[localUri] = photoMeta
+      const uploaded = await uploadCleaningMedia(
+        token,
+        { uri: localUri, name: photoMeta.name, mimeType: photoMeta.mimeType },
+        {
+          watermark: '1',
+          purpose: 'feedback',
+          property_code: propertyCode,
+          task_id: feedbackSourceTaskId || taskId,
+          media_id: photoMeta.mediaId,
+          captured_at: photoMeta.capturedAt,
+          watermark_text: photoMeta.watermarkText,
+        },
+        { skipImageCompression: true },
+      )
+      const remoteReference = cleaningMediaReference(uploaded)
+      if (!remoteReference) throw new Error('上传成功但未返回媒体引用')
+      nextReferences[index] = remoteReference
+      nextLocalPreviews[remoteReference] = localUri
+      setLocalPreviewByReference(nextLocalPreviews)
+      setLocalPhotoMetaByUri(nextLocalPhotoMeta)
+    }
+    return nextReferences
   }
 
   async function uploadAndAppend(setter: React.Dispatch<React.SetStateAction<string[]>>, source: 'camera' | 'library') {
@@ -909,6 +1301,8 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   function removeProjectPhoto(field: 'before_photos' | 'after_photos', photoIndex: number) {
+    const removedReference = projectForm[field][photoIndex]
+    if (removedReference) discardLocalPreviews([removedReference])
     setProjectForm((prev) => ({
       ...prev,
       [field]: prev[field].filter((_, idx) => idx !== photoIndex),
@@ -922,6 +1316,8 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   function removeDailyEditPhoto(photoIndex: number) {
+    const removedReference = dailyEditMedia[photoIndex]
+    if (removedReference) discardLocalPreviews([removedReference])
     setDailyEditMedia((prev) => prev.filter((_, idx) => idx !== photoIndex))
   }
 
@@ -946,7 +1342,89 @@ export default function FeedbackFormScreen(props: Props) {
     Alert.alert(t('common_error'), `${prefix}以下记录提交失败：${failedLabels.join('、')}`)
   }
 
+  function feedbackSubmissionError(stage: FeedbackSubmissionStage, error: unknown) {
+    const raw = String((error as any)?.message || error || '').toLowerCase()
+    if (raw.includes('source_task')) return '来源任务不匹配，请刷新任务后重试'
+    if (raw.includes('after_photo')) return '请补充处理后照片'
+    if (stage === 'create') return '反馈记录保存失败，请重试'
+    if (stage === 'project') return '完工项目保存失败，请重试'
+    return '完工信息提交失败，请重试'
+  }
+
+  function responseFeedbackId(response: any) {
+    return String(response?.id || response?.existing_id || response?.item?.id || response?.response?.id || '').trim()
+  }
+
+  function localPreviewsAfterRemoving(
+    references: string[],
+    previews: Record<string, string> = localPreviewByReference,
+    photoMeta: Record<string, LocalFeedbackPhotoMeta> = localPhotoMetaByUri,
+  ) {
+    const nextLocalPreviews = { ...previews }
+    const nextLocalPhotoMeta = { ...photoMeta }
+    references.forEach((reference) => {
+      const localUri = isLocalFeedbackDraftReference(reference) ? reference : nextLocalPreviews[reference]
+      if (localUri) deleteDraftMedia(localUri)
+      if (localUri) delete nextLocalPhotoMeta[localUri]
+      delete nextLocalPreviews[reference]
+    })
+    return { localPreviewByReference: nextLocalPreviews, localPhotoMetaByUri: nextLocalPhotoMeta }
+  }
+
   async function submitFeedback() {
+    if (!requireFeedbackKind()) return
+    if (isInspectionPanelBatchMode) {
+      try {
+        setSubmitting(true)
+        if (kind === 'maintenance') {
+          const invalidIndex = maintenanceDrafts.findIndex((draft) => {
+            if (!draft.area || !draft.detail.trim()) return true
+            if (draft.submitAsCompleted && !draft.completionAfterPhotos.length) return true
+            return false
+          })
+          if (invalidIndex >= 0) {
+            Alert.alert(t('common_error'), `请完整填写第 ${invalidIndex + 1} 条维修记录`)
+            return
+          }
+        } else if (kind === 'deep_cleaning') {
+          const invalidIndex = deepCleaningDrafts.findIndex((draft) => {
+            if (!draft.area || !draft.detail.trim() || !draft.media.length) return true
+            if (draft.submitAsCompleted) {
+              if (!draft.completionAfterPhotos.length) return true
+              if (!String(draft.completionStartedAt || '').trim() || !String(draft.completionEndedAt || '').trim()) return true
+            }
+            return false
+          })
+          if (invalidIndex >= 0) {
+            Alert.alert(t('common_error'), `请完整填写第 ${invalidIndex + 1} 条深度清洁记录`)
+            return
+          }
+        } else {
+          const invalidIndex = dailyDrafts.findIndex((draft) => {
+            const qty = Number(draft.qty)
+            return !draft.itemName.trim() || !Number.isFinite(qty) || qty < 1 || (!draft.note.trim() && !draft.media.length)
+          })
+          if (invalidIndex >= 0) {
+            Alert.alert(t('common_error'), `请完整填写第 ${invalidIndex + 1} 条日用品记录`)
+            return
+          }
+        }
+        await persistFeedbackDraftSnapshot({
+          kind,
+          maintenanceDrafts,
+          deepCleaningDrafts,
+          dailyDrafts,
+        })
+        Alert.alert(t('common_ok'), '已暂存到检查提交批次，正式提交本页时再同步到后台。')
+        props.navigation.goBack()
+        return
+      } catch (e: any) {
+        Alert.alert(t('common_error'), String(e?.message || '保存失败'))
+        return
+      } finally {
+        setSubmitting(false)
+      }
+    }
     if (!token || !propertyId) return
     try {
       setSubmitting(true)
@@ -960,49 +1438,94 @@ export default function FeedbackFormScreen(props: Props) {
           Alert.alert(t('common_error'), `请完整填写第 ${invalidIndex + 1} 条维修记录`)
           return
         }
-        const payloads = maintenanceDrafts.map((draft) => ({
-          kind: 'maintenance' as const,
-          property_id: propertyId,
-          source_task_id: task?.id ? String(task.id) : undefined,
-          area: draft.area || undefined,
-          detail: draft.detail.trim(),
-          media_urls: draft.media,
-        }))
-        const createResults = await createPropertyFeedbackBatch(token, payloads)
+        const resolvedMedia = await resolvePendingFeedbackMedia('maintenance')
         const failedIds = new Set<string>()
         let successCount = 0
-        for (let idx = 0; idx < createResults.length; idx += 1) {
-          const result = createResults[idx]
-          const draft = maintenanceDrafts[idx]
-          if (!result?.ok) {
-            failedIds.add(draft.clientId)
-            continue
+        let nextMaintenanceDrafts = resolvedMedia.nextMaintenanceDrafts
+        for (let idx = 0; idx < nextMaintenanceDrafts.length; idx += 1) {
+          let draft = nextMaintenanceDrafts[idx]
+          const checkpoint = async (submission: FeedbackSubmissionState) => {
+            draft = { ...draft, submission }
+            nextMaintenanceDrafts = nextMaintenanceDrafts.map((item) => (item.clientId === draft.clientId ? draft : item))
+            setMaintenanceDrafts(nextMaintenanceDrafts)
+            await persistFeedbackDraftSnapshot({ maintenanceDrafts: nextMaintenanceDrafts, localPreviewByReference: resolvedMedia.nextLocalPreviews })
           }
-          const feedbackId = String(result.response?.id || '').trim()
+          let feedbackId = String(draft.submission?.feedbackId || '').trim()
           if (!feedbackId) {
-            failedIds.add(draft.clientId)
-            continue
-          }
-          if (draft.submitAsCompleted) {
             try {
-              await completePropertyFeedbackProject(token, 'maintenance', feedbackId, `legacy-${feedbackId}`, {
-                note: draft.completionNote.trim() || undefined,
+              const response = await createPropertyFeedback(token, {
+                kind: 'maintenance',
+                property_id: propertyId,
+                source_task_id: feedbackSourceTaskId || undefined,
+                area: draft.area || undefined,
                 detail: draft.detail.trim(),
-                source_task_id: task?.id ? String(task.id) : undefined,
-                before_photos: draft.media,
-                after_photos: draft.completionAfterPhotos,
+                media_urls: draft.media,
               })
-            } catch {
+              feedbackId = responseFeedbackId(response)
+              if (!feedbackId) throw new Error('missing_feedback_id')
+              if (!draft.submitAsCompleted) {
+                successCount += 1
+                continue
+              }
+              await checkpoint({ feedbackId, stage: 'project' })
+            } catch (error) {
+              await checkpoint({ ...draft.submission, stage: 'create', error: feedbackSubmissionError('create', error) })
               failedIds.add(draft.clientId)
               continue
             }
           }
-          successCount += 1
+          if (!draft.submitAsCompleted) {
+            successCount += 1
+            continue
+          }
+          let projectId = String(draft.submission?.projectId || '').trim()
+          if (!projectId) {
+            try {
+              const project = await createPropertyFeedbackProject(token, 'maintenance', feedbackId, {
+                name: draft.detail.trim() || draft.area || '维修项目',
+                area: draft.area || undefined,
+                detail: draft.detail.trim(),
+                note: draft.completionNote.trim() || undefined,
+              })
+              projectId = String(project?.item?.id || '').trim()
+              if (!projectId) throw new Error('missing_project_id')
+              await checkpoint({ feedbackId, projectId, stage: 'complete' })
+            } catch (error) {
+              await checkpoint({ feedbackId, stage: 'project', error: feedbackSubmissionError('project', error) })
+              failedIds.add(draft.clientId)
+              continue
+            }
+          }
+          try {
+            await completePropertyFeedbackProject(token, 'maintenance', feedbackId, projectId, {
+              note: draft.completionNote.trim() || undefined,
+              detail: draft.detail.trim(),
+              source_task_id: feedbackSourceTaskId || undefined,
+              before_photos: draft.media,
+              after_photos: draft.completionAfterPhotos,
+            })
+            successCount += 1
+          } catch (error) {
+            await checkpoint({ feedbackId, projectId, stage: 'complete', error: feedbackSubmissionError('complete', error) })
+            failedIds.add(draft.clientId)
+          }
         }
-        const nextMaintenanceDrafts = !failedIds.size ? [buildMaintenanceDraft()] : maintenanceDrafts.filter((draft) => failedIds.has(draft.clientId))
-        setMaintenanceDrafts(nextMaintenanceDrafts)
-        await persistFeedbackDraftSnapshot({ maintenanceDrafts: nextMaintenanceDrafts })
-        dismissCreateSuccess(successCount, maintenanceDrafts.filter((draft) => failedIds.has(draft.clientId)).map((_, idx) => `维修记录${idx + 1}`))
+        const failedDrafts = nextMaintenanceDrafts.filter((draft) => failedIds.has(draft.clientId))
+        const successfulReferences = nextMaintenanceDrafts
+          .filter((draft) => !failedIds.has(draft.clientId))
+          .flatMap(draftPhotoReferences)
+          .filter((reference) => !failedDrafts.some((draft) => draftPhotoReferences(draft).includes(reference)))
+        const finalDrafts = failedDrafts.length ? failedDrafts : [buildMaintenanceDraft()]
+        const finalLocalState = localPreviewsAfterRemoving(successfulReferences, resolvedMedia.nextLocalPreviews, resolvedMedia.nextLocalPhotoMeta)
+        setMaintenanceDrafts(finalDrafts)
+        setLocalPreviewByReference(finalLocalState.localPreviewByReference)
+        setLocalPhotoMetaByUri(finalLocalState.localPhotoMetaByUri)
+        await persistFeedbackDraftSnapshot({
+          maintenanceDrafts: finalDrafts,
+          localPreviewByReference: finalLocalState.localPreviewByReference,
+          localPhotoMetaByUri: finalLocalState.localPhotoMetaByUri,
+        })
+        dismissCreateSuccess(successCount, maintenanceDrafts.flatMap((draft, idx) => failedIds.has(draft.clientId) ? [`维修记录${idx + 1}（${nextMaintenanceDrafts.find((item) => item.clientId === draft.clientId)?.submission?.error || '请重试'}）`] : []))
       } else if (kind === 'deep_cleaning') {
         const invalidIndex = deepCleaningDrafts.findIndex((draft) => {
           if (!draft.area || !draft.detail.trim() || !draft.media.length) return true
@@ -1016,51 +1539,95 @@ export default function FeedbackFormScreen(props: Props) {
           Alert.alert(t('common_error'), `请完整填写第 ${invalidIndex + 1} 条深度清洁记录`)
           return
         }
-        const payloads = deepCleaningDrafts.map((draft) => ({
-          kind: 'deep_cleaning' as const,
-          property_id: propertyId,
-          source_task_id: task?.id ? String(task.id) : undefined,
-          areas: draft.area ? [draft.area] : [],
-          detail: draft.detail.trim(),
-          media_urls: draft.media,
-        }))
-        const createResults = await createPropertyFeedbackBatch(token, payloads)
+        const resolvedMedia = await resolvePendingFeedbackMedia('deep_cleaning')
         const failedIds = new Set<string>()
         let successCount = 0
-        for (let idx = 0; idx < createResults.length; idx += 1) {
-          const result = createResults[idx]
-          const draft = deepCleaningDrafts[idx]
-          if (!result?.ok) {
-            failedIds.add(draft.clientId)
-            continue
+        let nextDeepCleaningDrafts = resolvedMedia.nextDeepCleaningDrafts
+        for (let idx = 0; idx < nextDeepCleaningDrafts.length; idx += 1) {
+          let draft = nextDeepCleaningDrafts[idx]
+          const checkpoint = async (submission: FeedbackSubmissionState) => {
+            draft = { ...draft, submission }
+            nextDeepCleaningDrafts = nextDeepCleaningDrafts.map((item) => (item.clientId === draft.clientId ? draft : item))
+            setDeepCleaningDrafts(nextDeepCleaningDrafts)
+            await persistFeedbackDraftSnapshot({ deepCleaningDrafts: nextDeepCleaningDrafts, localPreviewByReference: resolvedMedia.nextLocalPreviews })
           }
-          const feedbackId = String(result.response?.id || '').trim()
+          let feedbackId = String(draft.submission?.feedbackId || '').trim()
           if (!feedbackId) {
-            failedIds.add(draft.clientId)
-            continue
-          }
-          if (draft.submitAsCompleted) {
             try {
-              await completePropertyFeedbackProject(token, 'deep_cleaning', feedbackId, `legacy-${feedbackId}`, {
-                note: draft.completionNote.trim() || undefined,
+              const response = await createPropertyFeedback(token, {
+                kind: 'deep_cleaning',
+                property_id: propertyId,
+                source_task_id: feedbackSourceTaskId || undefined,
+                areas: draft.area ? [draft.area] : [],
                 detail: draft.detail.trim(),
-                source_task_id: task?.id ? String(task.id) : undefined,
-                started_at: draft.completionStartedAt || undefined,
-                ended_at: draft.completionEndedAt || undefined,
-                before_photos: draft.media,
-                after_photos: draft.completionAfterPhotos,
+                media_urls: draft.media,
               })
-            } catch {
+              feedbackId = responseFeedbackId(response)
+              if (!feedbackId) throw new Error('missing_feedback_id')
+              if (!draft.submitAsCompleted) {
+                successCount += 1
+                continue
+              }
+              await checkpoint({ feedbackId, stage: 'project' })
+            } catch (error) {
+              await checkpoint({ ...draft.submission, stage: 'create', error: feedbackSubmissionError('create', error) })
               failedIds.add(draft.clientId)
               continue
             }
           }
-          successCount += 1
+          if (!draft.submitAsCompleted) {
+            successCount += 1
+            continue
+          }
+          let projectId = String(draft.submission?.projectId || '').trim()
+          if (!projectId) {
+            try {
+              const project = await createPropertyFeedbackProject(token, 'deep_cleaning', feedbackId, {
+                name: draft.area || '深度清洁',
+                area: draft.area || undefined,
+                note: draft.completionNote.trim() || undefined,
+              })
+              projectId = String(project?.item?.id || '').trim()
+              if (!projectId) throw new Error('missing_project_id')
+              await checkpoint({ feedbackId, projectId, stage: 'complete' })
+            } catch (error) {
+              await checkpoint({ feedbackId, stage: 'project', error: feedbackSubmissionError('project', error) })
+              failedIds.add(draft.clientId)
+              continue
+            }
+          }
+          try {
+            await completePropertyFeedbackProject(token, 'deep_cleaning', feedbackId, projectId, {
+              note: draft.completionNote.trim() || undefined,
+              detail: draft.detail.trim(),
+              source_task_id: feedbackSourceTaskId || undefined,
+              started_at: draft.completionStartedAt || undefined,
+              ended_at: draft.completionEndedAt || undefined,
+              before_photos: draft.media,
+              after_photos: draft.completionAfterPhotos,
+            })
+            successCount += 1
+          } catch (error) {
+            await checkpoint({ feedbackId, projectId, stage: 'complete', error: feedbackSubmissionError('complete', error) })
+            failedIds.add(draft.clientId)
+          }
         }
-        const nextDeepCleaningDrafts = !failedIds.size ? [buildDeepCleaningDraft()] : deepCleaningDrafts.filter((draft) => failedIds.has(draft.clientId))
-        setDeepCleaningDrafts(nextDeepCleaningDrafts)
-        await persistFeedbackDraftSnapshot({ deepCleaningDrafts: nextDeepCleaningDrafts })
-        dismissCreateSuccess(successCount, deepCleaningDrafts.filter((draft) => failedIds.has(draft.clientId)).map((_, idx) => `深清记录${idx + 1}`))
+        const failedDrafts = nextDeepCleaningDrafts.filter((draft) => failedIds.has(draft.clientId))
+        const successfulReferences = nextDeepCleaningDrafts
+          .filter((draft) => !failedIds.has(draft.clientId))
+          .flatMap(draftPhotoReferences)
+          .filter((reference) => !failedDrafts.some((draft) => draftPhotoReferences(draft).includes(reference)))
+        const finalDrafts = failedDrafts.length ? failedDrafts : [buildDeepCleaningDraft()]
+        const finalLocalState = localPreviewsAfterRemoving(successfulReferences, resolvedMedia.nextLocalPreviews, resolvedMedia.nextLocalPhotoMeta)
+        setDeepCleaningDrafts(finalDrafts)
+        setLocalPreviewByReference(finalLocalState.localPreviewByReference)
+        setLocalPhotoMetaByUri(finalLocalState.localPhotoMetaByUri)
+        await persistFeedbackDraftSnapshot({
+          deepCleaningDrafts: finalDrafts,
+          localPreviewByReference: finalLocalState.localPreviewByReference,
+          localPhotoMetaByUri: finalLocalState.localPhotoMetaByUri,
+        })
+        dismissCreateSuccess(successCount, deepCleaningDrafts.flatMap((draft, idx) => failedIds.has(draft.clientId) ? [`深清记录${idx + 1}（${nextDeepCleaningDrafts.find((item) => item.clientId === draft.clientId)?.submission?.error || '请重试'}）`] : []))
       } else {
         const invalidIndex = dailyDrafts.findIndex((draft) => {
           const qty = Number(draft.qty)
@@ -1070,12 +1637,14 @@ export default function FeedbackFormScreen(props: Props) {
           Alert.alert(t('common_error'), `请完整填写第 ${invalidIndex + 1} 条日用品记录`)
           return
         }
+        const resolvedMedia = await resolvePendingFeedbackMedia('daily_necessities')
+        const resolvedDailyDrafts = resolvedMedia.nextDailyDrafts
         const results = await createPropertyFeedbackBatch(
           token,
-          dailyDrafts.map((draft) => ({
+          resolvedDailyDrafts.map((draft) => ({
             kind: 'daily_necessities' as const,
             property_id: propertyId,
-            source_task_id: task?.id ? String(task.id) : undefined,
+            source_task_id: feedbackSourceTaskId || undefined,
             status: draft.status,
             item_name: draft.itemName.trim(),
             quantity: Math.trunc(Number(draft.qty)),
@@ -1087,26 +1656,38 @@ export default function FeedbackFormScreen(props: Props) {
         let successCount = 0
         results.forEach((result, idx) => {
           if (result.ok) successCount += 1
-          else failedIds.add(dailyDrafts[idx].clientId)
+          else failedIds.add(resolvedDailyDrafts[idx].clientId)
         })
-        const nextDailyDrafts = !failedIds.size ? [buildDailyDraft()] : dailyDrafts.filter((draft) => failedIds.has(draft.clientId))
+        const nextDailyDrafts = !failedIds.size ? [buildDailyDraft()] : resolvedDailyDrafts.filter((draft) => failedIds.has(draft.clientId))
+        const successfulReferences = resolvedDailyDrafts
+          .filter((draft) => !failedIds.has(draft.clientId))
+          .flatMap((draft) => draft.media)
+          .filter((reference) => !nextDailyDrafts.some((draft) => draft.media.includes(reference)))
+        const finalLocalState = localPreviewsAfterRemoving(successfulReferences, resolvedMedia.nextLocalPreviews, resolvedMedia.nextLocalPhotoMeta)
         setDailyDrafts(nextDailyDrafts)
-        await persistFeedbackDraftSnapshot({ dailyDrafts: nextDailyDrafts })
-        dismissCreateSuccess(successCount, dailyDrafts.filter((draft) => failedIds.has(draft.clientId)).map((_, idx) => `日用品记录${idx + 1}`))
+        setLocalPreviewByReference(finalLocalState.localPreviewByReference)
+        setLocalPhotoMetaByUri(finalLocalState.localPhotoMetaByUri)
+        await persistFeedbackDraftSnapshot({
+          dailyDrafts: nextDailyDrafts,
+          localPreviewByReference: finalLocalState.localPreviewByReference,
+          localPhotoMetaByUri: finalLocalState.localPhotoMetaByUri,
+        })
+        dismissCreateSuccess(successCount, resolvedDailyDrafts.filter((draft) => failedIds.has(draft.clientId)).map((_, idx) => `日用品记录${idx + 1}`))
       }
       await refreshLists({ force: true })
-    } catch (e: any) {
-      Alert.alert(t('common_error'), String(e?.message || '提交失败'))
+    } catch {
+      Alert.alert(t('common_error'), '提交失败，请稍后重试')
     } finally {
       setSubmitting(false)
     }
   }
 
-  function openViewer(urls: string[], index: number) {
+  function openViewer(urls: string[], index: number, accessTaskId?: string | null) {
     const list = urls.map(toAbsoluteUrl).filter(Boolean)
     if (!list.length) return
     setViewerUrls(list)
     setViewerIndex(Math.max(0, Math.min(index, list.length - 1)))
+    setViewerAccessTaskId(String(accessTaskId || '').trim() || null)
     setViewerOpen(true)
   }
 
@@ -1116,6 +1697,7 @@ export default function FeedbackFormScreen(props: Props) {
 
   function closeViewer() {
     setViewerOpen(false)
+    setViewerAccessTaskId(null)
   }
 
   function syncViewerIndex(offsetX: number) {
@@ -1178,7 +1760,6 @@ export default function FeedbackFormScreen(props: Props) {
   function openDailyEdit(item: PropertyFeedback) {
     const matched = dailyOptions.find((option) => String(option.item_name || '').trim() === String(item.item_name || '').trim()) || null
     setDailyEditItem(item)
-    setDailyEditStatus((String(item.status || '').trim() as any) || 'need_replace')
     setDailyEditItemName(String(item.item_name || '').trim())
     setDailyEditItemSku(matched?.sku ? String(matched.sku) : null)
     setDailyEditQty(String(item.quantity || 1))
@@ -1188,6 +1769,7 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   function openRecordEditor(item: PropertyFeedback) {
+    if (!item.capabilities?.can_edit_content) return
     if (item.kind === 'daily_necessities') {
       openDailyEdit(item)
       return
@@ -1199,9 +1781,9 @@ export default function FeedbackFormScreen(props: Props) {
       ...nextProject,
       name: item.kind === 'maintenance' ? '维修记录' : '深度清洁记录',
       before_photos: normalizeUrls(item.media_urls),
-      after_photos: normalizeUrls(item.repair_photo_urls),
+      after_photos: [],
       detail: String(item.detail || '').trim() || nextProject.detail || null,
-      note: String(item.repair_notes || nextProject.note || '').trim() || null,
+      note: null,
     })
     setRecordArea(
       item.kind === 'deep_cleaning'
@@ -1212,7 +1794,7 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   function requestRecordEdit(item: PropertyFeedback) {
-    if (actionOpen || dailyEditOpen || recordEditOpen) return
+    if (!item.capabilities?.can_edit_content || actionOpen || dailyEditOpen || recordEditOpen) return
     if (detailItem) {
       setQueuedEditItem(item)
       setDetailItem(null)
@@ -1236,9 +1818,68 @@ export default function FeedbackFormScreen(props: Props) {
     if (detailItem?.id === row.id && detailItem?.kind === row.kind) setDetailItem(row)
   }
 
+  function removeFeedbackRow(item: PropertyFeedback) {
+    setPending((prev) => prev.filter((row) => `${row.kind}:${row.id}` !== `${item.kind}:${item.id}`))
+    setResolved((prev) => prev.filter((row) => `${row.kind}:${row.id}` !== `${item.kind}:${item.id}`))
+    if (detailItem?.id === item.id && detailItem?.kind === item.kind) setDetailItem(null)
+  }
+
+  function requestMoveFeedback(item: PropertyFeedback) {
+    if (!item.capabilities?.can_move_category || actionOpen || dailyEditOpen || recordEditOpen || moveOpen) return
+    setMoveItem(item)
+    setMoveTargetKind(item.kind === 'maintenance' ? 'deep_cleaning' : 'maintenance')
+    setMoveOpen(true)
+  }
+
+  async function confirmMoveFeedback() {
+    if (!token || !moveItem) return
+    if (moveTargetKind === moveItem.kind) {
+      setMoveOpen(false)
+      setMoveItem(null)
+      return
+    }
+    try {
+      setMoveSaving(true)
+      const original = moveItem
+      const resp = await movePropertyFeedback(token, original.kind, original.id, moveTargetKind)
+      removeFeedbackRow(original)
+      if (resp.row) applyUpdatedFeedbackRow(resp.row as any)
+      setMoveOpen(false)
+      setMoveItem(null)
+      await refreshLists({ force: true })
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '调整失败'))
+    } finally {
+      setMoveSaving(false)
+    }
+  }
+
+  function requestDeleteFeedback(item: PropertyFeedback) {
+    if (!item.capabilities?.can_delete || !token) return
+    Alert.alert('删除反馈记录', '确认撤回这条反馈记录？它将不再显示在历史反馈中，历史证据照片不会被删除。', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              setDeleteBusyId(`${item.kind}:${item.id}`)
+              await deletePropertyFeedback(token, item.kind, item.id)
+              removeFeedbackRow(item)
+              await refreshLists({ force: true })
+            } catch (e: any) {
+              Alert.alert(t('common_error'), String(e?.message || '删除失败'))
+            } finally {
+              setDeleteBusyId(null)
+            }
+          })()
+        },
+      },
+    ])
+  }
+
   function buildEditedFeedbackFallback(item: PropertyFeedback): PropertyFeedback {
-    const afterPhotos = Array.isArray(projectForm.after_photos) ? projectForm.after_photos : []
-    const isResolvedPending = afterPhotos.length > 0
     return {
       ...item,
       area: item.kind === 'maintenance' ? String(projectForm.area || '').trim() || null : item.area || null,
@@ -1246,12 +1887,6 @@ export default function FeedbackFormScreen(props: Props) {
       category: item.kind === 'maintenance' ? String(projectForm.category || '').trim() || null : item.category || null,
       detail: String(projectForm.detail || '').trim(),
       media_urls: projectForm.before_photos,
-      repair_photo_urls: afterPhotos,
-      repair_notes: String(projectForm.note || '').trim() || null,
-      note: String(projectForm.note || '').trim() || null,
-      status: isResolvedPending ? 'resolved' : item.status,
-      review_status: isResolvedPending ? 'pending' : item.review_status || null,
-      completed_at: isResolvedPending ? item.completed_at || new Date().toISOString() : item.completed_at || null,
     }
   }
 
@@ -1333,16 +1968,20 @@ export default function FeedbackFormScreen(props: Props) {
             return
           }
         }
+        const beforePhotos = await resolveTransientFeedbackReferences(projectForm.before_photos)
+        const afterPhotos = await resolveTransientFeedbackReferences(projectForm.after_photos)
+        setProjectForm((prev) => ({ ...prev, before_photos: beforePhotos, after_photos: afterPhotos }))
         const resp = await completePropertyFeedbackProject(token, actionFeedback.kind as 'maintenance' | 'deep_cleaning', actionFeedback.id, actionProject.id, {
           note: String(projectForm.note || '').trim() || undefined,
           detail: String(projectForm.detail || '').trim() || undefined,
-          source_task_id: task?.id ? String(task.id) : undefined,
+          source_task_id: feedbackSourceTaskId || undefined,
           started_at: String(projectForm.started_at || '').trim() || undefined,
           ended_at: String(projectForm.ended_at || '').trim() || undefined,
-          before_photos: projectForm.before_photos,
-          after_photos: projectForm.after_photos,
+          before_photos: beforePhotos,
+          after_photos: afterPhotos,
         })
         setDetailItem((resp.row as any) || null)
+        discardLocalPreviews([...beforePhotos, ...afterPhotos])
       }
       setActionOpen(false)
       await refreshLists({ force: true })
@@ -1362,28 +2001,29 @@ export default function FeedbackFormScreen(props: Props) {
           Alert.alert(t('common_error'), '请完整填写维修记录')
           return
         }
+        const mediaUrls = await resolveTransientFeedbackReferences(projectForm.before_photos)
+        setProjectForm((prev) => ({ ...prev, before_photos: mediaUrls }))
         const resp = await updatePropertyFeedback(token, 'maintenance', recordEditFeedback.id, {
           area: String(projectForm.area || '').trim(),
           detail: String(projectForm.detail || '').trim(),
-          note: String(projectForm.note || '').trim() || undefined,
-          media_urls: projectForm.before_photos,
-          repair_photo_urls: projectForm.after_photos,
+          media_urls: mediaUrls,
         })
-        applyUpdatedFeedbackRow((resp.row as any) || buildEditedFeedbackFallback(recordEditFeedback))
+        applyUpdatedFeedbackRow((resp.row as any) || { ...buildEditedFeedbackFallback(recordEditFeedback), media_urls: mediaUrls })
       } else {
         if (!recordArea || !String(projectForm.detail || '').trim()) {
           Alert.alert(t('common_error'), '请完整填写深度清洁记录')
           return
         }
+        const mediaUrls = await resolveTransientFeedbackReferences(projectForm.before_photos)
+        setProjectForm((prev) => ({ ...prev, before_photos: mediaUrls }))
         const resp = await updatePropertyFeedback(token, 'deep_cleaning', recordEditFeedback.id, {
           areas: [recordArea],
           detail: String(projectForm.detail || '').trim(),
-          note: String(projectForm.note || '').trim() || undefined,
-          media_urls: projectForm.before_photos,
-          repair_photo_urls: projectForm.after_photos,
+          media_urls: mediaUrls,
         })
-        applyUpdatedFeedbackRow((resp.row as any) || buildEditedFeedbackFallback(recordEditFeedback))
+        applyUpdatedFeedbackRow((resp.row as any) || { ...buildEditedFeedbackFallback(recordEditFeedback), media_urls: mediaUrls })
       }
+      discardLocalPreviews(projectForm.before_photos)
       setRecordEditOpen(false)
       setRecordEditFeedback(null)
       await refreshLists({ force: true })
@@ -1403,13 +2043,15 @@ export default function FeedbackFormScreen(props: Props) {
         Alert.alert(t('common_error'), '请完整填写日用品反馈')
         return
       }
+      const mediaUrls = await resolveTransientFeedbackReferences(dailyEditMedia)
+      setDailyEditMedia(mediaUrls)
       const resp = await updatePropertyFeedback(token, 'daily_necessities', dailyEditItem.id, {
-        status: dailyEditStatus,
         item_name: dailyEditItemName.trim(),
         quantity: Math.trunc(qty),
         note: dailyEditNote.trim(),
-        media_urls: dailyEditMedia,
+        media_urls: mediaUrls,
       })
+      discardLocalPreviews(mediaUrls)
       setDailyEditOpen(false)
       if (detailItem?.id === dailyEditItem.id) setDetailItem((resp.row as any) || null)
       await refreshLists({ force: true })
@@ -1427,8 +2069,12 @@ export default function FeedbackFormScreen(props: Props) {
     return buildHistoryProject(detailItem)
   }, [detailItem])
   const pendingHistoryCount = pendingGroups.maintenance.length + pendingGroups.deep.length + pendingGroups.daily.length
-  const currentDraftCount = kind === 'maintenance' ? maintenanceDrafts.length : kind === 'deep_cleaning' ? deepCleaningDrafts.length : dailyDrafts.length
-  const submitButtonLabel = submitting ? t('common_loading') : currentDraftCount > 1 ? `提交全部 ${currentDraftCount} 条记录` : '提交记录'
+  const currentDraftCount = kind === 'maintenance' ? maintenanceDrafts.length : kind === 'deep_cleaning' ? deepCleaningDrafts.length : kind === 'daily_necessities' ? dailyDrafts.length : 1
+  const submitButtonLabel = submitting
+    ? t('common_loading')
+    : isInspectionPanelBatchMode
+      ? (currentDraftCount > 1 ? `暂存全部 ${currentDraftCount} 条记录` : '暂存并返回')
+      : (currentDraftCount > 1 ? `提交全部 ${currentDraftCount} 条记录` : '提交记录')
 
   useEffect(() => {
     if (detailItem || !queuedEditItem || actionOpen || dailyEditOpen || recordEditOpen) return
@@ -1439,7 +2085,7 @@ export default function FeedbackFormScreen(props: Props) {
 
   return (
     <>
-      <ScrollView style={styles.page} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+      <ScrollView ref={scrollRef} style={styles.page} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
         {!task ? (
           <Text style={styles.muted}>{t('common_loading')}</Text>
         ) : (
@@ -1448,6 +2094,7 @@ export default function FeedbackFormScreen(props: Props) {
               step="1"
               title="选择反馈类型"
               subtitle="先选择本次反馈属于维修、深清还是日用品。"
+              highlight={kindError}
             >
               <View style={styles.headerRow}>
                 <View style={styles.headerTextWrap}>
@@ -1466,14 +2113,31 @@ export default function FeedbackFormScreen(props: Props) {
                   </Pressable>
                 ))}
               </View>
+              {kindError ? <Text style={styles.errorText}>请选择反馈类型后再提交。</Text> : null}
             </StepCard>
 
             <StepCard
               step="2"
               title="填写记录信息"
-              subtitle={kind === 'daily_necessities' ? '可连续添加多条日用品记录，一次性提交。' : kind === 'deep_cleaning' ? '可连续添加多条深清记录，每条独立填写前后照片和完成状态。' : '可连续添加多条维修记录，每条独立填写前后照片和完成状态。'}
+              subtitle={
+                isInspectionPanelBatchMode
+                  ? '这里只做本地暂存，正式提交“检查与补充”时才会统一上传并写库。'
+                  : !kind
+                    ? '先选择反馈类型，再填写对应记录。'
+                    : kind === 'daily_necessities'
+                    ? '可连续添加多条日用品记录，一次性提交。'
+                    : kind === 'deep_cleaning'
+                      ? '可连续添加多条深清记录，每条独立填写前后照片和完成状态。'
+                      : '可连续添加多条维修记录，每条独立填写前后照片和完成状态。'
+              }
             >
-              {kind === 'maintenance'
+              {!kind ? (
+                <View style={styles.emptyKindCard}>
+                  <Ionicons name="arrow-up-circle-outline" size={22} color="#2563EB" />
+                  <Text style={styles.emptyKindTitle}>请先选择反馈类型</Text>
+                  <Text style={styles.emptyKindText}>选择房源维修、深度清洁或日用品反馈后，再填写对应记录。</Text>
+                </View>
+              ) : kind === 'maintenance'
                   ? maintenanceDrafts.map((draft, index) => (
                       <View key={draft.clientId} style={styles.createCard}>
                         <View style={styles.createCardHeader}>
@@ -1501,7 +2165,7 @@ export default function FeedbackFormScreen(props: Props) {
                         <Text style={styles.createSectionTitle}>现场照片</Text>
                         <Text style={styles.label}>维修前照片</Text>
                         <UploadButtons onCamera={() => appendMaintenancePhoto(draft.clientId, 'media', 'camera')} onLibrary={() => appendMaintenancePhoto(draft.clientId, 'media', 'library')} />
-                        <PhotoStrip urls={draft.media} onPress={openViewer} onRemove={(photoIndex) => removeMaintenancePhoto(draft.clientId, 'media', photoIndex)} />
+                        <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} localPreviewByReference={localPreviewByReference} urls={draft.media} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} onRemove={(photoIndex) => removeMaintenancePhoto(draft.clientId, 'media', photoIndex)} />
                       </View>
                       <View style={styles.createSection}>
                         <Text style={styles.createSectionTitle}>完成信息</Text>
@@ -1520,7 +2184,7 @@ export default function FeedbackFormScreen(props: Props) {
                           <View style={styles.completionBlock}>
                             <Text style={styles.label}>维修后照片（必填）</Text>
                             <UploadButtons onCamera={() => appendMaintenancePhoto(draft.clientId, 'completionAfterPhotos', 'camera')} onLibrary={() => appendMaintenancePhoto(draft.clientId, 'completionAfterPhotos', 'library')} />
-                            <PhotoStrip urls={draft.completionAfterPhotos} onPress={openViewer} onRemove={(photoIndex) => removeMaintenancePhoto(draft.clientId, 'completionAfterPhotos', photoIndex)} />
+                            <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} localPreviewByReference={localPreviewByReference} urls={draft.completionAfterPhotos} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} onRemove={(photoIndex) => removeMaintenancePhoto(draft.clientId, 'completionAfterPhotos', photoIndex)} />
                             <Text style={styles.label}>维修备注（可选）</Text>
                             <TextInput value={draft.completionNote} onChangeText={(v) => updateMaintenanceDraft(draft.clientId, (item) => ({ ...item, completionNote: v }))} style={[styles.input, styles.textarea]} placeholder="例如：已维修完成，可正常使用" placeholderTextColor="#9CA3AF" multiline />
                           </View>
@@ -1556,7 +2220,7 @@ export default function FeedbackFormScreen(props: Props) {
                           <Text style={styles.createSectionTitle}>现场照片</Text>
                           <Text style={styles.label}>深度清洁前照片</Text>
                           <UploadButtons onCamera={() => appendDeepCleaningPhoto(draft.clientId, 'media', 'camera')} onLibrary={() => appendDeepCleaningPhoto(draft.clientId, 'media', 'library')} />
-                          <PhotoStrip urls={draft.media} onPress={openViewer} onRemove={(photoIndex) => removeDeepCleaningPhoto(draft.clientId, 'media', photoIndex)} />
+                          <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} localPreviewByReference={localPreviewByReference} urls={draft.media} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} onRemove={(photoIndex) => removeDeepCleaningPhoto(draft.clientId, 'media', photoIndex)} />
                         </View>
                         <View style={styles.createSection}>
                           <Text style={styles.createSectionTitle}>完成信息</Text>
@@ -1585,7 +2249,7 @@ export default function FeedbackFormScreen(props: Props) {
                               </Pressable>
                               <Text style={styles.label}>深度清洁后照片（必填）</Text>
                               <UploadButtons onCamera={() => appendDeepCleaningPhoto(draft.clientId, 'completionAfterPhotos', 'camera')} onLibrary={() => appendDeepCleaningPhoto(draft.clientId, 'completionAfterPhotos', 'library')} />
-                              <PhotoStrip urls={draft.completionAfterPhotos} onPress={openViewer} onRemove={(photoIndex) => removeDeepCleaningPhoto(draft.clientId, 'completionAfterPhotos', photoIndex)} />
+                              <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} localPreviewByReference={localPreviewByReference} urls={draft.completionAfterPhotos} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} onRemove={(photoIndex) => removeDeepCleaningPhoto(draft.clientId, 'completionAfterPhotos', photoIndex)} />
                               <Text style={styles.label}>处理说明（可选）</Text>
                               <TextInput value={draft.completionNote} onChangeText={(v) => updateDeepCleaningDraft(draft.clientId, (item) => ({ ...item, completionNote: v }))} style={[styles.input, styles.textarea]} placeholder="例如：已经深清完成，异味已消除" placeholderTextColor="#9CA3AF" multiline />
                             </View>
@@ -1646,7 +2310,7 @@ export default function FeedbackFormScreen(props: Props) {
                           <Text style={styles.createSectionTitle}>现场照片与备注</Text>
                           <Text style={styles.label}>照片</Text>
                           <UploadButtons onCamera={() => appendDailyPhoto(draft.clientId, 'camera')} onLibrary={() => appendDailyPhoto(draft.clientId, 'library')} />
-                          <PhotoStrip urls={draft.media} onPress={openViewer} onRemove={(photoIndex) => removeDailyDraftPhoto(draft.clientId, photoIndex)} />
+                          <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} localPreviewByReference={localPreviewByReference} urls={draft.media} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} onRemove={(photoIndex) => removeDailyDraftPhoto(draft.clientId, photoIndex)} />
                           <Text style={styles.label}>备注</Text>
                           <TextInput value={draft.note} onChangeText={(v) => updateDailyDraft(draft.clientId, (item) => ({ ...item, note: v }))} style={[styles.input, styles.textarea]} placeholder="备注或照片至少填一个" placeholderTextColor="#9CA3AF" multiline />
                         </View>
@@ -1655,6 +2319,11 @@ export default function FeedbackFormScreen(props: Props) {
               <View style={styles.batchActions}>
                 <Pressable
                   onPress={() => {
+                    if (!kind) {
+                      setKindError(true)
+                      scrollRef.current?.scrollTo({ y: 0, animated: true })
+                      return
+                    }
                     if (kind === 'maintenance') setMaintenanceDrafts((prev) => [...prev, buildMaintenanceDraft()])
                     else if (kind === 'deep_cleaning') setDeepCleaningDrafts((prev) => [...prev, buildDeepCleaningDraft()])
                     else setDailyDrafts((prev) => [...prev, buildDailyDraft()])
@@ -1673,7 +2342,7 @@ export default function FeedbackFormScreen(props: Props) {
               <View style={styles.historyHeader}>
                 <View style={styles.historyTitleWrap}>
                   <Text style={styles.historyTitle}>本房源历史反馈</Text>
-                  <Text style={styles.historySubtitle}>处理中反馈默认展开，待复核记录默认收起，可按需查看。</Text>
+                  <Text style={styles.historySubtitle}>先查看已报问题；相同问题无需重复提交。处理中反馈默认展开，待复核记录可按需查看。</Text>
                 </View>
                 <Pressable onPress={() => setExpanded((v) => !v)} style={({ pressed }) => [styles.historyToggle, pressed ? styles.pressed : null]}>
                   <Text style={styles.historyToggleText}>{expanded ? '收起' : '展开'}</Text>
@@ -1689,29 +2358,40 @@ export default function FeedbackFormScreen(props: Props) {
                   </View>
                 </View>
               ) : null}
-              {listError ? <Text style={styles.muted}>{listError}</Text> : null}
+              {listError ? (
+                <View accessibilityRole="alert" style={styles.historyErrorCard}>
+                  <Text style={styles.historyErrorText}>{listError}</Text>
+                  <AppButton
+                    accessibilityLabel="重新加载历史反馈"
+                    label="重新加载"
+                    onPress={() => { void refreshLists({ force: true }) }}
+                    style={styles.historyRetryButton}
+                    tone="outline"
+                  />
+                </View>
+              ) : null}
               {expanded && !listError ? (
                 <View style={styles.historyGroups}>
                   <View style={styles.historySection}>
                     <View style={styles.historySectionHead}>
                       <View style={styles.historySectionTextWrap}>
                         <Text style={styles.historySectionTitle}>处理中反馈</Text>
-                        <Text style={styles.historySectionSubtitle}>先看当前还需要继续跟进的记录，再按类型查看。</Text>
+                        <Text style={styles.historySectionSubtitle}>先核对已报问题；相同问题无需重复提交。</Text>
                       </View>
                       <View style={styles.historySectionCount}>
                         <Text style={styles.historySectionCountText}>{pendingHistoryCount}</Text>
                       </View>
                     </View>
-                    <FeedbackGroup title="房源维修" items={pendingGroups.maintenance} emptyText="暂无处理中维修反馈" onView={setDetailItem} onEdit={requestRecordEdit} onPreview={openViewer} />
-                    <FeedbackGroup title="深度清洁" items={pendingGroups.deep} emptyText="暂无处理中深清反馈" onView={setDetailItem} onEdit={requestRecordEdit} onPreview={openViewer} />
-                    <FeedbackGroup title="日用品反馈" items={pendingGroups.daily} emptyText="暂无处理中日用品反馈" onView={setDetailItem} onEdit={requestRecordEdit} onPreview={openViewer} />
+                    <FeedbackGroup token={token} accessTaskId={feedbackSourceTaskId} title="房源维修" items={pendingGroups.maintenance} emptyText="暂无处理中维修反馈" deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
+                    <FeedbackGroup token={token} accessTaskId={feedbackSourceTaskId} title="深度清洁" items={pendingGroups.deep} emptyText="暂无处理中深清反馈" deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
+                    <FeedbackGroup token={token} accessTaskId={feedbackSourceTaskId} title="日用品反馈" items={pendingGroups.daily} emptyText="暂无处理中日用品反馈" deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />
                   </View>
 
                   <View style={styles.historySection}>
                     <View style={styles.historySectionHead}>
                       <View style={styles.historySectionTextWrap}>
                         <Text style={styles.historySectionTitle}>已完成待复核</Text>
-                        <Text style={styles.historySectionSubtitle}>已提交完工信息，等待后续复核确认。</Text>
+                        <Text style={styles.historySectionSubtitle}>已提交完工或日用品处理信息，等待后续复核确认。</Text>
                       </View>
                       <View style={styles.historySectionHeadActions}>
                         <View style={styles.historySectionCount}>
@@ -1722,7 +2402,7 @@ export default function FeedbackFormScreen(props: Props) {
                         </Pressable>
                       </View>
                     </View>
-                    {resolvedExpanded ? <FeedbackGroup title="完工记录" items={resolved} emptyText="暂无待复核记录" onView={setDetailItem} onEdit={requestRecordEdit} onPreview={openViewer} /> : null}
+                    {resolvedExpanded ? <FeedbackGroup token={token} accessTaskId={feedbackSourceTaskId} title="完工记录" items={resolved} emptyText="暂无待复核记录" deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} /> : null}
                   </View>
                 </View>
               ) : null}
@@ -1738,10 +2418,22 @@ export default function FeedbackFormScreen(props: Props) {
             <View style={styles.modalTop}>
               <Text style={styles.modalTitle}>反馈详情</Text>
               <View style={styles.modalActions}>
-                {detailItem ? (
+                {detailItem?.capabilities?.can_edit_content ? (
                   <Pressable onPress={() => requestRecordEdit(detailItem)} style={({ pressed }) => [styles.headerActionBtn, pressed ? styles.pressed : null]}>
                     <Ionicons name="create-outline" size={16} color="#2563EB" />
                     <Text style={styles.headerActionText}>编辑记录</Text>
+                  </Pressable>
+                ) : null}
+                {detailItem?.capabilities?.can_move_category ? (
+                  <Pressable onPress={() => requestMoveFeedback(detailItem)} style={({ pressed }) => [styles.headerActionBtn, pressed ? styles.pressed : null]}>
+                    <Ionicons name="swap-horizontal-outline" size={16} color="#2563EB" />
+                    <Text style={styles.headerActionText}>调整类型</Text>
+                  </Pressable>
+                ) : null}
+                {detailItem?.capabilities?.can_delete ? (
+                  <Pressable onPress={() => requestDeleteFeedback(detailItem)} style={({ pressed }) => [styles.headerDangerBtn, pressed ? styles.pressed : null]}>
+                    <Ionicons name="trash-outline" size={16} color="#DC2626" />
+                    <Text style={styles.headerDangerText}>删除</Text>
                   </Pressable>
                 ) : null}
                 <Pressable onPress={closeDetailModal}><Text style={styles.closeText}>关闭</Text></Pressable>
@@ -1756,7 +2448,13 @@ export default function FeedbackFormScreen(props: Props) {
                 {detailItem?.kind === 'daily_necessities' && normalizeUrls(detailItem?.media_urls).length ? (
                   <>
                     <Text style={styles.label}>原始反馈照片</Text>
-                    <PhotoStrip urls={normalizeUrls(detailItem?.media_urls)} onPress={openViewer} />
+                    <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} urls={normalizeUrls(detailItem?.media_urls)} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} />
+                  </>
+                ) : null}
+                {detailItem?.kind === 'daily_necessities' && normalizeUrls(detailItem?.repair_photo_urls).length ? (
+                  <>
+                    <Text style={styles.label}>更换后照片</Text>
+                    <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} urls={normalizeUrls(detailItem?.repair_photo_urls)} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} />
                   </>
                 ) : null}
 
@@ -1786,19 +2484,64 @@ export default function FeedbackFormScreen(props: Props) {
                       {detailRecord.before_photos.length ? (
                         <>
                           <Text style={styles.photoSectionLabel}>{detailItem.kind === 'deep_cleaning' ? '深度清洁前照片' : '维修前照片'}</Text>
-                          <PhotoStrip urls={detailRecord.before_photos} onPress={openViewer} />
+                          <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} urls={detailRecord.before_photos} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} />
                         </>
                       ) : null}
                       {detailRecord.after_photos.length ? (
                         <>
                           <Text style={styles.photoSectionLabel}>{detailItem.kind === 'deep_cleaning' ? '深度清洁后照片' : '维修后照片'}</Text>
-                          <PhotoStrip urls={detailRecord.after_photos} onPress={openViewer} />
+                          <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} urls={detailRecord.after_photos} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} />
                         </>
                       ) : null}
                     </View>
                   </>
                 ) : null}
               </ScrollView>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={moveOpen} transparent presentationStyle="overFullScreen" animationType="fade" onRequestClose={() => { if (!moveSaving) { setMoveOpen(false); setMoveItem(null) } }}>
+        <View style={styles.modalRoot}>
+          <Pressable style={styles.modalBackdrop} onPress={() => { if (!moveSaving) { setMoveOpen(false); setMoveItem(null) } }} />
+          <View style={styles.modalSheet}>
+            <View style={styles.modalTop}>
+              <Text style={styles.modalTitle}>调整反馈类型</Text>
+              <Pressable disabled={moveSaving} onPress={() => { setMoveOpen(false); setMoveItem(null) }}><Text style={styles.closeText}>关闭</Text></Pressable>
+            </View>
+            <View style={styles.modalBody}>
+              <View style={styles.modalScrollBody}>
+                <Text style={styles.helperText}>
+                  {moveItem ? `当前类型：${feedbackKindLabel(moveItem.kind)}。调整后会移动到对应分组。` : '请选择目标类型。'}
+                </Text>
+                <View style={styles.chipsRow}>
+                  {(['maintenance', 'deep_cleaning', 'daily_necessities'] as Kind[]).map((value) => (
+                    <Pressable
+                      key={`move-${value}`}
+                      disabled={moveSaving || value === moveItem?.kind}
+                      onPress={() => setMoveTargetKind(value)}
+                      style={({ pressed }) => [
+                        styles.chip,
+                        moveTargetKind === value ? styles.chipActive : null,
+                        value === moveItem?.kind ? styles.chipDisabled : null,
+                        pressed ? styles.pressed : null,
+                      ]}
+                    >
+                      <Text style={[styles.chipText, moveTargetKind === value ? styles.chipTextActive : null, value === moveItem?.kind ? styles.chipTextDisabled : null]}>
+                        {feedbackKindLabel(value)}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Pressable
+                  onPress={confirmMoveFeedback}
+                  disabled={moveSaving || !moveItem || moveTargetKind === moveItem.kind}
+                  style={({ pressed }) => [styles.submitBtn, moveSaving || !moveItem || moveTargetKind === moveItem.kind ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
+                >
+                  <Text style={styles.submitText}>{moveSaving ? t('common_loading') : '确认调整'}</Text>
+                </Pressable>
+              </View>
             </View>
           </View>
         </View>
@@ -1847,15 +2590,7 @@ export default function FeedbackFormScreen(props: Props) {
                     onCamera={() => appendProjectPhoto('before_photos', 'camera', { continuousCamera: recordEditFeedback?.kind === 'deep_cleaning' })}
                     onLibrary={() => appendProjectPhoto('before_photos', 'library')}
                   />
-                  <PhotoStrip urls={projectForm.before_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('before_photos', photoIndex)} />
-                  <Text style={styles.label}>{recordEditFeedback.kind === 'deep_cleaning' ? '处理备注（可选）' : '维修备注（可选）'}</Text>
-                  <TextInput value={String(projectForm.note || '')} onChangeText={(v) => setProjectForm((prev) => ({ ...prev, note: v }))} style={[styles.input, styles.textarea]} placeholder="处理说明" placeholderTextColor="#9CA3AF" multiline />
-                  <Text style={styles.label}>{recordEditFeedback.kind === 'deep_cleaning' ? '深度清洁后照片（可选）' : '维修后照片（可选）'}</Text>
-                  <UploadButtons
-                    onCamera={() => appendProjectPhoto('after_photos', 'camera', { continuousCamera: recordEditFeedback?.kind === 'deep_cleaning' })}
-                    onLibrary={() => appendProjectPhoto('after_photos', 'library')}
-                  />
-                  <PhotoStrip urls={projectForm.after_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('after_photos', photoIndex)} />
+                  <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} localPreviewByReference={localPreviewByReference} urls={projectForm.before_photos} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} onRemove={(photoIndex) => removeProjectPhoto('before_photos', photoIndex)} />
                   </>
                 ) : (
                   <Text style={styles.muted}>记录加载中，请重新打开编辑。</Text>
@@ -1923,13 +2658,13 @@ export default function FeedbackFormScreen(props: Props) {
                         onCamera={() => appendProjectPhoto('before_photos', 'camera', { continuousCamera: actionFeedback?.kind === 'deep_cleaning' })}
                         onLibrary={() => appendProjectPhoto('before_photos', 'library')}
                       />
-                      <PhotoStrip urls={projectForm.before_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('before_photos', photoIndex)} />
+                      <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} localPreviewByReference={localPreviewByReference} urls={projectForm.before_photos} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} onRemove={(photoIndex) => removeProjectPhoto('before_photos', photoIndex)} />
                       <Text style={styles.label}>后照片（必填）</Text>
                       <UploadButtons
                         onCamera={() => appendProjectPhoto('after_photos', 'camera', { continuousCamera: actionFeedback?.kind === 'deep_cleaning' })}
                         onLibrary={() => appendProjectPhoto('after_photos', 'library')}
                       />
-                      <PhotoStrip urls={projectForm.after_photos} onPress={openViewer} onRemove={(photoIndex) => removeProjectPhoto('after_photos', photoIndex)} />
+                      <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} localPreviewByReference={localPreviewByReference} urls={projectForm.after_photos} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} onRemove={(photoIndex) => removeProjectPhoto('after_photos', photoIndex)} />
                     </>
                   ) : null}
                   </>
@@ -1954,15 +2689,6 @@ export default function FeedbackFormScreen(props: Props) {
             </View>
             <View style={styles.modalBody}>
               <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalScrollBody} nestedScrollEnabled>
-                <Text style={styles.label}>状态</Text>
-                <View style={styles.chipsRow}>
-                  {DAILY_STATUS_OPTIONS.map((x) => (
-                    <Pressable key={x.value} onPress={() => setDailyEditStatus(x.value)} style={({ pressed }) => [styles.chip, dailyEditStatus === x.value ? styles.chipActive : null, pressed ? styles.pressed : null]}>
-                      <Text style={[styles.chipText, dailyEditStatus === x.value ? styles.chipTextActive : null]}>{x.label}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-
                 <Text style={styles.label}>物品名称</Text>
                 <TextInput
                   value={dailyEditItemName}
@@ -1994,7 +2720,7 @@ export default function FeedbackFormScreen(props: Props) {
                 <TextInput value={dailyEditQty} onChangeText={(v) => setDailyEditQty(v.replace(/[^\d]/g, ''))} style={styles.input} placeholder="例如：2" placeholderTextColor="#9CA3AF" keyboardType="number-pad" />
                 <Text style={styles.label}>照片</Text>
                 <UploadButtons onCamera={() => appendDailyEditPhoto('camera')} onLibrary={() => appendDailyEditPhoto('library')} />
-                <PhotoStrip urls={dailyEditMedia} onPress={openViewer} onRemove={removeDailyEditPhoto} />
+                <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} localPreviewByReference={localPreviewByReference} urls={dailyEditMedia} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} onRemove={removeDailyEditPhoto} />
                 <Text style={styles.label}>备注</Text>
                 <TextInput value={dailyEditNote} onChangeText={setDailyEditNote} style={[styles.input, styles.textarea]} placeholder="备注或照片至少填一个" placeholderTextColor="#9CA3AF" multiline />
               </ScrollView>
@@ -2022,18 +2748,13 @@ export default function FeedbackFormScreen(props: Props) {
             >
             {viewerUrls.map((u, idx) => (
                 <View key={`${u}-${idx}`} style={[styles.viewerSlide, { width: screenWidth }]}>
-                <Image source={{ uri: toAbsoluteUrl(u) }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+                <CleaningMediaPreview token={token} reference={isLocalFeedbackDraftReference(u) ? undefined : u} localUri={isLocalFeedbackDraftReference(u) ? u : localPreviewByReference[u]} accessTaskId={viewerAccessTaskId} loadPreview={idx === viewerIndex} style={{ width: '100%', height: '100%' }} />
               </View>
             ))}
             </ScrollView>
             <View style={[styles.viewerTop, { paddingTop: Math.max(insets.top, 12) }]}>
               <Pressable onPress={closeViewer}><Text style={styles.viewerText}>关闭</Text></Pressable>
               {viewerUrls.length ? <Text style={styles.viewerCounter}>{`${Math.min(viewerIndex + 1, viewerUrls.length)}/${viewerUrls.length}`}</Text> : null}
-              {viewerUrls[viewerIndex] ? (
-                <Pressable onPress={() => Linking.openURL(viewerUrls[viewerIndex]).catch(() => Alert.alert(t('common_error'), '打开失败'))}>
-                  <Text style={styles.viewerText}>浏览器打开</Text>
-                </Pressable>
-              ) : null}
             </View>
           </Pressable>
         </Pressable>
@@ -2080,22 +2801,18 @@ export default function FeedbackFormScreen(props: Props) {
 function UploadButtons(props: { onCamera: () => void; onLibrary: () => void }) {
   return (
     <View style={styles.photoRow}>
-      <Pressable onPress={props.onCamera} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
-        <Text style={styles.photoBtnText}>拍照上传</Text>
-      </Pressable>
-      <Pressable onPress={props.onLibrary} style={({ pressed }) => [styles.photoBtn, pressed ? styles.pressed : null]}>
-        <Text style={styles.photoBtnText}>相册选择</Text>
-      </Pressable>
+      <AppButton label="拍照上传" onPress={props.onCamera} tone="outline" style={styles.photoBtn} />
+      <AppButton label="相册选择" onPress={props.onLibrary} tone="outline" style={styles.photoBtn} />
     </View>
   )
 }
 
-function StepCard(props: { step: string; title: string; subtitle?: string; children: React.ReactNode }) {
+function StepCard(props: { step: string; title: string; subtitle?: string; highlight?: boolean; children: React.ReactNode }) {
   return (
-    <View style={styles.stepCard}>
+    <View style={[styles.stepCard, props.highlight ? styles.stepCardError : null]}>
       <View style={styles.stepHeader}>
-        <View style={styles.stepBadge}>
-          <Text style={styles.stepBadgeText}>{props.step}</Text>
+        <View style={[styles.stepBadge, props.highlight ? styles.stepBadgeError : null]}>
+          <Text style={[styles.stepBadgeText, props.highlight ? styles.stepBadgeTextError : null]}>{props.step}</Text>
         </View>
         <View style={styles.stepHeaderText}>
           <Text style={styles.stepTitle}>{props.title}</Text>
@@ -2107,14 +2824,14 @@ function StepCard(props: { step: string; title: string; subtitle?: string; child
   )
 }
 
-function PhotoStrip(props: { urls: string[]; onPress: (urls: string[], index: number) => void; onRemove?: (index: number) => void }) {
+function PhotoStrip(props: { token?: string | null; accessTaskId?: string | null; localPreviewByReference?: Record<string, string>; urls: string[]; onPress: (urls: string[], index: number) => void; onRemove?: (index: number) => void }) {
   if (!props.urls.length) return null
   return (
     <View style={styles.thumbRow}>
       {props.urls.map((u, idx) => (
         <View key={`${u}-${idx}`} style={styles.thumbItemWrap}>
           <Pressable onPress={() => props.onPress(props.urls, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
-            <Image source={{ uri: toAbsoluteUrl(u) }} style={styles.thumb} />
+            <CleaningMediaImage token={props.token} localUri={isLocalFeedbackDraftReference(u) ? u : props.localPreviewByReference?.[u]} remoteReference={isLocalFeedbackDraftReference(u) ? undefined : u} accessTaskId={props.accessTaskId} style={styles.thumb} />
           </Pressable>
           {props.onRemove ? (
             <Pressable onPress={() => props.onRemove?.(idx)} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
@@ -2127,7 +2844,19 @@ function PhotoStrip(props: { urls: string[]; onPress: (urls: string[], index: nu
   )
 }
 
-function FeedbackGroup(props: { title: string; items: PropertyFeedback[]; emptyText?: string; onView: (item: PropertyFeedback) => void; onEdit: (item: PropertyFeedback) => void; onPreview: (urls: string[], index: number) => void }) {
+function FeedbackGroup(props: {
+  token?: string | null
+  accessTaskId?: string | null
+  title: string
+  items: PropertyFeedback[]
+  emptyText?: string
+  deleteBusyId?: string | null
+  onView: (item: PropertyFeedback) => void
+  onEdit: (item: PropertyFeedback) => void
+  onMove: (item: PropertyFeedback) => void
+  onDelete: (item: PropertyFeedback) => void
+  onPreview: (urls: string[], index: number, accessTaskId?: string | null) => void
+}) {
   return (
     <View style={styles.groupBlock}>
       <View style={styles.groupHead}>
@@ -2139,7 +2868,7 @@ function FeedbackGroup(props: { title: string; items: PropertyFeedback[]; emptyT
       {props.items.length ? (
         props.items.map((item) => {
           const previewUrls = feedbackPreviewUrls(item)
-          const previewUrl = previewUrls[0] ? toAbsoluteUrl(previewUrls[0]) : ''
+          const previewUrl = previewUrls[0] || ''
           return (
             <View key={`${item.kind}:${item.id}`} style={styles.feedbackItem}>
               <View style={styles.feedbackRow}>
@@ -2148,8 +2877,8 @@ function FeedbackGroup(props: { title: string; items: PropertyFeedback[]; emptyT
                   <Text style={styles.feedbackMeta}>{statusLabel(item)}</Text>
                 </View>
                 {previewUrl ? (
-                  <Pressable onPress={() => props.onPreview(previewUrls, 0)} style={({ pressed }) => [styles.feedbackThumbWrap, pressed ? styles.pressed : null]}>
-                    <Image source={{ uri: previewUrl }} style={styles.feedbackThumb} resizeMode="cover" />
+                  <Pressable accessibilityRole="button" accessibilityLabel="查看反馈照片" onPress={() => props.onPreview(previewUrls, 0, props.accessTaskId)} style={({ pressed }) => [styles.feedbackThumbWrap, pressed ? styles.pressed : null]}>
+                    <CleaningMediaImage token={props.token} remoteReference={previewUrl} accessTaskId={props.accessTaskId} style={styles.feedbackThumb} resizeMode="cover" />
                     {previewUrls.length > 1 ? (
                       <View style={styles.feedbackThumbBadge}>
                         <Text style={styles.feedbackThumbBadgeText}>{previewUrls.length}</Text>
@@ -2157,14 +2886,33 @@ function FeedbackGroup(props: { title: string; items: PropertyFeedback[]; emptyT
                     ) : null}
                   </Pressable>
                 ) : null}
-                <View style={styles.feedbackActions}>
-                  <Pressable onPress={() => props.onView(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
-                    <Ionicons name="eye-outline" size={18} color="#2563EB" />
-                  </Pressable>
-                  <Pressable onPress={() => props.onEdit(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
+              </View>
+              <View style={styles.feedbackActions}>
+                <Pressable accessibilityRole="button" accessibilityLabel="查看反馈详情" onPress={() => props.onView(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
+                  <Ionicons name="eye-outline" size={18} color="#2563EB" />
+                </Pressable>
+                {item.capabilities?.can_edit_content ? (
+                  <Pressable accessibilityRole="button" accessibilityLabel="编辑反馈记录" onPress={() => props.onEdit(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
                     <Ionicons name="create-outline" size={18} color="#2563EB" />
                   </Pressable>
-                </View>
+                ) : null}
+                {item.capabilities?.can_move_category ? (
+                  <Pressable accessibilityRole="button" accessibilityLabel="调整反馈类型" onPress={() => props.onMove(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
+                    <Ionicons name="swap-horizontal-outline" size={18} color="#2563EB" />
+                  </Pressable>
+                ) : null}
+                {item.capabilities?.can_delete ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="删除反馈记录"
+                    accessibilityState={{ disabled: props.deleteBusyId === `${item.kind}:${item.id}` }}
+                    disabled={props.deleteBusyId === `${item.kind}:${item.id}`}
+                    onPress={() => props.onDelete(item)}
+                    style={({ pressed }) => [styles.iconBtnDanger, props.deleteBusyId === `${item.kind}:${item.id}` ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
+                  >
+                    <Ionicons name="trash-outline" size={18} color="#DC2626" />
+                  </Pressable>
+                ) : null}
               </View>
             </View>
           )
@@ -2181,9 +2929,12 @@ const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 40 },
   pageStack: { gap: 14 },
   stepCard: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 16, borderWidth: hairline(), borderColor: '#E5E7EB', shadowColor: '#0F172A', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 1, overflow: 'hidden' },
+  stepCardError: { borderColor: '#FCA5A5', backgroundColor: '#FFF7F7' },
   stepHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   stepBadge: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
+  stepBadgeError: { backgroundColor: '#FEE2E2' },
   stepBadgeText: { color: '#1D4ED8', fontWeight: '900', fontSize: 13 },
+  stepBadgeTextError: { color: '#DC2626' },
   stepHeaderText: { flex: 1 },
   stepTitle: { fontSize: 18, fontWeight: '900', color: '#111827' },
   stepSubtitle: { marginTop: 4, color: '#6B7280', fontWeight: '600', lineHeight: 18 },
@@ -2204,6 +2955,9 @@ const styles = StyleSheet.create({
   textarea: { height: 112, minHeight: 112, paddingTop: 12, paddingBottom: 12, textAlignVertical: 'top' },
   helperText: { marginTop: 6, color: '#64748B', fontSize: 12, lineHeight: 17, fontWeight: '600' },
   errorText: { marginTop: 6, color: '#DC2626', fontSize: 12, fontWeight: '700' },
+  emptyKindCard: { marginTop: 12, borderRadius: 16, borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', padding: 16, alignItems: 'flex-start', gap: 6 },
+  emptyKindTitle: { color: '#1D4ED8', fontSize: 15, fontWeight: '900' },
+  emptyKindText: { color: '#475569', fontSize: 13, fontWeight: '700', lineHeight: 19 },
   suggestList: { marginTop: 8, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E2E8F0', overflow: 'hidden' },
   suggestItem: { paddingHorizontal: 12, paddingVertical: 11, borderBottomWidth: hairline(), borderBottomColor: '#E5E7EB' },
   suggestItemTitle: { color: '#111827', fontWeight: '800' },
@@ -2211,11 +2965,12 @@ const styles = StyleSheet.create({
   chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 999, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB' },
   chipActive: { backgroundColor: '#DBEAFE', borderColor: '#93C5FD' },
+  chipDisabled: { opacity: 0.45 },
   chipText: { color: '#111827', fontWeight: '700', fontSize: 12 },
   chipTextActive: { color: '#1D4ED8' },
-  photoRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
-  photoBtn: { backgroundColor: '#EFF6FF', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, borderWidth: hairline(), borderColor: '#BFDBFE' },
-  photoBtnText: { color: '#1D4ED8', fontWeight: '800' },
+  chipTextDisabled: { color: '#64748B' },
+  photoRow: { flexDirection: 'row', gap: layoutTokens.button.rowGap, alignItems: 'stretch' },
+  photoBtn: { flex: 1, minWidth: 0, backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' },
   choiceGrid: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   choiceCard: { flex: 1, minWidth: 130, borderRadius: 16, borderWidth: hairline(), borderColor: '#D1D5DB', backgroundColor: '#F8FAFC', paddingHorizontal: 14, paddingVertical: 12 },
   choiceCardActive: { backgroundColor: '#EFF6FF', borderColor: '#93C5FD' },
@@ -2226,7 +2981,7 @@ const styles = StyleSheet.create({
   createCard: { marginTop: 12, borderRadius: 18, backgroundColor: '#F8FAFC', borderWidth: hairline(), borderColor: '#DCE4F2', overflow: 'hidden' },
   createCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: hairline(), borderBottomColor: '#E2E8F0', backgroundColor: '#FFFFFF' },
   createCardTitle: { flex: 1, minWidth: 0, fontSize: 16, fontWeight: '900', color: '#111827' },
-  removeBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: '#FEE2E2' },
+  removeBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 999, backgroundColor: '#FEE2E2', alignItems: 'center', justifyContent: 'center' },
   removeBtnText: { color: '#DC2626', fontWeight: '800', fontSize: 12 },
   createSection: { margin: 12, marginTop: 0, padding: 14, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E8EDF5' },
   createSectionTitle: { fontSize: 13, fontWeight: '900', color: '#475569', letterSpacing: 0.3 },
@@ -2250,14 +3005,14 @@ const styles = StyleSheet.create({
   thumbRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
   thumbItemWrap: { position: 'relative' },
   thumbWrap: { borderRadius: 10, overflow: 'hidden' },
-  thumb: { width: 74, height: 74, borderRadius: 10, backgroundColor: '#E5E7EB' },
+  thumb: { width: 96, height: 96, borderRadius: 10, backgroundColor: '#E5E7EB' },
   thumbDeleteBtn: { position: 'absolute', right: 4, top: 4, width: 20, height: 20, borderRadius: 10, backgroundColor: 'rgba(17,24,39,0.76)', alignItems: 'center', justifyContent: 'center' },
   submitWrap: { marginTop: 2, marginBottom: 2 },
   batchActions: { marginTop: 16, gap: 10 },
-  secondaryBtn: { borderRadius: 16, backgroundColor: '#EFF6FF', paddingVertical: 14, alignItems: 'center', borderWidth: hairline(), borderColor: '#BFDBFE' },
+  secondaryBtn: { minHeight: layoutTokens.button.height, borderRadius: 16, backgroundColor: '#EFF6FF', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, alignItems: 'center', justifyContent: 'center', borderWidth: hairline(), borderColor: '#BFDBFE' },
   secondaryBtnText: { color: '#1D4ED8', fontWeight: '900', fontSize: 15 },
   batchSubmitBtn: { marginTop: 2 },
-  submitBtn: { borderRadius: 16, backgroundColor: '#111827', paddingVertical: 15, alignItems: 'center' },
+  submitBtn: { minHeight: layoutTokens.button.height, borderRadius: 16, backgroundColor: '#111827', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, alignItems: 'center', justifyContent: 'center' },
   submitDisabled: { opacity: 0.5 },
   submitText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
   historyCard: { backgroundColor: '#F8FAFC', borderRadius: 18, borderWidth: hairline(), borderColor: '#E2E8F0', padding: 14 },
@@ -2280,6 +3035,9 @@ const styles = StyleSheet.create({
   historySyncTextWrap: { flex: 1, minWidth: 0 },
   historySyncTitle: { color: '#1E3A8A', fontWeight: '900', fontSize: 13 },
   historySyncSubtitle: { color: '#1D4ED8', fontWeight: '700', fontSize: 12, marginTop: 2 },
+  historyErrorCard: { marginTop: 10, padding: 12, borderRadius: 14, borderWidth: hairline(), borderColor: '#FCD34D', backgroundColor: '#FFFBEB' },
+  historyErrorText: { color: '#92400E', fontWeight: '800', lineHeight: 20 },
+  historyRetryButton: { alignSelf: 'flex-start', marginTop: 10, minWidth: 120 },
   historyToggle: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: '#E2E8F0' },
   historyToggleText: { color: '#334155', fontWeight: '800', fontSize: 12 },
   historyGroups: { marginTop: 10, gap: 12 },
@@ -2304,15 +3062,15 @@ const styles = StyleSheet.create({
   groupCountText: { color: '#475569', fontSize: 11, fontWeight: '900' },
   groupEmptyText: { color: '#94A3B8', fontWeight: '700', fontSize: 12 },
   feedbackItem: { padding: 10, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E2E8F0', marginBottom: 8 },
-  feedbackRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  feedbackRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   feedbackMain: { flex: 1, minWidth: 0 },
   feedbackTitle: { fontWeight: '800', color: '#1F2937' },
   feedbackMeta: { marginTop: 6, color: '#64748B', fontWeight: '700', fontSize: 12 },
-  feedbackThumbWrap: { width: 56, height: 56, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', position: 'relative' },
+  feedbackThumbWrap: { width: 80, height: 80, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', position: 'relative', flexShrink: 0 },
   feedbackThumb: { width: '100%', height: '100%', backgroundColor: '#DBEAFE' },
   feedbackThumbBadge: { position: 'absolute', right: 4, bottom: 4, minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4, backgroundColor: 'rgba(15,23,42,0.78)', alignItems: 'center', justifyContent: 'center' },
   feedbackThumbBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
-  feedbackActions: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' },
+  feedbackActions: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', marginTop: 10 },
   muted: { color: '#6B7280', marginTop: 8, fontWeight: '600' },
   modalRoot: { flex: 1, backgroundColor: 'rgba(17,24,39,0.45)', alignItems: 'center', justifyContent: 'center', padding: 16 },
   modalBackdrop: { ...StyleSheet.absoluteFillObject },
@@ -2327,9 +3085,12 @@ const styles = StyleSheet.create({
   modalActions: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' },
   modalTitle: { flex: 1, minWidth: 0, fontWeight: '900', color: '#111827', fontSize: 16 },
   closeText: { color: '#2563EB', fontWeight: '800' },
-  headerActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE' },
+  headerActionBtn: { minHeight: layoutTokens.button.height, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 999, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE' },
   headerActionText: { color: '#2563EB', fontWeight: '800', fontSize: 12, textAlign: 'center' },
-  iconBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', alignItems: 'center', justifyContent: 'center' },
+  headerDangerBtn: { minHeight: layoutTokens.button.height, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 999, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FECACA' },
+  headerDangerText: { color: '#DC2626', fontWeight: '800', fontSize: 12, textAlign: 'center' },
+  iconBtn: { width: layoutTokens.button.iconTouchSize, height: layoutTokens.button.iconTouchSize, borderRadius: layoutTokens.button.iconTouchSize / 2, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', alignItems: 'center', justifyContent: 'center' },
+  iconBtnDanger: { width: layoutTokens.button.iconTouchSize, height: layoutTokens.button.iconTouchSize, borderRadius: layoutTokens.button.iconTouchSize / 2, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FECACA', alignItems: 'center', justifyContent: 'center' },
   detailHeadline: { color: '#111827', fontWeight: '900', fontSize: 16 },
   detailText: { marginTop: 10, color: '#374151', lineHeight: 20 },
   detailMeta: { marginTop: 8, color: '#6B7280', fontSize: 12, fontWeight: '700' },
@@ -2339,9 +3100,9 @@ const styles = StyleSheet.create({
   projectMeta: { marginTop: 6, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   projectText: { marginTop: 6, color: '#374151', lineHeight: 18 },
   inlineBtns: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' },
-  miniBtn: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10, backgroundColor: '#E5E7EB' },
+  miniBtn: { minHeight: layoutTokens.button.height, paddingHorizontal: 12, paddingVertical: 0, borderRadius: 10, backgroundColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   miniBtnText: { color: '#111827', fontWeight: '800', fontSize: 12, textAlign: 'center' },
-  miniBtnPrimary: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10, backgroundColor: '#2563EB' },
+  miniBtnPrimary: { minHeight: layoutTokens.button.height, paddingHorizontal: 12, paddingVertical: 0, borderRadius: 10, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   miniBtnPrimaryText: { color: '#FFFFFF', fontWeight: '800', fontSize: 12, textAlign: 'center' },
   photoSectionLabel: { marginTop: 8, color: '#374151', fontWeight: '800' },
   timeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
