@@ -25,7 +25,7 @@ import { prependNotice } from '../../lib/noticesStore'
 import { hasAnyRole } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getEffectiveTaskStatus, isTaskWorkflowProgressStatus } from '../../lib/taskVisualTheme'
-import { findWorkTaskItemByAnyId, patchWorkTaskItem, refreshWorkTasksFromServer, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
+import { findWorkTaskItemByAnyId, patchWorkTaskItem, requestWorkTasksRefresh, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
 import {
   completionPhotoTaskIdsFromTask,
   inspectionPhotoTaskIdsFromTask,
@@ -351,7 +351,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     const view: WorkTasksView = 'all'
     const { date_from, date_to } = buildDetailFallbackRange()
     setResolvingRemote(true)
-    refreshWorkTasksFromServer({ token, userId: String(user.id), date_from, date_to, view })
+    requestWorkTasksRefresh({ token, userId: String(user.id), date_from, date_to, view, mode: 'force', reason: 'manager_task_fallback' })
       .catch(() => null)
       .finally(() => {
         if (!cancelled) setResolvingRemote(false)
@@ -597,7 +597,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
       }
       if (token && user?.id) {
         const { date_from, date_to } = buildDetailFallbackRange()
-        refreshWorkTasksFromServer({ token, userId: String(user.id), date_from, date_to, view: 'all' }).catch(() => null)
+        requestWorkTasksRefresh({ token, userId: String(user.id), date_from, date_to, view: 'all', mode: 'force', reason: 'manager_task_saved' }).catch(() => null)
       }
       setKeysDirty(false)
       const skippedAll = !saveResult || saveResult?.skipped

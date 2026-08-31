@@ -65,7 +65,8 @@ import {
   makeWorkTasksBucketKey,
   patchWorkTaskItem,
   patchWorkTaskItems,
-  refreshWorkTasksFromServer,
+  requestWorkTasksRefresh,
+  setWorkTasksRefreshForeground,
   subscribeWorkTasks,
   type WorkTaskItem,
   type WorkTasksView,
@@ -905,7 +906,7 @@ export default function TasksScreen(props: Props) {
     return canManagerMode && mode === 'manager' ? view : 'mine'
   }, [canManagerMode, mode, view])
 
-  const refreshTasksData = useCallback(async (opts?: { silent?: boolean; preserveError?: boolean }) => {
+  const refreshTasksData = useCallback(async (opts?: { silent?: boolean; preserveError?: boolean; mode?: 'passive' | 'force'; reason?: string }) => {
     if (status !== 'signedIn' || !user?.id || !token) return
     const silent = opts?.silent === true
     const preserveError = opts?.preserveError === true
@@ -916,8 +917,17 @@ export default function TasksScreen(props: Props) {
     }
     try {
       await Promise.all([processKeyUploadQueue(token), processDayEndHandoverQueue(token)])
-      await refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
-      await activateWorkTasksRealtime({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
+      await requestWorkTasksRefresh({
+        token,
+        userId: user.id,
+        date_from: range.date_from,
+        date_to: range.date_to,
+        view: effectiveView,
+        mode: opts?.mode || 'force',
+        reason: opts?.reason || 'tasks_screen_refresh',
+      })
+      const realtimeActive = await activateWorkTasksRealtime({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
+      if (!realtimeActive) return
       await maybeFetchSlaAlerts()
       seedTaskNoticeBaseline(getWorkTasksSnapshot().items || [])
       setTaskNoticeArmed(true)
@@ -946,8 +956,8 @@ export default function TasksScreen(props: Props) {
       setTaskNoticeArmed(false)
       await initNoticesStore().catch(() => null)
       const bucketKey = makeWorkTasksBucketKey({ userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
-      await initWorkTasksStore({ bucketKey })
-      if (cancelled) return
+      const hydrated = await initWorkTasksStore({ bucketKey, session: { token, userId: user.id } })
+      if (!hydrated || cancelled) return
       const hydratedSnapshot = getWorkTasksSnapshot()
       const hasCachedItems = Array.isArray(hydratedSnapshot.items) && hydratedSnapshot.items.length > 0
       setHasInit(true)
@@ -955,7 +965,7 @@ export default function TasksScreen(props: Props) {
       setIsShowingCachedTasks(hasCachedItems)
       setTaskCacheHint(hasCachedItems ? buildTaskCacheHint(hydratedSnapshot.lastFullSyncTimestamp || null, false) : null)
       try {
-        await refreshTasksData({ silent: true })
+        await refreshTasksData({ silent: true, mode: 'force', reason: 'tasks_initial_load' })
       } catch (e: any) {
         if (!cancelled) handleTaskRefreshFailure(String((e as any)?.message || '加载失败'), false)
       }
@@ -970,7 +980,7 @@ export default function TasksScreen(props: Props) {
     const nav: any = props.navigation as any
     const onFocus = async () => {
       try {
-        await refreshTasksData({ silent: true, preserveError: true })
+        await refreshTasksData({ silent: true, preserveError: true, mode: 'passive', reason: 'tasks_screen_focus' })
       } catch {}
     }
     const unsub = nav && typeof nav.addListener === 'function' ? nav.addListener('focus', onFocus) : null
@@ -984,13 +994,15 @@ export default function TasksScreen(props: Props) {
   useEffect(() => {
     if (!token || !user?.id) return
     let cancelled = false
+    setWorkTasksRefreshForeground(AppState.currentState === 'active')
     const onAppActive = async () => {
       if (cancelled) return
       try {
-        await refreshTasksData({ silent: true, preserveError: true })
+        await refreshTasksData({ silent: true, preserveError: true, mode: 'passive', reason: 'tasks_app_active' })
       } catch {}
     }
     const sub = AppState.addEventListener('change', (nextState) => {
+      setWorkTasksRefreshForeground(nextState === 'active')
       if (nextState !== 'active') return
       void onAppActive()
     })
@@ -2062,7 +2074,15 @@ function showBanner(title: string, message: string) {
       await patchWorkTaskItems(localPatches)
       setReorderMode(false)
       showBanner('已保存', '顺序已保存')
-      void refreshWorkTasksFromServer({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: canManagerMode && mode === 'manager' ? view : 'mine' }).catch(() => null)
+      void requestWorkTasksRefresh({
+        token,
+        userId: user.id,
+        date_from: range.date_from,
+        date_to: range.date_to,
+        view: canManagerMode && mode === 'manager' ? view : 'mine',
+        mode: 'force',
+        reason: 'mixed_reorder_saved',
+      }).catch(() => null)
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
     } finally {

@@ -17,7 +17,7 @@ jest.mock('../../lib/storage', () => ({
 jest.mock('../../lib/workTasksStore', () => ({
   findWorkTaskItemByAnyId: jest.fn(() => mockWorkTask),
   findWorkTaskItemByAnyIds: jest.fn(() => null),
-  refreshWorkTasksFromServer: jest.fn(async () => {}),
+  requestWorkTasksRefresh: jest.fn(async () => {}),
 }))
 
 jest.mock('../../lib/authStorage', () => ({

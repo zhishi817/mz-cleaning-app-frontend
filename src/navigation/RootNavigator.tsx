@@ -8,7 +8,7 @@ import * as Notifications from 'expo-notifications'
 import Constants from 'expo-constants'
 import { useAuth } from '../lib/auth'
 import { useI18n } from '../lib/i18n'
-import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, refreshWorkTasksFromServer } from '../lib/workTasksStore'
+import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, requestWorkTasksRefresh } from '../lib/workTasksStore'
 import { getNoticesSnapshot, initNoticesStore, subscribeNotices } from '../lib/noticesStore'
 import { registerExpoPushToken } from '../lib/api'
 import { syncInboxNotifications } from '../lib/notificationInbox'
@@ -160,12 +160,14 @@ async function refreshWorkTasksForNotice(params: { token: string; user: any; tas
   const existingTask = findWorkTaskItemByAnyId(params.taskRouteId)
   const baseDateRaw = String(params.noticeData?.date || existingTask?.scheduled_date || (existingTask as any)?.date || '').slice(0, 10)
   const parsedBase = /^\d{4}-\d{2}-\d{2}$/.test(baseDateRaw) ? new Date(`${baseDateRaw}T00:00:00`) : new Date()
-  await refreshWorkTasksFromServer({
+  await requestWorkTasksRefresh({
     token: params.token,
     userId,
     date_from: formatDateKey(addDays(parsedBase, -7)),
     date_to: formatDateKey(addDays(parsedBase, 60)),
     view: isTaskManagerUser(params.user) ? 'all' : 'mine',
+    mode: 'force',
+    reason: 'notification_task_navigation',
   })
 }
 

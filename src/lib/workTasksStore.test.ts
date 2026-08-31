@@ -1,10 +1,44 @@
-import { getWorkTasksSnapshot, initWorkTasksStore, isSafePatchEvent, makeWorkTasksBucketKey, mergePatchIntoTask, mergeRemoteWorkTaskItems, patchWorkTaskItem, projectCleaningStatusForTask, refreshWorkTasksFromServer, type WorkTaskItem } from './workTasksStore'
+import {
+  activateWorkTasksRealtime,
+  deactivateWorkTasksRealtime,
+  establishWorkTasksSession,
+  getWorkTasksSnapshot,
+  initWorkTasksStore,
+  isSafePatchEvent,
+  makeWorkTasksBucketKey,
+  mergePatchIntoTask,
+  mergeRemoteWorkTaskItems,
+  patchWorkTaskItem,
+  projectCleaningStatusForTask,
+  requestWorkTasksRefresh,
+  setWorkTasksRefreshForeground,
+  type WorkTaskItem,
+} from './workTasksStore'
 
 jest.mock('react-native-sse', () => jest.fn())
 jest.mock('../config/env', () => ({ API_BASE_URL: 'https://api.example.com/api' }))
 jest.mock('./storage', () => ({ getJson: jest.fn(), setJson: jest.fn() }))
 jest.mock('./api', () => ({ listWorkTasks: jest.fn() }))
 jest.mock('./authEvents', () => ({ notifyAuthInvalidated: jest.fn() }))
+
+beforeEach(() => {
+  jest.useRealTimers()
+  const storage = require('./storage')
+  const api = require('./api')
+  storage.getJson.mockReset()
+  storage.getJson.mockResolvedValue(null)
+  storage.setJson.mockClear()
+  api.listWorkTasks.mockReset()
+  api.listWorkTasks.mockResolvedValue([])
+  deactivateWorkTasksRealtime()
+  establishWorkTasksSession({ token: 't1', userId: 'refresh-user' })
+  setWorkTasksRefreshForeground(true)
+})
+
+afterEach(() => {
+  deactivateWorkTasksRealtime()
+  jest.useRealTimers()
+})
 
 function makeTask(patch: Partial<WorkTaskItem>): WorkTaskItem {
   return {
@@ -81,9 +115,10 @@ test('does not let an in-flight stale list response overwrite a maintenance rece
   })
   store.getJson.mockResolvedValueOnce({ items: [assignedTask] })
   api.listWorkTasks.mockReturnValueOnce(staleResponse)
-  await initWorkTasksStore({ bucketKey })
+  establishWorkTasksSession({ token: 't1', userId })
+  await initWorkTasksStore({ bucketKey, session: { token: 't1', userId } })
 
-  const refresh = refreshWorkTasksFromServer({ token: 't1', userId, date_from: '2026-08-08', date_to: '2026-08-08', view: 'mine' })
+  const refresh = requestWorkTasksRefresh({ token: 't1', userId, date_from: '2026-08-08', date_to: '2026-08-08', view: 'mine', mode: 'force', reason: 'stale_receipt_test' })
   await Promise.resolve()
   await patchWorkTaskItem('property_maintenance:m-race', {
     status: 'pending_review',
@@ -97,6 +132,155 @@ test('does not let an in-flight stale list response overwrite a maintenance rece
     status: 'pending_review',
     maintenance_workflow: { status: 'pending_review', available_actions: [] },
   })
+})
+
+function refreshParams(overrides: Partial<{ token: string; userId: string; date_from: string; date_to: string; view: 'mine' | 'all' }> = {}) {
+  return {
+    token: 't1',
+    userId: 'refresh-user',
+    date_from: '2026-08-30',
+    date_to: '2026-08-30',
+    view: 'mine' as const,
+    ...overrides,
+  }
+}
+
+test('keeps the 60 second passive cooldown scoped to one user and date window', async () => {
+  const api = require('./api')
+  const today = refreshParams({ userId: 'scope-user', date_from: '2026-08-30', date_to: '2026-08-30' })
+  const tomorrow = refreshParams({ userId: 'scope-user', date_from: '2026-08-31', date_to: '2026-08-31' })
+  establishWorkTasksSession({ token: today.token, userId: today.userId })
+
+  await requestWorkTasksRefresh({ ...today, mode: 'force', reason: 'initial' })
+  await requestWorkTasksRefresh({ ...today, mode: 'passive', reason: 'focus' })
+  await requestWorkTasksRefresh({ ...tomorrow, mode: 'passive', reason: 'date_changed' })
+
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
+})
+
+test('coalesces continuous consistency events into one bounded trailing refresh', async () => {
+  jest.useFakeTimers()
+  const api = require('./api')
+  const params = refreshParams({ userId: 'consistency-user' })
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'initial' })
+  for (let index = 0; index < 12; index += 1) {
+    await requestWorkTasksRefresh({ ...params, mode: 'consistency', reason: `sse_${index}` })
+  }
+
+  await jest.advanceTimersByTimeAsync(59_999)
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+  await jest.advanceTimersByTimeAsync(1)
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
+})
+
+test('drops repeated focus refreshes during cooldown without scheduling a trailing refresh', async () => {
+  jest.useFakeTimers()
+  const api = require('./api')
+  const params = refreshParams({ userId: 'focus-user' })
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'initial' })
+  for (let index = 0; index < 10; index += 1) {
+    await requestWorkTasksRefresh({ ...params, mode: 'passive', reason: 'screen_focus' })
+  }
+
+  await jest.advanceTimersByTimeAsync(60_000)
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+})
+
+test('collapses force requests received while a refresh is running into one follow-up', async () => {
+  const api = require('./api')
+  const params = refreshParams({ userId: 'force-user' })
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+  let releaseFirstRequest: (items: WorkTaskItem[]) => void = () => {}
+  const firstRequest = new Promise<WorkTaskItem[]>((resolve) => {
+    releaseFirstRequest = resolve
+  })
+  api.listWorkTasks.mockReturnValueOnce(firstRequest).mockResolvedValue([])
+
+  const initial = requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'initial' })
+  const forceRequests = Array.from({ length: 10 }, () => requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'manual_refresh' }))
+  releaseFirstRequest([])
+  await Promise.all([initial, ...forceRequests])
+
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
+})
+
+test('clears pending timers on logout so a new account does not inherit its refresh state', async () => {
+  jest.useFakeTimers()
+  const api = require('./api')
+  const accountA = refreshParams({ userId: 'account-a' })
+  const accountB = refreshParams({ userId: 'account-b' })
+  establishWorkTasksSession({ token: accountA.token, userId: accountA.userId })
+
+  await requestWorkTasksRefresh({ ...accountA, mode: 'force', reason: 'initial' })
+  await requestWorkTasksRefresh({ ...accountA, mode: 'consistency', reason: 'sse_unknown' })
+  deactivateWorkTasksRealtime()
+  await jest.advanceTimersByTimeAsync(60_000)
+  establishWorkTasksSession({ token: accountB.token, userId: accountB.userId })
+  await requestWorkTasksRefresh({ ...accountB, mode: 'passive', reason: 'screen_focus' })
+
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
+})
+
+test('drops an old account response after logout without scheduling its queued follow-up', async () => {
+  const api = require('./api')
+  const accountA = refreshParams({ token: 'token-a', userId: 'account-a' })
+  const accountB = refreshParams({ token: 'token-b', userId: 'account-b' })
+  const oldTask = makeTask({ id: 'old-account-task', scheduled_date: accountA.date_from, date: accountA.date_from })
+  const newTask = makeTask({ id: 'new-account-task', scheduled_date: accountB.date_from, date: accountB.date_from })
+  let releaseOldRequest: (items: WorkTaskItem[]) => void = () => {}
+  const oldResponse = new Promise<WorkTaskItem[]>((resolve) => {
+    releaseOldRequest = resolve
+  })
+  api.listWorkTasks.mockReturnValueOnce(oldResponse).mockResolvedValueOnce([newTask])
+  establishWorkTasksSession({ token: accountA.token, userId: accountA.userId })
+
+  const oldRequest = requestWorkTasksRefresh({ ...accountA, mode: 'force', reason: 'initial' })
+  await Promise.resolve()
+  await Promise.resolve()
+  const queuedOldFollowUp = requestWorkTasksRefresh({ ...accountA, mode: 'force', reason: 'manual_refresh' })
+  deactivateWorkTasksRealtime()
+  establishWorkTasksSession({ token: accountB.token, userId: accountB.userId })
+  await requestWorkTasksRefresh({ ...accountB, mode: 'force', reason: 'account_switched' })
+  releaseOldRequest([oldTask])
+  await Promise.all([oldRequest, queuedOldFollowUp])
+  await Promise.resolve()
+  await Promise.resolve()
+
+  expect(getWorkTasksSnapshot().items.map((task) => task.id)).toEqual(['new-account-task'])
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
+  expect(api.listWorkTasks.mock.calls.map((call: any[]) => call[0])).toEqual(['token-a', 'token-b'])
+})
+
+test('rejects a queue-delayed old account caller after a new account session starts', async () => {
+  const api = require('./api')
+  const EventSource = require('react-native-sse')
+  const accountA = refreshParams({ token: 'token-a', userId: 'account-a' })
+  const accountB = refreshParams({ token: 'token-b', userId: 'account-b' })
+  let releaseOldQueue: () => void = () => {}
+  const oldQueue = new Promise<void>((resolve) => {
+    releaseOldQueue = resolve
+  })
+  establishWorkTasksSession({ token: accountA.token, userId: accountA.userId })
+
+  const delayedOldCaller = (async () => {
+    await oldQueue
+    const refreshed = await requestWorkTasksRefresh({ ...accountA, mode: 'force', reason: 'tasks_screen_refresh' })
+    const realtimeActive = await activateWorkTasksRealtime(accountA)
+    return { refreshed, realtimeActive }
+  })()
+
+  deactivateWorkTasksRealtime()
+  establishWorkTasksSession({ token: accountB.token, userId: accountB.userId })
+  await requestWorkTasksRefresh({ ...accountB, mode: 'force', reason: 'account_switched' })
+  releaseOldQueue()
+
+  await expect(delayedOldCaller).resolves.toEqual({ refreshed: false, realtimeActive: false })
+  expect(api.listWorkTasks.mock.calls.map((call: any[]) => call[0])).toEqual(['token-b'])
+  expect(EventSource).not.toHaveBeenCalled()
 })
 
 test('keeps a non-password inspection task pending key video after the realtime inspected event', () => {

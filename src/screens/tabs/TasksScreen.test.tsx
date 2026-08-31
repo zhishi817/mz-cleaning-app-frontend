@@ -1,5 +1,6 @@
 import React from 'react'
-import { fireEvent, render, waitFor } from '@testing-library/react-native'
+import { AppState } from 'react-native'
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
 import * as Clipboard from 'expo-clipboard'
 import { I18nProvider } from '../../lib/i18n'
 
@@ -134,14 +135,15 @@ jest.mock('../../lib/workTasksStore', () => {
     lastFullSyncTimestamp: null,
   }
   return {
-    activateWorkTasksRealtime: jest.fn(async () => {}),
+    activateWorkTasksRealtime: jest.fn(async () => true),
     deactivateWorkTasksRealtime: jest.fn(),
     getWorkTasksSnapshot: () => snapshot,
-    initWorkTasksStore: jest.fn(async () => {}),
+    initWorkTasksStore: jest.fn(async () => true),
     makeWorkTasksBucketKey: jest.fn(() => 'bucket'),
     patchWorkTaskItem: jest.fn(),
     patchWorkTaskItems: jest.fn(),
-    refreshWorkTasksFromServer: jest.fn(async () => {}),
+    requestWorkTasksRefresh: jest.fn(async () => true),
+    setWorkTasksRefreshForeground: jest.fn(),
     subscribeWorkTasks: () => () => {},
   }
 })
@@ -188,6 +190,56 @@ test('tasks screen defaults tasks collapsed, shows guest request, and expands de
   })
   ui.unmount()
 }, 20_000)
+
+test('tasks screen routes initial, focus and foreground reads through the shared refresh coordinator', async () => {
+  const store = require('../../lib/workTasksStore')
+  const refreshMock = store.requestWorkTasksRefresh as jest.Mock
+  refreshMock.mockClear()
+  const focusCallbacks: (() => unknown)[] = []
+  const appStateCallbacks: ((nextState: string) => unknown)[] = []
+  const addAppStateListener = jest.spyOn(AppState, 'addEventListener').mockImplementation((event: any, listener: any) => {
+    if (event === 'change') appStateCallbacks.push(listener)
+    return { remove: jest.fn() } as any
+  })
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{
+          navigate: jest.fn(),
+          addListener: jest.fn((event: string, listener: () => unknown) => {
+            if (event === 'focus') focusCallbacks.push(listener)
+            return () => {}
+          }),
+        } as any}
+        route={{ key: 'tasks-refresh-coordinator', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ mode: 'force', reason: 'tasks_initial_load' }))
+  })
+  refreshMock.mockClear()
+
+  await act(async () => {
+    for (const callback of focusCallbacks) await callback()
+  })
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ mode: 'passive', reason: 'tasks_screen_focus' }))
+  })
+  refreshMock.mockClear()
+
+  await act(async () => {
+    for (const callback of appStateCallbacks) await callback('active')
+  })
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ mode: 'passive', reason: 'tasks_app_active' }))
+  })
+  ui.unmount()
+  addAppStateListener.mockRestore()
+})
 
 test('周五、周六、周日将日期栏定位到末端，避免今天卡片被裁切', () => {
   const { shouldScrollWeekRowToEnd } = require('./TasksScreen') as typeof import('./TasksScreen')
@@ -1053,7 +1105,7 @@ test('manager-only user can switch between 全部 and 我的 without being force
   mockRoleState.canSwitchTaskMode = false
   mockRoleState.isTaskManagerUser = true
   const store = require('../../lib/workTasksStore')
-  const refreshMock = store.refreshWorkTasksFromServer as jest.Mock
+  const refreshMock = store.requestWorkTasksRefresh as jest.Mock
   refreshMock.mockClear()
 
   const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>

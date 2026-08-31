@@ -25,7 +25,7 @@ import { processInspectionPanelSubmitQueue } from './inspectionPanelSubmitQueue'
 import { processKeyUploadQueue } from './keyUploadQueue'
 import { runLocalMediaHousekeeping } from './localMediaHousekeeping'
 import { clearRegisteredExpoPushToken, getRegisteredExpoPushToken } from './pushTokenStorage'
-import { deactivateWorkTasksRealtime } from './workTasksStore'
+import { deactivateWorkTasksRealtime, establishWorkTasksSession } from './workTasksStore'
 
 type AuthStatus = 'booting' | 'signedOut' | 'signedIn'
 
@@ -93,6 +93,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
   const applySignedInState = useCallback(async (nextToken: string, nextUser: StoredUser) => {
     await setAuthToken(nextToken)
     await setStoredUser(nextUser)
+    establishWorkTasksSession({ token: nextToken, userId: nextUser.id })
     setToken(nextToken)
     setUser(nextUser)
     setStatus('signedIn')
@@ -155,6 +156,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         const id = u?.id || `local:${username}`
         const localUser = { id, username, role }
         await setStoredUser(localUser)
+        establishWorkTasksSession({ token: t, userId: localUser.id })
         setToken(t)
         setUser(localUser)
         setStatus('signedIn')
@@ -242,6 +244,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         await setAuthToken(localToken)
         await setStoredUser(localUser)
         await clearRememberedLogin()
+        establishWorkTasksSession({ token: localToken, userId: localUser.id })
         setToken(localToken)
         setUser(localUser)
         setStatus('signedIn')

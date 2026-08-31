@@ -1,5 +1,24 @@
 # Feature Regression Registry
 
+## FR-P1-WTR-01 — 任务全量刷新协调与一致性窗口
+
+- **Status:** active
+- **Maintenance scope:** `mobile`
+- **Last reviewed:** 2026-08-31 Australia/Melbourne
+- **Business outcome:** 同一登录用户、日期范围与视图 bucket 的任务全量读取只通过 `workTasksStore` 的共享协调器发起。首次/强制操作立即执行；焦点与前台恢复在 60 秒内直接跳过；SSE 成员资格或未知一致性事件在窗口内合并为一次有界尾随同步；服务端因重连历史缺口发出的 `resync_required`、手动刷新、日期切换、通知跳转与写操作回执均为强制刷新。同步运行期间，额外触发最多保留一次后续同步，强制优先于一致性同步；认证层建立唯一的当前任务会话，登出或账户切换使旧请求、缓存 hydration、timer、pending、in-flight 等待状态和旧 SSE 启动全部失效。
+- **Related CRLs:** `mobile/CRL-20260830-004`.
+
+### Test-to-invariant mapping
+
+- `src/lib/workTasksStore.test.ts` — 60 秒冷却按 user/date/view bucket 隔离；持续一致性事件最多形成一次有界尾随刷新；反复 focus 不产生尾随刷新；运行中的多个强制请求合并为一次后续同步；登出后下一账户不继承 timer 或冷却状态，旧账号慢响应不能覆盖新账号缓存或安排旧 token 的 follow-up，队列延迟的旧闭包也不能在新账户会话下发起读取或重建 SSE。
+- `src/screens/tabs/TasksScreen.test.tsx` — 任务屏调用共享刷新入口而不是自己维护第二个 debounce/interval；初始读取为 `force`，navigation focus 和 App foreground 均显式为 `passive`。
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — 钥匙上传后仍触发带原因标记的强制任务投影刷新。
+
+### Delivery boundary
+
+- 本条仅约束 Mobile `/mzapp/work-tasks` 的全量读取时机；不改变任务可见性、后端鉴权、SSE 传输、数据库 SQL、通知历史列表或日终交接的独立业务读取。
+- 本地测试不能证明生产实际请求率；需要与匹配的 Mobile OTA/原生发布后，再以真实账户和 Neon Query Performance 验证。
+
 ## FR-MNT-001 — 维修执行人专用工作流提交
 
 - **Status:** active
