@@ -7718,15 +7718,15 @@
 - Branch: `codex/r2-worktasks-refresh-20260831`
 - Base: `origin/Dev@fbe44c3b08f50c7a31104ad6e3e89e78cbbc2151`; fetched at `2026-08-31 10:44 AEST`.
 - Candidate patch SHA-256: `9bb2f3f3b4911a7e517b99978bbd391f4f19ff5f96c9c5d655ac17e31a11b028`, excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed; audit head is emitted by the post-commit release report.
+- Commit SHA: `f19e50afb415f3261324b4caebc72dd9f1214606`; candidate content commit, with audit head emitted by the post-commit release report.
 - Dependencies: none.
 - Required validation: PASS; targeted Jest (2 suites / 39 tests), full Jest (58 suites / 340 tests), typecheck, lint (0 errors / 109 pre-existing warnings), button check, ledger range-audit, current `check:ledger`, staged pre-commit gate and whitespace check all passed.
 - Shared-hunk review: PASS; all 78 non-ledger staged hunks match the selected CRL scope.
 - Generated-file review: PASS; staged paths contain TypeScript/TSX tests/source and Markdown only; no generated, config, environment, credential, media or log file is present.
-- Technical state: verified.
+- Technical state: committed.
 - User authorization: selected-for-commit; evidence: user explicitly replied `授权` to the request to commit `mobile/CRL-20260830-004` on 2026-08-31.
 - Independent review: GO for local commit only; evidence: final independent read-only review found no P0/P1/P2 and reconfirmed the candidate fingerprint, old-account/session gates, focus/AppState test invocation, historical ledger integrity and sensitive/production-write boundary.
-- Action conclusion: GO; blockers: none.
+- Action conclusion: GO; content commit created locally; exact committed-range audit is pending this bookkeeping receipt.
 
 ### Risks / Release Notes
 
