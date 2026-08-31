@@ -1442,10 +1442,14 @@ export default function CleaningSelfCompleteScreen(props: Props) {
             showsHorizontalScrollIndicator={false}
             style={styles.viewerPager}
             contentOffset={{ x: viewerIndex * viewerPageWidth, y: 0 }}
+            onMomentumScrollEnd={(event) => {
+              const nextIndex = Math.round(Number(event.nativeEvent.contentOffset.x || 0) / Math.max(viewerPageWidth, 1))
+              setViewerIndex(Math.max(0, Math.min(nextIndex, Math.max(viewerItems.length - 1, 0))))
+            }}
           >
             {viewerItems.map((item, index) => (
               <View key={`${item.reference}:${index}`} style={[styles.viewerSlide, { width: viewerPageWidth }]}>
-                <CleaningMediaPreview token={token} reference={item.reference} style={styles.viewerImg} />
+                <CleaningMediaPreview token={token} reference={item.reference} loadPreview={index === viewerIndex} style={styles.viewerImg} />
                 {item.watermarkText ? (
                   <View pointerEvents="none" style={styles.viewerWatermark}>
                     <Text style={styles.viewerWatermarkText}>{item.watermarkText}</Text>

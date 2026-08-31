@@ -2748,7 +2748,7 @@ export default function FeedbackFormScreen(props: Props) {
             >
             {viewerUrls.map((u, idx) => (
                 <View key={`${u}-${idx}`} style={[styles.viewerSlide, { width: screenWidth }]}>
-                <CleaningMediaPreview token={token} reference={isLocalFeedbackDraftReference(u) ? undefined : u} localUri={isLocalFeedbackDraftReference(u) ? u : localPreviewByReference[u]} accessTaskId={viewerAccessTaskId} style={{ width: '100%', height: '100%' }} />
+                <CleaningMediaPreview token={token} reference={isLocalFeedbackDraftReference(u) ? undefined : u} localUri={isLocalFeedbackDraftReference(u) ? u : localPreviewByReference[u]} accessTaskId={viewerAccessTaskId} loadPreview={idx === viewerIndex} style={{ width: '100%', height: '100%' }} />
               </View>
             ))}
             </ScrollView>

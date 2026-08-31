@@ -15,11 +15,19 @@ import {
   type WorkTaskItem,
 } from './workTasksStore'
 
-jest.mock('react-native-sse', () => jest.fn())
+const mockStreamListeners: Record<string, Array<(event: any) => void>> = {}
+
+jest.mock('react-native-sse', () => jest.fn().mockImplementation(() => ({
+  addEventListener: jest.fn((name: string, listener: (event: any) => void) => {
+    mockStreamListeners[name] = [...(mockStreamListeners[name] || []), listener]
+  }),
+  close: jest.fn(),
+})))
 jest.mock('../config/env', () => ({ API_BASE_URL: 'https://api.example.com/api' }))
 jest.mock('./storage', () => ({ getJson: jest.fn(), setJson: jest.fn() }))
 jest.mock('./api', () => ({ listWorkTasks: jest.fn() }))
 jest.mock('./authEvents', () => ({ notifyAuthInvalidated: jest.fn() }))
+jest.mock('./cleaningMediaCache', () => ({ invalidateCleaningMediaCache: jest.fn(async () => {}) }))
 
 beforeEach(() => {
   jest.useRealTimers()
@@ -30,6 +38,9 @@ beforeEach(() => {
   storage.setJson.mockClear()
   api.listWorkTasks.mockReset()
   api.listWorkTasks.mockResolvedValue([])
+  for (const key of Object.keys(mockStreamListeners)) delete mockStreamListeners[key]
+  const mediaCache = require('./cleaningMediaCache')
+  mediaCache.invalidateCleaningMediaCache.mockClear()
   deactivateWorkTasksRealtime()
   establishWorkTasksSession({ token: 't1', userId: 'refresh-user' })
   setWorkTasksRefreshForeground(true)
@@ -281,6 +292,23 @@ test('rejects a queue-delayed old account caller after a new account session sta
   await expect(delayedOldCaller).resolves.toEqual({ refreshed: false, realtimeActive: false })
   expect(api.listWorkTasks.mock.calls.map((call: any[]) => call[0])).toEqual(['token-b'])
   expect(EventSource).not.toHaveBeenCalled()
+})
+
+test('revokes current-account media files before membership, assignment and resync refreshes', async () => {
+  const mediaCache = require('./cleaningMediaCache')
+  await activateWorkTasksRealtime({ token: 't1', userId: 'refresh-user', date_from: '2026-08-30', date_to: '2026-08-30', view: 'mine' })
+
+  mockStreamListeners.work_task_event?.[0]({
+    type: 'work_task_event',
+    data: JSON.stringify({ event_type: 'TASK_ASSIGNMENT_CHANGED', change_scope: 'list' }),
+  })
+  mockStreamListeners.resync_required?.[0]({
+    type: 'resync_required',
+    data: JSON.stringify({ reason: 'sequence_gap' }),
+  })
+  await Promise.resolve()
+
+  expect(mediaCache.invalidateCleaningMediaCache).toHaveBeenCalledTimes(2)
 })
 
 test('keeps a non-password inspection task pending key video after the realtime inspected event', () => {

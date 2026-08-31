@@ -3,6 +3,7 @@ import { API_BASE_URL } from '../config/env'
 import { listWorkTasks, type WorkTask } from './api'
 import EventSource from 'react-native-sse'
 import { notifyAuthInvalidated } from './authEvents'
+import { invalidateCleaningMediaCache } from './cleaningMediaCache'
 
 export type WorkTaskItem = WorkTask & {
   date: string
@@ -690,6 +691,9 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
   const eventType = String(event.event_type || '').trim()
   const scope = String(event.change_scope || '').trim()
   if (scope === 'membership' || eventType === 'TASK_CREATED' || eventType === 'TASK_REMOVED' || eventType === 'TASK_ASSIGNMENT_CHANGED') {
+    if (scope === 'membership' || eventType === 'TASK_REMOVED' || eventType === 'TASK_ASSIGNMENT_CHANGED') {
+      void invalidateCleaningMediaCache()
+    }
     void requestActiveWorkTasksRefresh('consistency', eventType || 'membership')
     return
   }
@@ -740,6 +744,7 @@ function processSseBlock(block: { type?: string; data?: string | null; lastEvent
   }
   if (eventName === 'resync_required') {
     setConnectionState('open')
+    void invalidateCleaningMediaCache()
     void requestActiveWorkTasksRefresh('force', String((data as any)?.reason || 'resync_required')).catch(() => {})
     return
   }

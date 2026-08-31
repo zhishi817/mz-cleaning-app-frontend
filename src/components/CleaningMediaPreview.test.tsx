@@ -5,13 +5,19 @@ import { loadCleaningMediaImage } from '../lib/cleaningMediaCache'
 
 jest.mock('../lib/cleaningMediaCache', () => ({
   loadCleaningMediaImage: jest.fn(async () => ({ uri: null, failure: null })),
+  removeCleaningMediaCachedImage: jest.fn(async () => {}),
+  getCleaningMediaCacheEpoch: jest.fn(() => 0),
+  subscribeCleaningMediaCache: jest.fn(() => () => {}),
 }))
 
 const mockedLoadCleaningMediaImage = jest.mocked(loadCleaningMediaImage)
 
 beforeEach(() => {
   mockedLoadCleaningMediaImage.mockReset()
-  mockedLoadCleaningMediaImage.mockResolvedValue({ uri: null, failure: null })
+  mockedLoadCleaningMediaImage.mockImplementation(async (source) => ({
+    uri: source.uri?.includes('variant=preview') ? 'file:///cache/preview.jpg' : 'file:///cache/thumbnail.jpg',
+    failure: null,
+  }))
 })
 
 jest.mock('../config/env', () => ({
@@ -20,46 +26,36 @@ jest.mock('../config/env', () => ({
 
 test('先显示加载态，高清图成功后隐藏加载态', async () => {
   const ui = render(<CleaningMediaPreview token="token-1" reference="cleaning/photo-1.jpg" testID="photo" />)
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  await waitFor(() => expect(ui.getByTestId('photo-preview').props.source).toEqual({ uri: 'file:///cache/preview.jpg' }))
 
   expect(ui.getByText('高清图加载中…')).toBeTruthy()
   fireEvent(ui.getByTestId('photo-preview'), 'load')
   expect(ui.queryByText('高清图加载中…')).toBeNull()
 })
 
-test('高清图失败时保留缩略图并允许重试', async () => {
-  const ui = render(<CleaningMediaPreview token="token-1" reference="cleaning/photo-1.jpg" testID="photo" />)
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+test('list mode downloads only the thumbnail and never mounts a preview request', async () => {
+  const ui = render(<CleaningMediaPreview token="token-1" reference="cleaning/photo-1.jpg" loadPreview={false} testID="photo" />)
 
-  fireEvent(ui.getByTestId('photo-preview'), 'error')
-  await waitFor(() => expect(ui.getByText('原图加载失败，点击重试')).toBeTruthy())
-  fireEvent.press(ui.getByTestId('photo-retry'))
-  expect(ui.getByText('高清图加载中…')).toBeTruthy()
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  await waitFor(() => expect(ui.getByTestId('photo-thumbnail').props.source).toEqual({ uri: 'file:///cache/thumbnail.jpg' }))
+  expect(ui.queryByTestId('photo-preview')).toBeNull()
+  expect(mockedLoadCleaningMediaImage).toHaveBeenCalledTimes(1)
+  expect(mockedLoadCleaningMediaImage).toHaveBeenCalledWith(expect.objectContaining({ uri: expect.stringContaining('variant=thumbnail') }))
 })
 
-test('缓存完成前高清图的原生请求失败不会抢先卸载预览节点', async () => {
-  let resolvePreview: (result: { uri: string | null; failure: null }) => void = () => undefined
-  mockedLoadCleaningMediaImage.mockImplementation((source) => {
-    if (source.uri?.includes('variant=preview')) return new Promise((resolve) => { resolvePreview = resolve })
-    return Promise.resolve({ uri: null, failure: null })
-  })
-  const ui = render(<CleaningMediaPreview token="token-1" reference="cleaning/photo-1.jpg" testID="photo" />)
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+test('remote proxy URLs are used only by the downloader; native Images receive file URIs', async () => {
+  const reference = 'https://current-public-base.r2.dev/historical/offline-task-photo.jpg'
+  const ui = render(<CleaningMediaPreview token="token-1" reference={reference} accessWorkTaskId="cleaning_offline_tasks:task-1" offlineWorkTaskMedia testID="photo" />)
 
-  fireEvent(ui.getByTestId('photo-preview'), 'error')
-  expect(ui.queryByText('原图加载失败，点击重试')).toBeNull()
-  await act(async () => resolvePreview({ uri: 'file:///cache/preview.jpg', failure: null }))
-  fireEvent(ui.getByTestId('photo-preview'), 'load')
-  expect(ui.queryByText('原图加载失败，点击重试')).toBeNull()
-})
-
-test('缩略图失败时不伪装成黑色加载态并允许重试', async () => {
-  const ui = render(<CleaningMediaPreview token="token-1" reference="cleaning/photo-1.jpg" testID="photo" />)
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-
-  fireEvent(ui.getByTestId('photo-thumbnail'), 'error')
-  await waitFor(() => expect(ui.getByText('照片预览加载失败，点击重试')).toBeTruthy())
+  await waitFor(() => expect(ui.getByTestId('photo-thumbnail').props.source).toEqual({ uri: 'file:///cache/thumbnail.jpg' }))
+  expect(ui.getByTestId('photo-preview').props.source).toEqual({ uri: 'file:///cache/preview.jpg' })
+  expect(mockedLoadCleaningMediaImage).toHaveBeenCalledWith(expect.objectContaining({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fcurrent-public-base.r2.dev%2Fhistorical%2Foffline-task-photo.jpg&variant=thumbnail&work_task_id=cleaning_offline_tasks%3Atask-1',
+    headers: { Authorization: 'Bearer token-1' },
+  }))
+  expect(mockedLoadCleaningMediaImage).toHaveBeenCalledWith(expect.objectContaining({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fcurrent-public-base.r2.dev%2Fhistorical%2Foffline-task-photo.jpg&variant=preview&work_task_id=cleaning_offline_tasks%3Atask-1',
+    headers: { Authorization: 'Bearer token-1' },
+  }))
 })
 
 test('存在本地照片时，缩略图和原图预览都直接使用本地文件', async () => {
@@ -68,35 +64,7 @@ test('存在本地照片时，缩略图和原图预览都直接使用本地文�
 
   expect(ui.getByTestId('photo-thumbnail').props.source).toEqual({ uri: 'file:///draft/photo-1.jpg' })
   expect(ui.getByTestId('photo-preview').props.source).toEqual({ uri: 'file:///draft/photo-1.jpg' })
-})
-
-test('历史线下任务照片的缩略图和预览共用认证代理及精确任务上下文', async () => {
-  const reference = 'https://current-public-base.r2.dev/historical/offline-task-photo.jpg'
-  const ui = render(<CleaningMediaPreview token="token-1" reference={reference} accessWorkTaskId="cleaning_offline_tasks:task-1" offlineWorkTaskMedia testID="photo" />)
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-
-  expect(ui.getByTestId('photo-thumbnail').props.source).toEqual({
-    uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fcurrent-public-base.r2.dev%2Fhistorical%2Foffline-task-photo.jpg&variant=thumbnail&work_task_id=cleaning_offline_tasks%3Atask-1',
-    headers: { Authorization: 'Bearer token-1' },
-  })
-  expect(ui.getByTestId('photo-preview').props.source).toEqual({
-    uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fcurrent-public-base.r2.dev%2Fhistorical%2Foffline-task-photo.jpg&variant=preview&work_task_id=cleaning_offline_tasks%3Atask-1',
-    headers: { Authorization: 'Bearer token-1' },
-  })
-})
-
-test('临时通知照片的缩略图和预览共用认证代理及通知上下文', async () => {
-  const ui = render(<CleaningMediaPreview token="token-1" reference="mzapp/notice-photo-1.jpg" guestLuggageId="4a0dbea0-cbaf-4eef-87ec-2f4bb038703e" testID="photo" />)
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-
-  expect(ui.getByTestId('photo-thumbnail').props.source).toEqual({
-    uri: 'https://api.example.com/api/cleaning-app/media/image?key=mzapp%2Fnotice-photo-1.jpg&variant=thumbnail&guest_luggage_id=4a0dbea0-cbaf-4eef-87ec-2f4bb038703e',
-    headers: { Authorization: 'Bearer token-1' },
-  })
-  expect(ui.getByTestId('photo-preview').props.source).toEqual({
-    uri: 'https://api.example.com/api/cleaning-app/media/image?key=mzapp%2Fnotice-photo-1.jpg&variant=preview&guest_luggage_id=4a0dbea0-cbaf-4eef-87ec-2f4bb038703e',
-    headers: { Authorization: 'Bearer token-1' },
-  })
+  expect(mockedLoadCleaningMediaImage).not.toHaveBeenCalled()
 })
 
 test('403 是权限终态，不展示自动或手动重试入口', async () => {
@@ -111,7 +79,7 @@ test('403 是权限终态，不展示自动或手动重试入口', async () => {
   expect(ui.queryByTestId('photo-retry')).toBeNull()
 })
 
-test('404 是照片缺失终态，网络错误才保留重试入口', async () => {
+test('网络错误保留重试入口，而 404 不缓存为可展示图片', async () => {
   mockedLoadCleaningMediaImage.mockResolvedValueOnce({
     uri: null,
     failure: { status: 404, message: '照片已不可用（文件不存在）', retryable: false },

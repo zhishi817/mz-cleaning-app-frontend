@@ -1,5 +1,25 @@
 # Feature Regression Registry
 
+## FR-P1-MED-06 — 私有图片单次认证读取与权限失效
+
+- **Status:** active
+- **Maintenance scope:** `mobile`; reuses the existing Root `/cleaning-app/media/image` association and authorization contract without modifying it.
+- **Last reviewed:** 2026-08-31 Australia/Melbourne
+- **Business outcome:** 私有清洁、验收、耗材、钥匙、离线任务、维修/反馈、日终、通知和经理任务媒体只由受控下载器访问认证代理；原生 `Image` 只接收本地 `file://` 或本地草稿。缓存身份是当前账号/权限范围与规范代理 URI，Bearer token 不参与键；同一读取并发合并，下载仅在完整临时文件原子移动后命中。`401`、`403`、`404` 不缓存且不自动重试；登出、账号/角色变化、任务成员资格/分配变化与 `resync_required` 清除当前账号缓存。列表仅读 thumbnail，只有已打开的当前 Viewer 页读 preview。
+- **Related CRLs:** `mobile/CRL-20260831-001`; request-rate precursor `mobile/CRL-20260830-004`.
+
+### Test-to-invariant mapping
+
+- `src/lib/cleaningMediaCache.test.ts` — token 变化不重复下载；同 URI 并发合并；失败 partial 不生成 final；权限/可见性失效后必须重新经过代理；角色范围变更隔离缓存。
+- `src/components/CleaningMediaImage.test.tsx` — 私有缩略图的 native renderer 仅接收本地文件，终态错误不提供重试。
+- `src/components/CleaningMediaPreview.test.tsx` — grid/list 不请求 preview；当前 Viewer 的 thumbnail/preview 共用准确认证上下文且 native renderer 仅接收本地文件；本地草稿不经过下载器；`403`/`404` 终态和网络重试分离。
+- `src/lib/workTasksStore.test.ts` — assignment/membership 与 `resync_required` 在任务刷新前失效当前账号媒体缓存。
+
+### Delivery boundary
+
+- 本条只改变 Mobile 私有媒体的读取、内存去重、本地缓存和失效时机；不改变后端代理、数据库关联、R2 ACL、任务权限、上传队列、业务保存、共享 Viewer 架构或任何生产配置。
+- 本地测试不证明 iOS/Android 原子移动、认证代理响应、缓存容量清理或真实权限撤销；需在后续获授权的 OTA/设备验证中分别验证。
+
 ## FR-P1-WTR-01 — 任务全量刷新协调与一致性窗口
 
 - **Status:** active
