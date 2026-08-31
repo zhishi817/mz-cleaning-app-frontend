@@ -177,17 +177,18 @@
 
 - Repository: `mobile`
 - Selected CRLs: `mobile/CRL-20260831-001`
+- Selected CRL identities: `mobile/CRL-20260831-001`
 - Intended action: `commit`.
 - Base: `origin/Dev@2850592d4084a32e00283b570ebea233acde5ebc`; refreshed on 2026-09-01 Australia/Melbourne.
 - Candidate patch SHA-256: `69b58bbd8a79d9849a645de699f800701191a50772cfb37ae0ab66beb81d453b`, calculated from the current candidate excluding `docs/change-release-ledger.md` after P1 repair.
-- Candidate content commit: not committed.
+- Commit SHA: `7e0a37ff888d890a8b67038b5c65b0935dffe206`.
 - Branch: `codex/r3-private-media-20260901`.
 - Dependencies: none; backend proxy and authorization contract are unchanged.
-- Technical state: `verified`.
+- Technical state: `committed`.
 - User authorization: `selected-for-commit`; evidence: user explicitly instructed “OK 先提交R3” on 2026-09-01. This excludes push, PR, OTA, build, deployment and device validation.
 - Required validation: `PASS`; see Validation above.
-- Independent review: initial review was `NO-GO` for commit due to cold-start cache purge and retryable local-thumbnail fallback P1 findings; both were repaired with targeted tests. Re-review on the current fingerprint returned `GO` for a future commit, with no P0/P1/P2 findings; it does not authorize any delivery action.
-- Action conclusion: `GO` for commit after the exact staged-hunk pre-commit audit passes.
+- Independent review: `GO` — the current candidate re-review found no P0/P1/P2 and permits only the local commit. An earlier `NO-GO` found cold-start cache-purge and retryable local-thumbnail-fallback P1 issues; both were repaired with targeted tests. This does not authorize any delivery action.
+- Action conclusion: `GO`; the reviewed candidate content commit was created locally after the exact staged-hunk pre-commit audit passed. A ledger-only receipt and exact committed-range audit remain local evidence steps before any separate push authorization.
 
 ### Risks / Release Notes
 
