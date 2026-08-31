@@ -7735,7 +7735,7 @@
 - Selected CRL identities: `mobile/CRL-20260830-004`
 - Intended action: `push`
 - Branch: `codex/r2-worktasks-refresh-20260831`
-- Base: `origin/Dev@fbe44c3b08f50c7a31104ad6e3e89e78cbbc2151`; reconfirmed at `2026-08-31 10:44 AEST`.
+- Base: `origin/Dev@fbe44c3b08f50c7a31104ad6e3e89e78cbbc2151`; fetched at `2026-08-31 10:44 AEST`.
 - Candidate patch SHA-256: `9bb2f3f3b4911a7e517b99978bbd391f4f19ff5f96c9c5d655ac17e31a11b028`, excluding `docs/change-release-ledger.md`.
 - Commit SHA: `f19e50afb415f3261324b4caebc72dd9f1214606`; candidate content commit. Current bookkeeping head before this push authorization receipt: `bde307f1fe6cfd07442d89e24ad199e305c5084c`.
 - Dependencies: none.
