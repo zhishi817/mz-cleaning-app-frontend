@@ -92,7 +92,7 @@ jest.mock('../../lib/workTasksStore', () => {
       snapshot.items = snapshot.items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item)
       for (const listener of listeners) listener()
     }),
-    refreshWorkTasksFromServer: jest.fn(async () => {}),
+    requestWorkTasksRefresh: jest.fn(async () => {}),
     reconcileActiveWorkTasksAfterLocalPatch: jest.fn(async () => {}),
     findWorkTaskItemByAnyId: (id: string) => snapshot.items.find((item) => item.id === id || item.source_id === id) || null,
   }
@@ -174,14 +174,14 @@ test('uploading key photo queues sync and refreshes the task projection', async 
   })
   keyQueue.enqueueKeyUpload.mockClear()
   keyQueue.processKeyUploadQueue.mockClear()
-  workTasksStore.refreshWorkTasksFromServer.mockClear()
+  workTasksStore.requestWorkTasksRefresh.mockClear()
   fireEvent.press(ui.getByText(/upload key|上传钥匙/i))
 
   await waitFor(() => {
     expect(keyQueue.enqueueKeyUpload).toHaveBeenCalledWith(expect.objectContaining({ cleaning_task_id: 'ct1', source_uri: 'file:///tmp/k.jpg' }))
     expect(keyQueue.processKeyUploadQueue).toHaveBeenCalledWith('t1')
-    expect(workTasksStore.refreshWorkTasksFromServer).toHaveBeenCalledWith(
-      expect.objectContaining({ token: 't1', userId: 'u1', view: 'mine' }),
+    expect(workTasksStore.requestWorkTasksRefresh).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 't1', userId: 'u1', view: 'mine', mode: 'force', reason: 'task_detail_key_upload' }),
     )
   })
 }, 15_000)
@@ -767,7 +767,7 @@ test('internal maintenance detail refreshes a cached task once and renders retur
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
   const previousTask = { ...snapshot.items[0] }
-  const refreshMock = store.refreshWorkTasksFromServer as jest.Mock
+  const refreshMock = store.requestWorkTasksRefresh as jest.Mock
   snapshot.items[0] = {
     ...previousTask,
     task_kind: 'maintenance',
@@ -812,7 +812,7 @@ test('internal maintenance detail keeps the cached task usable when its one refr
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
   const previousTask = { ...snapshot.items[0] }
-  const refreshMock = store.refreshWorkTasksFromServer as jest.Mock
+  const refreshMock = store.requestWorkTasksRefresh as jest.Mock
   snapshot.items[0] = {
     ...previousTask,
     task_kind: 'maintenance',

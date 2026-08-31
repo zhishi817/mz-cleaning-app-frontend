@@ -14,7 +14,7 @@ import { useI18n } from '../../lib/i18n'
 import { getAuthToken, getStoredUser } from '../../lib/authStorage'
 import { markInboxNotificationsRead } from '../../lib/api'
 import { isTaskManagerUser, roleNamesOf } from '../../lib/roles'
-import { findWorkTaskItemByAnyId, refreshWorkTasksFromServer } from '../../lib/workTasksStore'
+import { findWorkTaskItemByAnyId, requestWorkTasksRefresh } from '../../lib/workTasksStore'
 import { actionDisabledReasonText, navigationForWorkTaskAction, preferredNoticeActionForTask } from '../../lib/workTaskActions'
 
 type Props = NativeStackScreenProps<NoticesStackParamList, 'NoticeDetail'>
@@ -206,12 +206,14 @@ export default function NoticeDetailScreen(props: Props) {
       const baseDateRaw = String((noticeData as any)?.date || existingTask?.scheduled_date || (existingTask as any)?.date || '').slice(0, 10)
       const parsedBase = /^\d{4}-\d{2}-\d{2}$/.test(baseDateRaw) ? new Date(`${baseDateRaw}T00:00:00`) : new Date()
       if (token && userId) {
-        await refreshWorkTasksFromServer({
+        await requestWorkTasksRefresh({
           token,
           userId,
           date_from: formatDateKey(addDays(parsedBase, -7)),
           date_to: formatDateKey(addDays(parsedBase, 60)),
           view: isTaskManagerUser(storedUser) ? 'all' : 'mine',
+          mode: 'force',
+          reason: 'notice_detail_task_navigation',
         })
       }
       const task = findWorkTaskItemByAnyId(taskRouteId) || existingTask

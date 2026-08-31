@@ -22,7 +22,7 @@ import {
 } from '../../lib/keyUploadQueue'
 import { hairline, isCompactWidth, moderateScale } from '../../lib/scale'
 import { layoutTokens } from '../../lib/theme'
-import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, reconcileActiveWorkTasksAfterLocalPatch, refreshWorkTasksFromServer, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
+import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, reconcileActiveWorkTasksAfterLocalPatch, requestWorkTasksRefresh, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import { appendWorkTaskCompletionPhotos, deleteKeyPhoto, listCleaningAppPropertyCodes, listUsers, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, submitMaintenanceExecutorAction, updateCleaningOfflineTask, updateWorkTaskPhotos, uploadMzappMedia } from '../../lib/api'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
@@ -432,7 +432,7 @@ export default function TaskDetailScreen(props: Props) {
     detailRefreshKeyRef.current = refreshKey
     const { date_from, date_to } = buildDetailFallbackRange()
     setResolvingRemote(true)
-    refreshWorkTasksFromServer({ token, userId: String(user.id), date_from, date_to, view })
+    requestWorkTasksRefresh({ token, userId: String(user.id), date_from, date_to, view, mode: 'force', reason: 'task_detail_fallback' })
       .catch(() => null)
       .finally(() => {
         if (!cancelled) setResolvingRemote(false)
@@ -508,12 +508,14 @@ export default function TaskDetailScreen(props: Props) {
         void processKeyUploadQueue(token).then(() => {
           if (!user?.id) return
           const { date_from, date_to } = buildDetailFallbackRange()
-          return refreshWorkTasksFromServer({
+          return requestWorkTasksRefresh({
             token,
             userId: String(user.id),
             date_from,
             date_to,
             view: canManagerView ? 'all' : 'mine',
+            mode: 'force',
+            reason: 'task_detail_key_upload',
           }).catch(() => null)
         })
         Alert.alert(t('common_ok'), '钥匙照片已暂存，正在同步。')
