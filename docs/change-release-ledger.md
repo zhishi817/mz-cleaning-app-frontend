@@ -7728,6 +7728,25 @@
 - Independent review: GO for local commit only; evidence: final independent read-only review found no P0/P1/P2 and reconfirmed the candidate fingerprint, old-account/session gates, focus/AppState test invocation, historical ledger integrity and sensitive/production-write boundary.
 - Action conclusion: GO; content commit created locally; exact committed-range audit is pending this bookkeeping receipt.
 
+#### RA-20260831-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260830-004`
+- Selected CRL identities: `mobile/CRL-20260830-004`
+- Intended action: `push`
+- Branch: `codex/r2-worktasks-refresh-20260831`
+- Base: `origin/Dev@fbe44c3b08f50c7a31104ad6e3e89e78cbbc2151`; reconfirmed at `2026-08-31 10:44 AEST`.
+- Candidate patch SHA-256: `9bb2f3f3b4911a7e517b99978bbd391f4f19ff5f96c9c5d655ac17e31a11b028`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `f19e50afb415f3261324b4caebc72dd9f1214606`; candidate content commit. Current bookkeeping head before this push authorization receipt: `bde307f1fe6cfd07442d89e24ad199e305c5084c`.
+- Dependencies: none.
+- Required validation: PASS; exact `origin/Dev...bde307f1fe6cfd07442d89e24ad199e305c5084c` release report is GO, with the candidate fingerprint, all selected hunks, generated-file and sensitive-information checks passing.
+- Shared-hunk review: PASS; exact report confirms all 78 selected non-ledger hunks.
+- Generated-file review: PASS; exact report finds no generated files or configured sensitive-information categories.
+- Technical state: committed.
+- User authorization: approved-for-push; evidence: user explicitly requested `推送` for this reviewed Mobile branch on 2026-08-31.
+- Independent review: GO for the reviewed content commit; no source changes have occurred since the exact range report.
+- Action conclusion: GO; push is authorized and pending execution.
+
 ### Risks / Release Notes
 
 - Risk: 60 秒 is a full-sync consistency bound, not an SLA for every server mutation; safe SSE patches still update locally, and the server's `resync_required` (including reconnect history gaps) bypasses cooldown.
