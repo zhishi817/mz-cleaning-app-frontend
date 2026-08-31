@@ -1,7 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View, type ImageProps, type StyleProp, type ViewStyle } from 'react-native'
 import { buildCleaningMediaImageSource } from '../lib/cleaningMedia'
-import { loadCleaningMediaImage, type CleaningMediaReadFailure } from '../lib/cleaningMediaCache'
+import {
+  getCleaningMediaCacheEpoch,
+  loadCleaningMediaImage,
+  removeCleaningMediaCachedImage,
+  subscribeCleaningMediaCache,
+  type CleaningMediaReadFailure,
+} from '../lib/cleaningMediaCache'
 
 type Props = {
   token?: string | null
@@ -14,26 +20,39 @@ type Props = {
   offlineWorkTaskMedia?: boolean
   dayEndUserId?: string | null
   dayEndDate?: string | null
+  /** List/grid callers keep this false; the open/current viewer page opts in. */
+  loadPreview?: boolean
   style?: StyleProp<ViewStyle>
   resizeMode?: ImageProps['resizeMode']
   testID?: string
 }
 
-export default function CleaningMediaPreview({ token, reference, localUri, thumbnailReference, accessTaskId, accessWorkTaskId, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate, style, resizeMode = 'contain', testID }: Props) {
+function isHttpUri(value: any) {
+  return /^https?:\/\//i.test(String(value || '').trim())
+}
+
+function retryableUnavailableFailure(): CleaningMediaReadFailure {
+  return { status: null, message: '照片暂时无法加载，点击重试', retryable: true }
+}
+
+export default function CleaningMediaPreview({ token, reference, localUri, thumbnailReference, accessTaskId, accessWorkTaskId, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate, loadPreview = true, style, resizeMode = 'contain', testID }: Props) {
   const [previewLoaded, setPreviewLoaded] = useState(false)
   const [previewFailed, setPreviewFailed] = useState(false)
   const [thumbnailFailed, setThumbnailFailed] = useState(false)
   const [retryKey, setRetryKey] = useState(0)
   const [cachedThumbnailUri, setCachedThumbnailUri] = useState<string | null>(null)
   const [cachedPreviewUri, setCachedPreviewUri] = useState<string | null>(null)
-  const [thumbnailCacheSettled, setThumbnailCacheSettled] = useState(false)
-  const [previewCacheSettled, setPreviewCacheSettled] = useState(false)
-  const [thumbnailNativeFailed, setThumbnailNativeFailed] = useState(false)
-  const [previewNativeFailed, setPreviewNativeFailed] = useState(false)
   const [thumbnailReadFailure, setThumbnailReadFailure] = useState<CleaningMediaReadFailure | null>(null)
   const [previewReadFailure, setPreviewReadFailure] = useState<CleaningMediaReadFailure | null>(null)
+  const [cacheEpoch, setCacheEpoch] = useState(getCleaningMediaCacheEpoch)
   const thumbnailSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || thumbnailReference || reference, 'thumbnail', { accessTaskId, accessWorkTaskId, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }), [accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, localUri, offlineWorkTaskMedia, reference, thumbnailReference, token])
   const previewSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || reference, 'preview', { accessTaskId, accessWorkTaskId, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }), [accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, localUri, offlineWorkTaskMedia, reference, token])
+  const thumbnailNeedsCache = isHttpUri(thumbnailSource.uri)
+  const previewNeedsCache = loadPreview && isHttpUri(previewSource.uri)
+
+  useEffect(() => {
+    return subscribeCleaningMediaCache(() => setCacheEpoch(getCleaningMediaCacheEpoch()))
+  }, [])
 
   useEffect(() => {
     setPreviewLoaded(false)
@@ -42,97 +61,87 @@ export default function CleaningMediaPreview({ token, reference, localUri, thumb
     setRetryKey(0)
     setCachedThumbnailUri(null)
     setCachedPreviewUri(null)
-    setThumbnailCacheSettled(false)
-    setPreviewCacheSettled(false)
-    setThumbnailNativeFailed(false)
-    setPreviewNativeFailed(false)
     setThumbnailReadFailure(null)
     setPreviewReadFailure(null)
-  }, [accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, localUri, offlineWorkTaskMedia, reference, thumbnailReference, token])
+  }, [accessTaskId, accessWorkTaskId, cacheEpoch, dayEndDate, dayEndUserId, guestLuggageId, localUri, loadPreview, offlineWorkTaskMedia, reference, thumbnailReference, token])
 
   useEffect(() => {
+    if (!thumbnailNeedsCache) return undefined
     let active = true
     void loadCleaningMediaImage(thumbnailSource).then((result) => {
       if (!active) return
-      if (result.uri) {
-        setCachedThumbnailUri(result.uri)
-        setThumbnailFailed(false)
-      }
-      setThumbnailReadFailure(result.failure)
-      setThumbnailCacheSettled(true)
+      setCachedThumbnailUri(result.uri)
+      setThumbnailReadFailure(result.failure || (result.uri ? null : retryableUnavailableFailure()))
     })
     return () => {
       active = false
     }
-  }, [thumbnailSource, retryKey])
+  }, [cacheEpoch, retryKey, thumbnailNeedsCache, thumbnailSource])
 
   useEffect(() => {
+    if (!loadPreview || !previewNeedsCache) return undefined
     let active = true
     void loadCleaningMediaImage(previewSource).then((result) => {
       if (!active) return
-      if (result.uri) {
-        setCachedPreviewUri(result.uri)
-        setPreviewFailed(false)
-      }
-      setPreviewReadFailure(result.failure)
-      setPreviewCacheSettled(true)
+      setCachedPreviewUri(result.uri)
+      setPreviewReadFailure(result.failure || (result.uri ? null : retryableUnavailableFailure()))
     })
     return () => {
       active = false
     }
-  }, [previewSource, retryKey])
-
-  useEffect(() => {
-    if (thumbnailCacheSettled && thumbnailNativeFailed && !cachedThumbnailUri) setThumbnailFailed(true)
-  }, [cachedThumbnailUri, thumbnailCacheSettled, thumbnailNativeFailed])
-
-  useEffect(() => {
-    if (previewCacheSettled && previewNativeFailed && !cachedPreviewUri) setPreviewFailed(true)
-  }, [cachedPreviewUri, previewCacheSettled, previewNativeFailed])
+  }, [cacheEpoch, loadPreview, previewNeedsCache, previewSource, retryKey])
 
   if (!reference && !localUri) return <View style={[styles.container, style]} />
 
-  const terminalReadFailure = [previewReadFailure, thumbnailReadFailure].find((failure) => failure && !failure.retryable) || null
-  const readFailure = terminalReadFailure || previewReadFailure || thumbnailReadFailure
+  const terminalReadFailure = [
+    loadPreview ? previewReadFailure : null,
+    thumbnailReadFailure,
+  ].find((failure) => failure && !failure.retryable) || null
+  const readFailure = terminalReadFailure || (loadPreview ? previewReadFailure : null) || thumbnailReadFailure
   const canRetry = !readFailure || readFailure.retryable
   const failureMessage = readFailure?.message || (previewFailed ? '原图加载失败，点击重试' : '照片预览加载失败，点击重试')
+  const thumbnailDisplaySource = thumbnailNeedsCache ? (cachedThumbnailUri ? { uri: cachedThumbnailUri } : null) : thumbnailSource
+  const previewDisplaySource = previewNeedsCache ? (cachedPreviewUri ? { uri: cachedPreviewUri } : null) : previewSource
 
   return (
     <View style={[styles.container, style]}>
-      <Image
-        key={`thumbnail:${thumbnailSource.uri}:${retryKey}`}
-        testID={testID ? `${testID}-thumbnail` : undefined}
-        source={cachedThumbnailUri ? { uri: cachedThumbnailUri } : thumbnailSource}
-        style={styles.media}
-        resizeMode={resizeMode}
-        fadeDuration={0}
-        onError={() => {
-          setThumbnailNativeFailed(true)
-          if (cachedThumbnailUri) setThumbnailFailed(true)
-        }}
-      />
-      {!previewFailed ? (
+      {thumbnailDisplaySource ? (
+        <Image
+          key={`thumbnail:${thumbnailSource.uri}:${retryKey}`}
+          testID={testID ? `${testID}-thumbnail` : undefined}
+          source={thumbnailDisplaySource}
+          style={styles.media}
+          resizeMode={resizeMode}
+          fadeDuration={0}
+          onError={() => {
+            if (thumbnailNeedsCache) void removeCleaningMediaCachedImage(thumbnailSource)
+            setCachedThumbnailUri(null)
+            setThumbnailFailed(true)
+          }}
+        />
+      ) : null}
+      {loadPreview && !previewFailed && previewDisplaySource ? (
         <Image
           key={`preview:${previewSource.uri}:${retryKey}`}
           testID={testID ? `${testID}-preview` : undefined}
-          source={cachedPreviewUri ? { uri: cachedPreviewUri } : previewSource}
+          source={previewDisplaySource}
           style={[styles.media, previewLoaded ? null : styles.hiddenMedia]}
           resizeMode={resizeMode}
           fadeDuration={0}
           onLoad={() => {
-            setPreviewNativeFailed(false)
             setPreviewFailed(false)
             setPreviewReadFailure(null)
             setPreviewLoaded(true)
           }}
           onError={() => {
+            if (previewNeedsCache) void removeCleaningMediaCachedImage(previewSource)
+            setCachedPreviewUri(null)
             setPreviewLoaded(false)
-            setPreviewNativeFailed(true)
-            if (cachedPreviewUri) setPreviewFailed(true)
+            setPreviewFailed(true)
           }}
         />
       ) : null}
-      {!previewLoaded && !previewFailed && !thumbnailFailed && !readFailure ? (
+      {loadPreview && !previewLoaded && !previewFailed && !thumbnailFailed && !readFailure ? (
         <View style={styles.statusOverlay} pointerEvents="none">
           <ActivityIndicator color="#FFFFFF" />
           <Text style={styles.statusText}>高清图加载中…</Text>
@@ -140,7 +149,7 @@ export default function CleaningMediaPreview({ token, reference, localUri, thumb
       ) : null}
       {previewFailed || thumbnailFailed || readFailure ? (
         canRetry ? (
-          <Pressable testID={testID ? `${testID}-retry` : undefined} style={styles.retryOverlay} onPress={() => { setPreviewFailed(false); setThumbnailFailed(false); setPreviewLoaded(false); setCachedThumbnailUri(null); setCachedPreviewUri(null); setThumbnailCacheSettled(false); setPreviewCacheSettled(false); setThumbnailNativeFailed(false); setPreviewNativeFailed(false); setThumbnailReadFailure(null); setPreviewReadFailure(null); setRetryKey((value) => value + 1) }}>
+          <Pressable testID={testID ? `${testID}-retry` : undefined} style={styles.retryOverlay} onPress={() => { setPreviewFailed(false); setThumbnailFailed(false); setPreviewLoaded(false); setCachedThumbnailUri(null); setCachedPreviewUri(null); setThumbnailReadFailure(null); setPreviewReadFailure(null); setRetryKey((value) => value + 1) }}>
             <Text style={styles.retryText}>{failureMessage}</Text>
           </Pressable>
         ) : (

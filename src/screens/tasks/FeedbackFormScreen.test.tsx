@@ -30,7 +30,10 @@ jest.mock('../../lib/localMediaDrafts', () => ({
   persistCompressedDraftMedia: jest.fn(async () => ({ localUri: 'file:///feedback.jpg', name: 'feedback.jpg', mimeType: 'image/jpeg' })),
 }))
 jest.mock('../../lib/cleaningMediaCache', () => ({
-  loadCleaningMediaImage: jest.fn(async () => ({ uri: null, failure: null })),
+  loadCleaningMediaImage: jest.fn(async () => ({ uri: 'file:///cache/private-media.jpg', failure: null })),
+  removeCleaningMediaCachedImage: jest.fn(async () => {}),
+  getCleaningMediaCacheEpoch: jest.fn(() => 0),
+  subscribeCleaningMediaCache: jest.fn(() => () => {}),
 }))
 jest.mock('../../lib/api', () => ({
   completePropertyFeedbackProject: jest.fn(async () => ({})),
@@ -305,7 +308,11 @@ test('历史深清照片在反馈列表通过认证代理并保留当前任务�
   )
 
   await waitFor(() => expect(ui.getByRole('button', { name: '查看反馈照片' })).toBeTruthy())
-  expect(ui.UNSAFE_getAllByType(Image).some((image) => String(image.props.source?.uri || '').includes('key=deep-cleaning%2Fbefore-photo.jpg&variant=thumbnail&source_task_id=cleaning-1'))).toBe(true)
+  const mediaCache = require('../../lib/cleaningMediaCache') as { loadCleaningMediaImage: jest.Mock }
+  await waitFor(() => expect(mediaCache.loadCleaningMediaImage).toHaveBeenCalledWith(expect.objectContaining({
+    uri: expect.stringContaining('key=deep-cleaning%2Fbefore-photo.jpg&variant=thumbnail&source_task_id=cleaning-1'),
+  })))
+  expect(ui.UNSAFE_getAllByType(Image).some((image) => image.props.source?.uri === 'file:///cache/private-media.jpg')).toBe(true)
 })
 
 test('历史维修的已保存完工照片会在反馈详情通过认证代理显示', async () => {
@@ -333,7 +340,11 @@ test('历史维修的已保存完工照片会在反馈详情通过认证代理�
   await waitFor(() => expect(ui.getByRole('button', { name: '查看反馈详情' })).toBeTruthy())
   fireEvent.press(ui.getByRole('button', { name: '查看反馈详情' }))
   await waitFor(() => expect(ui.getByText('维修后照片')).toBeTruthy())
-  expect(ui.UNSAFE_getAllByType(Image).some((image) => String(image.props.source?.uri || '').includes('key=mzapp%2Fmaintenance-completion.jpg'))).toBe(true)
+  const mediaCache = require('../../lib/cleaningMediaCache') as { loadCleaningMediaImage: jest.Mock }
+  await waitFor(() => expect(mediaCache.loadCleaningMediaImage).toHaveBeenCalledWith(expect.objectContaining({
+    uri: expect.stringContaining('key=mzapp%2Fmaintenance-completion.jpg'),
+  })))
+  expect(ui.UNSAFE_getAllByType(Image).some((image) => image.props.source?.uri === 'file:///cache/private-media.jpg')).toBe(true)
 })
 
 test('日用品更换前后照片在反馈详情都通过认证代理显示', async () => {
@@ -362,7 +373,12 @@ test('日用品更换前后照片在反馈详情都通过认证代理显示', as
   await waitFor(() => expect(ui.getByRole('button', { name: '查看反馈详情' })).toBeTruthy())
   fireEvent.press(ui.getByRole('button', { name: '查看反馈详情' }))
   await waitFor(() => expect(ui.getByText('更换后照片')).toBeTruthy())
-  const imageUris = ui.UNSAFE_getAllByType(Image).map((image) => String(image.props.source?.uri || ''))
-  expect(imageUris.some((uri) => uri.includes('key=inventory%2Fdaily-before.jpg'))).toBe(true)
-  expect(imageUris.some((uri) => uri.includes('key=inventory%2Fdaily-after.jpg'))).toBe(true)
+  const mediaCache = require('../../lib/cleaningMediaCache') as { loadCleaningMediaImage: jest.Mock }
+  await waitFor(() => expect(mediaCache.loadCleaningMediaImage).toHaveBeenCalledWith(expect.objectContaining({
+    uri: expect.stringContaining('key=inventory%2Fdaily-before.jpg'),
+  })))
+  expect(mediaCache.loadCleaningMediaImage).toHaveBeenCalledWith(expect.objectContaining({
+    uri: expect.stringContaining('key=inventory%2Fdaily-after.jpg'),
+  }))
+  expect(ui.UNSAFE_getAllByType(Image).every((image) => !String(image.props.source?.uri || '').includes('/cleaning-app/media/image'))).toBe(true)
 })

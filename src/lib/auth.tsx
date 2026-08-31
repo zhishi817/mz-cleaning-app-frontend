@@ -24,6 +24,7 @@ import { processInspectionMediaQueue, pruneExpiredInspectionMediaItems } from '.
 import { processInspectionPanelSubmitQueue } from './inspectionPanelSubmitQueue'
 import { processKeyUploadQueue } from './keyUploadQueue'
 import { runLocalMediaHousekeeping } from './localMediaHousekeeping'
+import { clearCleaningMediaCache, establishCleaningMediaCacheSession, runCleaningMediaCacheMaintenance } from './cleaningMediaCache'
 import { clearRegisteredExpoPushToken, getRegisteredExpoPushToken } from './pushTokenStorage'
 import { deactivateWorkTasksRealtime, establishWorkTasksSession } from './workTasksStore'
 
@@ -66,6 +67,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
 
   const signOutInternal = useCallback(async (reason: 'manual' | 'session_expired' = 'manual') => {
     deactivateWorkTasksRealtime()
+    await clearCleaningMediaCache()
     const currentToken = token
     try {
       const expoPushToken = await getRegisteredExpoPushToken()
@@ -91,6 +93,12 @@ export function AuthProvider(props: { children: React.ReactNode }) {
   }, [])
 
   const applySignedInState = useCallback(async (nextToken: string, nextUser: StoredUser) => {
+    await establishCleaningMediaCacheSession({
+      userId: nextUser.id,
+      role: nextUser.role,
+      roles: nextUser.roles,
+      permissions: nextUser.permissions,
+    })
     await setAuthToken(nextToken)
     await setStoredUser(nextUser)
     establishWorkTasksSession({ token: nextToken, userId: nextUser.id })
@@ -140,12 +148,14 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       const u = await getStoredUser()
       if (!t) {
         deactivateWorkTasksRealtime()
+        await clearCleaningMediaCache()
         setStatus('signedOut')
         return
       }
       if (t.startsWith('local:')) {
         if (!canUseLocalLogin()) {
           deactivateWorkTasksRealtime()
+          await clearCleaningMediaCache()
           await clearAuthToken()
           if (u) await clearStoredUser()
           setStatus('signedOut')
@@ -156,6 +166,10 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         const id = u?.id || `local:${username}`
         const localUser = { id, username, role }
         await setStoredUser(localUser)
+        await establishCleaningMediaCacheSession({
+          userId: localUser.id,
+          role: localUser.role,
+        })
         establishWorkTasksSession({ token: t, userId: localUser.id })
         setToken(t)
         setUser(localUser)
@@ -171,6 +185,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       }
     } catch {
       deactivateWorkTasksRealtime()
+      await clearCleaningMediaCache()
       setStatus('signedOut')
     }
   }, [applySignedInState, signOutInternal, trySilentReauth])
@@ -202,6 +217,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         await processKeyUploadQueue(token)
         await processDayEndHandoverQueue(token)
         await runLocalMediaHousekeeping()
+        void runCleaningMediaCacheMaintenance()
       } catch {}
     }
     void runQueueMaintenance()
@@ -241,6 +257,10 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       if (canUseLocalLogin() && username.trim() === LOCAL_LOGIN_USERNAME && params.password === LOCAL_LOGIN_PASSWORD) {
         const localUser = { id: `local:${username.trim()}`, username: username.trim(), role: LOCAL_LOGIN_ROLE }
         const localToken = localTokenFor(localUser.username)
+        await establishCleaningMediaCacheSession({
+          userId: localUser.id,
+          role: localUser.role,
+        })
         await setAuthToken(localToken)
         await setStoredUser(localUser)
         await clearRememberedLogin()

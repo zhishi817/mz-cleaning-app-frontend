@@ -1,11 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Image, Pressable, StyleSheet, Text, View, type ImageProps } from 'react-native'
+import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View, type ImageProps } from 'react-native'
 import {
   buildCleaningMediaImageSource,
   type CleaningMediaImageVariant,
   selectCleaningMediaReference,
 } from '../lib/cleaningMedia'
-import { loadCleaningMediaImage, type CleaningMediaReadFailure } from '../lib/cleaningMediaCache'
+import {
+  getCleaningMediaCacheEpoch,
+  loadCleaningMediaImage,
+  removeCleaningMediaCachedImage,
+  subscribeCleaningMediaCache,
+  type CleaningMediaReadFailure,
+} from '../lib/cleaningMediaCache'
 
 type Props = Omit<ImageProps, 'source'> & {
   token?: string | null
@@ -43,13 +49,18 @@ export default function CleaningMediaImage({
   const [cachedRemoteUri, setCachedRemoteUri] = useState<string | null>(null)
   const [remoteReadFailure, setRemoteReadFailure] = useState<CleaningMediaReadFailure | null>(null)
   const [retryKey, setRetryKey] = useState(0)
+  const [cacheEpoch, setCacheEpoch] = useState(getCleaningMediaCacheEpoch)
+
+  useEffect(() => {
+    return subscribeCleaningMediaCache(() => setCacheEpoch(getCleaningMediaCacheEpoch()))
+  }, [])
 
   useEffect(() => {
     setRemoteFailed(false)
     setThumbnailFailed(false)
     setCachedRemoteUri(null)
     setRemoteReadFailure(null)
-  }, [isOnline, localUri, remoteReference, thumbnailUri])
+  }, [cacheEpoch, isOnline, localUri, remoteReference, thumbnailUri])
 
   const selected = selectCleaningMediaReference({
     localUri,
@@ -63,21 +74,30 @@ export default function CleaningMediaImage({
     () => buildCleaningMediaImageSource(token, selected.reference, variant, { accessTaskId, accessWorkTaskId, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }),
     [accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, offlineWorkTaskMedia, selected.reference, token, variant],
   )
+  const shouldUsePrivateFile = /^https?:\/\//i.test(String(selectedSource.uri || ''))
+  const hasLocalThumbnailFallback = /^file:/i.test(String(thumbnailUri || '').trim())
 
   useEffect(() => {
-    if (selected.kind !== 'remote') return undefined
+    if (!shouldUsePrivateFile) return undefined
     let active = true
     void loadCleaningMediaImage(selectedSource).then(({ uri, failure }) => {
       if (!active) return
+      if (!uri && failure?.retryable && selected.kind === 'remote' && hasLocalThumbnailFallback) {
+        setCachedRemoteUri(null)
+        setRemoteReadFailure(null)
+        setRemoteFailed(true)
+        return
+      }
       if (uri) setCachedRemoteUri(uri)
-      setRemoteReadFailure(failure)
+      else setCachedRemoteUri(null)
+      setRemoteReadFailure(failure || (uri ? null : { status: null, message: '照片暂时无法加载，点击重试', retryable: true }))
     })
     return () => {
       active = false
     }
-  }, [retryKey, selected.kind, selected.reference, selectedSource, token])
+  }, [cacheEpoch, hasLocalThumbnailFallback, retryKey, selected.kind, selectedSource, shouldUsePrivateFile])
 
-  if (selected.kind === 'remote' && remoteReadFailure) {
+  if (shouldUsePrivateFile && remoteReadFailure) {
     const failureBody = <Text style={styles.failureText}>{remoteReadFailure.message}</Text>
     return (
       <View testID={imageProps.testID} style={[styles.failureContainer, imageProps.style]}>
@@ -98,13 +118,24 @@ export default function CleaningMediaImage({
     )
   }
 
+  if (shouldUsePrivateFile && !cachedRemoteUri) {
+    return (
+      <View testID={imageProps.testID} style={[styles.loadingContainer, imageProps.style]}>
+        <ActivityIndicator color="#FFFFFF" />
+      </View>
+    )
+  }
+
   return (
     <Image
       {...imageProps}
-      source={selected.kind === 'remote' && cachedRemoteUri ? { uri: cachedRemoteUri } : selectedSource}
+      source={shouldUsePrivateFile && cachedRemoteUri ? { uri: cachedRemoteUri } : selectedSource}
       onError={(event) => {
-        if (selected.kind === 'remote' && thumbnailUri) setRemoteFailed(true)
-        else if (selected.kind === 'remote') setRemoteReadFailure({ status: null, message: '照片加载失败，点击重试', retryable: true })
+        if (shouldUsePrivateFile) {
+          void removeCleaningMediaCachedImage(selectedSource)
+          setCachedRemoteUri(null)
+          setRemoteReadFailure({ status: null, message: '照片加载失败，点击重试', retryable: true })
+        } else if (selected.kind === 'remote' && thumbnailUri) setRemoteFailed(true)
         else if (selected.kind === 'thumbnail') setThumbnailFailed(true)
         onError?.(event)
       }}
@@ -113,6 +144,7 @@ export default function CleaningMediaImage({
 }
 
 const styles = StyleSheet.create({
+  loadingContainer: { overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: '#64748B', minWidth: 44, minHeight: 44 },
   failureContainer: { overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: '#64748B', minWidth: 44, minHeight: 44 },
   failureAction: { width: '100%', height: '100%', minHeight: 44, alignItems: 'center', justifyContent: 'center', padding: 8 },
   failureText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700', textAlign: 'center', lineHeight: 17, padding: 8 },

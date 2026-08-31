@@ -39,6 +39,7 @@ import {
 import { executionTaskIdsForRole } from '../../lib/turnoverDisplay'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
+import CleaningMediaImage from '../../components/CleaningMediaImage'
 import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'ManagerDailyTask'>
@@ -968,10 +969,10 @@ export default function ManagerDailyTaskScreen(props: Props) {
           <View style={styles.luggagePhotos}>
             {luggagePhotoItems.map((photo, index) => (
               <View key={`${photo.remoteReference}-${index}`} style={styles.luggagePhotoItem}>
-                <CleaningMediaPreview
+                <CleaningMediaImage
                   token={token}
                   localUri={photo.localUri}
-                  reference={photo.remoteReference}
+                  remoteReference={photo.remoteReference}
                   guestLuggageId={photo.guestLuggageId}
                   style={styles.luggagePhoto}
                 />
@@ -1055,7 +1056,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
               }}
               style={({ pressed }) => [styles.mediaThumbWrap, pressed ? styles.pressed : null]}
             >
-              <CleaningMediaPreview token={token} reference={(task as any)?.key_photo_url} style={styles.mediaThumb} resizeMode="contain" />
+              <CleaningMediaImage token={token} remoteReference={(task as any)?.key_photo_url} style={styles.mediaThumb} resizeMode="contain" />
               <Text style={styles.mediaLabel}>钥匙照片</Text>
             </Pressable>
           ) : null}
@@ -1084,7 +1085,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                     }}
                     style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                   >
-                    <CleaningMediaPreview token={token} reference={x.url} style={styles.gridImg} />
+                    <CleaningMediaImage token={token} remoteReference={x.url} style={styles.gridImg} />
                   </Pressable>
                 ))}
               </View>
@@ -1111,7 +1112,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <CleaningMediaPreview token={token} reference={url} style={styles.gridImg} />
+                      <CleaningMediaImage token={token} remoteReference={url} style={styles.gridImg} />
                     </Pressable>
                   ))}
                 </View>
@@ -1131,7 +1132,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <CleaningMediaPreview token={token} reference={remoteTvPhotoUrl} style={styles.gridImg} />
+                      <CleaningMediaImage token={token} remoteReference={remoteTvPhotoUrl} style={styles.gridImg} />
                       <Text style={styles.mediaLabel}>电视遥控器</Text>
                     </Pressable>
                   ) : null}
@@ -1143,7 +1144,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <CleaningMediaPreview token={token} reference={remoteAcPhotoUrl} style={styles.gridImg} />
+                      <CleaningMediaImage token={token} remoteReference={remoteAcPhotoUrl} style={styles.gridImg} />
                       <Text style={styles.mediaLabel}>空调遥控器</Text>
                     </Pressable>
                   ) : null}
@@ -1169,7 +1170,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                   }}
                   style={({ pressed }) => [styles.gridItem, styles.completionPhotoItem, pressed ? styles.pressed : null]}
                 >
-                  <CleaningMediaPreview token={token} reference={url} style={styles.gridImg} />
+                  <CleaningMediaImage token={token} remoteReference={url} style={styles.gridImg} />
                   <Text style={styles.photoGalleryLabel} numberOfLines={2}>{g.label}</Text>
                 </Pressable>
               )))}
@@ -1196,7 +1197,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                  <CleaningMediaPreview token={token} reference={x.url} style={styles.gridImg} />
+                  <CleaningMediaImage token={token} remoteReference={x.url} style={styles.gridImg} />
                     </Pressable>
                   ))}
                 </View>
@@ -1230,7 +1231,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                               }}
                               style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                             >
-                              <CleaningMediaPreview token={token} reference={photoUrl} style={styles.gridImg} />
+                              <CleaningMediaImage token={token} remoteReference={photoUrl} style={styles.gridImg} />
                             </Pressable>
                           ))}
                         </View>
@@ -1251,7 +1252,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                               }}
                               style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                             >
-                              <CleaningMediaPreview token={token} reference={photoUrl} style={styles.gridImg} />
+                              <CleaningMediaImage token={token} remoteReference={photoUrl} style={styles.gridImg} />
                             </Pressable>
                           ))}
                         </View>

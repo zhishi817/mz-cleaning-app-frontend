@@ -1,5 +1,224 @@
 # Change Release Ledger
 
+## CRL-20260831-001 — 私有媒体认证读取去重、原子缓存与按需预览（mobile）
+
+- **Repository:** `mobile`
+- **Status:** ready
+- **Updated:** 2026-09-01 Australia/Melbourne
+- **Request:** 实施 R3：消除同一私有图片由原生 `Image`、thumbnail 与 preview 并行触发的重复认证代理访问，减少不必要的后端认证、媒体授权和对象读取，同时保持私有媒体 fail-closed。
+- **Outcome:** 认证代理请求由账户/权限范围隔离的受控下载器统一发起；成功文件才进入缓存，列表不预取 preview，只有当前 Viewer 页读取 preview。权限范围不确定或失效时删除当前账号文件；冷启动无会话时删除私有缓存根，后续读取重新经过服务器授权。
+
+### Implementation
+
+- Previous behavior: `CleaningMediaImage` 和 `CleaningMediaPreview` 可先把带 Bearer 的代理 URL 交给 native `Image`，同时再调用下载缓存；缓存键包含 Bearer token，重复 token/组件/预览导致重复请求；失败下载可能占用 final 文件路径。
+- New behavior: 远程私有图片只由 `cleaningMediaCache` 下载到 `.partial`，确认完整后移动到 final file；缓存键不含 Bearer token，并发相同代理读取合并。native renderer 只接收成功的 `file://`，本地草稿仍直接显示。账号/角色变化、退出登录、任务成员资格/分配事件和 `resync_required` 失效当前账号缓存；后台维护清理超龄、partial 和超容量文件。
+- Key decisions: 重用现有 `/cleaning-app/media/image`、`CleaningMediaImage`、`CleaningMediaPreview`、AuthProvider、work-task SSE 和各领域队列；不新增上传队列、裸 URL fallback、后端缓存、权限推断或共享 Viewer。
+
+### Files / Areas
+
+- `src/lib/cleaningMediaCache.ts`, `src/lib/cleaningMediaCache.test.ts` — account/permission-scoped cache, in-flight coalescing, partial-to-final move, invalidation and retention tests.
+- `src/components/CleaningMediaImage.tsx`, `src/components/CleaningMediaImage.test.tsx` — thumbnail uses cached local file only.
+- `src/components/CleaningMediaPreview.tsx`, `src/components/CleaningMediaPreview.test.tsx` — progressive viewer read; list/grid callers can suppress preview loading.
+- `src/lib/auth.tsx` — establishes/clears cache identity and runs non-blocking maintenance after existing queue maintenance.
+- `src/lib/workTasksStore.ts`, `src/lib/workTasksStore.test.ts` — membership/assignment and resync invalidate the current account cache before canonical refresh.
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx`, `src/screens/tasks/CleaningSelfCompleteScreen.tsx`, `src/screens/tasks/FeedbackFormScreen.tsx`, `src/screens/tasks/FeedbackFormScreen.test.tsx` — manager grids use thumbnail renderer; multi-page viewers load preview for only the visible page.
+- `docs/feature-regression-registry.md`, `docs/change-release-ledger.md` — R3 regression and release evidence.
+
+### Impact / Dependencies
+
+- API / backend / database / migration / R2 / Render / Neon / production data / configuration / dependencies: none changed.
+- Existing server contract: authenticated `/cleaning-app/media/image` with existing key/url, variant and task/source context; Root association/authorization remains server-owned.
+- Related units: `mobile/CRL-20260830-004` reduces task-refresh triggers; this unit reduces repeated private-media reads inside remaining screens.
+- Feature Regression Registry: `FR-P1-MED-06` added because private bytes must not outlive a permission revocation and duplicate requests directly amplify production database work.
+
+### Validation
+
+- Source diagnosis: completed before implementation. First broken boundary is Mobile renderer/cache request duplication; backend association, authorization and proxy context are reused and not changed.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/audit_change_release_ledger.py` — passed: 15 changed files, 15 recorded, coverage PASS against freshly fetched `origin/Dev@2850592d4084a32e00283b570ebea233acde5ebc`.
+- `git diff --check` — passed: no whitespace error.
+- `npm ci` — completed only in the isolated candidate worktree using its own lockfile; no dependency/version/configuration change was made.
+- Targeted Jest — passed after review repairs: 6 suites / 52 tests (`cleaningMediaCache`, shared image/preview renderers, work-task cache invalidation, self-complete and feedback surfaces), including cold-start signed-out purge, retryable remote failure with a local thumbnail fallback, expiry cleanup and capacity trimming.
+- `npm run typecheck` — passed.
+- `npm run lint` — passed with 0 errors and 553 existing/project warnings.
+- `npm run check:ci` — passed after review repairs: ledger-range auditor 41 tests, ledger coverage 15/15, TypeScript, lint (0 errors / 553 warnings), strict button audit, fast Jest (3 suites / 26 tests), and full Jest (58 suites / 345 tests).
+- iOS simulator, Android emulator/device, authenticated deployed proxy, R2/object behavior, OTA/build and production Query Performance: not run; each needs its own authorization/evidence.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared.
+- **Untracked review:** none; the isolated candidate worktree contains only the 15 tracked R3 paths.
+- `docs/feature-regression-registry.md` — SHA-256: `d8fdbd1498c0382c08aa7d9b7021e0011cfee7d1918a9c9e17cd52eaac8dee56`
+- `src/components/CleaningMediaImage.test.tsx` — SHA-256: `13f154b4ceaba6c979754c0a4802384cd5c52c9ccc6964ac6bfc940ca6425c57`
+- `src/components/CleaningMediaImage.test.tsx` — SHA-256: `3a882fdb4f69e21d6f872cfee1539b3a29336bf46f85dfcea2817a10bd73a402`
+- `src/components/CleaningMediaImage.test.tsx` — SHA-256: `b6398db4a7be5113cb9766fac02eb42191645a442bea5ce252ec0eacc2d63c1a`
+- `src/components/CleaningMediaImage.tsx` — SHA-256: `146622e19b0b4de4ea3f17c180a171a1313dd1ea687ba262e571b442d6d0a30f`
+- `src/components/CleaningMediaImage.tsx` — SHA-256: `1b6751403040f7c1c35df6b0cd28bbfa7f2c89df922aed1ef5f079626a7971b9`
+- `src/components/CleaningMediaImage.tsx` — SHA-256: `2884cd84e06d2839f95436be0777fd44cd66d27d9e018fa01e244ac62d760f78`
+- `src/components/CleaningMediaImage.tsx` — SHA-256: `30d2676bbe6ae25071af416d954f7654b213f47b2539705d70d73fe91fa2a6b8`
+- `src/components/CleaningMediaImage.tsx` — SHA-256: `31f79762890029945130fe9116b0d90c76a675c6cde1811ed7a9763abcfa4331`
+- `src/components/CleaningMediaImage.tsx` — SHA-256: `6a3f29899768cb581c70efd5f3f59be9d6d896837dd77e7edef39563fa34ae7c`
+- `src/components/CleaningMediaImage.tsx` — SHA-256: `6cc0e5cb0eec569570ca41fcd6021fb3e6f2a937b3ea24094dc35d33095e01de`
+- `src/components/CleaningMediaImage.tsx` — SHA-256: `6e78d3384a6b0fcfe33d35e0496d5e9c08e4d791d450c893e507662e7a381239`
+- `src/components/CleaningMediaImage.tsx` — SHA-256: `81bc04e28b21ed43e400a18f0055c9e111f7d8c1d3ca9abfe0e72a13cbb62dab`
+- `src/components/CleaningMediaImage.tsx` — SHA-256: `877611203c885c4b1e3eee2cfdff869c8713400014f75e8edacd7a40de4b710b`
+- `src/components/CleaningMediaImage.tsx` — SHA-256: `8b6cd4ba8a9704a065dcc7a3625655e8cb50975576a96d748a27e8a77aa3eda9`
+- `src/components/CleaningMediaImage.tsx` — SHA-256: `b48d6d03bdae9cbc5872302f38e7ce4169460840f42e92424aaf219acfef3920`
+- `src/components/CleaningMediaImage.tsx` — SHA-256: `b9b4c855aeff47c28a81f95969ed0622398dfd012bd67242a0da4918812d94eb`
+- `src/components/CleaningMediaImage.tsx` — SHA-256: `ea973483e5e24c6a2e5011d0efa26f1e9d4b79ada0d74d4384f5a940f472a58b`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `0d4f458c902815fd0bdb140893132b792f8fc23b4ea3f71e7d71b963727b7121`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `13f2012107e41fd9394cf0f3b948af60432874be904a3393a01417397c592954`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `199c7a5515841642d11c9fa849dd0a463cc70afff6515a98771f53c83da12a74`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `36acf6ba4873055e1a71048709c095732a7b68a2d8a5ac619c9e3008bf4dc109`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `56219a705e5d6a4ef461c82d345b3c182c2e9518dd2da96f335f9c93d36599e4`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `5965d623190e3052402db6d7b3a6a4486a755c6df59830453efb95ddc7210c08`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `785db7de7bf81bdf78ee1f6087800dae1cac3c5fa94389507dc6780a2379168e`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `966759d0b29e0ea6c69031892a3d03917cacc8454ea2a8c2effbf9bfc50de4bc`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `9e89b124fad9cbdba1db0c214351267d87ddc4735a382f87a8fbbbb16f5de6f0`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `b1e857669ffa48b23db23d31db7579bf61fa24afda08ef64761cfdfc0de99fca`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `be1b804101508d5339c5596d8f78daaaaa94fa00e40286f72889c72346290561`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `df45635124d0df96f28e5080b0662b78a828b526112b4473989f3919d36a1cda`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `f407d98eadbc1c2e9d854c173da1cfa180b70efe3bc979d714adb98bb53c1039`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `007cbcc8b3aa40827b5a83260f3979dfc9cb3d54f165edd002a85967696b5b17`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `02a0c3d1f51dd6462a2e3210b4287787a8bc04b75280e60af2b6a2f32ed3f095`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `03bc30b28a889abea7a47009dcf19fc1f24a22c6f0b47eeedba0067400605828`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `1267f4720d8e56462251002d96e2bdf8829df1d2197bdbdfec93cac75e82c011`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `14745c7cc35f4f1531a9e678a028f39db3831d665b38bd07ba7dbe0990ae6237`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `2f734ca8eb34aac141474cd2b8d1a3299cab7521e8572b682fcaacde2889c450`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `3b5904fe8cf9db7e018ef52330a0e8cce1735f168ee8e7e0c65dbda3221f5f77`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `565e0d08aa10272c6627d5f8375b762fa30bb3439b608f510c2ece97dd85b1f6`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `56a1848ae1a9d01ea80a357617f9694d002ce54553c36cd9e9c363b5e8129a3e`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `6d078ce880af0a54c54826c17c0e69da66d0b8db40a8cf4160fc12c7c5fb9ee3`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `6d0a653b5dc50dc2b23423e0fd9057d47bbd7ca2b555b09683fd3635110cf4b6`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `6e23c2426c84335c5d10a67b706158893c986b5f1c3c0d1794f72ad96ec57946`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `72d09a8dc432ba29661d4b4a8c6116fde8b9c3ea186759c61c3439e7b2dfd70d`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `a1cc42e7bbc34759bc68e6cb0581d4bfbfd5ee03bf6aa4d3fa16e36090a8950a`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `aa7fdce99c3372239e94499091dced673cc4e21ad9418a3f7bb58e7da7a63ad2`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `b51c5869b2d9c1aeb93d036b3ffb63ae7402ed6c336443abbf4f5e7bc4e9a33d`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `b630af6d69a0aa96e9d6787d054f4c642482319be7a2280d02f29beb640cf7e0`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `bb085ab50336e1eb0a66e6d9947cd45847390df18d4fe170f2b185d8354c415d`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `be3fe9ed339faacd1fa4b2d0d6832796ca249eed869ef8f61d3050c9be927294`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `bf5b4db919a84352daf33ba312c31294b3cf194182bd4f712f4b6c960a744d26`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `da928d9646da3434cb906d7d110d18568a3d8e714a45c7e6fdeff2db0b913757`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `e56a593183ba6df8fbd668b35bc7c877fcbfb8c05dbf6bc0504f69e60b40f2fb`
+- `src/components/CleaningMediaPreview.tsx` — SHA-256: `ffa61f0f1efe9b21f376696771c74e572211e1da7a9f2d355954d90a5487f092`
+- `src/lib/auth.tsx` — SHA-256: `1c204eaf7adb33b06beade32ba89514c2c97400375872da9465ca944dd25cec4`
+- `src/lib/auth.tsx` — SHA-256: `3030fcf28204c8a34d83d15b3e7cd10a1e336478bc1012f9816b98d3994054cf`
+- `src/lib/auth.tsx` — SHA-256: `53b92c4bb0359c4cef38144e615b2a56660bbd95b82e4218347d4e2b697bdc32`
+- `src/lib/auth.tsx` — SHA-256: `5b4abbd76de814c8f40583ddc159e1a9ceb56eed0982ad8b4e86c87acd0bebef`
+- `src/lib/auth.tsx` — SHA-256: `6898863976694a2dd23d3b092fa1084fa12d5aa33a17c5284651d84862d9ded6`
+- `src/lib/auth.tsx` — SHA-256: `6f78ca87f73d6ce473bcea7d0b2c7f57a6198d552b8aa4d8d8c58d13481a37e1`
+- `src/lib/auth.tsx` — SHA-256: `917a6b229aa273dac93cc446b8d2207f719d9a2275745e010a0865bb0e7c3630`
+- `src/lib/auth.tsx` — SHA-256: `9cbad376c1f0be196cd125e32543e189ae3433d63e1b79488c115f4394d81bd2`
+- `src/lib/auth.tsx` — SHA-256: `b197d151f36f20002c27c39846f630872b447945b6b0d0738e50c438e88a87d3`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `10b47b2d39cee30a42d54660b00deb1a6b98ba2275b1abe54997933e5f556dad`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `111901cdfee966378448d34fc69ab999b66ffce29eb5de09c8d187bf23e9609b`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `1a9c4da8dfa12b14cdf7c4983973d221f72a910a7c0947030bf9ff7a05032c99`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `23055ab81541da1f0a391b20ba28738428c36540b2436fa918a174a406f0ae67`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `298b4a40b2f27fd84681cea765d9382db8b7ab59efce8a8f9fe3d986b421cade`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `5262123adaccc62c70a487ca909f1a7e943292d1e1079f838664237a37588317`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `554223e6356b8b5431df41c598ba60065bfba1865663ead849ead3bdd0688afd`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `63293c52f11b890bd92207e1786f21750ccb9f95320478fc705e45db6aa9c6ba`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `6a9202dfb5ebabf84cd9c68405ca9d0c6f19ad979602fd49fc64cc8b8ad8574f`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `937f11d2f7b35c892dcd112c76032f9c137011b11b5907ec782a260455790ca1`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `99dc2f02da4673de89facbb6a0ba8ba58783e269e76654310ab17bd3a2120b5b`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `9ae2fe43a6ff07d85e8dde21912fc9ab79ee5476330c67f2952ab02c3faf06d1`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `adf2efb50d3bb421ef6de7b4335aca6d7dfb2c74b80397b8e2cddc51d19c9484`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `aea573a6278690b83deaa715b8885c4dd95c4a13f5edc90bb26859945edb196b`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `baa3bf32c0ea10eb8e841d3bb890919b15384d3999a0118080e88380851d53dd`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `c180e67d844863dc3829fd30ff03ef4d0266c34621e20f100037a3626fbb30ad`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `c21615621ef16c346afe634549971fda759fcc2a3a1e78b35322fa86ceb548ae`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `c7bdd7fef8776aa24e51990501087b6446607500791b6b0d5cceed5c595a5e0f`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `cda73443b2b56d4d935935cc9532afe46847d176704a195a0687824d53b0a8b1`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `dd2c7b796f5559e7eb7fb3bc432319b02b74f829de67e2f1764e11342f246cca`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `fcb81bf0f5e14dbfec67acb21bd60aa868c74c33249532c1c16ba5efbb673f90`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `ff03087ec670f92066feebed6bd27823244f0825f3110389872fa2ce540a871f`
+- `src/lib/cleaningMediaCache.ts` — SHA-256: `1bd1d558ecc2e8755b1badde0d9e48cf08debbbaa63aac76b97b23bdc35d6545`
+- `src/lib/cleaningMediaCache.ts` — SHA-256: `2a20013872dcd0fa35cb74d728d9c1a03d4a9933a29479ac0e6cb53d9ea457e4`
+- `src/lib/cleaningMediaCache.ts` — SHA-256: `2b5391ce6179249ad862e1f650cd1d66d5969d1bd17a298a0625ef73ab47ee4c`
+- `src/lib/cleaningMediaCache.ts` — SHA-256: `3647171e7d90e74a20e58bd39b1b47db64553f6ef799e6baa8af4f0998532520`
+- `src/lib/cleaningMediaCache.ts` — SHA-256: `3d6d371c7fda7b47463cbced2b8023c826da3a8a821c79f624d79b09bead726b`
+- `src/lib/cleaningMediaCache.ts` — SHA-256: `470b3b7b395228fa112290f4d81fa0308efadd52bfc5d628c4f9c908d4ae847e`
+- `src/lib/cleaningMediaCache.ts` — SHA-256: `53fdf2fe33ed08baf9f3755f9d36f4d188c9a335dba2b41bf9ee32132ea95ad6`
+- `src/lib/cleaningMediaCache.ts` — SHA-256: `54935bd154b34b9572cdd7feeb2d1e8e9f759f88f1c6735cae98c4b011194e4b`
+- `src/lib/cleaningMediaCache.ts` — SHA-256: `56cafe490fe74cdf811789a6f09930b0779b655640d82a394d81d239f4d48524`
+- `src/lib/cleaningMediaCache.ts` — SHA-256: `cd58960b80f915b149b92a8f88999579f6f84b31387cc7b855775b497915a48f`
+- `src/lib/cleaningMediaCache.ts` — SHA-256: `dc4bd43e2f3d00e58b811e62ab033608ea5aa1510061033ad9d1fc8ae5d66b0c`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `04bcab25e97fad4a82abde595ebf3169532161849666e9f07830f4402e5bcbfb`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `39e2736e5fd0b5be286e3156c44b57893dac0401e02cb56457194b63fd4b4cd2`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `bb3a6491cd7228688091a9051df4bf229ec91de6e4c98ecc0b96316fa64b3ee5`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `d0cc9b3c28979dd8fcdde3551b039b5e42118cb4949cd85a4e7ccb73d0706a4f`
+- `src/lib/workTasksStore.ts` — SHA-256: `02ab3a693e29a068380180cce5f51d71d31bac330737847afb1785bb20e8c0bf`
+- `src/lib/workTasksStore.ts` — SHA-256: `2e7acd122368b19f2599ab0f06d96518b5ea96960ae2716e9761b3a34b6ef1d6`
+- `src/lib/workTasksStore.ts` — SHA-256: `d5978f09a7cfb2454921f5617134389009f36f8d636d2395d03420a2b8f0b166`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `4da94110b6580e85713880a5a988c98f4802f9c35dd6c7950d1d843e3d5df884`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `8befb0da2a6237eaf29db3fd29bae4057e6300999fdec42a1d042ad82b279d86`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `1f80e4765b0143f70c5b48bb539553a2929684c55fbc641ac3de57597de78cb6`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `26468bcdca032fcedded91bb041585b76733b89eb879e266094a084a5a4298de`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `bb90cb9efbbb306f13cc92a60d06736fc9a495e8fc3090310bde4058cd0a5de9`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `e505864c9d33c3b6568c730363a9348436d6b1a9cc824694f051cd7fc95d9854`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `47215d696b8c4c4bc3ffae4b75bfd3ca2a8cd899cad9ca3641f2dce326ec18c1`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `0e68ed08d4361e1c021b97c89e6b6ec14985287c49cf0310e33f5f29c1b1c791`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `1b3374b937b902b6fae4a5e6107fe3b75beb390169f47a256d1b13cc21e002c9`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `21be609803842f95dc6fd2571e1cf5b3d159e8d4aba26bfff4e0740a055e515a`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `4f400f26b2fe1f10fa39510239e171a927f2d5c2d5f24d7ac7159e26349a00e2`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `5197866b20e9d9c02489d2776e24a18ebde63eb00ccbbac9b99d0d903bc41123`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `77966bb9252f05de960a8df3878d028cf026d62c2fc4a71f21b10ce359e352de`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `8e9c969f7b3be28955e5d20873a72469398afd7b92763274d75c90059aa96c2b`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `8ed538f0240a6520992b44bee207b366e0962315132f3bbca7fcd1d60149f617`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `b70a5827efc3f67e2053f00ff236572b625c8109d933bff698b364bee4027db9`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `e4fe79f11afef32e63e7cd922cc74a03b796d537a29af30bbf107a6eff429536`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `f7fff340fdef9893d649edea16b5af2ac80ae2072defe452b5f61403dfc643fb`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `ff1137ba800044dbfccd2a118b77f203e33bef87e06566f44f1e33958e3a2087`
+
+### Release Attempts
+
+#### RA-20260831-001
+
+- Repository: `mobile`
+- Selected CRLs: `mobile/CRL-20260831-001`
+- Selected CRL identities: `mobile/CRL-20260831-001`
+- Intended action: `commit`.
+- Base: `origin/Dev@2850592d4084a32e00283b570ebea233acde5ebc`; fetched at `2026-08-31T11:12:44+10:00`, verified locally on 2026-09-01 Australia/Melbourne.
+- Candidate patch SHA-256: `69b58bbd8a79d9849a645de699f800701191a50772cfb37ae0ab66beb81d453b`, calculated from the current candidate excluding `docs/change-release-ledger.md` after P1 repair.
+- Commit SHA: `7e0a37ff888d890a8b67038b5c65b0935dffe206`.
+- Branch: `codex/r3-private-media-20260901`.
+- Dependencies: none.
+- Scope constraint: backend proxy and authorization contract are unchanged.
+- Shared-hunk review: `PASS`; all 122 selected non-ledger hunk fingerprints match the committed content range.
+- Technical state: `committed`.
+- User authorization: `selected-for-commit`; evidence: user explicitly instructed “OK 先提交R3” on 2026-09-01. This excludes push, PR, OTA, build, deployment and device validation.
+- Required validation: `PASS`; see Validation above.
+- Independent review: `GO` — the current candidate re-review found no P0/P1/P2 and permits only the local commit. An earlier `NO-GO` found cold-start cache-purge and retryable local-thumbnail-fallback P1 issues; both were repaired with targeted tests. This does not authorize any delivery action.
+- Action conclusion: `GO`; the reviewed candidate content commit was created locally after the exact staged-hunk pre-commit audit passed. A ledger-only receipt and exact committed-range audit remain local evidence steps before any separate push authorization.
+
+#### RA-20260901-001
+
+- Repository: `mobile`
+- Selected CRLs: `mobile/CRL-20260831-001`
+- Selected CRL identities: `mobile/CRL-20260831-001`
+- Intended action: `push`.
+- Branch: `codex/r3-private-media-20260901`.
+- Remote branch: `origin/codex/r3-private-media-20260901@be14a6535f9555590e8306dd1ecce52c78d04418`; verified after the authorized push on 2026-09-01.
+- Base: `origin/Dev@2850592d4084a32e00283b570ebea233acde5ebc`; fetched at `2026-09-01T07:43:06+10:00` and live `git ls-remote` confirmed the same Dev SHA.
+- Candidate patch SHA-256: `69b58bbd8a79d9849a645de699f800701191a50772cfb37ae0ab66beb81d453b`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `7e0a37ff888d890a8b67038b5c65b0935dffe206` (R3 content commit).
+- Dependencies: none.
+- Required validation: `PASS`; targeted Jest, typecheck, lint, `check:ci`, and the exact committed-range audit at `e90da376f848dec2b1914d16069abee22abfd6a2` passed.
+- Shared-hunk review: `PASS`; all 122 selected non-ledger hunk fingerprints match the content range.
+- Generated-file review: not applicable; the range has no generated files.
+- Technical state: `pushed`.
+- User authorization: `approved-for-push`; evidence: user explicitly confirmed “确认推送R3” on 2026-09-01 for the previously presented branch and audited head.
+- Independent review: `GO`; code-range review found no P0/P1/P2. Its temporary remote-DNS verification gap was cleared by this attempt's successful fetch and live `ls-remote` check.
+- Action conclusion: `GO`; the authorized branch push succeeded and its remote SHA was verified. PR creation, merge, OTA/build, deployment and device verification remain outside this attempt.
+
+### Risks / Release Notes
+
+- The cache is intentionally account/permission scoped and fail-closed on terminal server errors. Native Android/iOS atomic-write behavior and visual paging still require device evidence.
+- Sensitive-information review: no tokens, credentials, private URLs, media bytes, caches or production records are added to tracked files.
+- Rollback: revert only this mobile CRL; the backend proxy, object store, data and R2 ACL are untouched.
+- Git state: uncommitted clean-baseline candidate.
+
 ## CRL-20260830-002 — 历史台账回执精确审计模式（mobile；受控身份迁移）
 
 - **Repository:** `mobile`
