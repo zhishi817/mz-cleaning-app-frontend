@@ -179,11 +179,13 @@
 - Selected CRLs: `mobile/CRL-20260831-001`
 - Selected CRL identities: `mobile/CRL-20260831-001`
 - Intended action: `commit`.
-- Base: `origin/Dev@2850592d4084a32e00283b570ebea233acde5ebc`; refreshed on 2026-09-01 Australia/Melbourne.
+- Base: `origin/Dev@2850592d4084a32e00283b570ebea233acde5ebc`; fetched at `2026-08-31T11:12:44+10:00`, verified locally on 2026-09-01 Australia/Melbourne.
 - Candidate patch SHA-256: `69b58bbd8a79d9849a645de699f800701191a50772cfb37ae0ab66beb81d453b`, calculated from the current candidate excluding `docs/change-release-ledger.md` after P1 repair.
 - Commit SHA: `7e0a37ff888d890a8b67038b5c65b0935dffe206`.
 - Branch: `codex/r3-private-media-20260901`.
-- Dependencies: none; backend proxy and authorization contract are unchanged.
+- Dependencies: none.
+- Scope constraint: backend proxy and authorization contract are unchanged.
+- Shared-hunk review: `PASS`; all 122 selected non-ledger hunk fingerprints match the committed content range.
 - Technical state: `committed`.
 - User authorization: `selected-for-commit`; evidence: user explicitly instructed “OK 先提交R3” on 2026-09-01. This excludes push, PR, OTA, build, deployment and device validation.
 - Required validation: `PASS`; see Validation above.
