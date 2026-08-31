@@ -199,6 +199,7 @@
 - Selected CRL identities: `mobile/CRL-20260831-001`
 - Intended action: `push`.
 - Branch: `codex/r3-private-media-20260901`.
+- Remote branch: `origin/codex/r3-private-media-20260901@be14a6535f9555590e8306dd1ecce52c78d04418`; verified after the authorized push on 2026-09-01.
 - Base: `origin/Dev@2850592d4084a32e00283b570ebea233acde5ebc`; fetched at `2026-09-01T07:43:06+10:00` and live `git ls-remote` confirmed the same Dev SHA.
 - Candidate patch SHA-256: `69b58bbd8a79d9849a645de699f800701191a50772cfb37ae0ab66beb81d453b`, excluding `docs/change-release-ledger.md`.
 - Commit SHA: `7e0a37ff888d890a8b67038b5c65b0935dffe206` (R3 content commit).
@@ -206,10 +207,10 @@
 - Required validation: `PASS`; targeted Jest, typecheck, lint, `check:ci`, and the exact committed-range audit at `e90da376f848dec2b1914d16069abee22abfd6a2` passed.
 - Shared-hunk review: `PASS`; all 122 selected non-ledger hunk fingerprints match the content range.
 - Generated-file review: not applicable; the range has no generated files.
-- Technical state: `committed`.
+- Technical state: `pushed`.
 - User authorization: `approved-for-push`; evidence: user explicitly confirmed “确认推送R3” on 2026-09-01 for the previously presented branch and audited head.
 - Independent review: `GO`; code-range review found no P0/P1/P2. Its temporary remote-DNS verification gap was cleared by this attempt's successful fetch and live `ls-remote` check.
-- Action conclusion: `GO`; pending this receipt commit and a final exact `base...head` range audit, then push only this branch.
+- Action conclusion: `GO`; the authorized branch push succeeded and its remote SHA was verified. PR creation, merge, OTA/build, deployment and device verification remain outside this attempt.
 
 ### Risks / Release Notes
 
