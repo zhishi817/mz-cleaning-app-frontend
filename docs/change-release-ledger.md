@@ -58,6 +58,25 @@
 - User authorization: `selected-for-commit`; evidence: user instructed “先审核提交这些更新” for the enumerated personnel-settlement Root and Mobile units; this necessary adjacent-CRL audit repair is included only to make that exact multi-unit gate enforceable. Push and later stages remain unauthorized.
 - Independent review: `GO for local commit only`; evidence: second independent read-only review matched fingerprint `2dcfbcaed2a9208e3e9876a751d16fe685639f9f6e865ea85936e671c4588db8`, confirmed both prior P1 findings closed, reran the 16-test focused screen suite and 43 auditor tests, and found no P0/P1/P2, secret, generated-file, untracked-path or production-write blocker.
 - Action conclusion: `GO`; the selected and independently reviewed local content commit completed as `05601c3156b8db63c0908c52ab7a3c46766796ae`. Push, PR, merge, deployment, migration, OTA and device/production verification remain unauthorized and unverified.
+
+#### RA-20260929-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20260929-001`, `CRL-20260910-001`, `CRL-20260910-002`, `CRL-20260911-001`, `CRL-20260911-002`, `CRL-20260911-003`, `CRL-20260911-004`, `CRL-20260911-005`, `CRL-20260911-006`, `CRL-20260911-007`, `CRL-20260911-008`, `CRL-20260912-001`, `CRL-20260913-001`, `CRL-20260913-002`, `CRL-20260913-003`, `CRL-20260913-004`, `CRL-20260913-005`, `CRL-20260914-001`, `CRL-20260914-002`, `CRL-20260914-003`, `CRL-20260914-004`, `CRL-20260922-001`, `CRL-20260924-001`, `CRL-20260924-002`, `CRL-20260924-003`, `CRL-20260924-004`, `CRL-20260924-005`, `CRL-20260926-001`
+- Selected CRL identities: `mobile/CRL-20260929-001`, `mobile/CRL-20260910-001`, `mobile/CRL-20260910-002`, `mobile/CRL-20260911-001`, `mobile/CRL-20260911-002`, `mobile/CRL-20260911-003`, `mobile/CRL-20260911-004`, `mobile/CRL-20260911-005`, `mobile/CRL-20260911-006`, `mobile/CRL-20260911-007`, `mobile/CRL-20260911-008`, `mobile/CRL-20260912-001`, `mobile/CRL-20260913-001`, `mobile/CRL-20260913-002`, `mobile/CRL-20260913-003`, `mobile/CRL-20260913-004`, `mobile/CRL-20260913-005`, `mobile/CRL-20260914-001`, `mobile/CRL-20260914-002`, `mobile/CRL-20260914-003`, `mobile/CRL-20260914-004`, `mobile/CRL-20260922-001`, `mobile/CRL-20260924-001`, `mobile/CRL-20260924-002`, `mobile/CRL-20260924-003`, `mobile/CRL-20260924-004`, `mobile/CRL-20260924-005`, `mobile/CRL-20260926-001`
+- Intended action: `push`
+- Branch: `codex/personnel-settlement-batch-20260929`
+- Base: `origin/Dev@d945b692a68c5cee9a729523aa79c8432bc7c92f`; fetched at `2026-09-29T16:35:16+10:00` and confirmed unchanged
+- Candidate patch SHA-256: `2dcfbcaed2a9208e3e9876a751d16fe685639f9f6e865ea85936e671c4588db8` excluding `docs/change-release-ledger.md`
+- Commit SHA: `05601c3156b8db63c0908c52ab7a3c46766796ae`
+- Dependencies: `root/CRL-20260929-001@821a9e5aadec57589f43a552d7e78b21c0c00fcd`
+- Required validation: `PASS; evidence: final isolated npm run check:full, exact pre-commit gates, both repository committed-range reports and clean-worktree checks passed for their local scope; each single-repository report retained only the declared cross-repository verification gap, addressed by separately auditing the paired Root range and exact content SHA.`
+- Shared-hunk review: `PASS`; evidence: committed Mobile range matches all 28 selected files and 71 non-ledger hunk fingerprints with no unselected file or unexpected hunk.
+- Generated-file review: `PASS`; evidence: committed range contains no generated output, dependency link, cache, secret file or untracked path.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: after receiving the exact Root and Mobile content/receipt SHAs and explicit statement that neither branch had been pushed, user instructed “推送” on 2026-09-29. This authorizes non-force push of this exact Mobile branch/range only; it does not authorize PR, merge, deployment, OTA or build publication.
+- Independent review: `GO for ledger receipt commit and non-force push`; evidence: independent read-only push review verified the exact base → content commit → current receipt ancestry, unchanged non-ledger fingerprint `2dcfbcaed2a9208e3e9876a751d16fe685639f9f6e865ea85936e671c4588db8`, 28 selected files / 71 hunks, fresh `origin/Dev`, absent remote branch, user authorization, sensitive/generated-file and native-dependency review, plus the paired Root content SHA/range. No new P0/P1/P2 was found; the paired Root private-PDF orphan P2 remains disclosed.
+- Action conclusion: `GO` for committing this ledger-only authorization receipt and then non-force pushing the unchanged final audited head to `origin/codex/personnel-settlement-batch-20260929`; any changed base, branch, selected CRL, content commit, fingerprint, new remote branch or final gate failure invalidates this conclusion. PR, merge, deployment, OTA and build publication remain unauthorized.
 ### Risks / Release Notes
 
 - 风险仅限本地治理逻辑；若区间算法错误，测试中的未选择间隙案例和真实组合预提交门禁应阻止提交。
