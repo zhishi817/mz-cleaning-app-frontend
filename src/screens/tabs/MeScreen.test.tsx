@@ -1,6 +1,6 @@
 import React from 'react'
 import { StyleSheet } from 'react-native'
-import { render } from '@testing-library/react-native'
+import { fireEvent, render } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 import MeScreen from './MeScreen'
 
@@ -36,9 +36,10 @@ jest.mock('../../lib/roles', () => ({
 }))
 
 test('我页的退出登录文字在红色按钮内垂直和水平居中', () => {
+  const navigate = jest.fn()
   const ui = render(
     <I18nProvider>
-      <MeScreen navigation={{ navigate: jest.fn() } as any} route={{ key: 'me-home', name: 'MeHome' } as any} />
+      <MeScreen navigation={{ navigate } as any} route={{ key: 'me-home', name: 'MeHome' } as any} />
     </I18nProvider>,
   )
 
@@ -54,4 +55,7 @@ test('我页的退出登录文字在红色按钮内垂直和水平居中', () =>
     alignItems: 'center',
     justifyContent: 'center',
   }))
+
+  fireEvent.press(ui.getByTestId('me-personnel-settlement'))
+  expect(navigate).toHaveBeenCalledWith('PersonnelSettlement')
 })

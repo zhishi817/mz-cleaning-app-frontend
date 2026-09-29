@@ -5,6 +5,10 @@ function cleanText(value: any) {
   return String(value ?? '').trim()
 }
 
+export function isPersonnelSettlementNoticeData(data: unknown) {
+  return cleanText((data as any)?.action) === 'open_personnel_settlement'
+}
+
 function parseLines(text: string) {
   return cleanText(text)
     .split('\n')
@@ -317,6 +321,11 @@ export function getPresentedNotice(notice: Notice) {
     addDetail(contentLines, '执行人员', assigneeName || '未分配')
     addDetail(contentLines, '任务标题', taskTitle)
     addDetail(contentLines, '任务内容', taskSummary)
+  } else if (kind === 'personnel_settlement_confirmation_requested') {
+    title = '请确认上周费用结算'
+    summary = [cleanText((data as any).week_start), cleanText((data as any).week_end)].filter(Boolean).join(' 至 ') || '请核对工作量及金额'
+    addDetail(contentLines, '结算周期', summary)
+    addDetail(contentLines, '待办', '确认工作量及金额正确，或提交异议')
   } else {
     if (propertyCode && !title.includes(propertyCode)) title = eventTitle(propertyCode, title.replace(/^[^：]+[:：]\s*/, ''))
     summary = summary || '请查看详情'
@@ -348,6 +357,7 @@ export function getPresentedNotice(notice: Notice) {
     'day_end_handover_manager_reminder',
     'work_task_updated',
     'work_task_completed',
+    'personnel_settlement_confirmation_requested',
   ])
   for (const line of rawLines) {
     if (structuredKinds.has(kind)) continue

@@ -1,6 +1,6 @@
 import { API_BASE_URL } from '../config/env'
 import { notifyAuthInvalidated } from './authEvents'
-import { File } from 'expo-file-system'
+import { Directory, File, Paths } from 'expo-file-system'
 
 type Json = any
 type AuthenticatedRequestOptions = {
@@ -155,6 +155,9 @@ async function parseErrorMessage(res: Response) {
       }
       if (errorCode === 'IMAGE_FORMAT_UNSUPPORTED' || String(json?.message || '').trim() === 'image_format_unsupported') {
         return '照片格式无法处理，请重新拍摄或选择 JPG/PNG 图片。'
+      }
+      if (errorCode === 'settlement_preview_changed') {
+        return '本周工作量或预计金额已更新，请重新核对明细后再提交。'
       }
       const msg = json?.message
       if (typeof msg === 'string' && msg.trim()) {
@@ -2480,6 +2483,179 @@ type MyProfileResponse = {
   visa_grant_number?: string | null
 }
 
+export type MyPersonnelSettlementProfileResponse = {
+  user_id: string
+  legal_name?: string | null
+  supplier_business_name?: string | null
+  personal_abn?: string | null
+  gst_status?: 'unconfirmed' | 'registered' | 'not_registered'
+  gst_effective_from?: string | null
+  bank_account_name?: string | null
+  bank_bsb?: string | null
+  bank_account_number?: string | null
+  settlement_profile_available?: boolean
+}
+
+export type PersonnelClaimType =
+  | 'warehouse_hour'
+  | 'trial_task'
+  | 'trial_day'
+  | 'trial_hour'
+  | 'external_task'
+  | 'external_day'
+  | 'external_hour'
+  | 'subsidy_amount'
+  | 'overtime_hour'
+  | 'new_property_task'
+  | 'custom_amount'
+
+export type PersonnelClaimInputMode = 'amount' | 'quantity' | 'day' | 'time_range'
+
+export type PersonnelClaimOption = {
+  business_type: 'warehouse' | 'overtime' | 'subsidy' | 'new_property' | 'external' | 'custom'
+  claim_type: PersonnelClaimType
+  label: string
+  calculation_label: string
+  input_mode: PersonnelClaimInputMode
+  evidence_required: boolean
+  property_required: boolean
+  rule_configured: boolean
+}
+
+export type MyPersonnelClaimOptionsResponse = {
+  service_date: string
+  rule_id: string | null
+  rule_name: string | null
+  options: PersonnelClaimOption[]
+}
+
+export type PersonnelClaimEstimate = {
+  available: boolean
+  reason: string | null
+  rule_id?: string
+  rule_name?: string
+  effective_from?: string
+  price_basis?: 'inclusive_gst' | 'exclusive_gst'
+  unit_rate_cents?: number
+  gst_status?: 'unconfirmed' | 'registered' | 'not_registered'
+  quantity_numerator?: number
+  quantity_denominator?: number
+  subtotal_cents?: number
+  gst_cents?: number
+  total_cents?: number
+}
+
+export type PersonnelClaimEvidence = {
+  id: string
+  claim_id: string
+  media_id: string
+  mime_type: string
+  byte_size?: number | null
+  original_file_name?: string | null
+  created_at?: string | null
+}
+
+export type PersonnelWorkloadClaim = {
+  id: string
+  status: 'draft' | 'submitted' | 'approved' | 'rejected' | 'returned'
+  service_date: string
+  claim_type: PersonnelClaimType
+  property_id?: string | null
+  cleaning_task_id?: string | null
+  started_at?: string | null
+  ended_at?: string | null
+  duration_minutes?: number | null
+  approved_duration_minutes?: number | null
+  requested_quantity?: string | null
+  approved_quantity?: string | null
+  requested_amount_cents?: number | null
+  approved_amount_cents?: number | null
+  note: string
+  review_note?: string | null
+  evidence_count: number
+  evidence?: PersonnelClaimEvidence[]
+  available_actions?: ('edit' | 'submit')[]
+}
+
+export type PersonnelClaimPayload = {
+  client_request_id?: string | null
+  service_date: string
+  claim_type: PersonnelClaimType
+  property_id?: string | null
+  started_at?: string | null
+  ended_at?: string | null
+  duration_minutes?: number | null
+  requested_quantity?: number | string | null
+  requested_amount_cents?: number | null
+  note: string
+}
+
+export type PersonnelSettlementLine = {
+  id: string
+  component_type: string
+  service_date: string
+  source_type?: string | null
+  source_id?: string | null
+  description?: string | null
+  quantity_numerator: number
+  quantity_denominator: number
+  unit_rate_cents: number
+  subtotal_cents: number
+  gst_cents: number
+  total_cents: number
+  price_basis?: 'inclusive_gst' | 'exclusive_gst'
+  evidence_count: number
+}
+
+export type PersonnelSettlementDocument = {
+  id: string
+  settlement_id: string
+  document_stage: 'awaiting_confirmation' | 'confirmed' | 'finance_approved' | 'paid'
+  document_kind: 'settlement_draft' | 'tax_invoice' | 'invoice'
+  document_label: string
+  version: number
+  invoice_number: string | null
+  mime_type: string
+  byte_size: number
+  generated_at: string | null
+  file_name: string
+}
+
+export type PersonnelWeeklySettlement = {
+  id: string
+  week_start: string
+  week_end: string
+  status: 'draft' | 'awaiting_confirmation' | 'confirmed' | 'disputed' | 'finance_approved' | 'paid' | 'void'
+  subtotal_cents: number
+  gst_cents: number
+  total_cents: number
+  currency: string
+  line_count: number
+  evidence_count: number
+  profile_snapshot?: {
+    gst_status?: 'unconfirmed' | 'registered' | 'not_registered'
+  } | null
+  dispute_note?: string | null
+  available_actions?: string[]
+  lines?: PersonnelSettlementLine[]
+  documents?: PersonnelSettlementDocument[]
+  phase5_schema_ready?: boolean
+}
+
+export type PersonnelSettlementSubmissionPreview = {
+  week_start: string
+  week_end: string
+  status: PersonnelWeeklySettlement['status'] | 'not_submitted'
+  settlement: PersonnelWeeklySettlement | null
+  subtotal_cents: number
+  gst_cents: number
+  total_cents: number
+  line_count: number
+  lines: PersonnelSettlementLine[]
+  blocking_issues: { source_type?: string; source_id?: string; code: string }[]
+  confirmation_token: string
+}
+
 export async function getMyProfile(token: string) {
   const urls = buildUrlCandidates('users/me')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -2531,6 +2707,219 @@ export async function updateMyProfile(
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as MyProfileResponse
+}
+
+export async function getMyPersonnelSettlementProfile(token: string) {
+  const urls = buildUrlCandidates('finance/settlements/my-profile')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MyPersonnelSettlementProfileResponse
+}
+
+export async function updateMyPersonnelSettlementProfile(
+  token: string,
+  params: {
+    effective_date: string
+    legal_name?: string | null
+    supplier_business_name?: string | null
+    personal_abn?: string | null
+    gst_status?: 'unconfirmed' | 'registered' | 'not_registered'
+    bank_account_name?: string | null
+    bank_bsb?: string | null
+    bank_account_number?: string | null
+  },
+) {
+  const urls = buildUrlCandidates('finance/settlements/my-profile')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as MyPersonnelSettlementProfileResponse
+}
+
+async function personnelSettlementJsonRequest<T>(
+  token: string,
+  path: string,
+  init: { method?: string; body?: unknown } = {},
+) {
+  const urls = buildUrlCandidates(`finance/settlements/${String(path || '').replace(/^\/+/, '')}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, {
+      method: init.method || 'GET',
+      headers: authenticatedHeaders(token, undefined, init.body === undefined ? undefined : { 'Content-Type': 'application/json' }),
+      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+    }, 20000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw await toApiErrorFromResponse(res)
+  return (await parseJsonOrThrow(res)) as T
+}
+
+export function listMyPersonnelClaims(token: string) {
+  return personnelSettlementJsonRequest<PersonnelWorkloadClaim[]>(token, 'my-claims')
+}
+
+export function getMyPersonnelClaimOptions(token: string, serviceDate: string) {
+  return personnelSettlementJsonRequest<MyPersonnelClaimOptionsResponse>(
+    token,
+    `my-claim-options?service_date=${encodeURIComponent(serviceDate)}`,
+  )
+}
+
+export function getMyPersonnelClaimEstimate(
+  token: string,
+  params: {
+    service_date: string
+    claim_type: PersonnelClaimType
+    duration_minutes?: number
+    requested_quantity?: string
+    requested_amount_cents?: number
+  },
+) {
+  const query = new URLSearchParams({
+    service_date: params.service_date,
+    claim_type: params.claim_type,
+  })
+  if (params.duration_minutes != null) query.set('duration_minutes', String(params.duration_minutes))
+  if (params.requested_quantity) query.set('requested_quantity', params.requested_quantity)
+  if (params.requested_amount_cents != null) query.set('requested_amount_cents', String(params.requested_amount_cents))
+  return personnelSettlementJsonRequest<PersonnelClaimEstimate>(token, `my-claim-estimate?${query.toString()}`)
+}
+
+export function getMyPersonnelClaim(token: string, claimId: string) {
+  return personnelSettlementJsonRequest<PersonnelWorkloadClaim>(token, `my-claims/${encodeURIComponent(claimId)}`)
+}
+
+export function createMyPersonnelClaim(token: string, payload: PersonnelClaimPayload) {
+  return personnelSettlementJsonRequest<PersonnelWorkloadClaim>(token, 'my-claims', { method: 'POST', body: payload })
+}
+
+export function updateMyPersonnelClaim(token: string, claimId: string, payload: PersonnelClaimPayload) {
+  const { client_request_id: _clientRequestId, ...editable } = payload
+  return personnelSettlementJsonRequest<PersonnelWorkloadClaim>(token, `my-claims/${encodeURIComponent(claimId)}`, { method: 'PATCH', body: editable })
+}
+
+export async function uploadMyPersonnelClaimEvidence(
+  token: string,
+  claimId: string,
+  mediaId: string,
+  file: { uri: string; name: string; mimeType: string },
+) {
+  const urls = buildUrlCandidates(`finance/settlements/my-claims/${encodeURIComponent(claimId)}/evidence`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  if (!new File(file.uri).exists) throw new ApiError('本地证明照片已丢失，请重新拍摄', 0, 'MISSING_LOCAL_FILE', false)
+  const form = new FormData()
+  form.append('media_id', mediaId)
+  form.append('file', { uri: file.uri, name: file.name, type: file.mimeType } as any)
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: authenticatedHeaders(token),
+      body: form as any,
+    }, 30000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw await toApiErrorFromResponse(res)
+  return (await parseJsonOrThrow(res)) as PersonnelClaimEvidence
+}
+
+export function submitMyPersonnelClaim(token: string, claimId: string) {
+  return personnelSettlementJsonRequest<PersonnelWorkloadClaim>(token, `my-claims/${encodeURIComponent(claimId)}/submit`, { method: 'POST', body: {} })
+}
+
+export function listMyPersonnelSettlements(token: string) {
+  return personnelSettlementJsonRequest<PersonnelWeeklySettlement[]>(token, 'my-settlements')
+}
+
+export function getMyPersonnelSettlementSubmissionPreview(token: string, weekStart: string) {
+  return personnelSettlementJsonRequest<PersonnelSettlementSubmissionPreview>(
+    token,
+    `my-settlements-preview?week_start=${encodeURIComponent(weekStart)}`,
+  )
+}
+
+export function submitMyPersonnelSettlementWeek(token: string, weekStart: string, confirmationToken: string) {
+  return personnelSettlementJsonRequest<PersonnelWeeklySettlement>(token, 'my-settlements-submit', {
+    method: 'POST',
+    body: { week_start: weekStart, confirmation_token: confirmationToken },
+  })
+}
+
+export function getMyPersonnelSettlement(token: string, settlementId: string) {
+  return personnelSettlementJsonRequest<PersonnelWeeklySettlement>(token, `my-settlements/${encodeURIComponent(settlementId)}`)
+}
+
+export async function downloadMyPersonnelSettlementDocument(
+  token: string,
+  settlementId: string,
+  document: Pick<PersonnelSettlementDocument, 'id' | 'file_name'>,
+) {
+  const urls = buildUrlCandidates(`finance/settlements/my-settlements/${encodeURIComponent(settlementId)}/documents/${encodeURIComponent(document.id)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  const directory = new Directory(Paths.cache, 'personnel-settlements')
+  directory.create({ idempotent: true, intermediates: true })
+  const safeName = String(document.file_name || `settlement-${document.id}.pdf`).replace(/[^a-zA-Z0-9._-]/g, '_')
+  const target = new File(directory, safeName)
+  let lastError: unknown = null
+  for (const url of urls) {
+    try {
+      const downloaded = await File.downloadFileAsync(url, target, {
+        headers: authenticatedHeaders(token),
+        idempotent: true,
+      })
+      if (!downloaded.exists || downloaded.size <= 0) throw new Error('结算文件下载不完整')
+      return downloaded.uri
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('结算文件下载失败')
+}
+
+export function confirmMyPersonnelSettlement(token: string, settlementId: string) {
+  return personnelSettlementJsonRequest<PersonnelWeeklySettlement>(token, `my-settlements/${encodeURIComponent(settlementId)}/confirm`, {
+    method: 'POST',
+    body: { note: '工作量及金额正确' },
+  })
+}
+
+export function disputeMyPersonnelSettlement(token: string, settlementId: string, reason: string) {
+  return personnelSettlementJsonRequest<PersonnelWeeklySettlement>(token, `my-settlements/${encodeURIComponent(settlementId)}/dispute`, {
+    method: 'POST',
+    body: { reason },
+  })
+}
+
+export function submitMyPersonnelSettlementClaimForReconciliation(
+  token: string,
+  settlementId: string,
+  claimId: string,
+  reason: string,
+) {
+  return personnelSettlementJsonRequest<PersonnelWeeklySettlement>(
+    token,
+    `my-settlements/${encodeURIComponent(settlementId)}/claims/${encodeURIComponent(claimId)}/submit-for-reconciliation`,
+    { method: 'POST', body: { reason } },
+  )
 }
 
 export async function changeMyPassword(token: string, params: { old_password: string; new_password: string }) {

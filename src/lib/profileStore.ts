@@ -1,4 +1,5 @@
 import { getJson, remove, setJson } from './storage'
+import type { PersonnelGstStatus } from './personnelSettlementProfile'
 
 export type Profile = {
   avatar_url: string | null
@@ -9,6 +10,9 @@ export type Profile = {
   bank_bsb: string
   bank_account_number: string
   personal_abn: string
+  supplier_business_name: string
+  gst_status: PersonnelGstStatus
+  gst_effective_from: string
   photo_id_url: string | null
   visa_document_url: string | null
   visa_grant_number: string
@@ -38,11 +42,17 @@ export async function getProfile(owner: { id?: string | null; username?: string 
       photo_id_url: profileDocumentPresence(v2.photo_id_url),
       visa_document_url: profileDocumentPresence(v2.visa_document_url),
       visa_grant_number: v2.visa_grant_number || '',
+      supplier_business_name: v2.supplier_business_name || '',
+      gst_status: v2.gst_status || 'unconfirmed',
+      gst_effective_from: v2.gst_effective_from || '',
     }
     if (
       normalized.photo_id_url !== v2.photo_id_url ||
       normalized.visa_document_url !== v2.visa_document_url ||
-      normalized.visa_grant_number !== v2.visa_grant_number
+      normalized.visa_grant_number !== v2.visa_grant_number ||
+      normalized.supplier_business_name !== v2.supplier_business_name ||
+      normalized.gst_status !== v2.gst_status ||
+      normalized.gst_effective_from !== v2.gst_effective_from
     ) {
       await setJson(key, normalized)
     }
@@ -62,6 +72,9 @@ export async function getProfile(owner: { id?: string | null; username?: string 
       bank_bsb: legacy.bank_bsb || '',
       bank_account_number: legacy.bank_account_number || '',
       personal_abn: legacy.personal_abn || '',
+      supplier_business_name: legacy.supplier_business_name || '',
+      gst_status: legacy.gst_status || 'unconfirmed',
+      gst_effective_from: legacy.gst_effective_from || '',
       photo_id_url: profileDocumentPresence(legacy.photo_id_url),
       visa_document_url: profileDocumentPresence(legacy.visa_document_url),
       visa_grant_number: legacy.visa_grant_number || '',
@@ -102,6 +115,9 @@ export function defaultProfileFromUser(user: { username: string; role: string } 
     bank_bsb: '',
     bank_account_number: '',
     personal_abn: '',
+    supplier_business_name: '',
+    gst_status: 'unconfirmed',
+    gst_effective_from: '',
     photo_id_url: null,
     visa_document_url: null,
     visa_grant_number: '',

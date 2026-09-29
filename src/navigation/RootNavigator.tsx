@@ -15,6 +15,7 @@ import { syncInboxNotifications } from '../lib/notificationInbox'
 import { getPushDeviceId, setRegisteredExpoPushToken } from '../lib/pushTokenStorage'
 import { isTaskManagerUser, roleNamesOf } from '../lib/roles'
 import { navigationForWorkTaskAction, preferredNoticeActionForTask } from '../lib/workTaskActions'
+import { isPersonnelSettlementNoticeData } from '../lib/noticePresentation'
 import type { CompanyContentCategory, CompanyGuideRole } from '../lib/api'
 import LoginScreen from '../screens/LoginScreen'
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen'
@@ -29,6 +30,7 @@ import ProfileEditScreen from '../screens/me/ProfileEditScreen'
 import AccountScreen from '../screens/me/AccountScreen'
 import ChangePasswordScreen from '../screens/me/ChangePasswordScreen'
 import ExpenseCenterScreen from '../screens/me/ExpenseCenterScreen'
+import PersonnelSettlementScreen from '../screens/me/PersonnelSettlementScreen'
 import TaskDetailScreen from '../screens/tasks/TaskDetailScreen'
 import FeedbackFormScreen from '../screens/tasks/FeedbackFormScreen'
 import SuppliesFormScreen from '../screens/tasks/SuppliesFormScreen'
@@ -125,6 +127,7 @@ export type MeStackParamList = {
   Account: undefined
   ChangePassword: undefined
   ExpenseCenter: undefined
+  PersonnelSettlement: undefined
 }
 
 function pickTaskRouteIdFromNoticeData(data0: any) {
@@ -300,6 +303,7 @@ function MeStackNavigator() {
       <MeStack.Screen name="Account" component={AccountScreen} options={{ title: t('account_manage') }} />
       <MeStack.Screen name="ChangePassword" component={ChangePasswordScreen} options={{ title: '修改密码' }} />
       <MeStack.Screen name="ExpenseCenter" component={ExpenseCenterScreen} options={{ title: '支出录入' }} />
+      <MeStack.Screen name="PersonnelSettlement" component={PersonnelSettlementScreen} options={{ title: '费用结算' }} />
     </MeStack.Navigator>
   )
 }
@@ -491,6 +495,10 @@ export default function RootNavigator() {
             taskRoute = resolveTaskNoticeNavigation({ taskRouteId, user: userRef.current, noticeData: data }) as any
           }
           if (navRef.isReady()) {
+            if (isPersonnelSettlementNoticeData(data)) {
+              navRef.navigate('Me', { screen: 'PersonnelSettlement' } as any)
+              return
+            }
             if (taskRoute) {
               navRef.navigate('Notices', { screen: taskRoute.screen, params: taskRoute.params } as any)
               return

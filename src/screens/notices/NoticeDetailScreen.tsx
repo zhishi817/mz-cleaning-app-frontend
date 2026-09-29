@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getNoticesSnapshot, initNoticesStore, markNoticeRead, subscribeNotices, type Notice } from '../../lib/noticesStore'
 import { layoutTokens } from '../../lib/theme'
-import { getPresentedNotice } from '../../lib/noticePresentation'
+import { getPresentedNotice, isPersonnelSettlementNoticeData } from '../../lib/noticePresentation'
 import CleaningMediaImage from '../../components/CleaningMediaImage'
 import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 import { isNoticeMediaReferenceEligible, resolveNoticeMediaContext } from '../../lib/noticeMedia'
@@ -16,6 +16,7 @@ import { markInboxNotificationsRead } from '../../lib/api'
 import { isTaskManagerUser, roleNamesOf } from '../../lib/roles'
 import { findWorkTaskItemByAnyId, requestWorkTasksRefresh } from '../../lib/workTasksStore'
 import { actionDisabledReasonText, navigationForWorkTaskAction, preferredNoticeActionForTask } from '../../lib/workTaskActions'
+import AppButton from '../../components/ui/AppButton'
 
 type Props = NativeStackScreenProps<NoticesStackParamList, 'NoticeDetail'>
 
@@ -184,6 +185,7 @@ export default function NoticeDetailScreen(props: Props) {
   const targetUserId = String((notice as any)?.data?.target_user_id || '').trim()
   const targetUserName = String((notice as any)?.data?.target_user_name || '').trim()
   const canOpenDayEnd = action === 'open_day_end_handover' && !!targetDate
+  const canOpenPersonnelSettlement = isPersonnelSettlementNoticeData((notice as any)?.data)
   const noticeData = (rawNotice as any)?.data || (notice as any)?.data || {}
   const noticeMedia = resolveNoticeMediaContext(noticeData)
   const displayImages = noticeMedia ? imgs.filter((reference) => isNoticeMediaReferenceEligible(noticeData, reference)) : []
@@ -303,6 +305,18 @@ export default function NoticeDetailScreen(props: Props) {
               <Ionicons name="open-outline" size={moderateScale(16)} color="#2563EB" />
               <Text style={styles.actionText}>查看日终交接</Text>
             </Pressable>
+          ) : null}
+
+          {canOpenPersonnelSettlement ? (
+            <AppButton
+              label="查看费用结算"
+              tone="outline"
+              onPress={() => {
+                const rootNav: any = props.navigation.getParent?.()?.getParent?.() || props.navigation.getParent?.()
+                rootNav?.navigate?.('Me', { screen: 'PersonnelSettlement' })
+              }}
+              fullWidth
+            />
           ) : null}
 
           {canOpenTask ? (
