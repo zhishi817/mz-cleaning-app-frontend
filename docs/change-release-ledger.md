@@ -47,17 +47,17 @@
 - Selected CRL identities: `mobile/CRL-20260929-001`, `mobile/CRL-20260910-001`, `mobile/CRL-20260910-002`, `mobile/CRL-20260911-001`, `mobile/CRL-20260911-002`, `mobile/CRL-20260911-003`, `mobile/CRL-20260911-004`, `mobile/CRL-20260911-005`, `mobile/CRL-20260911-006`, `mobile/CRL-20260911-007`, `mobile/CRL-20260911-008`, `mobile/CRL-20260912-001`, `mobile/CRL-20260913-001`, `mobile/CRL-20260913-002`, `mobile/CRL-20260913-003`, `mobile/CRL-20260913-004`, `mobile/CRL-20260913-005`, `mobile/CRL-20260914-001`, `mobile/CRL-20260914-002`, `mobile/CRL-20260914-003`, `mobile/CRL-20260914-004`, `mobile/CRL-20260922-001`, `mobile/CRL-20260924-001`, `mobile/CRL-20260924-002`, `mobile/CRL-20260924-003`, `mobile/CRL-20260924-004`, `mobile/CRL-20260924-005`, `mobile/CRL-20260926-001`
 - Intended action: `commit`
 - Branch: `codex/personnel-settlement-batch-20260929`
-- Base: `origin/Dev@d945b692a68c5cee9a729523aa79c8432bc7c92f`; fetched and confirmed unchanged at `2026-09-29T15:49:31+10:00`
+- Base: `origin/Dev@d945b692a68c5cee9a729523aa79c8432bc7c92f`; fetched at `2026-09-29T15:49:31+10:00` and confirmed unchanged
 - Candidate patch SHA-256: `2dcfbcaed2a9208e3e9876a751d16fe685639f9f6e865ea85936e671c4588db8` excluding `docs/change-release-ledger.md`
-- Commit SHA: not committed
-- Dependencies: paired Root Release Attempt `root/RA-20260929-001` on `codex/personnel-settlement-batch-20260929`, covering the selected Root personnel-settlement CRLs, API and migrations; the exact Root content commit SHA is pending this coordinated local commit. Root must be merged and its migrations/backend deployed before any Mobile OTA/build delivery.
+- Commit SHA: `05601c3156b8db63c0908c52ab7a3c46766796ae`
+- Dependencies: `root/CRL-20260929-001@821a9e5aadec57589f43a552d7e78b21c0c00fcd`
 - Required validation: `PASS; evidence: after resolving independent-review findings, isolated npm run check:full passed with TypeScript, ESLint 0 errors / 556 existing warnings, button audit, 43/43 ledger-auditor tests and 62 Jest suites / 367 tests; the focused PersonnelSettlementScreen suite passed 16/16.`
 - Shared-hunk review: `PASS`; evidence: exact pre-commit gate matched 28 staged files and 71 non-ledger hunk fingerprints to the selected Mobile CRLs with no untracked or unselected path.
 - Generated-file review: `PASS; evidence: no generated output, dependency links, local caches or unrelated files are staged.`
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: user instructed “先审核提交这些更新” for the enumerated personnel-settlement Root and Mobile units; this necessary adjacent-CRL audit repair is included only to make that exact multi-unit gate enforceable. Push and later stages remain unauthorized.
 - Independent review: `GO for local commit only`; evidence: second independent read-only review matched fingerprint `2dcfbcaed2a9208e3e9876a751d16fe685639f9f6e865ea85936e671c4588db8`, confirmed both prior P1 findings closed, reran the 16-test focused screen suite and 43 auditor tests, and found no P0/P1/P2, secret, generated-file, untracked-path or production-write blocker.
-- Action conclusion: `GO` for the selected local commit only; push, PR, merge, deployment, migration, OTA and device/production verification remain unauthorized and unverified.
+- Action conclusion: `GO`; the selected and independently reviewed local content commit completed as `05601c3156b8db63c0908c52ab7a3c46766796ae`. Push, PR, merge, deployment, migration, OTA and device/production verification remain unauthorized and unverified.
 ### Risks / Release Notes
 
 - 风险仅限本地治理逻辑；若区间算法错误，测试中的未选择间隙案例和真实组合预提交门禁应阻止提交。
