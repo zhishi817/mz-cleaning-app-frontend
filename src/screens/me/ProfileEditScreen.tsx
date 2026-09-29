@@ -5,7 +5,8 @@ import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { defaultProfileFromUser, getProfile, PROFILE_DOCUMENT_PRESENT, profileDocumentPresence, setProfile, type Profile } from '../../lib/profileStore'
-import { getMyProfile, profileDocumentImageSource, type ProfileDocumentType, updateMyProfile, uploadMzappMedia } from '../../lib/api'
+import { getMyPersonnelSettlementProfile, getMyProfile, profileDocumentImageSource, type ProfileDocumentType, updateMyPersonnelSettlementProfile, updateMyProfile, uploadMzappMedia } from '../../lib/api'
+import { isValidAustralianAbn, isValidDateOnly, melbourneDateToday, type PersonnelGstStatus } from '../../lib/personnelSettlementProfile'
 import { hairline, moderateScale } from '../../lib/scale'
 import { layoutTokens } from '../../lib/theme'
 import AppButton from '../../components/ui/AppButton'
@@ -54,7 +55,7 @@ function isValidAuMobile(input: string) {
 function isValidAbn(input: string) {
   const digits = input.replace(/[^\d]/g, '')
   if (!digits) return true
-  return digits.length === 11
+  return isValidAustralianAbn(digits)
 }
 
 function roleNamesOf(user: any) {
@@ -89,6 +90,11 @@ function profileFromRemote(remote: any, fallback: Profile): Profile {
     bank_bsb: String(remote?.bank_bsb || fallback.bank_bsb || ''),
     bank_account_number: String(remote?.bank_account_number || fallback.bank_account_number || ''),
     personal_abn: String(remote?.personal_abn || fallback.personal_abn || ''),
+    supplier_business_name: String(remote?.supplier_business_name ?? fallback.supplier_business_name ?? ''),
+    gst_status: remote?.gst_status ?? fallback.gst_status ?? 'unconfirmed',
+    gst_effective_from: remote?.gst_effective_from === undefined
+      ? String(fallback.gst_effective_from || '')
+      : String(remote.gst_effective_from || ''),
     photo_id_url: presenceFromRemote('photo_id_uploaded', fallback.photo_id_url),
     visa_document_url: presenceFromRemote('visa_document_uploaded', fallback.visa_document_url),
     visa_grant_number: String(remote?.visa_grant_number || fallback.visa_grant_number || ''),
@@ -131,12 +137,13 @@ export default function ProfileEditScreen() {
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [uploadingPhotoId, setUploadingPhotoId] = useState(false)
   const [uploadingVisaDocument, setUploadingVisaDocument] = useState(false)
+  const [settlementProfileAvailable, setSettlementProfileAvailable] = useState(false)
   const [form, setForm] = useState<Profile>(() => defaultProfileFromUser(user))
   const [localAvatarUri, setLocalAvatarUri] = useState<string | null>(null)
   const [localPhotoIdUri, setLocalPhotoIdUri] = useState<string | null>(null)
   const [localVisaDocumentUri, setLocalVisaDocumentUri] = useState<string | null>(null)
   const [expandedDocument, setExpandedDocument] = useState<{ source: DocumentImageSource; showPreviewWatermark: boolean; title: string } | null>(null)
-  const showComplianceFields = useMemo(() => canEditComplianceFields(user), [user])
+  const showComplianceFields = useMemo(() => canEditComplianceFields(user) || settlementProfileAvailable, [settlementProfileAvailable, user])
   const { width: windowWidth, height: windowHeight } = useWindowDimensions()
   const photoIdSource = profileDocumentSource(token, 'photo_id', localPhotoIdUri, form.photo_id_url)
   const visaDocumentSource = profileDocumentSource(token, 'visa_document', localVisaDocumentUri, form.visa_document_url)
@@ -153,8 +160,12 @@ export default function ProfileEditScreen() {
       setForm(saved)
       if (token) {
         try {
-          const remote = await getMyProfile(token)
-          setForm(profileFromRemote(remote, saved))
+          const [remote, settlement] = await Promise.all([
+            getMyProfile(token),
+            getMyPersonnelSettlementProfile(token).catch(() => null),
+          ])
+          setSettlementProfileAvailable(!!settlement?.settlement_profile_available)
+          setForm(profileFromRemote({ ...remote, ...(settlement || {}) }, saved))
         } catch {}
       }
     })()
@@ -244,7 +255,13 @@ export default function ProfileEditScreen() {
   async function onSave() {
     const nameOk = isValidName(form.display_name)
     const mobileOk = isValidAuMobile(form.phone_au)
-    const abnOk = showComplianceFields ? isValidAbn(form.personal_abn) : true
+    const abnDigits = form.personal_abn.replace(/\D/g, '')
+    const abnOk = showComplianceFields
+      ? (abnDigits ? isValidAbn(abnDigits) : form.gst_status === 'unconfirmed')
+      : true
+    const effectiveDateOk = showComplianceFields && form.gst_status !== 'unconfirmed'
+      ? isValidDateOnly(form.gst_effective_from) && form.gst_effective_from <= melbourneDateToday()
+      : true
     if (!nameOk) {
       Alert.alert(t('common_error'), t('profile_invalid_name'))
       return
@@ -255,6 +272,10 @@ export default function ProfileEditScreen() {
     }
     if (!abnOk) {
       Alert.alert(t('common_error'), t('profile_invalid_abn'))
+      return
+    }
+    if (!effectiveDateOk) {
+      Alert.alert(t('common_error'), t('profile_invalid_effective_date'))
       return
     }
     try {
@@ -268,20 +289,28 @@ export default function ProfileEditScreen() {
         bank_bsb: form.bank_bsb.trim(),
         bank_account_number: form.bank_account_number.trim(),
         personal_abn: form.personal_abn.trim(),
+        supplier_business_name: form.supplier_business_name.trim(),
+        gst_status: form.gst_status,
+        gst_effective_from: form.gst_effective_from.trim(),
       }
       if (token) {
+        const settlement = showComplianceFields ? await updateMyPersonnelSettlementProfile(token, {
+          effective_date: cleaned.gst_effective_from || melbourneDateToday(),
+          legal_name: profileApiText(cleaned.legal_name),
+          supplier_business_name: profileApiText(cleaned.supplier_business_name),
+          personal_abn: profileApiText(cleaned.personal_abn),
+          gst_status: cleaned.gst_status,
+          bank_account_name: profileApiText(cleaned.bank_account_name),
+          bank_bsb: profileApiText(cleaned.bank_bsb),
+          bank_account_number: profileApiText(cleaned.bank_account_number),
+        }) : null
         const updated = await updateMyProfile(token, {
           display_name: cleaned.display_name,
           phone_au: profileApiText(cleaned.phone_au),
           avatar_url: profileApiUrl(cleaned.avatar_url),
-          legal_name: showComplianceFields ? profileApiText(cleaned.legal_name) : undefined,
-          bank_account_name: showComplianceFields ? profileApiText(cleaned.bank_account_name) : undefined,
-          bank_bsb: showComplianceFields ? profileApiText(cleaned.bank_bsb) : undefined,
-          bank_account_number: showComplianceFields ? profileApiText(cleaned.bank_account_number) : undefined,
-          personal_abn: showComplianceFields ? profileApiText(cleaned.personal_abn) : undefined,
           visa_grant_number: showComplianceFields ? profileApiText(cleaned.visa_grant_number) : undefined,
         })
-        Object.assign(cleaned, profileFromRemote(updated, cleaned))
+        Object.assign(cleaned, profileFromRemote({ ...updated, ...(settlement || {}) }, cleaned))
       }
       await setProfile(user, cleaned)
       setForm(cleaned)
@@ -361,6 +390,47 @@ export default function ProfileEditScreen() {
                   keyboardType="number-pad"
                 />
               </View>
+              <View style={styles.field}>
+                <Text style={styles.label}>{t('profile_business_name')}</Text>
+                <TextInput
+                  value={form.supplier_business_name}
+                  onChangeText={v => setField('supplier_business_name', v)}
+                  style={styles.input}
+                  placeholder={t('profile_business_name')}
+                />
+              </View>
+              <View style={styles.field}>
+                <Text style={styles.label}>{t('profile_gst_status')}</Text>
+                <View style={styles.gstOptions}>
+                  {(['unconfirmed', 'registered', 'not_registered'] as PersonnelGstStatus[]).map((status) => (
+                    <AppButton
+                      key={status}
+                      label={status === 'registered' ? t('profile_gst_registered') : status === 'not_registered' ? t('profile_gst_not_registered') : t('profile_gst_unconfirmed')}
+                      tone={form.gst_status === status ? 'primary' : 'outline'}
+                      size="compact"
+                      minHeight={40}
+                      style={styles.gstOption}
+                      onPress={() => {
+                        setField('gst_status', status)
+                        if (status !== 'unconfirmed' && !form.gst_effective_from) setField('gst_effective_from', melbourneDateToday())
+                      }}
+                    />
+                  ))}
+                </View>
+              </View>
+              {form.gst_status !== 'unconfirmed' ? (
+                <View style={styles.field}>
+                  <Text style={styles.label}>{t('profile_gst_effective_date')}</Text>
+                  <TextInput
+                    value={form.gst_effective_from}
+                    onChangeText={v => setField('gst_effective_from', v)}
+                    style={styles.input}
+                    placeholder="YYYY-MM-DD"
+                    keyboardType="numbers-and-punctuation"
+                  />
+                  <Text style={styles.hint}>{t('profile_gst_effective_date_hint')}</Text>
+                </View>
+              ) : null}
             </View>
 
             <View style={styles.section}>
@@ -550,6 +620,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   hint: { marginTop: 8, color: '#6B7280', lineHeight: 20, fontWeight: '600' },
+  gstOptions: { marginTop: 4, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  gstOption: { minWidth: 0, flexGrow: 1, flexBasis: 150 },
   documentPreview: {
     marginTop: 12,
     width: '100%',

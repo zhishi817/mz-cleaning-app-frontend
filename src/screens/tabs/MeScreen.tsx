@@ -62,6 +62,9 @@ export default function MeScreen(props: Props) {
               bank_bsb: String(remote.bank_bsb || ''),
               bank_account_number: String(remote.bank_account_number || ''),
               personal_abn: String(remote.personal_abn || ''),
+              supplier_business_name: saved?.supplier_business_name || '',
+              gst_status: saved?.gst_status || 'unconfirmed',
+              gst_effective_from: saved?.gst_effective_from || '',
               photo_id_url: remote.photo_id_uploaded === undefined ? profileDocumentPresence(saved?.photo_id_url) : remote.photo_id_uploaded ? PROFILE_DOCUMENT_PRESENT : null,
               visa_document_url: remote.visa_document_uploaded === undefined ? profileDocumentPresence(saved?.visa_document_url) : remote.visa_document_uploaded ? PROFILE_DOCUMENT_PRESENT : null,
               visa_grant_number: String(remote.visa_grant_number || ''),
@@ -144,6 +147,11 @@ export default function MeScreen(props: Props) {
             </Pressable>
           </>
         ) : null}
+        <View style={styles.sep} />
+        <Pressable testID="me-personnel-settlement" onPress={() => props.navigation.navigate('PersonnelSettlement')} style={({ pressed }) => [styles.listItem, pressed ? styles.pressed : null]}>
+          <Ionicons name="cash-outline" size={20} color="#2563EB" />
+          <Text style={styles.itemText}>费用结算</Text>
+        </Pressable>
       </View>
 
       <Pressable testID="me-logout-action" style={({ pressed }) => [styles.logoutBtn, pressed ? styles.logoutPressed : null]} onPress={onLogout}>
