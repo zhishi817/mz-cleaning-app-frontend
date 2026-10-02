@@ -162,15 +162,15 @@
 - Branch: `codex/subsidy-direct-amount-20261001`
 - Base: `origin/Dev@8c4df378665e05b1de9179cd3fa760ba0439ff13`; fetched at `2026-10-02T10:53:07+1000`
 - Candidate patch SHA-256: `f98bd568758e41ad332f636f4ed2cd509364e806ff370507c27f4121bbda8e30`
-- Commit SHA: `not committed`
+- Commit SHA: `8ce10fff673a44bf8cc5aa9b88613af9b476b963`
 - Dependencies: `root/CRL-20261002-001`
 - Required validation: `PASS`; evidence: 17/17 targeted tests, temporary-stub TypeScript, target lint, button audit, ledger coverage and diff check passed; full lint environment gap is recorded.
 - Shared-hunk review: `not applicable`; evidence: only one selected mobile CRL.
 - Generated-file review: `PASS`; evidence: no build outputs, caches or dependency links are staged.
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: user explicitly selected mobile/CRL-20261002-001 for commit.
 - Independent review: `GO for commit`; evidence: independent read-only reviewer recomputed candidate fingerprint `f98bd568758e41ad332f636f4ed2cd509364e806ff370507c27f4121bbda8e30`, inspected all 5 staged files / 36 non-ledger hunks, reran 17/17 focused tests, the exact pre-commit gate and diff check, and found no P0/P1, scope, secret, generated-file or production-write blocker. Accepted non-blocking P2s: a same-day legacy local draft can miss automatic reclassification if options load before AsyncStorage, and one test mock implementation is not restored between cases; users can still select the single subsidy entry without data loss.
-- Action conclusion: `GO`; the exact reviewed candidate may be committed locally. Push, PR, merge, OTA/build, deployment and device/production verification remain unauthorized.
+- Action conclusion: `GO`; evidence: the exact reviewed candidate was committed locally as `8ce10fff673a44bf8cc5aa9b88613af9b476b963`. Push, PR, merge, OTA/build, deployment and device/production verification remain unauthorized.
 
 ### Git / Delivery State
 
