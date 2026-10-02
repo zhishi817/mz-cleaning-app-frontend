@@ -69,6 +69,7 @@
 - Selected CRL identities: `mobile/CRL-20261002-001`, `mobile/CRL-20261002-002`
 - Intended action: `push`
 - Branch: `codex/subsidy-direct-amount-20261001`
+- Remote branch/SHA: initial verified push `origin/codex/subsidy-direct-amount-20261001@9bcb62cbbc70edd439b84a222eeb5064a7efdd53`; this ledger-only pushed-state receipt will be re-audited before a separate second push.
 - Base: `origin/Dev@8c4df378665e05b1de9179cd3fa760ba0439ff13`; fetched at `2026-10-02T16:55:32+1000`
 - Candidate patch SHA-256: `c4dc341c4bd84f7242808445d6918fcecfdea07f3ed6230e1200ff306a091078`
 - Commit SHA: `9741a187976663d594fe7f1734adacb8e1443a31`
@@ -77,10 +78,10 @@
 - Required validation: `PASS`; evidence: clean `npm ci` succeeded, then `npm run check:ci` passed TypeScript, lint with 0 errors / 556 existing warnings, button audit, 44/44 auditor tests, 3 fast suites / 26 tests and the full 62 suites / 368 tests; Root and Mobile remain separate branch pushes and no build, deployment or OTA is included.
 - Shared-hunk review: `PASS`; evidence: the two selected Mobile CRLs jointly declare every non-ledger hunk in the exact range and the independent read-only push review verified that ownership.
 - Generated-file review: `PASS`; evidence: no tracked build output, cache, dependency directory or generated artifact is selected.
-- Technical state: `committed`
+- Technical state: `pushed`
 - User authorization: `approved-for-push`; evidence: after the exact final Root and Mobile branch heads were reported, the user explicitly instructed “推送”, then confirmed authorization for the required ledger-only push-evidence commits and the new final branch heads they create.
 - Independent review: `GO`; evidence: independent read-only push review verified the exact two-CRL Mobile range, base, branch, content commit, full-range fingerprint, 7 files / 39 non-ledger hunks, paired scope, clean-install full CI, authorization and sensitive/generated-file boundaries; no P0/P1 remains and two recorded P2s are non-blocking.
-- Action conclusion: `GO`; evidence: the clean exact `8c4df378665e05b1de9179cd3fa760ba0439ff13...7e2383955f67e840019d60fd241f90dc9ef8aca0` release report passed every gate; the same report must pass again after this ledger-only conclusion receipt.
+- Action conclusion: `GO`; evidence: the clean final pre-push range report passed every gate, the non-force initial push succeeded, and `git ls-remote` matched `origin/codex/subsidy-direct-amount-20261001@9bcb62cbbc70edd439b84a222eeb5064a7efdd53`; this ledger-only pushed-state receipt must pass the same audit before its second push.
 
 
 ### Risks / Release Notes
@@ -200,6 +201,7 @@
 - Selected CRL identities: `mobile/CRL-20261002-001`, `mobile/CRL-20261002-002`
 - Intended action: `push`
 - Branch: `codex/subsidy-direct-amount-20261001`
+- Remote branch/SHA: initial verified push `origin/codex/subsidy-direct-amount-20261001@9bcb62cbbc70edd439b84a222eeb5064a7efdd53`; this ledger-only pushed-state receipt will be re-audited before a separate second push.
 - Base: `origin/Dev@8c4df378665e05b1de9179cd3fa760ba0439ff13`; fetched at `2026-10-02T16:55:32+1000`
 - Candidate patch SHA-256: `c4dc341c4bd84f7242808445d6918fcecfdea07f3ed6230e1200ff306a091078`
 - Commit SHA: `9741a187976663d594fe7f1734adacb8e1443a31`
@@ -208,10 +210,10 @@
 - Required validation: `PASS`; evidence: clean `npm ci` succeeded, then `npm run check:ci` passed TypeScript, lint with 0 errors / 556 existing warnings, button audit, 44/44 auditor tests, 3 fast suites / 26 tests and the full 62 suites / 368 tests; Root and Mobile remain separate branch pushes and no build, deployment or OTA is included.
 - Shared-hunk review: `PASS`; evidence: the two selected Mobile CRLs jointly declare every non-ledger hunk in the exact range and the independent read-only push review verified that ownership.
 - Generated-file review: `PASS`; evidence: no tracked build output, cache, dependency directory or generated artifact is selected.
-- Technical state: `committed`
+- Technical state: `pushed`
 - User authorization: `approved-for-push`; evidence: after the exact final Root and Mobile branch heads were reported, the user explicitly instructed “推送”, then confirmed authorization for the required ledger-only push-evidence commits and the new final branch heads they create.
 - Independent review: `GO`; evidence: independent read-only push review verified the exact two-CRL Mobile range, base, branch, content commit, full-range fingerprint, 7 files / 39 non-ledger hunks, paired scope, clean-install full CI, authorization and sensitive/generated-file boundaries; no P0/P1 remains and two recorded P2s are non-blocking.
-- Action conclusion: `GO`; evidence: the clean exact `8c4df378665e05b1de9179cd3fa760ba0439ff13...7e2383955f67e840019d60fd241f90dc9ef8aca0` release report passed every gate; the same report must pass again after this ledger-only conclusion receipt.
+- Action conclusion: `GO`; evidence: the clean final pre-push range report passed every gate, the non-force initial push succeeded, and `git ls-remote` matched `origin/codex/subsidy-direct-amount-20261001@9bcb62cbbc70edd439b84a222eeb5064a7efdd53`; this ledger-only pushed-state receipt must pass the same audit before its second push.
 
 
 ### Git / Delivery State
