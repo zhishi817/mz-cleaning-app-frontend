@@ -1,5 +1,118 @@
 # Change Release Ledger
 
+## CRL-20261002-001 — 移动端只保留通用补贴入口（mobile）
+
+- **Repository:** `mobile`
+- **Status:** verified in isolated candidate; selected for commit
+- **Updated:** 2026-10-02 Australia/Melbourne
+- **Request:** 不向合作方展示停车费、油费、高温补贴、雨补等预设类别，也不再给一个新的“其他费用”入口；合作方只填写具体补贴内容、金额和证明，交由财务判断能否给、是否计入。
+- **Outcome:** 新建工作量反馈和周结算补充区只显示一个“补贴”入口，字段为“补贴内容”“补贴金额 AUD”和证明照片，不含任何具体补贴示例。补贴金额按最终总额展示，不再根据结算单现有未税规则额外加 GST。历史 `custom_amount` 记录继续可查看，历史草稿/退回记录仍可修改。
+
+### Implementation
+
+- 新建表单过滤新的 `custom_amount` 选项；旧记录仅在带有历史 claim ID 时保留编辑兼容。
+- 保存过但尚未提交的旧“其他费用”草稿自动归入通用补贴，保留已填金额、内容和照片。
+- 补贴字段使用专用中文标签与不带示例的占位文案；缺内容时提示“请填写补贴内容”。
+- 周结算补充区移除费用类型二选一，只提交 `subsidy_amount`，预计增加额直接使用填写的最终总额。
+- API 类型允许后端直接金额计算返回空 `rule_id/rule_name`；Jest 的 WebView mock 标记为 virtual，使缺少本地可选包的隔离验证仍可运行。
+
+### Files / Areas
+
+- `src/screens/me/PersonnelSettlementScreen.tsx` — 单一补贴入口、历史兼容、字段文案与最终总额预览。
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — 覆盖不显示“其他费用”、不列举具体补贴、补贴字段及不额外加 GST。
+- `src/lib/api.ts` — 直接金额预估的可空规则元数据。
+- `docs/feature-regression-registry.md` — 登记通用补贴覆盖规则。
+- `docs/change-release-ledger.md` — 本 CRL。
+
+### Impact / Dependencies
+
+- 无原生依赖、数据库结构、migration、生产写入、OTA 或 build 发布。
+- 配套后端为 `root/CRL-20261002-001`；仅发布移动端会改变入口但不能保证生产 API 无规则计算，因此两仓应一起发布。
+- 历史 `custom_amount` 不删除、不改类型，避免旧草稿和待处理记录失联。
+
+### Validation
+
+- `npm test -- --runInBand src/screens/me/PersonnelSettlementScreen.test.tsx` — passed：17/17 tests，包含历史 `custom_amount` 可继续修改但不再出现在新建类型中的回归。
+- `NODE_OPTIONS=--max-old-space-size=8192 npm run typecheck` — 在候选外临时补充当前安装树缺失的 `react-native-webview` 类型声明后 passed；临时声明未保留在候选，仓库 `package.json` 已声明该依赖。
+- 目标文件 ESLint（仅因当前安装树缺失上述已声明包而关闭 `import/no-unresolved`）— passed：0 errors / 35 个既有 warnings。
+- 完整 `npm run lint` — 未通过：唯一 error 是当前 `node_modules` 无法解析已在 `package.json` 声明的 `react-native-webview`；另有 110 个既有 warnings。未通过安装依赖来改变候选环境。
+- `npm run check:buttons` — passed：没有发现可疑硬编码按钮尺寸；27 个台账内既有例外仍被排除，因此不等同于全量 44pt 合规证明。
+- 构建/导出 — not run：当前隔离候选的复用依赖树缺失已声明的 `react-native-webview`，不能把不完整安装树当作有效发布构建证据。
+- `python3 scripts/audit_change_release_ledger.py` — passed：5/5 changed files recorded；`git diff --check` — passed。
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; candidate is based on freshly fetched `origin/Dev`.
+- `docs/feature-regression-registry.md` — SHA-256: `15a0fa982f88f1b32bdc03a07af700afa70971d32348f231b5bdfea6649f1b8a`
+- `docs/feature-regression-registry.md` — SHA-256: `42b78823f982c6a335d74de2cb8848f9535f1ed42528d966aa654df4263c0558`
+- `src/lib/api.ts` — SHA-256: `de71719eeec9824597a033604ca546138dfcb78201c6f3ae694b19d5cf32afbc`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `00686293ed32fa65817cb1fe96b1c2cdcf8d1c80b312980f907935670bbba85e`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `0393d47f2afcde60a794cbbb59390ad7611b59b01ce27912c8db36874a577af3`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `41c42f8df7f30148a8381ad703103684d6ada3df7cc3632fdac1a8b6abb53603`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `5ed2102ed7c1a25774de31c2e89b42c4333ce3f876ef718e363266ae48861db6`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `72548995298b2391aa9669d69352addf8a02f570dfa3202960805b1227367e11`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `78123d79b92c2039d7d14d17b02cb2e11e6d33d40f87d1da7c4d52c4908b241d`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `95c695480647b1491befbf35daa922216a9b748b3e2eb8271a967fc6a57f84a7`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `96b52af67a6f6e71571cf9524a9cf392615e0d0c2196d8acea49af89ac258e62`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `b16859989dbeddf5fa67196536f522bc32c54421a3a8b01c2271bb3a622d09a0`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `c89326bde03d79427fc3b6ebb02fcb23e1f0b34ca92752a5cd38e2963add71f6`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `f13eeb1d43a396879766cb87fb52329a11b963d4e7027df24cfb119969e856a0`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `1da79533bc01bb19240562f70aec7a51378a7303c66d3be1d55aeaede9e0afa9`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `266706b41496fdd2d010a8f0dc2e17e38c1f0aa8d7b32fcdc6655f60bdbe95bc`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `32015a82403793dbab5e6ce761092e10fdebe7b682f7b153143b7d7c9a5b10ac`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `3b7b8ac1e573aee27ed0da71c817973a301481956859c42a66b21293c5b1a768`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `4ebf0ba067c47e041eb7df29c651a3dabaef56a45cb401873fe0e38f57eb7ff2`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `5df3cc5fd7559bd8551fbd483a444dc0e76a8b954f1efa7ffede7283f2c16008`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `642ff00b042176b5431ea3c4f3c67cb1c5f8a898fb8d624482ef7cfeea10df7f`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `745cd5001cafa5c8a1478abd64975e3725a47920655488e736a011419711b358`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `7465c81dfea5cafbfc51f38f076b79dd86c67e07f57b3b1a740526111a0bfb63`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `7b6608a82dcd7fc173cc537706f8ca20d698625d5d75b37e38c552b2e9f1b280`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `8aed555eb8a3bc2494ec569a43fa6ffd7ae36390e06804556c86d5a5ce7955d0`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `8d1795f730a965f42e1a8d5bcef296c0b464535f4232ea5a3d722a3747548f80`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `981f1d07bbe70e9a39ae37dd92aa38a208ba58f99f83b21fa671f1219e4f7c11`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `9830200e1153eac955dca941be67a64db6c2251961a5b3b5f47e7732bdef1e90`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `a234a97768144b81a329602c0ed7ae76d9bdd49ae274f3f5f97c9ff970a07ed3`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `b137d1fbcfb7dae240418a2353ae662758169cf10934808cb107f8af12a0a66c`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `baa945c18aff7b3ef49b85f4543e1673021597fe745f4ce7051dfb4883722350`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ca7ce4c507a85c58fd533b62a8b4874297dd0c70040850c5e91e8f4fdc171c6e`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `e5274166f48cc90b4407951126ed29f2c85b3a46040e0027a013fd0ac8f7249d`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ec02d7d6589cc13a06bd38c9ce4a5f9cbaddf9dd70d752f746de67343d73665c`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `f628db76fd38c96276454d9b474007b35f616c9b22c7eebf02fce526f57d3f29`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `fdb495a21d8bc6100e14111a2c910d9a67dce8e0f47f66486d338a0a3b495e23`
+
+### Release Attempts
+
+#### RA-20261002-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261002-001`
+- Selected CRL identities: `mobile/CRL-20261002-001`
+- Intended action: `commit`
+- Branch: `codex/subsidy-direct-amount-20261001`
+- Base: `origin/Dev@8c4df378665e05b1de9179cd3fa760ba0439ff13`; fetched at `2026-10-02T10:53:07+1000`
+- Candidate patch SHA-256: `f98bd568758e41ad332f636f4ed2cd509364e806ff370507c27f4121bbda8e30`
+- Commit SHA: `not committed`
+- Dependencies: `root/CRL-20261002-001`
+- Required validation: `PASS`; evidence: 17/17 targeted tests, temporary-stub TypeScript, target lint, button audit, ledger coverage and diff check passed; full lint environment gap is recorded.
+- Shared-hunk review: `not applicable`; evidence: only one selected mobile CRL.
+- Generated-file review: `PASS`; evidence: no build outputs, caches or dependency links are staged.
+- Technical state: `verified`
+- User authorization: `selected-for-commit`; evidence: user explicitly selected mobile/CRL-20261002-001 for commit.
+- Independent review: `GO for commit`; evidence: independent read-only reviewer recomputed candidate fingerprint `f98bd568758e41ad332f636f4ed2cd509364e806ff370507c27f4121bbda8e30`, inspected all 5 staged files / 36 non-ledger hunks, reran 17/17 focused tests, the exact pre-commit gate and diff check, and found no P0/P1, scope, secret, generated-file or production-write blocker. Accepted non-blocking P2s: a same-day legacy local draft can miss automatic reclassification if options load before AsyncStorage, and one test mock implementation is not restored between cases; users can still select the single subsidy entry without data loss.
+- Action conclusion: `GO`; the exact reviewed candidate may be committed locally. Push, PR, merge, OTA/build, deployment and device/production verification remain unauthorized.
+
+### Git / Delivery State
+
+- Branch: `codex/subsidy-direct-amount-20261001`
+- Base: `origin/Dev@8c4df378665e05b1de9179cd3fa760ba0439ff13`
+- Commit SHA: not committed
+- Remote branch/SHA: not pushed
+- PR / merge: not created / not merged
+- OTA / build: not published / not built
+- Device verification: not run
+
 ## CRL-20260929-001 — 多选新 CRL 的连续台账范围审计（mobile）
 
 - **Repository:** `mobile`

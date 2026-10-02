@@ -2532,8 +2532,8 @@ export type MyPersonnelClaimOptionsResponse = {
 export type PersonnelClaimEstimate = {
   available: boolean
   reason: string | null
-  rule_id?: string
-  rule_name?: string
+  rule_id?: string | null
+  rule_name?: string | null
   effective_from?: string
   price_basis?: 'inclusive_gst' | 'exclusive_gst'
   unit_rate_cents?: number

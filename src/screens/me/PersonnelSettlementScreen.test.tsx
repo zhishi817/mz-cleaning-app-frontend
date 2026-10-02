@@ -1,7 +1,14 @@
 import React from 'react'
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
 import { Alert, AppState, Share, StyleSheet } from 'react-native'
-import { getMyPersonnelClaim, getMyPersonnelSettlement, getMyPersonnelSettlementSubmissionPreview, listMyPersonnelClaims, listMyPersonnelSettlements } from '../../lib/api'
+import {
+  getMyPersonnelClaim,
+  getMyPersonnelSettlement,
+  getMyPersonnelSettlementSubmissionPreview,
+  listMyPersonnelClaims,
+  listMyPersonnelSettlements,
+  type MyPersonnelClaimOptionsResponse,
+} from '../../lib/api'
 import PersonnelSettlementScreen, {
   buildPersonnelCalendarMonth,
   formatPersonnelDuration,
@@ -58,7 +65,7 @@ jest.mock('@react-navigation/native', () => {
 jest.mock('react-native-webview', () => {
   const { View } = require('react-native')
   return { WebView: View }
-})
+}, { virtual: true })
 
 jest.mock('expo-image-picker', () => ({
   MediaTypeOptions: { Images: 'Images' },
@@ -93,17 +100,17 @@ const mockDownloadDocument = jest.fn(async (_token?: string, _settlementId?: str
 const mockCreateClaim = jest.fn(async (_token?: string, payload?: any) => ({ id: payload?.client_request_id || 'claim-1', status: 'draft' }))
 const mockUploadEvidence = jest.fn(async (_token?: string, _claimId?: string, _mediaId?: string, _file?: any) => ({ id: 'evidence-1' }))
 const mockSubmitClaim = jest.fn(async (_token?: string, _claimId?: string) => ({ id: 'claim-1', status: 'submitted' }))
-const mockGetClaimOptions = jest.fn(async (_token?: string, serviceDate?: string) => ({
+const mockGetClaimOptions = jest.fn(async (_token?: string, serviceDate?: string): Promise<MyPersonnelClaimOptionsResponse> => ({
   service_date: serviceDate || '2026-09-13',
   rule_id: 'rule-1',
   rule_name: 'Cleaner rule',
   options: [
     { business_type: 'warehouse', claim_type: 'warehouse_hour', label: '仓管工作', calculation_label: '可先反馈，公司核对时确认计算方式', input_mode: 'time_range', evidence_required: true, property_required: false, rule_configured: false },
     { business_type: 'overtime', claim_type: 'overtime_hour', label: '加班', calculation_label: '可先反馈，公司核对时确认计算方式', input_mode: 'time_range', evidence_required: true, property_required: false, rule_configured: false },
-    { business_type: 'subsidy', claim_type: 'subsidy_amount', label: '补贴', calculation_label: '可先反馈，公司核对时确认计算方式', input_mode: 'amount', evidence_required: true, property_required: false, rule_configured: false },
+    { business_type: 'subsidy', claim_type: 'subsidy_amount', label: '补贴', calculation_label: '按填写金额提交，公司核对后决定是否计入', input_mode: 'amount', evidence_required: true, property_required: false, rule_configured: true },
     { business_type: 'new_property', claim_type: 'new_property_task', label: '上新房', calculation_label: '可先反馈，公司核对时确认计算方式', input_mode: 'time_range', evidence_required: false, property_required: true, rule_configured: false },
     { business_type: 'external', claim_type: 'external_task', label: '编外合作', calculation_label: '可先反馈，公司核对时确认计算方式', input_mode: 'quantity', evidence_required: true, property_required: false, rule_configured: false },
-    { business_type: 'custom', claim_type: 'custom_amount', label: '其他费用', calculation_label: '可先反馈，公司核对时确认计算方式', input_mode: 'amount', evidence_required: true, property_required: false, rule_configured: false },
+    { business_type: 'custom', claim_type: 'custom_amount', label: '其他费用', calculation_label: '按填写金额提交，公司核对后决定是否计入', input_mode: 'amount', evidence_required: true, property_required: false, rule_configured: true },
   ],
 }))
 const mockGetClaimEstimate = jest.fn(async (_token?: string, _params?: any) => ({
@@ -384,6 +391,35 @@ test('草稿或需补充资料的反馈从详情继续修改', async () => {
   expect(ui.getByTestId('claim-form-header')).toBeTruthy()
 })
 
+test('历史其他费用仍可修改但不会重新出现在新建类型中', async () => {
+  const returnedClaim = {
+    id: 'claim-custom-returned', status: 'returned', service_date: '2026-09-12', claim_type: 'custom_amount',
+    requested_amount_cents: 1368, note: '历史停车补贴', review_note: '请补充说明', evidence_count: 1,
+  } as any
+  ;(listMyPersonnelClaims as jest.Mock).mockResolvedValueOnce([returnedClaim])
+  ;(getMyPersonnelClaim as jest.Mock).mockResolvedValueOnce(returnedClaim)
+  const optionsWithoutCustom = (await mockGetClaimOptions('token-1', '2026-09-12')).options
+    .filter((option: any) => option.claim_type !== 'custom_amount')
+  mockGetClaimOptions.mockImplementation(async (_token?: string, serviceDate?: string) => ({
+    service_date: serviceDate || '2026-09-12',
+    rule_id: null,
+    rule_name: null,
+    options: optionsWithoutCustom,
+  }))
+
+  const ui = renderPersonnelSettlementScreen()
+  await waitFor(() => expect(ui.getByTestId('claim-row-claim-custom-returned')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-row-claim-custom-returned'))
+  await waitFor(() => expect(ui.getByTestId('claim-detail-edit')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-detail-edit'))
+  await waitFor(() => expect(ui.getByText('修改工作量反馈')).toBeTruthy())
+
+  expect(ui.getByText('当前选择：其他费用（历史）')).toBeTruthy()
+  expect(ui.queryByTestId('claim-type-custom')).toBeNull()
+  expect(ui.getByTestId('claim-amount').props.value).toBe('13.68')
+  expect(ui.getByTestId('claim-note').props.value).toBe('历史停车补贴')
+})
+
 test('页面聚焦和回前台刷新结算状态且十秒内不会重复读取', async () => {
   const ui = renderPersonnelSettlementScreen()
   await waitFor(() => expect(listMyPersonnelClaims).toHaveBeenCalledTimes(1))
@@ -632,13 +668,18 @@ test('上一完整周必须先核对明细并二次确认才提交给财务', as
   ui.unmount()
 })
 
-test('没有对应费用规则时仍可主动选择业务类型，上新房按时间且无需照片即可提交', async () => {
+test('补贴使用单一通用入口且不提示具体类别，上新房按时间且无需照片即可提交', async () => {
   const ui = renderPersonnelSettlementScreen()
   await waitFor(() => expect(mockGetClaimOptions).toHaveBeenCalled())
   openClaimForm()
 
-  expect(ui.getByText(/未配置规则也可以先提交/)).toBeTruthy()
-  expect(ui.getByText('可先反馈，公司核对时确认计算方式')).toBeTruthy()
+  expect(ui.getByText(/补贴按填写金额提交，由财务决定是否计入/)).toBeTruthy()
+  expect(ui.getByText('按填写金额提交，公司核对后决定是否计入')).toBeTruthy()
+  expect(ui.queryByText('其他费用')).toBeNull()
+  expect(ui.getByText('补贴金额 AUD')).toBeTruthy()
+  expect(ui.getByText('补贴内容')).toBeTruthy()
+  expect(ui.getByTestId('claim-note').props.placeholder).toBe('请填写具体补贴内容')
+  expect(ui.getByTestId('claim-note').props.placeholder).not.toMatch(/停车|油费|高温|雨补|交通/)
   expect(ui.getAllByText('编外合作')).toHaveLength(1)
   expect(ui.queryByText(/试工/)).toBeNull()
   expect(ui.getByTestId('claim-amount')).toBeTruthy()
@@ -791,7 +832,7 @@ test('关闭仍在加载的周结算后迟到响应不会重新打开详情', as
   expect(ui.queryByTestId('settlement-detail-header')).toBeNull()
 })
 
-test('周结算详情从统一入口提交带截图的补充费用并原子进入重新核对', async () => {
+test('周结算详情从统一入口提交带截图的通用补贴并原子进入重新核对', async () => {
   const ui = renderPersonnelSettlementScreen()
   await waitFor(() => expect(ui.getByText('暂无工作量反馈')).toBeTruthy())
   fireEvent.press(ui.getByTestId('personnel-settlements-tab'))
@@ -802,6 +843,11 @@ test('周结算详情从统一入口提交带截图的补充费用并原子进�
   fireEvent.press(ui.getByTestId('settlement-issue-supplement'))
   await waitFor(() => expect(ui.getByTestId('settlement-supplement-card')).toBeTruthy())
   expect(StyleSheet.flatten(ui.getByTestId('settlement-supplement-card').props.style)).toEqual(expect.objectContaining({ gap: 12 }))
+  expect(ui.getByText('补充本周补贴')).toBeTruthy()
+  expect(ui.queryByText('其他费用')).toBeNull()
+  expect(ui.getByText('补贴金额 AUD')).toBeTruthy()
+  expect(ui.getByText('补贴内容')).toBeTruthy()
+  expect(ui.getByTestId('settlement-supplement-note').props.placeholder).toBe('请填写具体补贴内容')
 
   expect(ui.getByTestId('settlement-projected-total').props.children).toBe('$110.00')
   expect(ui.getByTestId('settlement-supplement-date-value').props.children).toBe('13/09/2026')
@@ -815,8 +861,8 @@ test('周结算详情从统一入口提交带截图的补充费用并原子进�
   expect(ui.getByTestId('settlement-supplement-date-value').props.children).toBe('12/09/2026')
   fireEvent.changeText(ui.getByTestId('settlement-supplement-amount'), '10.00')
   fireEvent.changeText(ui.getByTestId('settlement-supplement-note'), '临时交通补贴')
-  expect(ui.getByTestId('settlement-current-supplement-total').props.children).toEqual(['+ ', '$11.00'])
-  expect(ui.getByTestId('settlement-projected-total').props.children).toBe('$121.00')
+  expect(ui.getByTestId('settlement-current-supplement-total').props.children).toEqual(['+ ', '$10.00'])
+  expect(ui.getByTestId('settlement-projected-total').props.children).toBe('$120.00')
 
   fireEvent.press(ui.getByText('上传照片/截图'))
   await waitFor(() => expect(mockAddDraftPhoto).toHaveBeenCalled())
