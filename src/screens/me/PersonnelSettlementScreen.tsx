@@ -104,6 +104,16 @@ const CLAIM_TYPE_LABELS: Record<PersonnelClaimType, string> = {
   external_hour: '编外合作',
   custom_amount: '其他费用',
 }
+const HISTORICAL_CUSTOM_AMOUNT_OPTION: PersonnelClaimOption = {
+  business_type: 'custom',
+  claim_type: 'custom_amount',
+  label: '其他费用（历史）',
+  calculation_label: '按填写金额提交，公司核对后决定是否计入',
+  input_mode: 'amount',
+  evidence_required: true,
+  property_required: false,
+  rule_configured: true,
+}
 const SETTLEMENT_COMPONENT_LABELS: Record<string, string> = {
   inspection_day: 'Inspection',
   warehouse_hour: 'Warehouse',
@@ -488,11 +498,8 @@ export function unincludedSubmissionClaims(
   ))
 }
 
-export function estimatedSettlementClaimTotalCents(settlement: PersonnelWeeklySettlement, amountCents: number) {
+export function estimatedSettlementClaimTotalCents(_settlement: PersonnelWeeklySettlement, amountCents: number) {
   const safeAmount = Number.isFinite(amountCents) ? Math.max(0, Math.round(amountCents)) : 0
-  const gstRegistered = settlement.profile_snapshot?.gst_status === 'registered'
-  const priceBasis = (settlement.lines || []).find((line) => line.price_basis)?.price_basis
-  if (gstRegistered && priceBasis === 'exclusive_gst') return safeAmount + Math.floor((safeAmount + 5) / 10)
   return safeAmount
 }
 
@@ -1032,8 +1039,14 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
       setClaimOptions(nextOptions)
       setDraft((current) => {
         if (current.service_date !== serviceDate || current.claim_id) return current
+        if (current.claim_type === 'custom_amount') {
+          const subsidyOption = nextOptions.find((option) => option.claim_type === 'subsidy_amount')
+          return subsidyOption ? draftForClaimOption(current, subsidyOption) : current
+        }
         if (nextOptions.some((option) => option.claim_type === current.claim_type)) return current
-        return nextOptions[0] ? draftForClaimOption(current, nextOptions[0]) : current
+        const fallback = nextOptions.find((option) => option.claim_type === 'subsidy_amount')
+          || nextOptions.find((option) => option.claim_type !== 'custom_amount')
+        return fallback ? draftForClaimOption(current, fallback) : current
       })
     } catch (error: any) {
       if (claimOptionsRequestRef.current !== requestId) return
@@ -1118,7 +1131,9 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
   const resetDraft = useCallback(async () => {
     if (userId) await clearPersonnelClaimDraft(userId, draft)
     const empty = emptyPersonnelClaimDraft(todayYmd())
-    setDraft(claimOptions[0] ? draftForClaimOption(empty, claimOptions[0]) : empty)
+    const defaultOption = claimOptions.find((option) => option.claim_type === 'subsidy_amount')
+      || claimOptions.find((option) => option.claim_type !== 'custom_amount')
+    setDraft(defaultOption ? draftForClaimOption(empty, defaultOption) : empty)
   }, [claimOptions, draft, userId])
 
   const addPhoto = useCallback(async (source: 'camera' | 'library') => {
@@ -1159,7 +1174,9 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
 
   const validateClaimDraft = useCallback((candidate: PersonnelClaimDraft, option?: PersonnelClaimOption) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate.service_date)) throw new Error('请输入 YYYY-MM-DD 格式的工作日期')
-    if (!candidate.note.trim()) throw new Error('请填写工作说明')
+    if (!candidate.note.trim()) {
+      throw new Error(candidate.claim_type === 'subsidy_amount' ? '请填写补贴内容' : '请填写工作说明')
+    }
     if (option?.property_required && !candidate.property_id.trim()) throw new Error('请填写房源编号')
     if (option?.input_mode === 'time_range') {
       if (!candidate.started_at || !candidate.ended_at) throw new Error('请选择开始时间和结束时间')
@@ -1245,12 +1262,15 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
     if (!token || !userId || saving) return
     try {
       const option = claimOptions.find((item) => item.claim_type === draft.claim_type)
+        || (draft.claim_id && draft.claim_type === 'custom_amount' ? HISTORICAL_CUSTOM_AMOUNT_OPTION : null)
       if (!option) throw new Error('当前反馈类型暂不可用，请刷新后重新选择')
       validateClaimDraft(draft, option)
       setSaving(true)
       await persistAndSubmitClaim(draft, 'default', setDraft)
       const empty = emptyPersonnelClaimDraft(todayYmd())
-      setDraft(claimOptions[0] ? draftForClaimOption(empty, claimOptions[0]) : empty)
+      const defaultOption = claimOptions.find((item) => item.claim_type === 'subsidy_amount')
+        || claimOptions.find((item) => item.claim_type !== 'custom_amount')
+      setDraft(defaultOption ? draftForClaimOption(empty, defaultOption) : empty)
       await loadAll(true)
       setClaimFormOpen(false)
       Alert.alert('提交成功', option.evidence_required ? '工作量和证明已提交公司核对。' : '工作量已提交公司核对。')
@@ -1332,7 +1352,9 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
       ])
       if (settlementDetailRequestRef.current !== requestId) return
       setSettlementDetail(detail)
-      setSupplementDraft(storedSupplement || emptyPersonnelClaimDraft(detail.week_end))
+      setSupplementDraft(storedSupplement
+        ? { ...storedSupplement, claim_type: 'subsidy_amount' }
+        : emptyPersonnelClaimDraft(detail.week_end))
     } catch (error: any) {
       if (settlementDetailRequestRef.current !== requestId) return
       setSettlementDetail(null)
@@ -1404,8 +1426,8 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
       if (!['awaiting_confirmation', 'disputed'].includes(settlementDetail.status)) {
         throw new Error('当前结算已确认或已进入付款流程，请联系财务重新打开后再补充。')
       }
-      if (!['subsidy_amount', 'custom_amount'].includes(supplementDraft.claim_type)) {
-        throw new Error('本区域只补充补贴或其他费用')
+      if (supplementDraft.claim_type !== 'subsidy_amount') {
+        throw new Error('本区域只补充需要财务核对的补贴')
       }
       if (!isDateWithinSettlement(supplementDraft.service_date, settlementDetail)) {
         throw new Error(`工作日期必须在 ${settlementDetail.week_start} 至 ${settlementDetail.week_end} 内`)
@@ -1531,8 +1553,13 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
   }, [draft.service_date, loadClaimOptions, refreshSettlementLists])
 
   const selectedClaimOption = useMemo(
-    () => claimOptions.find((item) => item.claim_type === draft.claim_type) || null,
-    [claimOptions, draft.claim_type],
+    () => claimOptions.find((item) => item.claim_type === draft.claim_type)
+      || (draft.claim_id && draft.claim_type === 'custom_amount' ? HISTORICAL_CUSTOM_AMOUNT_OPTION : null),
+    [claimOptions, draft.claim_id, draft.claim_type],
+  )
+  const selectableClaimOptions = useMemo(
+    () => claimOptions.filter((item) => item.claim_type !== 'custom_amount'),
+    [claimOptions],
   )
   const selectedTypeLabel = selectedClaimOption?.label || CLAIM_TYPE_LABELS[draft.claim_type] || draft.claim_type
   const claimEstimateParams = useMemo(() => {
@@ -1661,7 +1688,7 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                   </View>
                   <ScrollView contentContainerStyle={[styles.content, { paddingBottom: 40 + insets.bottom }]} keyboardShouldPersistTaps="handled">
             <View style={styles.card}>
-              <Text style={styles.help}>先选择工作日期，再主动反馈需要公司核对的工作或费用。已有费用规则会自动采用；未配置规则也可以先提交。</Text>
+              <Text style={styles.help}>先选择工作日期，再反馈需要公司核对的工作或补贴。按时、按次工作采用费用规则；补贴按填写金额提交，由财务决定是否计入。</Text>
               <DateSelector testID="claim-service-date" label="工作日期" value={draft.service_date} onPress={() => setDatePickerTarget('claim')} />
               <Text style={styles.label}>工作或费用类型</Text>
               {claimOptionsLoading ? (
@@ -1671,9 +1698,9 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                   <Text style={styles.errorText}>{claimOptionsError}</Text>
                   <AppButton label="重新加载" tone="outline" size="compact" onPress={() => loadClaimOptions(draft.service_date)} />
                 </View>
-              ) : claimOptions.length ? (
+              ) : selectableClaimOptions.length ? (
                 <View style={styles.typeGrid}>
-                {claimOptions.map((item) => (
+                {selectableClaimOptions.map((item) => (
                   <AppButton
                     key={item.business_type}
                     testID={`claim-type-${item.business_type}`}
@@ -1717,7 +1744,7 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                 <Field testID="claim-quantity" label="工作量" value={draft.requested_quantity} placeholder="例如 1" keyboardType="decimal-pad" onChangeText={(value) => setDraftField('requested_quantity', value.replace(/[^\d.]/g, ''))} />
               ) : null}
               {selectedClaimOption?.input_mode === 'amount' ? (
-                <Field testID="claim-amount" label="费用金额 AUD" value={draft.requested_amount} placeholder="例如 35.00" keyboardType="decimal-pad" onChangeText={(value) => setDraftField('requested_amount', value.replace(/[^\d.]/g, ''))} />
+                <Field testID="claim-amount" label={selectedClaimOption.claim_type === 'subsidy_amount' ? '补贴金额 AUD' : '费用金额 AUD'} value={draft.requested_amount} placeholder="例如 35.00" keyboardType="decimal-pad" onChangeText={(value) => setDraftField('requested_amount', value.replace(/[^\d.]/g, ''))} />
               ) : null}
               {selectedClaimOption?.input_mode === 'day' ? (
                 <View style={styles.notice}><Text style={styles.help}>本次按所选工作日期计 1 天，实际金额由当天生效规则计算。</Text></View>
@@ -1731,7 +1758,7 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                 ) : claimEstimate?.available ? (
                   <View testID="claim-estimate-card" style={styles.estimateCard}>
                     <View style={styles.summaryRow}>
-                      <Text style={styles.muted}>结算规则</Text>
+                      <Text style={styles.muted}>{selectedClaimOption.input_mode === 'amount' ? '提交口径' : '结算规则'}</Text>
                       <Text testID="claim-estimate-rate" style={styles.summaryValue}>
                         {selectedClaimOption.input_mode === 'time_range'
                           ? `${money(claimEstimate.unit_rate_cents)} / 小时`
@@ -1761,7 +1788,15 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
               ) : null}
               {selectedClaimOption ? (
                 <>
-              <Field testID="claim-note" label="工作说明" value={draft.note} placeholder="说明工作内容、时间或补贴原因" multiline onChangeText={(value) => setDraftField('note', value)} style={styles.multiline} />
+              <Field
+                testID="claim-note"
+                label={selectedClaimOption.claim_type === 'subsidy_amount' ? '补贴内容' : '工作说明'}
+                value={draft.note}
+                placeholder={selectedClaimOption.claim_type === 'subsidy_amount' ? '请填写具体补贴内容' : '说明工作内容和时间'}
+                multiline
+                onChangeText={(value) => setDraftField('note', value)}
+                style={styles.multiline}
+              />
 
               <Text testID="claim-photo-label" style={styles.label}>
                 照片或截图证明{selectedClaimOption?.evidence_required === false ? '（选填）' : '（必填）'}（{draft.media.length}/5）
@@ -2243,8 +2278,8 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
 
                     {settlementIssueMode === 'supplement' && supplementDraft ? (
                       <View testID="settlement-supplement-card" style={styles.supplementForm}>
-                        <Text style={styles.cardTitle}>补充本周工作或费用</Text>
-                        <Text style={styles.help}>填写日期、金额和说明，并上传照片或截图。提交后公司会核对内容，不会直接改写正式结算金额。</Text>
+                        <Text style={styles.cardTitle}>补充本周补贴</Text>
+                        <Text style={styles.help}>填写日期、补贴内容和金额，并上传照片或截图。提交后由财务核对是否计入，不会直接改写正式结算金额。</Text>
                         <View style={styles.summaryBox}>
                           <View style={styles.summaryRow}>
                             <Text style={styles.muted}>当前正式总额</Text>
@@ -2267,7 +2302,7 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                             </Text>
                           </View>
                         </View>
-                        <Text style={styles.help}>预计总额按本结算当前 GST 与含税/未税口径估算；公司可核对并调整金额，最终以重新生成的正式结算单为准。</Text>
+                        <Text style={styles.help}>补贴金额按填写的最终总额估算；公司可核对并调整金额，最终以重新生成的正式结算单为准。</Text>
 
                         {pendingClaims.length ? (
                           <View style={styles.pendingList}>
@@ -2284,16 +2319,9 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                           </View>
                         ) : null}
 
-                        <View style={styles.field}>
-                          <Text style={styles.label}>费用类型</Text>
-                          <View style={styles.actionRow}>
-                            <AppButton label="补贴" size="compact" minHeight={44} tone={supplementDraft.claim_type === 'subsidy_amount' ? 'primary' : 'outline'} onPress={() => setSupplementDraftField('claim_type', 'subsidy_amount')} style={styles.flexButton} />
-                            <AppButton label="其他费用" size="compact" minHeight={44} tone={supplementDraft.claim_type === 'custom_amount' ? 'primary' : 'outline'} onPress={() => setSupplementDraftField('claim_type', 'custom_amount')} style={styles.flexButton} />
-                          </View>
-                        </View>
                         <DateSelector testID="settlement-supplement-date" label="工作日期" value={supplementDraft.service_date} onPress={() => setDatePickerTarget('supplement')} />
-                        <Field testID="settlement-supplement-amount" label="补充费用金额 AUD" value={supplementDraft.requested_amount} placeholder="例如 35.00" keyboardType="decimal-pad" onChangeText={(value) => setSupplementDraftField('requested_amount', value.replace(/[^\d.]/g, ''))} />
-                        <Field testID="settlement-supplement-note" label="工作或费用说明" value={supplementDraft.note} placeholder="说明时间、原因和工作内容" multiline onChangeText={(value) => setSupplementDraftField('note', value)} style={styles.multiline} />
+                        <Field testID="settlement-supplement-amount" label="补贴金额 AUD" value={supplementDraft.requested_amount} placeholder="例如 35.00" keyboardType="decimal-pad" onChangeText={(value) => setSupplementDraftField('requested_amount', value.replace(/[^\d.]/g, ''))} />
+                        <Field testID="settlement-supplement-note" label="补贴内容" value={supplementDraft.note} placeholder="请填写具体补贴内容" multiline onChangeText={(value) => setSupplementDraftField('note', value)} style={styles.multiline} />
                         <View style={styles.field}>
                           <Text style={styles.label}>照片或截图证明（{supplementDraft.media.length}/5）</Text>
                           <View style={styles.photoGrid}>

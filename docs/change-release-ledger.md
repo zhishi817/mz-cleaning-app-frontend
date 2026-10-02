@@ -1,5 +1,231 @@
 # Change Release Ledger
 
+## CRL-20261002-002 — 发布尝试字段解析边界修复
+
+- **Repository:** `mobile`
+- **Status:** locally validated; selected for commit
+- **Updated:** 2026-10-02 Australia/Melbourne
+- **Request:** 修复发布审计器把 Release Attempt 后续的 CRL 汇总字段继续解析为同一次尝试字段，导致正确的 Base、Commit SHA 和授权证据被覆盖并阻止精确范围审计的问题。
+- **Outcome:** 每个 `#### RA-*` 只读取到下一次 Release Attempt 或下一个 `###` 小节；后续“Git / Delivery State”等汇总字段不再覆盖权威 RA，移动端内容提交可以生成合规的后置台账回执与精确范围证据。
+
+### Implementation
+
+- Previous behavior: `parse_attempts` 和 `release_attempt_block` 只以同级 RA 或整个 CRL 结尾作为边界；RA 后出现 `### Git / Delivery State` 时，其中重复的 Base、Commit SHA 会覆盖已记录的权威字段。
+- New behavior: 两个解析入口都选择“下一 RA、下一 `###` 小节、CRL 结尾”三者中最早的位置作为边界。
+- Key decisions: 只收紧 Markdown 解析边界，不修改 CRL 身份、hunk 规则、授权模型、移动端代码、OTA 或生产行为；回归测试同时断言字段值和原始 RA block 均排除后续汇总小节。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — 收紧 Release Attempt 字段和原始区块的结束边界。
+- `scripts/tests/test_audit_change_release_ledger.py` — 增加 RA 后跟 CRL 汇总字段时不被覆盖的回归。
+- `docs/change-release-ledger.md` — 记录本治理修复和提交证据。
+
+### Impact / Dependencies
+
+- Application/API/role/database/production: none；不调用任何业务 API，不读写数据库，不触发通知、任务、同步、OTA 或部署。
+- CI/config/dependencies: 无依赖或工作流改动；现有审计命令会自动使用修复后的解析器。
+- Dependencies: none；本单元位于当前临时分支已有本地提交之后，但解析修复本身不依赖通用补贴业务实现。
+- Related units: `mobile/CRL-20261002-001`, `root/CRL-20261002-003`。
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed：44/44 tests；覆盖合格 CRL、未跟踪路径阻断、hunk 范围不匹配、ledger-only receipt 与 exact range 验证。
+- Feature Registry: not modified；本次只改变发布台账工具，不改变业务不变量。
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; incremental candidate is isolated on the existing temporary release branch after the previously reviewed local content head.
+- `scripts/audit_change_release_ledger.py` — SHA-256: `5d23c314c12a8f54eb0c6f741a445b693ddc0cc0fe3df1802d2213d78278bb50`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `c17effd7203096d59568ee2ccedbd3aaac91742fedab69ee584066b6649bf0fa`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `6c9439a8a627e8d0059826d0e444c75985639ac4107f91a800fd467248fbd8d0`
+
+### Release Attempts
+
+#### RA-20261002-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261002-002`
+- Selected CRL identities: `mobile/CRL-20261002-002`
+- Intended action: `commit`
+- Branch: `codex/subsidy-direct-amount-20261001`
+- Base: `local incremental base@8ce10fff673a44bf8cc5aa9b88613af9b476b963`; `origin/Dev@8c4df378665e05b1de9179cd3fa760ba0439ff13` fetched at `2026-10-02T15:57:32+1000`
+- Candidate patch SHA-256: `3e60579135086f482230ee92099c2f3d9ec60101c7a16f4c103a6797a111e63b`
+- Commit SHA: `9741a187976663d594fe7f1734adacb8e1443a31`
+- Dependencies: none
+- Required validation: `PASS`; evidence: auditor regression suite passed 44/44 and performs Git-only fixture checks without application, API or database writes.
+- Shared-hunk review: `not applicable`; evidence: all three candidate files belong only to this governance CRL.
+- Generated-file review: `PASS`; evidence: no cache, dependency, build output or generated file is selected.
+- Technical state: `committed`
+- User authorization: `selected-for-commit`; evidence: user explicitly authorized the proposed mobile/CRL-20261002-002 governance repair after the push gate blocker was reported.
+- Independent review: `GO`; evidence: independent read-only review matched the exact 3-file staged scope and candidate fingerprint, found no P0/P1/P2, and independently passed 44/44 auditor tests, the pre-commit gate, ledger coverage and diff check.
+- Action conclusion: `GO`; evidence: the exact reviewed candidate was committed locally as `9741a187976663d594fe7f1734adacb8e1443a31`; push, PR, merge, deployment and OTA remain unauthorized.
+
+#### RA-20261002-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261002-001`, `CRL-20261002-002`
+- Selected CRL identities: `mobile/CRL-20261002-001`, `mobile/CRL-20261002-002`
+- Intended action: `push`
+- Branch: `codex/subsidy-direct-amount-20261001`
+- Remote branch/SHA: initial verified push `origin/codex/subsidy-direct-amount-20261001@9bcb62cbbc70edd439b84a222eeb5064a7efdd53`; this ledger-only pushed-state receipt will be re-audited before a separate second push.
+- Base: `origin/Dev@8c4df378665e05b1de9179cd3fa760ba0439ff13`; fetched at `2026-10-02T16:55:32+1000`
+- Candidate patch SHA-256: `c4dc341c4bd84f7242808445d6918fcecfdea07f3ed6230e1200ff306a091078`
+- Commit SHA: `9741a187976663d594fe7f1734adacb8e1443a31`
+- Dependencies: none
+- Paired release scope: `root/CRL-20261002-001@b4c147980170ae004ba14d7e1f7a8fad25841a5f`, `root/CRL-20261002-002@b4c147980170ae004ba14d7e1f7a8fad25841a5f`, `root/CRL-20261002-003@6da7d035a30c4d499396560a67ebc4ce908f3a70`; the two repository branch pushes are order-independent, while merge/deployment/OTA remain separately gated.
+- Required validation: `PASS`; evidence: clean `npm ci` succeeded, then `npm run check:ci` passed TypeScript, lint with 0 errors / 556 existing warnings, button audit, 44/44 auditor tests, 3 fast suites / 26 tests and the full 62 suites / 368 tests; Root and Mobile remain separate branch pushes and no build, deployment or OTA is included.
+- Shared-hunk review: `PASS`; evidence: the two selected Mobile CRLs jointly declare every non-ledger hunk in the exact range and the independent read-only push review verified that ownership.
+- Generated-file review: `PASS`; evidence: no tracked build output, cache, dependency directory or generated artifact is selected.
+- Technical state: `pushed`
+- User authorization: `approved-for-push`; evidence: after the exact final Root and Mobile branch heads were reported, the user explicitly instructed “推送”, then confirmed authorization for the required ledger-only push-evidence commits and the new final branch heads they create.
+- Independent review: `GO`; evidence: independent read-only push review verified the exact two-CRL Mobile range, base, branch, content commit, full-range fingerprint, 7 files / 39 non-ledger hunks, paired scope, clean-install full CI, authorization and sensitive/generated-file boundaries; no P0/P1 remains and two recorded P2s are non-blocking.
+- Action conclusion: `GO`; evidence: the clean final pre-push range report passed every gate, the non-force initial push succeeded, and `git ls-remote` matched `origin/codex/subsidy-direct-amount-20261001@9bcb62cbbc70edd439b84a222eeb5064a7efdd53`; this ledger-only pushed-state receipt must pass the same audit before its second push.
+
+
+### Risks / Release Notes
+
+- Risk: parser boundary changes affect release evidence extraction only; malformed attempts placed outside `### Release Attempts` remain outside the documented contract.
+- Sensitive-information review: no secrets, credentials, database URLs, environment files or production logs are recorded.
+- Rollback: revert this governance commit; no application, OTA or data rollback is required.
+- Git state: not committed, not pushed, no PR, not merged, not published.
+
+## CRL-20261002-001 — 移动端只保留通用补贴入口（mobile）
+
+- **Repository:** `mobile`
+- **Status:** verified in isolated candidate; selected for commit
+- **Updated:** 2026-10-02 Australia/Melbourne
+- **Request:** 不向合作方展示停车费、油费、高温补贴、雨补等预设类别，也不再给一个新的“其他费用”入口；合作方只填写具体补贴内容、金额和证明，交由财务判断能否给、是否计入。
+- **Outcome:** 新建工作量反馈和周结算补充区只显示一个“补贴”入口，字段为“补贴内容”“补贴金额 AUD”和证明照片，不含任何具体补贴示例。补贴金额按最终总额展示，不再根据结算单现有未税规则额外加 GST。历史 `custom_amount` 记录继续可查看，历史草稿/退回记录仍可修改。
+
+### Implementation
+
+- 新建表单过滤新的 `custom_amount` 选项；旧记录仅在带有历史 claim ID 时保留编辑兼容。
+- 保存过但尚未提交的旧“其他费用”草稿自动归入通用补贴，保留已填金额、内容和照片。
+- 补贴字段使用专用中文标签与不带示例的占位文案；缺内容时提示“请填写补贴内容”。
+- 周结算补充区移除费用类型二选一，只提交 `subsidy_amount`，预计增加额直接使用填写的最终总额。
+- API 类型允许后端直接金额计算返回空 `rule_id/rule_name`；Jest 的 WebView mock 标记为 virtual，使缺少本地可选包的隔离验证仍可运行。
+
+### Files / Areas
+
+- `src/screens/me/PersonnelSettlementScreen.tsx` — 单一补贴入口、历史兼容、字段文案与最终总额预览。
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — 覆盖不显示“其他费用”、不列举具体补贴、补贴字段及不额外加 GST。
+- `src/lib/api.ts` — 直接金额预估的可空规则元数据。
+- `docs/feature-regression-registry.md` — 登记通用补贴覆盖规则。
+- `docs/change-release-ledger.md` — 本 CRL。
+
+### Impact / Dependencies
+
+- 无原生依赖、数据库结构、migration、生产写入、OTA 或 build 发布。
+- 配套后端为 `root/CRL-20261002-001`；仅发布移动端会改变入口但不能保证生产 API 无规则计算，因此两仓应一起发布。
+- 历史 `custom_amount` 不删除、不改类型，避免旧草稿和待处理记录失联。
+
+### Validation
+
+- `npm test -- --runInBand src/screens/me/PersonnelSettlementScreen.test.tsx` — passed：17/17 tests，包含历史 `custom_amount` 可继续修改但不再出现在新建类型中的回归。
+- `NODE_OPTIONS=--max-old-space-size=8192 npm run typecheck` — 在候选外临时补充当前安装树缺失的 `react-native-webview` 类型声明后 passed；临时声明未保留在候选，仓库 `package.json` 已声明该依赖。
+- 目标文件 ESLint（仅因当前安装树缺失上述已声明包而关闭 `import/no-unresolved`）— passed：0 errors / 35 个既有 warnings。
+- 完整 `npm run lint` — 未通过：唯一 error 是当前 `node_modules` 无法解析已在 `package.json` 声明的 `react-native-webview`；另有 110 个既有 warnings。未通过安装依赖来改变候选环境。
+- `npm run check:buttons` — passed：没有发现可疑硬编码按钮尺寸；27 个台账内既有例外仍被排除，因此不等同于全量 44pt 合规证明。
+- 构建/导出 — not run：当前隔离候选的复用依赖树缺失已声明的 `react-native-webview`，不能把不完整安装树当作有效发布构建证据。
+- `python3 scripts/audit_change_release_ledger.py` — passed：5/5 changed files recorded；`git diff --check` — passed。
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; candidate is based on freshly fetched `origin/Dev`.
+- `docs/feature-regression-registry.md` — SHA-256: `15a0fa982f88f1b32bdc03a07af700afa70971d32348f231b5bdfea6649f1b8a`
+- `docs/feature-regression-registry.md` — SHA-256: `42b78823f982c6a335d74de2cb8848f9535f1ed42528d966aa654df4263c0558`
+- `src/lib/api.ts` — SHA-256: `de71719eeec9824597a033604ca546138dfcb78201c6f3ae694b19d5cf32afbc`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `00686293ed32fa65817cb1fe96b1c2cdcf8d1c80b312980f907935670bbba85e`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `0393d47f2afcde60a794cbbb59390ad7611b59b01ce27912c8db36874a577af3`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `41c42f8df7f30148a8381ad703103684d6ada3df7cc3632fdac1a8b6abb53603`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `5ed2102ed7c1a25774de31c2e89b42c4333ce3f876ef718e363266ae48861db6`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `72548995298b2391aa9669d69352addf8a02f570dfa3202960805b1227367e11`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `78123d79b92c2039d7d14d17b02cb2e11e6d33d40f87d1da7c4d52c4908b241d`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `95c695480647b1491befbf35daa922216a9b748b3e2eb8271a967fc6a57f84a7`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `96b52af67a6f6e71571cf9524a9cf392615e0d0c2196d8acea49af89ac258e62`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `b16859989dbeddf5fa67196536f522bc32c54421a3a8b01c2271bb3a622d09a0`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `c89326bde03d79427fc3b6ebb02fcb23e1f0b34ca92752a5cd38e2963add71f6`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `f13eeb1d43a396879766cb87fb52329a11b963d4e7027df24cfb119969e856a0`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `1da79533bc01bb19240562f70aec7a51378a7303c66d3be1d55aeaede9e0afa9`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `266706b41496fdd2d010a8f0dc2e17e38c1f0aa8d7b32fcdc6655f60bdbe95bc`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `32015a82403793dbab5e6ce761092e10fdebe7b682f7b153143b7d7c9a5b10ac`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `3b7b8ac1e573aee27ed0da71c817973a301481956859c42a66b21293c5b1a768`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `4ebf0ba067c47e041eb7df29c651a3dabaef56a45cb401873fe0e38f57eb7ff2`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `5df3cc5fd7559bd8551fbd483a444dc0e76a8b954f1efa7ffede7283f2c16008`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `642ff00b042176b5431ea3c4f3c67cb1c5f8a898fb8d624482ef7cfeea10df7f`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `745cd5001cafa5c8a1478abd64975e3725a47920655488e736a011419711b358`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `7465c81dfea5cafbfc51f38f076b79dd86c67e07f57b3b1a740526111a0bfb63`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `7b6608a82dcd7fc173cc537706f8ca20d698625d5d75b37e38c552b2e9f1b280`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `8aed555eb8a3bc2494ec569a43fa6ffd7ae36390e06804556c86d5a5ce7955d0`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `8d1795f730a965f42e1a8d5bcef296c0b464535f4232ea5a3d722a3747548f80`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `981f1d07bbe70e9a39ae37dd92aa38a208ba58f99f83b21fa671f1219e4f7c11`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `9830200e1153eac955dca941be67a64db6c2251961a5b3b5f47e7732bdef1e90`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `a234a97768144b81a329602c0ed7ae76d9bdd49ae274f3f5f97c9ff970a07ed3`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `b137d1fbcfb7dae240418a2353ae662758169cf10934808cb107f8af12a0a66c`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `baa945c18aff7b3ef49b85f4543e1673021597fe745f4ce7051dfb4883722350`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ca7ce4c507a85c58fd533b62a8b4874297dd0c70040850c5e91e8f4fdc171c6e`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `e5274166f48cc90b4407951126ed29f2c85b3a46040e0027a013fd0ac8f7249d`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ec02d7d6589cc13a06bd38c9ce4a5f9cbaddf9dd70d752f746de67343d73665c`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `f628db76fd38c96276454d9b474007b35f616c9b22c7eebf02fce526f57d3f29`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `fdb495a21d8bc6100e14111a2c910d9a67dce8e0f47f66486d338a0a3b495e23`
+
+### Release Attempts
+
+#### RA-20261002-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261002-001`
+- Selected CRL identities: `mobile/CRL-20261002-001`
+- Intended action: `commit`
+- Branch: `codex/subsidy-direct-amount-20261001`
+- Base: `origin/Dev@8c4df378665e05b1de9179cd3fa760ba0439ff13`; fetched at `2026-10-02T10:53:07+1000`
+- Candidate patch SHA-256: `f98bd568758e41ad332f636f4ed2cd509364e806ff370507c27f4121bbda8e30`
+- Commit SHA: `8ce10fff673a44bf8cc5aa9b88613af9b476b963`
+- Dependencies: `root/CRL-20261002-001`
+- Required validation: `PASS`; evidence: 17/17 targeted tests, temporary-stub TypeScript, target lint, button audit, ledger coverage and diff check passed; full lint environment gap is recorded.
+- Shared-hunk review: `not applicable`; evidence: only one selected mobile CRL.
+- Generated-file review: `PASS`; evidence: no build outputs, caches or dependency links are staged.
+- Technical state: `committed`
+- User authorization: `selected-for-commit`; evidence: user explicitly selected mobile/CRL-20261002-001 for commit.
+- Independent review: `GO for commit`; evidence: independent read-only reviewer recomputed candidate fingerprint `f98bd568758e41ad332f636f4ed2cd509364e806ff370507c27f4121bbda8e30`, inspected all 5 staged files / 36 non-ledger hunks, reran 17/17 focused tests, the exact pre-commit gate and diff check, and found no P0/P1, scope, secret, generated-file or production-write blocker. Accepted non-blocking P2s: a same-day legacy local draft can miss automatic reclassification if options load before AsyncStorage, and one test mock implementation is not restored between cases; users can still select the single subsidy entry without data loss.
+- Action conclusion: `GO`; evidence: the exact reviewed candidate was committed locally as `8ce10fff673a44bf8cc5aa9b88613af9b476b963`. Push, PR, merge, OTA/build, deployment and device/production verification remain unauthorized.
+
+#### RA-20261002-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261002-001`, `CRL-20261002-002`
+- Selected CRL identities: `mobile/CRL-20261002-001`, `mobile/CRL-20261002-002`
+- Intended action: `push`
+- Branch: `codex/subsidy-direct-amount-20261001`
+- Remote branch/SHA: initial verified push `origin/codex/subsidy-direct-amount-20261001@9bcb62cbbc70edd439b84a222eeb5064a7efdd53`; this ledger-only pushed-state receipt will be re-audited before a separate second push.
+- Base: `origin/Dev@8c4df378665e05b1de9179cd3fa760ba0439ff13`; fetched at `2026-10-02T16:55:32+1000`
+- Candidate patch SHA-256: `c4dc341c4bd84f7242808445d6918fcecfdea07f3ed6230e1200ff306a091078`
+- Commit SHA: `9741a187976663d594fe7f1734adacb8e1443a31`
+- Dependencies: none
+- Paired release scope: `root/CRL-20261002-001@b4c147980170ae004ba14d7e1f7a8fad25841a5f`, `root/CRL-20261002-002@b4c147980170ae004ba14d7e1f7a8fad25841a5f`, `root/CRL-20261002-003@6da7d035a30c4d499396560a67ebc4ce908f3a70`; the two repository branch pushes are order-independent, while merge/deployment/OTA remain separately gated.
+- Required validation: `PASS`; evidence: clean `npm ci` succeeded, then `npm run check:ci` passed TypeScript, lint with 0 errors / 556 existing warnings, button audit, 44/44 auditor tests, 3 fast suites / 26 tests and the full 62 suites / 368 tests; Root and Mobile remain separate branch pushes and no build, deployment or OTA is included.
+- Shared-hunk review: `PASS`; evidence: the two selected Mobile CRLs jointly declare every non-ledger hunk in the exact range and the independent read-only push review verified that ownership.
+- Generated-file review: `PASS`; evidence: no tracked build output, cache, dependency directory or generated artifact is selected.
+- Technical state: `pushed`
+- User authorization: `approved-for-push`; evidence: after the exact final Root and Mobile branch heads were reported, the user explicitly instructed “推送”, then confirmed authorization for the required ledger-only push-evidence commits and the new final branch heads they create.
+- Independent review: `GO`; evidence: independent read-only push review verified the exact two-CRL Mobile range, base, branch, content commit, full-range fingerprint, 7 files / 39 non-ledger hunks, paired scope, clean-install full CI, authorization and sensitive/generated-file boundaries; no P0/P1 remains and two recorded P2s are non-blocking.
+- Action conclusion: `GO`; evidence: the clean final pre-push range report passed every gate, the non-force initial push succeeded, and `git ls-remote` matched `origin/codex/subsidy-direct-amount-20261001@9bcb62cbbc70edd439b84a222eeb5064a7efdd53`; this ledger-only pushed-state receipt must pass the same audit before its second push.
+
+
+### Git / Delivery State
+
+- Branch: `codex/subsidy-direct-amount-20261001`
+- Base: `origin/Dev@8c4df378665e05b1de9179cd3fa760ba0439ff13`
+- Commit SHA: not committed
+- Remote branch/SHA: not pushed
+- PR / merge: not created / not merged
+- OTA / build: not published / not built
+- Device verification: not run
+
 ## CRL-20260929-001 — 多选新 CRL 的连续台账范围审计（mobile）
 
 - **Repository:** `mobile`
