@@ -52,15 +52,15 @@
 - Branch: `codex/subsidy-direct-amount-20261001`
 - Base: `local incremental base@8ce10fff673a44bf8cc5aa9b88613af9b476b963`; `origin/Dev@8c4df378665e05b1de9179cd3fa760ba0439ff13` fetched at `2026-10-02T15:57:32+1000`
 - Candidate patch SHA-256: `3e60579135086f482230ee92099c2f3d9ec60101c7a16f4c103a6797a111e63b`
-- Commit SHA: `not committed`
+- Commit SHA: `9741a187976663d594fe7f1734adacb8e1443a31`
 - Dependencies: none
 - Required validation: `PASS`; evidence: auditor regression suite passed 44/44 and performs Git-only fixture checks without application, API or database writes.
 - Shared-hunk review: `not applicable`; evidence: all three candidate files belong only to this governance CRL.
 - Generated-file review: `PASS`; evidence: no cache, dependency, build output or generated file is selected.
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: user explicitly authorized the proposed mobile/CRL-20261002-002 governance repair after the push gate blocker was reported.
 - Independent review: `GO`; evidence: independent read-only review matched the exact 3-file staged scope and candidate fingerprint, found no P0/P1/P2, and independently passed 44/44 auditor tests, the pre-commit gate, ledger coverage and diff check.
-- Action conclusion: `GO`; evidence: the exact reviewed candidate may be committed locally; this does not authorize push, PR, merge, deployment or OTA.
+- Action conclusion: `GO`; evidence: the exact reviewed candidate was committed locally as `9741a187976663d594fe7f1734adacb8e1443a31`; push, PR, merge, deployment and OTA remain unauthorized.
 
 ### Risks / Release Notes
 
