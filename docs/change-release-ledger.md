@@ -1,5 +1,74 @@
 # Change Release Ledger
 
+## CRL-20261002-002 — 发布尝试字段解析边界修复
+
+- **Repository:** `mobile`
+- **Status:** locally validated; selected for commit
+- **Updated:** 2026-10-02 Australia/Melbourne
+- **Request:** 修复发布审计器把 Release Attempt 后续的 CRL 汇总字段继续解析为同一次尝试字段，导致正确的 Base、Commit SHA 和授权证据被覆盖并阻止精确范围审计的问题。
+- **Outcome:** 每个 `#### RA-*` 只读取到下一次 Release Attempt 或下一个 `###` 小节；后续“Git / Delivery State”等汇总字段不再覆盖权威 RA，移动端内容提交可以生成合规的后置台账回执与精确范围证据。
+
+### Implementation
+
+- Previous behavior: `parse_attempts` 和 `release_attempt_block` 只以同级 RA 或整个 CRL 结尾作为边界；RA 后出现 `### Git / Delivery State` 时，其中重复的 Base、Commit SHA 会覆盖已记录的权威字段。
+- New behavior: 两个解析入口都选择“下一 RA、下一 `###` 小节、CRL 结尾”三者中最早的位置作为边界。
+- Key decisions: 只收紧 Markdown 解析边界，不修改 CRL 身份、hunk 规则、授权模型、移动端代码、OTA 或生产行为；回归测试同时断言字段值和原始 RA block 均排除后续汇总小节。
+
+### Files / Areas
+
+- `scripts/audit_change_release_ledger.py` — 收紧 Release Attempt 字段和原始区块的结束边界。
+- `scripts/tests/test_audit_change_release_ledger.py` — 增加 RA 后跟 CRL 汇总字段时不被覆盖的回归。
+- `docs/change-release-ledger.md` — 记录本治理修复和提交证据。
+
+### Impact / Dependencies
+
+- Application/API/role/database/production: none；不调用任何业务 API，不读写数据库，不触发通知、任务、同步、OTA 或部署。
+- CI/config/dependencies: 无依赖或工作流改动；现有审计命令会自动使用修复后的解析器。
+- Dependencies: none；本单元位于当前临时分支已有本地提交之后，但解析修复本身不依赖通用补贴业务实现。
+- Related units: `mobile/CRL-20261002-001`, `root/CRL-20261002-003`。
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_audit_change_release_ledger.py` — passed：44/44 tests；覆盖合格 CRL、未跟踪路径阻断、hunk 范围不匹配、ledger-only receipt 与 exact range 验证。
+- Feature Registry: not modified；本次只改变发布台账工具，不改变业务不变量。
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; incremental candidate is isolated on the existing temporary release branch after the previously reviewed local content head.
+- `scripts/audit_change_release_ledger.py` — SHA-256: `5d23c314c12a8f54eb0c6f741a445b693ddc0cc0fe3df1802d2213d78278bb50`
+- `scripts/audit_change_release_ledger.py` — SHA-256: `c17effd7203096d59568ee2ccedbd3aaac91742fedab69ee584066b6649bf0fa`
+- `scripts/tests/test_audit_change_release_ledger.py` — SHA-256: `6c9439a8a627e8d0059826d0e444c75985639ac4107f91a800fd467248fbd8d0`
+
+### Release Attempts
+
+#### RA-20261002-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261002-002`
+- Selected CRL identities: `mobile/CRL-20261002-002`
+- Intended action: `commit`
+- Branch: `codex/subsidy-direct-amount-20261001`
+- Base: `local incremental base@8ce10fff673a44bf8cc5aa9b88613af9b476b963`; `origin/Dev@8c4df378665e05b1de9179cd3fa760ba0439ff13` fetched at `2026-10-02T15:57:32+1000`
+- Candidate patch SHA-256: `3e60579135086f482230ee92099c2f3d9ec60101c7a16f4c103a6797a111e63b`
+- Commit SHA: `not committed`
+- Dependencies: none
+- Required validation: `PASS`; evidence: auditor regression suite passed 44/44 and performs Git-only fixture checks without application, API or database writes.
+- Shared-hunk review: `not applicable`; evidence: all three candidate files belong only to this governance CRL.
+- Generated-file review: `PASS`; evidence: no cache, dependency, build output or generated file is selected.
+- Technical state: `verified`
+- User authorization: `selected-for-commit`; evidence: user explicitly authorized the proposed mobile/CRL-20261002-002 governance repair after the push gate blocker was reported.
+- Independent review: `GO`; evidence: independent read-only review matched the exact 3-file staged scope and candidate fingerprint, found no P0/P1/P2, and independently passed 44/44 auditor tests, the pre-commit gate, ledger coverage and diff check.
+- Action conclusion: `GO`; evidence: the exact reviewed candidate may be committed locally; this does not authorize push, PR, merge, deployment or OTA.
+
+### Risks / Release Notes
+
+- Risk: parser boundary changes affect release evidence extraction only; malformed attempts placed outside `### Release Attempts` remain outside the documented contract.
+- Sensitive-information review: no secrets, credentials, database URLs, environment files or production logs are recorded.
+- Rollback: revert this governance commit; no application, OTA or data rollback is required.
+- Git state: not committed, not pushed, no PR, not merged, not published.
+
 ## CRL-20261002-001 — 移动端只保留通用补贴入口（mobile）
 
 - **Repository:** `mobile`
