@@ -62,6 +62,27 @@
 - Independent review: `GO`; evidence: independent read-only review matched the exact 3-file staged scope and candidate fingerprint, found no P0/P1/P2, and independently passed 44/44 auditor tests, the pre-commit gate, ledger coverage and diff check.
 - Action conclusion: `GO`; evidence: the exact reviewed candidate was committed locally as `9741a187976663d594fe7f1734adacb8e1443a31`; push, PR, merge, deployment and OTA remain unauthorized.
 
+#### RA-20261002-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261002-001`, `CRL-20261002-002`
+- Selected CRL identities: `mobile/CRL-20261002-001`, `mobile/CRL-20261002-002`
+- Intended action: `push`
+- Branch: `codex/subsidy-direct-amount-20261001`
+- Base: `origin/Dev@8c4df378665e05b1de9179cd3fa760ba0439ff13`; fetched at `2026-10-02T16:55:32+1000`
+- Candidate patch SHA-256: `c4dc341c4bd84f7242808445d6918fcecfdea07f3ed6230e1200ff306a091078`
+- Commit SHA: `9741a187976663d594fe7f1734adacb8e1443a31`
+- Dependencies: none
+- Paired release scope: `root/CRL-20261002-001@b4c147980170ae004ba14d7e1f7a8fad25841a5f`, `root/CRL-20261002-002@b4c147980170ae004ba14d7e1f7a8fad25841a5f`, `root/CRL-20261002-003@6da7d035a30c4d499396560a67ebc4ce908f3a70`; the two repository branch pushes are order-independent, while merge/deployment/OTA remain separately gated.
+- Required validation: `PASS`; evidence: clean `npm ci` succeeded, then `npm run check:ci` passed TypeScript, lint with 0 errors / 556 existing warnings, button audit, 44/44 auditor tests, 3 fast suites / 26 tests and the full 62 suites / 368 tests; Root and Mobile remain separate branch pushes and no build, deployment or OTA is included.
+- Shared-hunk review: `PASS`; evidence: the two selected Mobile CRLs jointly declare every non-ledger hunk in the exact range; complete-range independent review is pending.
+- Generated-file review: `PASS`; evidence: no tracked build output, cache, dependency directory or generated artifact is selected.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: after the exact final Root and Mobile branch heads were reported, the user explicitly instructed “推送”, then confirmed authorization for the required ledger-only push-evidence commits and the new final branch heads they create.
+- Independent review: `GO`; evidence: independent read-only push review verified the exact two-CRL Mobile range, base, branch, content commit, full-range fingerprint, 7 files / 39 non-ledger hunks, paired scope, clean-install full CI, authorization and sensitive/generated-file boundaries; no P0/P1 remains and two recorded P2s are non-blocking.
+- Action conclusion: `NOT VERIFIED`; blockers: clean committed-range audit of the ledger receipt is still pending.
+
+
 ### Risks / Release Notes
 
 - Risk: parser boundary changes affect release evidence extraction only; malformed attempts placed outside `### Release Attempts` remain outside the documented contract.
@@ -171,6 +192,27 @@
 - User authorization: `selected-for-commit`; evidence: user explicitly selected mobile/CRL-20261002-001 for commit.
 - Independent review: `GO for commit`; evidence: independent read-only reviewer recomputed candidate fingerprint `f98bd568758e41ad332f636f4ed2cd509364e806ff370507c27f4121bbda8e30`, inspected all 5 staged files / 36 non-ledger hunks, reran 17/17 focused tests, the exact pre-commit gate and diff check, and found no P0/P1, scope, secret, generated-file or production-write blocker. Accepted non-blocking P2s: a same-day legacy local draft can miss automatic reclassification if options load before AsyncStorage, and one test mock implementation is not restored between cases; users can still select the single subsidy entry without data loss.
 - Action conclusion: `GO`; evidence: the exact reviewed candidate was committed locally as `8ce10fff673a44bf8cc5aa9b88613af9b476b963`. Push, PR, merge, OTA/build, deployment and device/production verification remain unauthorized.
+
+#### RA-20261002-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261002-001`, `CRL-20261002-002`
+- Selected CRL identities: `mobile/CRL-20261002-001`, `mobile/CRL-20261002-002`
+- Intended action: `push`
+- Branch: `codex/subsidy-direct-amount-20261001`
+- Base: `origin/Dev@8c4df378665e05b1de9179cd3fa760ba0439ff13`; fetched at `2026-10-02T16:55:32+1000`
+- Candidate patch SHA-256: `c4dc341c4bd84f7242808445d6918fcecfdea07f3ed6230e1200ff306a091078`
+- Commit SHA: `9741a187976663d594fe7f1734adacb8e1443a31`
+- Dependencies: none
+- Paired release scope: `root/CRL-20261002-001@b4c147980170ae004ba14d7e1f7a8fad25841a5f`, `root/CRL-20261002-002@b4c147980170ae004ba14d7e1f7a8fad25841a5f`, `root/CRL-20261002-003@6da7d035a30c4d499396560a67ebc4ce908f3a70`; the two repository branch pushes are order-independent, while merge/deployment/OTA remain separately gated.
+- Required validation: `PASS`; evidence: clean `npm ci` succeeded, then `npm run check:ci` passed TypeScript, lint with 0 errors / 556 existing warnings, button audit, 44/44 auditor tests, 3 fast suites / 26 tests and the full 62 suites / 368 tests; Root and Mobile remain separate branch pushes and no build, deployment or OTA is included.
+- Shared-hunk review: `PASS`; evidence: the two selected Mobile CRLs jointly declare every non-ledger hunk in the exact range; complete-range independent review is pending.
+- Generated-file review: `PASS`; evidence: no tracked build output, cache, dependency directory or generated artifact is selected.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: after the exact final Root and Mobile branch heads were reported, the user explicitly instructed “推送”, then confirmed authorization for the required ledger-only push-evidence commits and the new final branch heads they create.
+- Independent review: `GO`; evidence: independent read-only push review verified the exact two-CRL Mobile range, base, branch, content commit, full-range fingerprint, 7 files / 39 non-ledger hunks, paired scope, clean-install full CI, authorization and sensitive/generated-file boundaries; no P0/P1 remains and two recorded P2s are non-blocking.
+- Action conclusion: `NOT VERIFIED`; blockers: clean committed-range audit of the ledger receipt is still pending.
+
 
 ### Git / Delivery State
 
