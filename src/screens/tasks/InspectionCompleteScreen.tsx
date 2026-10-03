@@ -6,7 +6,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { API_BASE_URL } from '../../config/env'
-import { deleteLockboxVideo, uploadLockboxVideo } from '../../lib/api'
+import { deleteLockboxVideo } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import {
   bindInspectionPanelCleaningTaskId,
@@ -286,22 +286,40 @@ export default function InspectionCompleteScreen(props: Props) {
       const expiredWithoutRemote = !!lockboxItem?.local_file_deleted_at && !lockboxItem?.uploaded_url
       if (expiredWithoutRemote) return Alert.alert(t('common_error'), '本地视频已过期清理，请重新拍摄。')
       if (lockboxItem) {
-        void processInspectionMediaQueue(token)
-        Alert.alert(t('common_ok'), '视频已保存到本机，任务记录尚未保存；请点击完成重试。')
-        props.navigation.goBack()
+        try {
+          await updateInspectionMediaItem(lockboxItem.id, {
+            upload_status: 'pending',
+            last_error: null,
+          })
+          void processInspectionMediaQueue(token)
+          Alert.alert(t('common_ok'), '视频已安全保存在本机，系统会继续上传并自动保存任务记录。')
+          props.navigation.goBack()
+        } catch (e: any) {
+          Alert.alert(t('common_error'), String(e?.message || '任务记录保存失败'))
+        }
         return
       }
       return Alert.alert(t('common_error'), '请先拍摄视频。')
     }
     try {
       setSubmitting(true)
-      const result = await uploadLockboxVideo(token, cleaningTaskId, { media_url: lockboxItem.uploaded_url })
       await updateInspectionMediaItem(lockboxItem.id, {
-        business_saved: true,
-        business_saved_at: new Date().toISOString(),
+        upload_status: 'uploaded',
         last_error: null,
       })
-      const serverFinalizationPending = result?.action_result?.finalization_pending === true
+      await processInspectionMediaQueue(token)
+      const items = await listInspectionMediaQueueItemsForTask(cleaningTaskId, ['lockbox_video'])
+      const latest = items.sort((a, b) => b.created_at.localeCompare(a.created_at))[0] || null
+      setLockboxItem(latest)
+      if (!latest?.business_saved) {
+        if (latest?.upload_status === 'failed_terminal') {
+          return Alert.alert(t('common_error'), String(latest.last_error || '任务记录保存失败'))
+        }
+        Alert.alert(t('common_ok'), '视频已安全保存在本机，系统会继续等待并自动保存任务记录。')
+        props.navigation.goBack()
+        return
+      }
+      const serverFinalizationPending = latest.meta?.business_finalization_pending === true
       Alert.alert(
         t('common_ok'),
         !isPasswordOnlyInspection && (inspectionPhotosPending || serverFinalizationPending)

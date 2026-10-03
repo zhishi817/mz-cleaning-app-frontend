@@ -1,5 +1,135 @@
 # Change Release Ledger
 
+## CRL-20261003-002 — 挂钥匙视频队列 single-flight 与迟到结果收敛（mobile）
+
+- **Repository:** `mobile`
+- **Status:** verified; selected and approved for local commit only
+- **Updated:** 2026-10-03 Australia/Melbourne
+- **Request:** 根治挂钥匙视频出现 `LOCAL_MEDIA_LOCKED`、等待超时后重复上传或重复任务保存的问题；用户本次只授权提交，不授权推送、PR、合并、OTA 或部署。
+- **Outcome:** 上传与任务保存分别由队列内 single-flight 执行者唯一拥有；等待超时不再释放真实执行所有权，迟到成功仍写回持久化队列并继续任务保存。挂钥匙完成页不再直接调用第二套业务保存接口，内部本地锁错误不再以原始错误码暴露给用户。
+
+### Implementation
+
+- Previous behavior: 队列用 `Promise.race` 限制等待时间，但 `finally` 会在等待超时后删除本地 URI 的进程内占用标记，而真实上传仍可能运行；下一次处理会再次读取同一文件并撞上 `LOCAL_MEDIA_LOCKED`。上传完成后，队列与 `InspectionCompleteScreen` 又都可独立调用挂钥匙业务保存接口。
+- New behavior: 队列按 `item.id` 保存活动上传和活动业务保存 Promise；所有调用复用同一 Promise。超时只记录可重试提示，底层 Promise 继续持有所有权；迟到上传自动衔接唯一业务保存，迟到保存成功清除临时错误并安全清理本地文件。所有队列写入串行化，避免超时状态与迟到结果互相覆盖。
+- Key decisions: 队列是上传和任务保存的唯一所有者；页面只触发并读取队列结果。复用现有本地媒体锁、持久化队列、上传 API 和任务保存 API，不新增后端接口、表、依赖或平行队列。
+- Controlled identity migration: 早期未提交、未推送的本地草稿曾临时使用 `mobile/CRL-20260924-001`；当前 `origin/Dev` 已将该不可变身份用于另一项人员结算功能，因此本候选分配新身份 `mobile/CRL-20261003-002`。未修改、复用或重写任何远端 CRL。
+
+### Files / Areas
+
+- `src/lib/inspectionMediaQueue.ts` — upload/business-save single-flight、串行持久化、等待超时与真实执行解耦、迟到结果收敛、内部锁错误安全映射。
+- `src/lib/inspectionMediaQueue.test.ts` — 并发、上传超时、业务保存超时、迟到成功、重启恢复、外部锁冲突与本地文件保留回归。
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — 删除页面直接业务保存路径，统一触发队列并读取最终或待重试状态。
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — 页面单一队列所有权及既有检查范围、动作门禁、离线行为回归。
+- `docs/feature-regression-registry.md` — 新增 `FR-P1-MED-07`。
+- `docs/change-release-ledger.md` — 本 CRL 的范围、证据、换号说明和提交尝试。
+
+### Impact / Dependencies
+
+- API / backend / database / migration / R2 / Render / Neon / production data / configuration / dependencies: none changed.
+- Existing contracts reused: `cleaning-app/upload`, inspection lockbox-video save, self-complete lockbox-video save, AsyncStorage queue and local private media file.
+- Feature Regression Registry: `FR-P1-MED-07` added because duplicate upload/save can lose retry ownership or generate duplicate business mutations under weak-network timing.
+- Compatibility: existing persisted `pending`, `uploading`, `uploaded`, `failed_retryable` and uploaded-but-unsaved items remain readable. A fresh app process has empty in-memory owners and performs one recovery attempt from persisted state.
+
+### Validation
+
+- Source diagnosis: completed. First broken boundary is Mobile queue ownership after waiter timeout; direct page business-save was a second competing owner. No backend/database/R2 change is required for this repair.
+- Targeted Jest — passed: 2 suites / 17 tests (`inspectionMediaQueue`, `InspectionCompleteScreen`).
+- `NODE_OPTIONS=--max-old-space-size=8192 npm run check:ci` — passed against an existing complete dependency tree: ledger auditor 44/44; changed-file coverage 6/6; TypeScript passed; ESLint passed with 0 errors / 568 existing warnings; button audit passed with 27 documented legacy exceptions; fast Jest 3 suites / 26 tests; full Jest 62 suites / 370 tests.
+- `git diff --check` — passed.
+- `python3 scripts/audit_change_release_ledger.py --pre-commit --repo mobile --crl CRL-20261003-002` — `GO`; exact 6 staged files, 54 non-ledger hunks, no untracked or unselected paths.
+- Independent read-only review — `GO` for commit; reviewer independently matched base, branch, candidate fingerprint, 6-file / 54-hunk scope and validation evidence, with no P0/P1/P2 findings.
+- iOS simulator, Android emulator/device, weak-network device, production API/R2/task state, OTA/build/deployment: not run and not authorized.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; candidate is isolated in a clean release worktree based on freshly fetched `origin/Dev`.
+- `docs/feature-regression-registry.md` — SHA-256: `28db2108d25da4e72c3be52e82aa460639108b84364acfaa1e111b71c8fb3194`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `09ff8c79163e7e7d59bd17d8af79fdef3d8ad249e354d2792dbfa51e19a4c8c1`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `0f0270c7087c0da0f5f157a86849a51a6b1514b41df2946227ba5883cf2d1347`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `10f812eaec75f948978ee731844914441f32737ed890126dcc2cf4f88e0dffa1`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `5eac436c02993791f1d96341e600f266400998700be6a0495a1d90be8093cf58`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `93a4d94dbbb8d1cc6f503e7970141e4b8ab4a493ebc59aeb3e5d982e58b869a0`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `95b77039119fa4951a23f6e3ac101805b6314536b33c94ae09b57ad3e55139cc`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `b048455a3c00f2544ccedb2e8174f7426061fcb14e698f0addfe0012204ecbef`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `f9ac4e4178b27ef45d3b656374b4740aa17965907d2e3b5d411cb061d7d620f4`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `0d73262c813930ff761ee40b6aaf22bc82724ccbdf92e12fd3261b565dd4885a`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `1fe88065e68caf7a8d674f85fe1f95ff2016b754d0fad061e1300ea4ef431de9`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `2288aa5e8da09dfeafa0227ffabcfb832b793228bbb068510c96306ba40b01ab`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `3421dde85e4b1356902bbd7a2ae819af683e8e1e02ea38d7f7a3e6cfcdf21eea`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `37cb1d822eb934cbe759bfe89adb7231fc61970fce3e0d4cb1082e9c32bd9dd2`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `414b728eb0bf445bd461b6d6166a3d4f0e6bb08ce8676539cdb08a6c3035fddb`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `417616be12bc93414c4e31f20329925c1801120ccc7683b5eafd74b7bb86b4ea`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `46431a8753c4260457343f98f4c3cc2302f9e9cf7ccdf562e4df557e25d82f78`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `4b5e5fb77615652aca81bffe100c9d53d07c093b6031d289f4260569158010c8`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `597d5044c513103bf9136ac83f32e78de24cea0b2a1d841871cf93f468aba1bd`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `7347c65d6d8bf29c645357511ab5a69bbfd128fcfe58b0b3afd2be2ca6403f2f`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `7506e878f22cc0eba5ba33ae1dd8aaf69a50b2b3ae9a98ddd932bee437de1126`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `773e913893dd86d002e5610d9ef6e3f5292335f04783f4c20e3cd1a1e45cd53a`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `811bef770a8ac3167d25b306a4c23f1f15ff885154d96a30d626d82350b25942`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `8a5c37f5ef3c64406c0783184dfe79b42d2758941dbfcb03109aa63aadec5c36`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `9059f0d57318791cc95d64541fa70cf9e09a357960b93ed3bcb77ca3b58a1564`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `9cd567eceac72bc9604bd62ac019d725e71f98a952e90dcedd37fc2a1db98c7c`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `b9dae3198d6d07cfdbbb4cfcf39c8a0b02a854c3f2636d11e0280f859d5f1387`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `d83ce09fb528e17c50160c6add03274851e0c80fe497e129e3b35392346ee19f`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `da78ec37a9d2fcf27af97a48662495e4f035d6baa40602d99d4230c67a22b1fe`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `f5a77de9f514a82c6db3530e2d35d02e77a6522fbb483c4482b2dd44cc746518`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `f5d5e46e9b92adfe22d0fbc81b1fca76f10ee769dfd6ac4a3b605488948e818c`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `fa51bf768042106d5edb941e57b4a790929448e8353e3271ed8454635a20b071`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `2bfb72cc7795d3f5a514d329edb1d2c86141aacefcb2c52e0fded0311c55593a`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `3096ef5687b757d173e4254014f35f256b6797733bb61a871cbf7f752108eafa`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `3f3300b8b4315c5f353029178349cc9709b52845a7deb98b9607eaa7e13a507d`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `4336dd3275c8d518e4247b108209ead4c2b317427a54d2126d937e7a393cb3b5`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `749d04e82669dc99cc81e0d0a4851089ff7271ef2d8c12c86c4426811d7e9487`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `8488ca6e7434663d60059881168916146b287f6a46be6b3bd67e13523b478bb2`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `88ba9e85f9eb76a0d6c0ecd1824cacc850af3af2f4d13ff2d3bc10f06c4585ac`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `96192830fe365490f401bbdb0b84e395f6ca6a4d90fad77f759740b4b0837d44`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `9a526ffd33737e3ef6d1f0c2a2f43985846e78355b2edddfc0073b9c7f0373fd`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `9d7b752043efb856df900961c7d9b840590a1a4fca0e251887ce48a3813e64ad`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `a7952032488a8cb72cc02763663e2f8c6f474a7f9aa422f7e9f0b92fff0b9d0b`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `aaf589111cab2c70012e15b582002924918cc85104e1ffb5cdcbc990fabcfcc5`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `cc9c8dc72471ff844c77842c5ac47ef8ca02616bbbe61475d2e04c65115ae10e`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `d2dd2a5c22475e8c082305570c768f006dc3117077bf00c57bd95e47bc3e4bc3`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `d74582db9748930ba6c046605cfb049134b733ff304418a5670373e7e5148ec3`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `d90988d649f4e3f1d60e4e6cca3686269526081bfaf95e11194a3ce0a0e73cc4`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `e654fc6b8ace0dc7a2d338d154fbcc6d9284b9cbe2ca3aed5899dcc230082969`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `29ca053b0bb5c956f53f0f875fd975450d2f5e3e1467203763ff56c24c05a942`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `51cf36b1b56c306cfe38a0da96b2e8b97856d6dd82c9a03ecef24e893fc63ab4`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `6317ab2ea661eec85fa7508c8182ebc33869671fffda48544e972aa44d351f58`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `7a50b3fddfb86f78aa40a29760194a2d6f59679ea6e0135d3b4d869565cbcd8a`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `8ea1e68677033f24b97ff26e707cbcfa8778a94e3678648c688b8dbfac4a297e`
+
+### Release Attempts
+
+#### RA-20261003-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261003-002`
+- Selected CRL identities: `mobile/CRL-20261003-002`
+- Intended action: `commit`
+- Branch: `codex/lockbox-video-singleflight-20261003`
+- Base: `origin/Dev@a3265b475a6f33268a6c8dcd3a90ac4bab2328b6`; fetched on 2026-10-03 before candidate preparation
+- Candidate patch SHA-256: `430ff8b8ca1ac48822627321d7e7f441940d31965566009752e470a5b4150160`
+- Commit SHA: not committed
+- Dependencies: none
+- Required validation: `PASS`; evidence: targeted 2 suites / 17 tests and full `npm run check:ci` passed, including TypeScript, 0-error lint, button audit, ledger audit and full 62 suites / 370 tests.
+- Shared-hunk review: `not applicable`; evidence: all staged non-ledger hunks belong only to this CRL.
+- Generated-file review: `PASS`; evidence: no generated artifact, cache, dependency directory, build output or local media is staged.
+- Technical state: `verified`
+- User authorization: `selected-for-commit`; evidence: user explicitly instructed “先提交” for this lockbox-video root-cause repair.
+- Independent review: `GO`; evidence: independent read-only reviewer matched candidate fingerprint `430ff8b8ca1ac48822627321d7e7f441940d31965566009752e470a5b4150160`, base, branch, staged scope and validation; no P0/P1/P2 findings.
+- Action conclusion: `GO`; evidence: exact staged-scope gate and independent review both passed for the selected local commit only. Push, PR, merge, OTA, deployment and device/production verification remain unauthorized.
+
+### Risks / Release Notes
+
+- Single-flight ownership is intentionally process-local; after an actual process death, the old JavaScript execution is gone and the persisted queue safely starts one recovery attempt.
+- Server-side idempotency contracts are unchanged. This repair prevents duplicate client execution within the live process but does not claim a new server idempotency guarantee.
+- Sensitive-information review: no credentials, tokens, database URLs, private media, production payloads or local caches are added to tracked files.
+- Rollback: revert only this mobile CRL; backend, database, object storage and production data are untouched.
+- Git state: uncommitted isolated candidate based on `origin/Dev@a3265b475a6f33268a6c8dcd3a90ac4bab2328b6`; not pushed, no PR, not merged, no OTA/build/deployment.
+
 ## CRL-20261002-002 — 发布尝试字段解析边界修复
 
 - **Repository:** `mobile`
