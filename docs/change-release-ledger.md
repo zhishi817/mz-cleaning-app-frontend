@@ -112,15 +112,15 @@
 - Branch: `codex/lockbox-video-singleflight-20261003`
 - Base: `origin/Dev@a3265b475a6f33268a6c8dcd3a90ac4bab2328b6`; fetched on 2026-10-03 before candidate preparation
 - Candidate patch SHA-256: `430ff8b8ca1ac48822627321d7e7f441940d31965566009752e470a5b4150160`
-- Commit SHA: not committed
+- Commit SHA: `880a639e0d78988aea743d86d013543a8216e739` (candidate content commit)
 - Dependencies: none
 - Required validation: `PASS`; evidence: targeted 2 suites / 17 tests and full `npm run check:ci` passed, including TypeScript, 0-error lint, button audit, ledger audit and full 62 suites / 370 tests.
 - Shared-hunk review: `not applicable`; evidence: all staged non-ledger hunks belong only to this CRL.
 - Generated-file review: `PASS`; evidence: no generated artifact, cache, dependency directory, build output or local media is staged.
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: user explicitly instructed “先提交” for this lockbox-video root-cause repair.
 - Independent review: `GO`; evidence: independent read-only reviewer matched candidate fingerprint `430ff8b8ca1ac48822627321d7e7f441940d31965566009752e470a5b4150160`, base, branch, staged scope and validation; no P0/P1/P2 findings.
-- Action conclusion: `GO`; evidence: exact staged-scope gate and independent review both passed for the selected local commit only. Push, PR, merge, OTA, deployment and device/production verification remain unauthorized.
+- Action conclusion: `GO`; evidence: exact staged-scope gate and independent review both passed, and the reviewed candidate was committed locally as `880a639e0d78988aea743d86d013543a8216e739`. Push, PR, merge, OTA, deployment and device/production verification remain unauthorized.
 
 ### Risks / Release Notes
 
