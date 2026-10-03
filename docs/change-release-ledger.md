@@ -137,9 +137,9 @@
 - Shared-hunk review: `PASS`; evidence: exact committed range contains only the six declared files and all 54 non-ledger hunk fingerprints match this CRL; no unselected or unexpected hunk.
 - Generated-file review: `PASS`; evidence: exact range contains no generated artifact, cache, dependency directory, build output or local media.
 - Technical state: `committed`
-- User authorization: `not-selected`; evidence: the user explicitly instructed “推送” after source head `c7796d5a52044e71a6cc5326a3fd8ceca102fd03` was reported, but this required ledger-only attempt receipt creates a new final head and invalidates that earlier head-specific authorization until the user reconfirms the final head.
+- User authorization: `approved-for-push`; evidence: after pre-authorization head `11ef6fd792063894dd6f98362c193c5e75e72bb4` and the required authorization receipt boundary were reported, the user explicitly replied “允许”, authorizing this necessary ledger-only authorization commit and the resulting final head on `codex/lockbox-video-singleflight-20261003`.
 - Independent review: `GO`; evidence: independent read-only push review matched the base, content commit, candidate fingerprint, six-file / 54-hunk range, staged RA, branch, validation, generated/sensitive boundaries and found no P0/P1. One non-blocking P2 noted that the CRL summary status/Git-state lines remain historical pre-commit wording; the release auditor intentionally permits ledger-only receipts to change only Release Attempt lines, so RA-20261003-002/003 remain the authoritative exact state evidence.
-- Action conclusion: `NOT VERIFIED`; blockers: exact final-head authorization after committing this ledger-only attempt receipt is still pending; no remote write may occur before that confirmation.
+- Action conclusion: `GO`; evidence: fresh base, exact committed range, candidate fingerprint, validation, independent push review and explicit final-head authorization all pass; only the named temporary branch may be pushed, with no PR, merge, OTA or deployment.
 
 ### Risks / Release Notes
 
