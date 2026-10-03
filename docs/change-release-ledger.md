@@ -122,6 +122,25 @@
 - Independent review: `GO`; evidence: independent read-only reviewer matched candidate fingerprint `430ff8b8ca1ac48822627321d7e7f441940d31965566009752e470a5b4150160`, base, branch, staged scope and validation; no P0/P1/P2 findings.
 - Action conclusion: `GO`; evidence: exact staged-scope gate and independent review both passed, and the reviewed candidate was committed locally as `880a639e0d78988aea743d86d013543a8216e739`. Push, PR, merge, OTA, deployment and device/production verification remain unauthorized.
 
+#### RA-20261003-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261003-002`
+- Selected CRL identities: `mobile/CRL-20261003-002`
+- Intended action: `push`
+- Branch: `codex/lockbox-video-singleflight-20261003`
+- Base: `origin/Dev@a3265b475a6f33268a6c8dcd3a90ac4bab2328b6`; fetched at `2026-10-03T21:58:07+1000`
+- Candidate patch SHA-256: `430ff8b8ca1ac48822627321d7e7f441940d31965566009752e470a5b4150160`
+- Commit SHA: `880a639e0d78988aea743d86d013543a8216e739` (candidate content commit); authorized source head before this attempt receipt: `c7796d5a52044e71a6cc5326a3fd8ceca102fd03`
+- Dependencies: none
+- Required validation: `PASS`; evidence: targeted 2 suites / 17 tests and full `npm run check:ci` passed, including TypeScript, 0-error lint, button audit, ledger audit and full 62 suites / 370 tests; exact committed range audit for RA-20261003-002 was `GO` at source head `c7796d5a52044e71a6cc5326a3fd8ceca102fd03`.
+- Shared-hunk review: `PASS`; evidence: exact committed range contains only the six declared files and all 54 non-ledger hunk fingerprints match this CRL; no unselected or unexpected hunk.
+- Generated-file review: `PASS`; evidence: exact range contains no generated artifact, cache, dependency directory, build output or local media.
+- Technical state: `committed`
+- User authorization: `not-selected`; evidence: the user explicitly instructed “推送” after source head `c7796d5a52044e71a6cc5326a3fd8ceca102fd03` was reported, but this required ledger-only attempt receipt creates a new final head and invalidates that earlier head-specific authorization until the user reconfirms the final head.
+- Independent review: `GO`; evidence: independent read-only push review matched the base, content commit, candidate fingerprint, six-file / 54-hunk range, staged RA, branch, validation, generated/sensitive boundaries and found no P0/P1. One non-blocking P2 noted that the CRL summary status/Git-state lines remain historical pre-commit wording; the release auditor intentionally permits ledger-only receipts to change only Release Attempt lines, so RA-20261003-002/003 remain the authoritative exact state evidence.
+- Action conclusion: `NOT VERIFIED`; blockers: exact final-head authorization after committing this ledger-only attempt receipt is still pending; no remote write may occur before that confirmation.
+
 ### Risks / Release Notes
 
 - Single-flight ownership is intentionally process-local; after an actual process death, the old JavaScript execution is gone and the persisted queue safely starts one recovery attempt.
