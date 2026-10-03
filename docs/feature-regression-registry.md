@@ -1,5 +1,23 @@
 # Feature Regression Registry
 
+## FR-P1-MED-07 — 挂钥匙视频上传与任务保存单一所有权
+
+- **Status:** active
+- **Maintenance scope:** `mobile`; reuses the existing Root cleaning upload and lockbox-video business-save contracts without modifying them.
+- **Last reviewed:** 2026-10-03 Australia/Melbourne
+- **Business outcome:** 同一个挂钥匙视频队列项在一个 App 进程中只能有一个真实上传和一个真实任务保存执行者。界面等待超时只结束本次等待，不得释放仍运行的底层任务、启动第二次请求或把 `LOCAL_MEDIA_LOCKED` 暴露给用户；迟到的上传/保存成功仍必须写回队列并继续后续业务保存。完成页只触发队列，不得直接调用第二套任务保存路径。本地视频必须保留到任务保存成功后才清理；App 重启后可从持久化队列恢复一次新尝试。
+- **Related CRLs:** `mobile/CRL-20261003-002`.
+
+### Test-to-invariant mapping
+
+- `src/lib/inspectionMediaQueue.test.ts` — 并发队列处理与等待超时共享同一上传/业务保存 Promise；迟到成功覆盖临时超时并继续完成；持久化 `uploading` 在新进程语义下恢复；外部本地媒体锁冲突转为可重试中文状态且不泄漏内部错误码；上传成功前不删除本地文件。
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — 挂钥匙完成页只调用 `processInspectionMediaQueue`，不直接调用 `uploadLockboxVideo`；密码任务、普通检查、客人已到达、离线本地队列与服务器禁用动作继续遵守原业务门禁。
+
+### Delivery boundary
+
+- 本条只改变 Mobile 挂钥匙视频队列的进程内执行所有权、超时后的迟到结果处理和完成页调用路径；不改变 Root API、数据库、R2、鉴权、任务成员资格、生产配置或依赖。
+- 单元测试不证明真实 iOS/Android 弱网、App 被系统杀死后的恢复、真实对象存储或生产任务最终状态；OTA/build、真实设备与生产验证均需单独授权。
+
 ## FR-P1-FIN-03 — 工作量反馈、私有证明、周结算确认与文件
 
 - **Status:** active; Phase 4/5 paired fixed Preview API integration and local export passed, not yet committed or release-ready.

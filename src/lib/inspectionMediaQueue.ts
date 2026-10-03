@@ -41,6 +41,7 @@ export type InspectionMediaQueueItem = {
     property_code?: string
     watermark_text?: string
     lockbox_submission_mode?: 'inspection' | 'self_complete'
+    business_finalization_pending?: boolean
   }
 }
 
@@ -48,9 +49,11 @@ const STORAGE_KEY = 'mzstay.inspection_media_queue.v1'
 const RETAIN_MS = 30 * 24 * 60 * 60 * 1000
 const UPLOAD_OPERATION_TIMEOUT_MS = 75 * 1000
 const BUSINESS_SAVE_OPERATION_TIMEOUT_MS = 30 * 1000
-const STALE_UPLOAD_ATTEMPT_MS = 2 * 60 * 1000
 const listeners = new Set<() => void>()
 const inFlightLocalUris = new Set<string>()
+const activeUploadAttempts = new Map<string, Promise<string>>()
+const activeBusinessSaveAttempts = new Map<string, Promise<void>>()
+let queueMutationTail: Promise<void> = Promise.resolve()
 
 function emit() {
   for (const listener of listeners) {
@@ -88,6 +91,12 @@ async function loadQueue(): Promise<InspectionMediaQueueItem[]> {
 async function saveQueue(items: InspectionMediaQueueItem[]) {
   await setJson(STORAGE_KEY, items)
   emit()
+}
+
+function serializeQueueMutation<T>(work: () => Promise<T>): Promise<T> {
+  const result = queueMutationTail.then(work, work)
+  queueMutationTail = result.then(() => undefined, () => undefined)
+  return result
 }
 
 function ensurePrivateDir() {
@@ -143,18 +152,8 @@ function shouldExpire(item: InspectionMediaQueueItem, now: number) {
 }
 
 function isRetryableStatus(item: InspectionMediaQueueItem) {
+  if (item.upload_status === 'failed_terminal' || item.upload_status === 'expired_local_cleaned') return false
   return item.upload_status === 'pending' || item.upload_status === 'uploading' || item.upload_status === 'failed_retryable' || (item.kind === 'lockbox_video' && !!item.uploaded_url && !item.business_saved)
-}
-
-function timestampMs(value: any) {
-  const t = new Date(String(value || '')).getTime()
-  return Number.isFinite(t) ? t : null
-}
-
-function isStaleUploadingAttempt(item: InspectionMediaQueueItem, now = Date.now()) {
-  if (item.upload_status !== 'uploading') return false
-  const startedAt = timestampMs(item.last_attempt_at || item.uploaded_at || item.created_at)
-  return startedAt != null && now - startedAt > STALE_UPLOAD_ATTEMPT_MS
 }
 
 function withOperationTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -170,15 +169,17 @@ function withOperationTimeout<T>(promise: Promise<T>, timeoutMs: number, message
 }
 
 async function updateQueueItem(id: string, updater: (item: InspectionMediaQueueItem) => InspectionMediaQueueItem | null) {
-  const items = await loadQueue()
-  let changed = false
-  const next = items.flatMap((item) => {
-    if (item.id !== id) return [item]
-    changed = true
-    const updated = updater(item)
-    return updated ? [updated] : []
+  await serializeQueueMutation(async () => {
+    const items = await loadQueue()
+    let changed = false
+    const next = items.flatMap((item) => {
+      if (item.id !== id) return [item]
+      changed = true
+      const updated = updater(item)
+      return updated ? [updated] : []
+    })
+    if (changed) await saveQueue(next)
   })
-  if (changed) await saveQueue(next)
 }
 
 export function subscribeInspectionMediaQueue(listener: () => void) {
@@ -227,9 +228,11 @@ export async function enqueueInspectionMediaItem(params: {
     last_error: null,
     meta: params.meta ? { ...params.meta } : undefined,
   }
-  const items = await loadQueue()
-  items.push(item)
-  await saveQueue(items)
+  await serializeQueueMutation(async () => {
+    const items = await loadQueue()
+    items.push(item)
+    await saveQueue(items)
+  })
   return item
 }
 
@@ -248,31 +251,35 @@ export async function removeInspectionMediaItem(id: string, options?: { deleteLo
 export async function completeInspectionMediaItems(ids: string[]) {
   const idSet = new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean))
   if (!idSet.size) return
-  const items = await loadQueue()
-  const next = items.filter((item) => {
-    if (!idSet.has(item.id)) return true
-    if (!item.local_file_deleted_at) deleteLocalFile(item.local_uri)
-    return false
+  await serializeQueueMutation(async () => {
+    const items = await loadQueue()
+    const next = items.filter((item) => {
+      if (!idSet.has(item.id)) return true
+      if (!item.local_file_deleted_at) deleteLocalFile(item.local_uri)
+      return false
+    })
+    await saveQueue(next)
   })
-  await saveQueue(next)
 }
 
 export async function pruneExpiredInspectionMediaItems(now = Date.now()) {
-  const items = await loadQueue()
-  let changed = false
-  const next = items.map((item) => {
-    if (!shouldExpire(item, now)) return item
-    changed = true
-    deleteLocalFile(item.local_uri)
-    return {
-      ...item,
-      local_file_deleted_at: nowIso(),
-      upload_status: item.uploaded_url ? item.upload_status : 'expired_local_cleaned',
-      last_error: item.uploaded_url ? item.last_error : '本地文件已过期清理，请重新拍摄',
-    }
+  return await serializeQueueMutation(async () => {
+    const items = await loadQueue()
+    let changed = false
+    const next = items.map((item) => {
+      if (!shouldExpire(item, now)) return item
+      changed = true
+      deleteLocalFile(item.local_uri)
+      return {
+        ...item,
+        local_file_deleted_at: nowIso(),
+        upload_status: item.uploaded_url ? item.upload_status : 'expired_local_cleaned',
+        last_error: item.uploaded_url ? item.last_error : '本地文件已过期清理，请重新拍摄',
+      }
+    })
+    if (changed) await saveQueue(next)
+    return next
   })
-  if (changed) await saveQueue(next)
-  return next
 }
 
 function isMissingLocalFileError(error: unknown) {
@@ -322,6 +329,140 @@ async function saveLockboxVideoBusinessRecord(token: string, item: InspectionMed
   return await uploadLockboxVideo(token, item.task_id, { media_url: uploadedUrl })
 }
 
+function isOperationTimeout(error: unknown) {
+  return error instanceof ApiError && error.code === 'TIMEOUT'
+}
+
+function isLocalMediaLockError(error: unknown) {
+  return String((error as any)?.code || (error as any)?.message || error || '').trim() === 'LOCAL_MEDIA_LOCKED'
+}
+
+function queueFailure(error: unknown, phase: 'upload' | 'business_save') {
+  const apiError = error instanceof ApiError ? error : null
+  const authFailure = apiError?.status === 401 || apiError?.status === 403
+  const missingLocalFile = phase === 'upload' && (apiError?.code === 'MISSING_LOCAL_FILE' || isMissingLocalFileError(error))
+  const localMediaLocked = isLocalMediaLockError(error)
+  const retryable = !authFailure && !missingLocalFile && (localMediaLocked || !apiError || isRetryableApiError(error))
+  const status: UploadQueueStatus = missingLocalFile
+    ? 'expired_local_cleaned'
+    : retryable
+      ? 'failed_retryable'
+      : 'failed_terminal'
+  const message = localMediaLocked
+    ? '本地视频正在处理中，系统会继续等待并自动重试'
+    : String((error as any)?.message || (phase === 'upload' ? '上传失败' : '任务记录保存失败'))
+  return { message, status }
+}
+
+async function recordQueueFailure(itemId: string, error: unknown, phase: 'upload' | 'business_save') {
+  const failure = queueFailure(error, phase)
+  await updateQueueItem(itemId, (current) => {
+    if (current.business_saved) return current
+    return {
+      ...current,
+      upload_status: failure.status,
+      last_error: failure.message,
+      local_file_deleted_at: failure.status === 'expired_local_cleaned' ? nowIso() : current.local_file_deleted_at,
+    }
+  })
+}
+
+async function recordWaitTimeout(itemId: string, phase: 'upload' | 'business_save', message: string) {
+  await updateQueueItem(itemId, (current) => {
+    if (current.business_saved) return current
+    if (phase === 'upload' && current.uploaded_url) return current
+    return {
+      ...current,
+      upload_status: 'failed_retryable',
+      last_error: message,
+    }
+  })
+}
+
+function startBusinessSaveAttempt(token: string, item: InspectionMediaQueueItem, uploadedUrl: string) {
+  const existing = activeBusinessSaveAttempts.get(item.id)
+  if (existing) return existing
+
+  const attempt = (async () => {
+    try {
+      const result: any = await saveLockboxVideoBusinessRecord(token, item, uploadedUrl)
+      await updateQueueItem(item.id, (current) => ({
+        ...current,
+        uploaded_url: uploadedUrl,
+        upload_status: 'uploaded',
+        business_saved: true,
+        business_saved_at: nowIso(),
+        local_file_deleted_at: current.local_file_deleted_at || nowIso(),
+        last_error: null,
+        meta: {
+          ...(current.meta || {}),
+          business_finalization_pending: result?.action_result?.finalization_pending === true,
+        },
+      }))
+      deleteLocalFile(item.local_uri)
+    } catch (error) {
+      await recordQueueFailure(item.id, error, 'business_save')
+      throw error
+    }
+  })()
+
+  activeBusinessSaveAttempts.set(item.id, attempt)
+  const clear = () => {
+    if (activeBusinessSaveAttempts.get(item.id) === attempt) activeBusinessSaveAttempts.delete(item.id)
+  }
+  void attempt.then(clear, clear)
+  return attempt
+}
+
+function startUploadAttempt(token: string, item: InspectionMediaQueueItem) {
+  const existing = activeUploadAttempts.get(item.id)
+  if (existing) return existing
+
+  const localUri = String(item.local_uri || '').trim()
+  const attempt = (async () => {
+    inFlightLocalUris.add(localUri)
+    try {
+      await updateQueueItem(item.id, (current) => ({
+        ...current,
+        upload_status: 'uploading',
+        last_attempt_at: nowIso(),
+        last_error: null,
+      }))
+      const upload = await uploadQueueItem(token, item)
+      const uploadedUrl = cleaningMediaReference(upload)
+      if (!uploadedUrl) throw new ApiError('上传成功但未返回文件地址', 0, 'MISSING_URL', false)
+      await updateQueueItem(item.id, (current) => ({
+        ...current,
+        uploaded_url: uploadedUrl,
+        upload_status: 'uploaded',
+        uploaded_at: nowIso(),
+        last_error: null,
+      }))
+      return uploadedUrl
+    } catch (error) {
+      await recordQueueFailure(item.id, error, 'upload')
+      throw error
+    } finally {
+      inFlightLocalUris.delete(localUri)
+    }
+  })()
+
+  activeUploadAttempts.set(item.id, attempt)
+  const clear = () => {
+    if (activeUploadAttempts.get(item.id) === attempt) activeUploadAttempts.delete(item.id)
+  }
+  void attempt.then(clear, clear)
+  return attempt
+}
+
+function continueLateLockboxUpload(token: string, item: InspectionMediaQueueItem, uploadAttempt: Promise<string>) {
+  void uploadAttempt.then(async (uploadedUrl) => {
+    const latest = (await loadQueue()).find((current) => current.id === item.id)
+    if (!latest || latest.business_saved || latest.kind !== 'lockbox_video') return
+    await startBusinessSaveAttempt(token, latest, uploadedUrl)
+  }).catch(() => null)
+}
+
 export async function processInspectionMediaQueue(token: string) {
   await pruneExpiredInspectionMediaItems()
   const items = await loadQueue()
@@ -332,74 +473,46 @@ export async function processInspectionMediaQueue(token: string) {
     return a.created_at.localeCompare(b.created_at)
   })
   let processed = 0
-  for (const item of ordered) {
+  for (const queuedItem of ordered) {
+    const item = (await loadQueue()).find((current) => current.id === queuedItem.id) || queuedItem
     if (item.business_saved || !isRetryableStatus(item) || (item.local_file_deleted_at && !item.uploaded_url)) continue
     const localUri = String(item.local_uri || '').trim()
     if (!localUri) continue
-    if (inFlightLocalUris.has(localUri)) {
-      if (!isStaleUploadingAttempt(item)) continue
-      inFlightLocalUris.delete(localUri)
-    }
-    inFlightLocalUris.add(localUri)
-    try {
-      const alreadyUploadedUrl = String(item.uploaded_url || '').trim()
-      if (!alreadyUploadedUrl) {
-        await updateQueueItem(item.id, (current) => ({ ...current, upload_status: 'uploading', last_attempt_at: nowIso(), last_error: null }))
-      }
-      const up = alreadyUploadedUrl
-        ? { url: alreadyUploadedUrl }
-        : await withOperationTimeout(
-          uploadQueueItem(token, item),
+    let uploadedUrl = String(item.uploaded_url || '').trim()
+    if (!uploadedUrl) {
+      const uploadAttempt = startUploadAttempt(token, item)
+      try {
+        uploadedUrl = await withOperationTimeout(
+          uploadAttempt,
           UPLOAD_OPERATION_TIMEOUT_MS,
-          '视频上传超时，已保存在本机，稍后会自动重试',
+          '视频上传超时，已保存在本机，系统会继续等待并自动重试',
         )
-      const uploadedUrl = cleaningMediaReference(up) || alreadyUploadedUrl
+        processed++
+      } catch (error) {
+        if (isOperationTimeout(error)) {
+          await recordWaitTimeout(item.id, 'upload', String((error as Error).message))
+          if (item.kind === 'lockbox_video') continueLateLockboxUpload(token, item, uploadAttempt)
+        }
+        continue
+      }
+    } else {
       processed++
-      await updateQueueItem(item.id, (current) => ({
-        ...current,
-        uploaded_url: uploadedUrl || current.uploaded_url,
-        upload_status: 'uploaded',
-        uploaded_at: nowIso(),
-        last_error: null,
-      }))
-      const persistedUpload = (await loadQueue()).find((current) => current.id === item.id)
-      if (item.kind === 'lockbox_video' && uploadedUrl) {
+    }
+
+    if (item.kind === 'lockbox_video' && uploadedUrl) {
+      const latest = (await loadQueue()).find((current) => current.id === item.id)
+      if (!latest || latest.business_saved) continue
+      try {
         await withOperationTimeout(
-          saveLockboxVideoBusinessRecord(token, item, uploadedUrl),
+          startBusinessSaveAttempt(token, latest, uploadedUrl),
           BUSINESS_SAVE_OPERATION_TIMEOUT_MS,
-          '视频已上传但保存任务超时，稍后会自动重试',
+          '视频已上传但保存任务超时，系统会继续等待并自动重试',
         )
-        await updateQueueItem(item.id, (current) => ({
-          ...current,
-          uploaded_url: uploadedUrl,
-          upload_status: 'uploaded',
-          business_saved: true,
-          business_saved_at: nowIso(),
-          local_file_deleted_at: current.local_file_deleted_at || nowIso(),
-          last_error: null,
-        }))
-        if (persistedUpload && !persistedUpload.local_file_deleted_at) {
-          deleteLocalFile(persistedUpload.local_uri)
+      } catch (error) {
+        if (isOperationTimeout(error)) {
+          await recordWaitTimeout(item.id, 'business_save', String((error as Error).message))
         }
       }
-    } catch (error: any) {
-      const message = String(error?.message || '上传失败')
-      const retryable = isRetryableApiError(error)
-      const status = error instanceof ApiError && (error.status === 401 || error.status === 403)
-        ? 'failed_terminal'
-        : retryable
-          ? 'failed_retryable'
-          : isMissingLocalFileError(error)
-            ? 'expired_local_cleaned'
-            : 'failed_terminal'
-      await updateQueueItem(item.id, (current) => ({
-        ...current,
-        upload_status: status,
-        last_error: message,
-        local_file_deleted_at: status === 'expired_local_cleaned' ? nowIso() : current.local_file_deleted_at,
-      }))
-    } finally {
-      inFlightLocalUris.delete(localUri)
     }
   }
   return { processed, remaining: (await loadQueue()).filter((item) => !item.business_saved).length }

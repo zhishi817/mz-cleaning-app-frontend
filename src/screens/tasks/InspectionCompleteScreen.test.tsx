@@ -114,6 +114,15 @@ jest.mock('../../lib/workTasksStore', () => ({
 
 beforeEach(() => {
   jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+	const api = require('../../lib/api')
+	;(api.deleteLockboxVideo as jest.Mock).mockReset().mockResolvedValue({})
+	;(api.uploadLockboxVideo as jest.Mock).mockReset().mockResolvedValue({})
+	const mediaQueue = require('../../lib/inspectionMediaQueue')
+	;(mediaQueue.enqueueInspectionMediaItem as jest.Mock).mockReset().mockResolvedValue({})
+	;(mediaQueue.listInspectionMediaQueueItemsForTask as jest.Mock).mockReset().mockImplementation(async () => mockQueueItems)
+	;(mediaQueue.processInspectionMediaQueue as jest.Mock).mockReset().mockResolvedValue({ processed: 0, remaining: 1 })
+	;(mediaQueue.removeInspectionMediaItem as jest.Mock).mockReset().mockResolvedValue(undefined)
+	;(mediaQueue.updateInspectionMediaItem as jest.Mock).mockReset().mockResolvedValue(undefined)
 	  mockInspectionPanelQueueListener = null
 	  const queue = require('../../lib/inspectionPanelSubmitQueue')
 	  ;(queue.getInspectionPanelBatch as jest.Mock).mockResolvedValue(null)
@@ -143,6 +152,21 @@ beforeEach(() => {
     },
 	  ]
 	})
+
+function mockNextQueueProcessingAsSaved(finalizationPending = false) {
+  const mediaQueue = require('../../lib/inspectionMediaQueue')
+  ;(mediaQueue.processInspectionMediaQueue as jest.Mock).mockImplementationOnce(async () => {
+    mockQueueItems = mockQueueItems.map((item) => ({
+      ...item,
+      upload_status: 'uploaded',
+      business_saved: true,
+      business_saved_at: '2026-09-24T00:00:00.000Z',
+      last_error: null,
+      meta: { ...(item.meta || {}), business_finalization_pending: finalizationPending },
+    }))
+    return { processed: 1, remaining: 0 }
+  })
+}
 
 test('inspection queue event refreshes silently without restoring the blocking validation state', async () => {
   const queue = require('../../lib/inspectionPanelSubmitQueue')
@@ -258,7 +282,7 @@ test('failed replacement enqueue keeps the old pending local video', async () =>
 
 test('password-only access video completion does not require inspection panel batch', async () => {
   const api = require('../../lib/api')
-  ;(api.uploadLockboxVideo as jest.Mock).mockClear()
+  const mediaQueue = require('../../lib/inspectionMediaQueue')
   const navigation = { goBack: jest.fn(), navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
   const InspectionCompleteScreen = require('./InspectionCompleteScreen').default as React.ComponentType<any>
 
@@ -287,10 +311,14 @@ test('password-only access video completion does not require inspection panel ba
     }))
   }
 
+  ;(mediaQueue.processInspectionMediaQueue as jest.Mock).mockClear()
+  mockNextQueueProcessingAsSaved()
   fireEvent.press(ui.getByText('改密码完成'))
 
   await waitFor(() => {
-    expect(api.uploadLockboxVideo).toHaveBeenCalledWith('t1', 'ct1', { media_url: 'https://example.com/video.mov' })
+    expect(mediaQueue.processInspectionMediaQueue).toHaveBeenCalledWith('t1')
+    expect(api.uploadLockboxVideo).not.toHaveBeenCalled()
+    expect(Alert.alert).toHaveBeenCalledWith(expect.any(String), '视频已提交，任务已完成')
   })
 })
 
@@ -350,9 +378,9 @@ test('uploaded video business-save failure shows the real save error instead of 
 	  expect(navigation.goBack).not.toHaveBeenCalled()
 	})
 
-	test('access video completion uses route sourceId when work task source_id is not the action target', async () => {
-	  const api = require('../../lib/api')
-	  ;(api.uploadLockboxVideo as jest.Mock).mockClear()
+		test('access video completion uses route sourceId when work task source_id is not the action target', async () => {
+		  const api = require('../../lib/api')
+		  const mediaQueue = require('../../lib/inspectionMediaQueue')
 	  mockSnapshot.items[0].source_id = 'ct-wrong-from-merged-card'
 	  mockQueueItems[0].task_id = 'ct-action-target'
 	  const navigation = { goBack: jest.fn(), navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
@@ -369,19 +397,23 @@ test('uploaded video business-save failure shows the real save error instead of 
 
 	  await waitFor(() => {
 	    expect(ui.getByText(/视频文件已上传/)).toBeTruthy()
-	  })
+		  })
 
-	  fireEvent.press(ui.getByText('改密码完成'))
+		  ;(mediaQueue.processInspectionMediaQueue as jest.Mock).mockClear()
+		  mockNextQueueProcessingAsSaved()
+		  fireEvent.press(ui.getByText('改密码完成'))
 
-	  await waitFor(() => {
-	    expect(api.uploadLockboxVideo).toHaveBeenCalledWith('t1', 'ct-action-target', { media_url: 'https://example.com/video.mov' })
-	  })
-	})
+		  await waitFor(() => {
+		    expect(mediaQueue.listInspectionMediaQueueItemsForTask).toHaveBeenCalledWith('ct-action-target', ['lockbox_video'])
+		    expect(mediaQueue.processInspectionMediaQueue).toHaveBeenCalledWith('t1')
+		    expect(api.uploadLockboxVideo).not.toHaveBeenCalled()
+		  })
+		})
 
 test('non-password inspection can finish access video while inspection photos are still pending sync', async () => {
   const api = require('../../lib/api')
+  const mediaQueue = require('../../lib/inspectionMediaQueue')
   const queue = require('../../lib/inspectionPanelSubmitQueue')
-  ;(api.uploadLockboxVideo as jest.Mock).mockClear()
   ;(queue.getInspectionPanelBatch as jest.Mock).mockResolvedValue({
     status: 'pending_submit',
     last_error: '已保存到本机，等待任务信息刷新后自动同步。',
@@ -431,10 +463,13 @@ test('non-password inspection can finish access video while inspection photos ar
   fireEvent.press(ui.getByText('进入检查与补充'))
   expect(navigation.navigate).toHaveBeenCalledWith('InspectionPanel', { taskId: 'w1', sourceId: 'ct-inspection-target' })
 
+  ;(mediaQueue.processInspectionMediaQueue as jest.Mock).mockClear()
+  mockNextQueueProcessingAsSaved()
   fireEvent.press(ui.getByText('提交视频（任务待完成）'))
 
   await waitFor(() => {
-    expect(api.uploadLockboxVideo).toHaveBeenCalledWith('t1', 'ct-video-target', { media_url: 'https://example.com/video.mov' })
+    expect(mediaQueue.processInspectionMediaQueue).toHaveBeenCalledWith('t1')
+    expect(api.uploadLockboxVideo).not.toHaveBeenCalled()
     expect(Alert.alert).toHaveBeenCalledWith(expect.any(String), '视频已提交，检查照片待同步，任务尚未完成。')
   })
 })
@@ -494,7 +529,7 @@ test('non-password inspection can leave with a locally queued video while offlin
   await waitFor(() => {
     expect(mediaQueue.processInspectionMediaQueue).toHaveBeenCalledWith('t1')
     expect(api.uploadLockboxVideo).not.toHaveBeenCalled()
-    expect(Alert.alert).toHaveBeenCalledWith(expect.any(String), '视频已保存到本机，任务记录尚未保存；请点击完成重试。')
+    expect(Alert.alert).toHaveBeenCalledWith(expect.any(String), '视频已安全保存在本机，系统会继续上传并自动保存任务记录。')
     expect(navigation.goBack).toHaveBeenCalled()
   })
 })
@@ -526,6 +561,7 @@ test('blocks ordinary inspection video until the local photo batch is ready', as
 
 test('guest-arrival-confirmed batch can proceed to video without room photos', async () => {
   const api = require('../../lib/api')
+  const mediaQueue = require('../../lib/inspectionMediaQueue')
   const queue = require('../../lib/inspectionPanelSubmitQueue')
   ;(queue.getInspectionPanelBatch as jest.Mock).mockResolvedValue({
     status: 'pending_submit',
@@ -549,9 +585,12 @@ test('guest-arrival-confirmed batch can proceed to video without room photos', a
   )
 
   await waitFor(() => expect(ui.getByText(/检查与补充照片已完整保存到本机/)).toBeTruthy())
+  ;(mediaQueue.processInspectionMediaQueue as jest.Mock).mockClear()
+  mockNextQueueProcessingAsSaved()
   fireEvent.press(ui.getByText('提交视频（任务待完成）'))
 
   await waitFor(() => {
-    expect(api.uploadLockboxVideo).toHaveBeenCalledWith('t1', 'ct-guest-arrival', { media_url: 'https://example.com/video.mov' })
+    expect(mediaQueue.processInspectionMediaQueue).toHaveBeenCalledWith('t1')
+    expect(api.uploadLockboxVideo).not.toHaveBeenCalled()
   })
 })
