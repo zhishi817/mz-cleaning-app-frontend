@@ -3,6 +3,7 @@ import { API_BASE_URL } from '../config/env'
 import { listWorkTasks, type WorkTask } from './api'
 import EventSource from 'react-native-sse'
 import { notifyAuthInvalidated } from './authEvents'
+import { invalidateCleaningMediaCache } from './cleaningMediaCache'
 
 export type WorkTaskItem = WorkTask & {
   date: string
@@ -12,6 +13,7 @@ export type WorkTaskItem = WorkTask & {
 
 export type WorkTasksView = 'mine' | 'all'
 export type WorkTasksRealtimeState = 'idle' | 'connecting' | 'open' | 'error'
+export type WorkTasksRefreshMode = 'passive' | 'consistency' | 'force'
 
 type StoreState = {
   items: WorkTaskItem[]
@@ -55,7 +57,7 @@ const STORAGE_PREFIX = 'mzstay.work_tasks.store.v1:'
 const RECONNECT_DELAY_MS = 1500
 const HEALTH_CHECK_INTERVAL_MS = 15000
 const STREAM_IDLE_TIMEOUT_MS = 65000
-const RESYNC_DEBOUNCE_MS = 500
+const FULL_REFRESH_COOLDOWN_MS = 60_000
 const SAFE_PATCH_FIELDS = new Set([
   'status',
   'scheduled_date',
@@ -66,28 +68,45 @@ const SAFE_PATCH_FIELDS = new Set([
   'urgency',
   'title',
   'summary',
+  'photo_urls',
   'completion_photo_urls',
   'completion_note',
   'completion_reason',
   'old_code',
   'new_code',
   'guest_special_request',
+  'guest_request_checkout',
+  'guest_request_checkin',
+  'guest_request_summary',
   'guest_luggage',
   'note',
   'checked_out_at',
   'key_photo_url',
   'lockbox_video_url',
+  'lockbox_video_uploaded_at',
   'sort_index',
   'sort_index_cleaner',
   'sort_index_inspector',
   'cleaner_name',
   'inspector_name',
+  'capabilities',
+  'available_actions',
+  'participants',
   'inspection_mode',
+  'inspection_scope',
   'inspection_due_date',
   'keys_required',
   'keys_required_checkout',
   'keys_required_checkin',
   'key_tags',
+  'active_source_ids',
+  'superseded_source_ids',
+  'all_related_source_ids',
+  'is_late_checkout',
+  'is_early_checkin',
+  'is_late_checkin',
+  'display_conflicts',
+  'turnover_display',
   'restock_items',
   'completion_photos_ok',
   'property.address',
@@ -108,15 +127,52 @@ let state: StoreState = {
   sseConnectionState: 'idle',
 }
 let initializedKey: string | null = null
+let workTasksHydrationGeneration = 0
+let workTasksSessionIdentity: StreamIdentity | null = null
+let workTasksSessionEpoch = 0
 let activeRealtimeParams: ActiveRealtimeParams | null = null
 let activeStreamIdentity: StreamIdentity | null = null
 let streamEs: EventSource<'connected' | 'ping' | 'resync_required' | 'work_task_event'> | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-let resyncTimer: ReturnType<typeof setTimeout> | null = null
 let healthTimer: ReturnType<typeof setInterval> | null = null
 let lastStreamActivityAt = 0
-let fullSyncPromise: Promise<void> | null = null
-let fullSyncQueued = false
+const refreshWorkTasksInFlight = new Map<string, Promise<boolean>>()
+let localPatchRevision = 0
+const localPatchRevisionsByBucket = new Map<string, Map<string, number>>()
+let workTasksRefreshForeground = true
+let refreshCoordinatorEpoch = 0
+
+type WorkTasksRefreshParams = {
+  token: string
+  userId: string
+  date_from: string
+  date_to: string
+  view: WorkTasksView
+}
+
+type RefreshWaiter = {
+  generation: number
+  resolve: (applied: boolean) => void
+  reject: (error: unknown) => void
+}
+
+type RefreshCoordinatorScope = {
+  params: WorkTasksRefreshParams
+  running: boolean
+  runningGeneration: number
+  completedGeneration: number
+  cooldownUntil: number
+  pendingConsistency: boolean
+  pendingForce: boolean
+  timer: ReturnType<typeof setTimeout> | null
+  waiters: RefreshWaiter[]
+}
+
+const refreshCoordinatorScopes = new Map<string, RefreshCoordinatorScope>()
+
+function isRefreshCoordinatorScopeCurrent(scopeKey: string, scope: RefreshCoordinatorScope, epoch: number) {
+  return refreshCoordinatorEpoch === epoch && refreshCoordinatorScopes.get(scopeKey) === scope
+}
 
 function emit() {
   for (const cb of listeners) cb()
@@ -169,6 +225,13 @@ function sameRealtimeParams(a: ActiveRealtimeParams | null, b: ActiveRealtimePar
 function sameStreamIdentity(a: StreamIdentity | null, b: StreamIdentity | null) {
   if (!a || !b) return false
   return a.token === b.token && a.userId === b.userId
+}
+
+function isCurrentWorkTasksSession(params: { token: string; userId: string }, epoch: number = workTasksSessionEpoch) {
+  return workTasksSessionEpoch === epoch && sameStreamIdentity(workTasksSessionIdentity, {
+    token: String(params.token || '').trim(),
+    userId: String(params.userId || '').trim(),
+  })
 }
 
 function setConnectionState(next: WorkTasksRealtimeState) {
@@ -231,17 +294,30 @@ function closeStream() {
 }
 
 export function deactivateWorkTasksRealtime() {
+  workTasksSessionIdentity = null
+  workTasksSessionEpoch += 1
   activeRealtimeParams = null
   activeStreamIdentity = null
   closeStream()
   stopHealthTimer()
-  if (resyncTimer) {
-    clearTimeout(resyncTimer)
-    resyncTimer = null
-  }
-  fullSyncQueued = false
+  clearWorkTasksRefreshCoordinator()
   lastStreamActivityAt = 0
   setConnectionState('idle')
+}
+
+export function establishWorkTasksSession(params: { token: string; userId: string }) {
+  const next: StreamIdentity = {
+    token: String(params.token || '').trim(),
+    userId: String(params.userId || '').trim(),
+  }
+  if (!next.token || !next.userId) {
+    deactivateWorkTasksRealtime()
+    return false
+  }
+  if (sameStreamIdentity(workTasksSessionIdentity, next)) return true
+  deactivateWorkTasksRealtime()
+  workTasksSessionIdentity = next
+  return true
 }
 
 function scheduleReconnect() {
@@ -279,6 +355,8 @@ function normalizeTaskIds(task: WorkTaskItem, event: WorkTaskStreamEvent) {
     String(task.id || '').trim(),
     String(task.source_id || '').trim(),
     ...(Array.isArray(task.source_ids) ? task.source_ids : []),
+    ...(Array.isArray((task as any).active_source_ids) ? (task as any).active_source_ids : []),
+    ...(Array.isArray((task as any).all_related_source_ids) ? (task as any).all_related_source_ids : []),
     ...(Array.isArray(task.cleaning_task_ids) ? task.cleaning_task_ids : []),
     ...(Array.isArray(task.inspection_task_ids) ? task.inspection_task_ids : []),
     String(event.task_id || '').trim(),
@@ -294,7 +372,7 @@ function matchTaskIds(task: WorkTaskItem, ids: string[]) {
   return ids.some((id) => candidates.has(id))
 }
 
-function isSafePatchEvent(event: WorkTaskStreamEvent) {
+export function isSafePatchEvent(event: WorkTaskStreamEvent) {
   const eventType = String(event.event_type || '').trim()
   const scope = String(event.change_scope || '').trim()
   if (!['TASK_UPDATED', 'TASK_COMPLETED', 'TASK_DETAIL_ASSET_CHANGED'].includes(eventType)) return false
@@ -315,7 +393,7 @@ function getPatchValue(patch: Record<string, any>, key: string) {
   return cursor
 }
 
-function mergePatchIntoTask(task: WorkTaskItem, event: WorkTaskStreamEvent) {
+export function mergePatchIntoTask(task: WorkTaskItem, event: WorkTaskStreamEvent) {
   const payload = event.payload && typeof event.payload === 'object' ? event.payload : {}
   const patch = payload.patch && typeof payload.patch === 'object' ? payload.patch : {}
   const changedFields = Array.isArray(event.changed_fields) ? event.changed_fields.map((x) => String(x || '').trim()).filter(Boolean) : []
@@ -359,14 +437,17 @@ function mergePatchIntoTask(task: WorkTaskItem, event: WorkTaskStreamEvent) {
   return next
 }
 
-function projectCleaningStatusForTask(task: WorkTaskItem, value: any) {
+export function projectCleaningStatusForTask(task: WorkTaskItem, value: any) {
   const raw = String(value || '').trim().toLowerCase()
   if (!raw) return value
   if (String(task.source_type || '').trim().toLowerCase() !== 'cleaning_tasks') return value
   const kind = String(task.task_kind || '').trim().toLowerCase()
   if (kind === 'inspection') {
     if (raw === 'keys_hung') return 'keys_hung'
-    if (raw === 'inspected' || raw === 'done' || raw === 'completed' || raw === 'ready') return 'done'
+    if (raw === 'inspected') {
+      return String((task as any).inspection_scope || '').trim().toLowerCase() === 'password_only' ? 'done' : 'to_hang_keys'
+    }
+    if (raw === 'done' || raw === 'completed' || raw === 'ready') return 'done'
     if (raw === 'cleaned' || raw === 'restock_pending' || raw === 'restocked') return 'to_inspect'
     if (raw === 'in_progress' || String((task as any).key_photo_url || '').trim()) return 'in_progress'
     if (raw === 'assigned' || String((task as any).inspector_id || '').trim()) return 'assigned'
@@ -407,33 +488,202 @@ function shouldIgnoreByVersion(task: WorkTaskItem, event: WorkTaskStreamEvent) {
   return false
 }
 
-async function forceFullSync() {
-  if (!activeRealtimeParams) return
-  if (fullSyncPromise) {
-    fullSyncQueued = true
-    return fullSyncPromise
+function normalizeRefreshParams(params: WorkTasksRefreshParams): WorkTasksRefreshParams | null {
+  const next: WorkTasksRefreshParams = {
+    token: String(params.token || '').trim(),
+    userId: String(params.userId || '').trim(),
+    date_from: String(params.date_from || '').trim(),
+    date_to: String(params.date_to || '').trim(),
+    view: params.view === 'all' ? 'all' : 'mine',
   }
-  const params = activeRealtimeParams
-  fullSyncPromise = refreshWorkTasksFromServer(params)
-    .catch(() => {})
-    .finally(() => {
-      fullSyncPromise = null
-    })
-  await fullSyncPromise
-  if (fullSyncQueued) {
-    fullSyncQueued = false
-    await forceFullSync()
+  return next.token && next.userId && next.date_from && next.date_to ? next : null
+}
+
+function refreshScopeKey(params: WorkTasksRefreshParams) {
+  return makeWorkTasksBucketKey(params)
+}
+
+function getRefreshCoordinatorScope(params: WorkTasksRefreshParams) {
+  const key = refreshScopeKey(params)
+  let scope = refreshCoordinatorScopes.get(key)
+  if (!scope) {
+    scope = {
+      params,
+      running: false,
+      runningGeneration: 0,
+      completedGeneration: 0,
+      cooldownUntil: 0,
+      pendingConsistency: false,
+      pendingForce: false,
+      timer: null,
+      waiters: [],
+    }
+    refreshCoordinatorScopes.set(key, scope)
+  } else {
+    scope.params = params
+  }
+  return { key, scope }
+}
+
+function settleRefreshWaiters(scope: RefreshCoordinatorScope, generation: number, applied: boolean, error: unknown) {
+  const ready = scope.waiters.filter((waiter) => waiter.generation <= generation)
+  scope.waiters = scope.waiters.filter((waiter) => waiter.generation > generation)
+  for (const waiter of ready) {
+    if (error) waiter.reject(error)
+    else waiter.resolve(applied)
   }
 }
 
-function scheduleFullSync(reason: string) {
+function waitForRefreshGeneration(scope: RefreshCoordinatorScope, generation: number) {
+  if (scope.completedGeneration >= generation) return Promise.resolve(true)
+  return new Promise<boolean>((resolve, reject) => {
+    scope.waiters.push({ generation, resolve, reject })
+  })
+}
+
+function clearRefreshCoordinatorTimer(scope: RefreshCoordinatorScope) {
+  if (!scope.timer) return
+  clearTimeout(scope.timer)
+  scope.timer = null
+}
+
+function armConsistencyRefresh(scopeKey: string, scope: RefreshCoordinatorScope) {
+  if (!scope.pendingConsistency || scope.running || !workTasksRefreshForeground) return
+  const delay = Math.max(0, scope.cooldownUntil - Date.now())
+  if (delay <= 0) {
+    startCoordinatedRefresh(scopeKey, scope)
+    return
+  }
+  if (scope.timer) return
+  scope.timer = setTimeout(() => {
+    scope.timer = null
+    if (!scope.pendingConsistency || scope.running || !workTasksRefreshForeground) return
+    startCoordinatedRefresh(scopeKey, scope)
+  }, delay)
+}
+
+function finishCoordinatedRefresh(scopeKey: string, scope: RefreshCoordinatorScope, generation: number, error: unknown) {
+  scope.running = false
+  scope.completedGeneration = generation
+  settleRefreshWaiters(scope, generation, true, error)
+  if (scope.pendingForce) {
+    scope.pendingForce = false
+    scope.pendingConsistency = false
+    clearRefreshCoordinatorTimer(scope)
+    if (workTasksRefreshForeground) startCoordinatedRefresh(scopeKey, scope)
+    return
+  }
+  armConsistencyRefresh(scopeKey, scope)
+}
+
+function discardCoordinatedRefresh(scope: RefreshCoordinatorScope, generation: number) {
+  scope.running = false
+  scope.completedGeneration = generation
+  scope.pendingForce = false
+  scope.pendingConsistency = false
+  clearRefreshCoordinatorTimer(scope)
+  settleRefreshWaiters(scope, generation, false, null)
+}
+
+function startCoordinatedRefresh(scopeKey: string, scope: RefreshCoordinatorScope) {
+  if (scope.running || !workTasksRefreshForeground) return
+  clearRefreshCoordinatorTimer(scope)
+  scope.pendingConsistency = false
+  scope.running = true
+  scope.runningGeneration += 1
+  const generation = scope.runningGeneration
+  const epoch = refreshCoordinatorEpoch
+  const sessionEpoch = workTasksSessionEpoch
+  const isCurrent = () => (
+    isRefreshCoordinatorScopeCurrent(scopeKey, scope, epoch)
+    && isCurrentWorkTasksSession(scope.params, sessionEpoch)
+  )
+  scope.cooldownUntil = Date.now() + FULL_REFRESH_COOLDOWN_MS
+  void executeWorkTasksRefresh(scope.params, isCurrent)
+    .then((applied) => {
+      if (!isCurrent()) return
+      if (!applied) {
+        discardCoordinatedRefresh(scope, generation)
+        return
+      }
+      finishCoordinatedRefresh(scopeKey, scope, generation, null)
+    })
+    .catch((error) => {
+      if (isCurrent()) finishCoordinatedRefresh(scopeKey, scope, generation, error)
+    })
+}
+
+function requestActiveWorkTasksRefresh(mode: WorkTasksRefreshMode, reason: string) {
+  if (!activeRealtimeParams) return Promise.resolve()
+  return requestWorkTasksRefresh({ ...activeRealtimeParams, mode, reason })
+}
+
+export function setWorkTasksRefreshForeground(isForeground: boolean) {
+  workTasksRefreshForeground = isForeground
+  if (!isForeground) {
+    for (const scope of refreshCoordinatorScopes.values()) clearRefreshCoordinatorTimer(scope)
+    return
+  }
+  for (const [scopeKey, scope] of refreshCoordinatorScopes.entries()) {
+    if (scope.pendingForce && !scope.running) {
+      scope.pendingForce = false
+      scope.pendingConsistency = false
+      startCoordinatedRefresh(scopeKey, scope)
+      continue
+    }
+    armConsistencyRefresh(scopeKey, scope)
+  }
+}
+
+export function requestWorkTasksRefresh(params: WorkTasksRefreshParams & { mode: WorkTasksRefreshMode; reason: string }) {
+  const next = normalizeRefreshParams(params)
+  if (!next || !isCurrentWorkTasksSession(next)) return Promise.resolve(false)
+  const { key, scope } = getRefreshCoordinatorScope(next)
+  const mode = params.mode
+  const reason = String(params.reason || mode).trim() || mode
   const bucketKey = state.bucketKey
-  if (bucketKey) markBucketDirty(bucketKey, reason)
-  if (resyncTimer) return
-  resyncTimer = setTimeout(() => {
-    resyncTimer = null
-    void forceFullSync()
-  }, RESYNC_DEBOUNCE_MS)
+  if (bucketKey === key) markBucketDirty(bucketKey, reason)
+
+  if (mode === 'passive') {
+    if (!workTasksRefreshForeground || scope.running || Date.now() < scope.cooldownUntil) return Promise.resolve(false)
+    const generation = scope.runningGeneration + 1
+    startCoordinatedRefresh(key, scope)
+    return waitForRefreshGeneration(scope, generation)
+  }
+
+  if (mode === 'consistency') {
+    scope.pendingConsistency = true
+    if (!scope.running && workTasksRefreshForeground && Date.now() >= scope.cooldownUntil) startCoordinatedRefresh(key, scope)
+    else armConsistencyRefresh(key, scope)
+    return Promise.resolve(true)
+  }
+
+  scope.pendingConsistency = false
+  clearRefreshCoordinatorTimer(scope)
+  if (!workTasksRefreshForeground) {
+    scope.pendingForce = true
+    return Promise.resolve(true)
+  }
+  if (scope.running) {
+    scope.pendingForce = true
+    return waitForRefreshGeneration(scope, scope.runningGeneration + 1)
+  }
+  const generation = scope.runningGeneration + 1
+  startCoordinatedRefresh(key, scope)
+  return waitForRefreshGeneration(scope, generation)
+}
+
+function clearWorkTasksRefreshCoordinator() {
+  refreshCoordinatorEpoch += 1
+  workTasksHydrationGeneration += 1
+  initializedKey = null
+  refreshWorkTasksInFlight.clear()
+  for (const scope of refreshCoordinatorScopes.values()) {
+    clearRefreshCoordinatorTimer(scope)
+    for (const waiter of scope.waiters) waiter.resolve(false)
+    scope.waiters = []
+  }
+  refreshCoordinatorScopes.clear()
 }
 
 function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
@@ -441,16 +691,19 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
   const eventType = String(event.event_type || '').trim()
   const scope = String(event.change_scope || '').trim()
   if (scope === 'membership' || eventType === 'TASK_CREATED' || eventType === 'TASK_REMOVED' || eventType === 'TASK_ASSIGNMENT_CHANGED') {
-    scheduleFullSync(eventType || 'membership')
+    if (scope === 'membership' || eventType === 'TASK_REMOVED' || eventType === 'TASK_ASSIGNMENT_CHANGED') {
+      void invalidateCleaningMediaCache()
+    }
+    void requestActiveWorkTasksRefresh('consistency', eventType || 'membership')
     return
   }
   if (!isSafePatchEvent(event)) {
-    scheduleFullSync(eventType || 'unsafe_patch')
+    void requestActiveWorkTasksRefresh('consistency', eventType || 'unsafe_patch')
     return
   }
   const indexes = findTaskIndexesForEvent(event)
   if (!indexes.length) {
-    scheduleFullSync('task_missing_for_patch')
+    void requestActiveWorkTasksRefresh('consistency', 'task_missing_for_patch')
     return
   }
   const items = state.items.slice()
@@ -491,7 +744,8 @@ function processSseBlock(block: { type?: string; data?: string | null; lastEvent
   }
   if (eventName === 'resync_required') {
     setConnectionState('open')
-    scheduleFullSync(String((data as any)?.reason || 'resync_required'))
+    void invalidateCleaningMediaCache()
+    void requestActiveWorkTasksRefresh('force', String((data as any)?.reason || 'resync_required')).catch(() => {})
     return
   }
   if (eventName !== 'work_task_event') return
@@ -603,14 +857,23 @@ export async function activateWorkTasksRealtime(params: ActiveRealtimeParams) {
     date_to: String(params.date_to || '').trim(),
     view: params.view === 'all' ? 'all' : 'mine',
   }
-  if (!next.token || !next.userId || !next.date_from || !next.date_to) return
+  if (!next.token || !next.userId || !next.date_from || !next.date_to) return false
+  const sessionEpoch = workTasksSessionEpoch
+  const isCurrent = () => isCurrentWorkTasksSession(next, sessionEpoch)
+  if (!isCurrent()) return false
   const nextIdentity: StreamIdentity = { token: next.token, userId: next.userId }
   const streamChanged = !sameStreamIdentity(activeStreamIdentity, nextIdentity)
+  if (streamChanged) clearWorkTasksRefreshCoordinator()
+  const bucketKey = makeWorkTasksBucketKey(next)
+  if (state.bucketKey !== bucketKey) {
+    const initialized = await initWorkTasksStore({ bucketKey, session: next, canApply: isCurrent })
+    if (!initialized || !isCurrent()) return false
+  }
+  if (!isCurrent()) return false
   activeRealtimeParams = next
   activeStreamIdentity = nextIdentity
-  const bucketKey = makeWorkTasksBucketKey(next)
-  if (state.bucketKey !== bucketKey) await initWorkTasksStore({ bucketKey })
   if (streamChanged || !streamEs) connectWorkTasksRealtime(streamChanged)
+  return true
 }
 
 export function findWorkTaskItemByAnyId(id0: string) {
@@ -634,6 +897,7 @@ export async function patchWorkTaskItem(id0: string, patch: Partial<WorkTaskItem
   const next = { ...prev, ...patch }
   const items = state.items.slice()
   items[idx] = next
+  recordLocalTaskPatch(state.bucketKey, next.id)
   state = { ...state, items, updatedAt: new Date().toISOString() }
   await persist()
   emit()
@@ -651,7 +915,9 @@ export async function patchWorkTaskItems(patches0: Array<{ id: string; patch: Pa
     const patch = patchById.get(String(task.id || '').trim())
     if (!patch) return task
     changed = true
-    return { ...task, ...patch }
+    const next = { ...task, ...patch }
+    recordLocalTaskPatch(state.bucketKey, next.id)
+    return next
   })
   if (!changed) return
   state = { ...state, items, updatedAt: new Date().toISOString() }
@@ -668,10 +934,15 @@ async function persist() {
   await setJson(storageKey(state.bucketKey), toSave)
 }
 
-export async function initWorkTasksStore(params: { bucketKey: string }) {
+export async function initWorkTasksStore(params: { bucketKey: string; session: { token: string; userId: string }; canApply?: () => boolean }) {
   const key = String(params.bucketKey || '').trim()
   if (!key) throw new Error('missing bucketKey')
-  if (initializedKey === key) return
+  const sessionEpoch = workTasksSessionEpoch
+  const canApply = params.canApply || (() => true)
+  const canApplyCurrentSession = () => canApply() && isCurrentWorkTasksSession(params.session, sessionEpoch)
+  if (!canApplyCurrentSession()) return false
+  if (initializedKey === key && state.bucketKey === key) return true
+  const hydrationGeneration = ++workTasksHydrationGeneration
   initializedKey = key
   state = {
     items: [],
@@ -683,8 +954,10 @@ export async function initWorkTasksStore(params: { bucketKey: string }) {
     sseConnectionState: state.sseConnectionState,
   }
   const saved = await getJson<StoreState>(storageKey(key))
+  if (!canApplyCurrentSession() || hydrationGeneration !== workTasksHydrationGeneration) return false
   state = buildStateFromSaved(saved, key)
   emit()
+  return true
 }
 
 function mapRemoteTask(t: WorkTask): WorkTaskItem {
@@ -697,27 +970,136 @@ function mapRemoteTask(t: WorkTask): WorkTaskItem {
   }
 }
 
-export async function refreshWorkTasksFromServer(params: {
-  token: string
-  userId: string
-  date_from: string
-  date_to: string
-  view: WorkTasksView
-}) {
-  const bucketKey = makeWorkTasksBucketKey({ userId: params.userId, date_from: params.date_from, date_to: params.date_to, view: params.view })
-  await initWorkTasksStore({ bucketKey })
-  const remote = await listWorkTasks(params.token, { date_from: params.date_from, date_to: params.date_to, view: params.view })
-  const items = remote.map(mapRemoteTask).filter((t) => t.date !== 'unknown')
+function workTaskIdentityValues(task: Partial<WorkTaskItem> | WorkTask) {
+  return [
+    (task as any)?.id,
+    (task as any)?.task_id,
+    (task as any)?.source_id,
+    ...((Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : [])),
+    ...((Array.isArray((task as any)?.active_source_ids) ? (task as any).active_source_ids : [])),
+    ...((Array.isArray((task as any)?.superseded_source_ids) ? (task as any).superseded_source_ids : [])),
+    ...((Array.isArray((task as any)?.all_related_source_ids) ? (task as any).all_related_source_ids : [])),
+    ...((Array.isArray((task as any)?.cleaning_task_ids) ? (task as any).cleaning_task_ids : [])),
+    ...((Array.isArray((task as any)?.inspection_task_ids) ? (task as any).inspection_task_ids : [])),
+    ...((Array.isArray((task as any)?.execution_task_ids) ? (task as any).execution_task_ids : [])),
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+}
 
-  const now = new Date().toISOString()
-  clearBucketDirty(bucketKey)
-  state = {
-    ...state,
-    items,
-    bucketKey,
-    updatedAt: now,
-    lastFullSyncTimestamp: now,
+function recordLocalTaskPatch(bucketKey: string | null, taskId0: string) {
+  const bucket = String(bucketKey || '').trim()
+  const taskId = String(taskId0 || '').trim()
+  if (!bucket || !taskId) return
+  const revisions = localPatchRevisionsByBucket.get(bucket) || new Map<string, number>()
+  revisions.set(taskId, ++localPatchRevision)
+  localPatchRevisionsByBucket.set(bucket, revisions)
+}
+
+function taskIdsPatchedAfter(bucketKey: string, revision: number) {
+  const revisions = localPatchRevisionsByBucket.get(bucketKey)
+  if (!revisions) return new Set<string>()
+  return new Set(Array.from(revisions.entries())
+    .filter(([, patchedRevision]) => patchedRevision > revision)
+    .map(([taskId]) => taskId))
+}
+
+function clearPatchedTaskIdsThrough(bucketKey: string, revision: number) {
+  const revisions = localPatchRevisionsByBucket.get(bucketKey)
+  if (!revisions) return
+  for (const [taskId, patchedRevision] of revisions.entries()) {
+    if (patchedRevision <= revision) revisions.delete(taskId)
   }
-  await persist()
-  emit()
+  if (!revisions.size) localPatchRevisionsByBucket.delete(bucketKey)
+}
+
+export function mergeRemoteWorkTaskItems(
+  remote: WorkTaskItem[],
+  previous: WorkTaskItem[],
+  options?: { retainLocalTaskIds?: Iterable<string> },
+) {
+  const previousByIdentity = new Map<string, WorkTaskItem>()
+  const previousItemsByIdentity = new Map<string, WorkTaskItem>()
+  for (const item of Array.isArray(previous) ? previous : []) {
+    for (const identity of workTaskIdentityValues(item)) {
+      if (!previousItemsByIdentity.has(identity)) previousItemsByIdentity.set(identity, item)
+      if (String((item as any)?.checked_out_at || '').trim() && !previousByIdentity.has(identity)) previousByIdentity.set(identity, item)
+    }
+  }
+
+  const retainLocalTaskIds = new Set(Array.from(options?.retainLocalTaskIds || []).map((id) => String(id || '').trim()).filter(Boolean))
+  return (Array.isArray(remote) ? remote : []).map((item) => {
+    const locallyPatchedItem = workTaskIdentityValues(item)
+      .map((identity) => retainLocalTaskIds.has(identity) ? previousItemsByIdentity.get(identity) : null)
+      .find(Boolean)
+    if (locallyPatchedItem) return locallyPatchedItem
+    if (String((item as any)?.source_type || '').trim() !== 'cleaning_tasks') return item
+    if (Object.prototype.hasOwnProperty.call(item, 'checked_out_at')) return item
+    const previousItem = workTaskIdentityValues(item)
+      .map((identity) => previousByIdentity.get(identity))
+      .find(Boolean)
+    const checkedOutAt = String((previousItem as any)?.checked_out_at || '').trim()
+    return checkedOutAt ? { ...item, checked_out_at: checkedOutAt } : item
+  })
+}
+
+async function executeWorkTasksRefresh(params: WorkTasksRefreshParams, canApply: () => boolean = () => true) {
+  const bucketKey = makeWorkTasksBucketKey({ userId: params.userId, date_from: params.date_from, date_to: params.date_to, view: params.view })
+  if (!canApply()) return false
+  const inFlight = refreshWorkTasksInFlight.get(bucketKey)
+  if (inFlight) return inFlight
+
+  const run = (async () => {
+    const initialized = await initWorkTasksStore({ bucketKey, session: params, canApply })
+    if (!initialized || !canApply() || state.bucketKey !== bucketKey) return false
+    const refreshStartPatchRevision = localPatchRevision
+    const remote = await listWorkTasks(params.token, { date_from: params.date_from, date_to: params.date_to, view: params.view })
+    if (!canApply() || state.bucketKey !== bucketKey) return false
+    const mappedRemote = remote.map(mapRemoteTask).filter((t) => t.date !== 'unknown')
+    const locallyPatchedTaskIds = taskIdsPatchedAfter(bucketKey, refreshStartPatchRevision)
+    const items = mergeRemoteWorkTaskItems(mappedRemote, state.items, { retainLocalTaskIds: locallyPatchedTaskIds })
+    clearPatchedTaskIdsThrough(bucketKey, refreshStartPatchRevision)
+
+    const now = new Date().toISOString()
+    clearBucketDirty(bucketKey)
+    state = {
+      ...state,
+      items,
+      bucketKey,
+      updatedAt: now,
+      lastFullSyncTimestamp: now,
+    }
+    await persist()
+    emit()
+    return true
+  })()
+
+  refreshWorkTasksInFlight.set(bucketKey, run)
+  try {
+    return await run
+  } finally {
+    if (refreshWorkTasksInFlight.get(bucketKey) === run) refreshWorkTasksInFlight.delete(bucketKey)
+  }
+}
+
+// An executor receipt is authoritative, but a task-list request may have been
+// sent before that receipt returned. Let that stale request settle under the
+// local-patch guard, then refresh the same active bucket once for canonical
+// server data. Do not switch a task detail into its fallback date bucket.
+export async function reconcileActiveWorkTasksAfterLocalPatch() {
+  const params = activeRealtimeParams ? { ...activeRealtimeParams } : null
+  if (!params) return false
+  const bucketKey = makeWorkTasksBucketKey(params)
+  if (state.bucketKey !== bucketKey) return false
+  const inFlight = refreshWorkTasksInFlight.get(bucketKey)
+  if (inFlight) {
+    try {
+      await inFlight
+    } catch {
+      // The next refresh still gives the receipt a chance to reconcile.
+    }
+  }
+  if (!sameRealtimeParams(activeRealtimeParams, params) || state.bucketKey !== bucketKey) return false
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'local_patch_reconcile' })
+  return true
 }
