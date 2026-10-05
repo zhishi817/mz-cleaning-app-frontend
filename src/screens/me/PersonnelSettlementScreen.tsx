@@ -912,6 +912,8 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
   const [settlements, setSettlements] = useState<PersonnelWeeklySettlement[]>([])
   const [submissionPreview, setSubmissionPreview] = useState<PersonnelSettlementSubmissionPreview | null>(null)
   const [submissionPreviewError, setSubmissionPreviewError] = useState('')
+  const [submissionReviewPreview, setSubmissionReviewPreview] = useState<PersonnelSettlementSubmissionPreview | null>(null)
+  const [submissionReviewLoadingWeek, setSubmissionReviewLoadingWeek] = useState('')
   const [submissionReviewOpen, setSubmissionReviewOpen] = useState(false)
   const [submissionReviewStep, setSubmissionReviewStep] = useState<1 | 2>(1)
   const [submissionAcknowledged, setSubmissionAcknowledged] = useState(false)
@@ -1096,12 +1098,19 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
   }, [draft, userId])
 
   useEffect(() => {
-    if (!submissionReviewOpen || !submissionPreview || submissionPreview.status !== 'not_submitted') return
-    if (submissionReviewToken === submissionPreview.confirmation_token) return
-    setSubmissionReviewToken(submissionPreview.confirmation_token)
+    if (!submissionReviewOpen || !submissionReviewPreview || submissionReviewPreview.status !== 'not_submitted') return
+    if (submissionReviewToken === submissionReviewPreview.confirmation_token) return
+    setSubmissionReviewToken(submissionReviewPreview.confirmation_token)
     setSubmissionReviewStep(1)
     setSubmissionAcknowledged(false)
-  }, [submissionPreview, submissionReviewOpen, submissionReviewToken])
+  }, [submissionReviewOpen, submissionReviewPreview, submissionReviewToken])
+
+  useEffect(() => {
+    if (!submissionReviewOpen || !submissionPreview || !submissionReviewPreview) return
+    if (submissionPreview.week_start !== submissionReviewPreview.week_start) return
+    if (submissionPreview.confirmation_token === submissionReviewPreview.confirmation_token) return
+    setSubmissionReviewPreview(submissionPreview)
+  }, [submissionPreview, submissionReviewOpen, submissionReviewPreview])
 
   useEffect(() => {
     if (!userId || !settlementDetail || !supplementDraft) return
@@ -1460,46 +1469,80 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
 
   const openSubmissionReview = useCallback(() => {
     if (!submissionPreview || submissionPreview.status !== 'not_submitted') return
+    setSubmissionReviewPreview(submissionPreview)
     setSubmissionReviewToken(submissionPreview.confirmation_token)
     setSubmissionReviewStep(1)
     setSubmissionAcknowledged(false)
     setSubmissionReviewOpen(true)
   }, [submissionPreview])
 
+  const openVoidedSettlementSubmissionReview = useCallback(async (settlement: PersonnelWeeklySettlement) => {
+    if (!token || settlement.status !== 'void' || submissionReviewLoadingWeek) return
+    try {
+      setSubmissionReviewLoadingWeek(settlement.week_start)
+      const preview = await getMyPersonnelSettlementSubmissionPreview(token, settlement.week_start)
+      if (
+        preview.status !== 'not_submitted'
+        || preview.settlement?.status !== 'void'
+        || String(preview.settlement?.id || '') !== String(settlement.id)
+      ) {
+        throw new Error('该周当前无法重新提交，请刷新后重试')
+      }
+      setSubmissionReviewPreview(preview)
+      setSubmissionReviewToken(preview.confirmation_token)
+      setSubmissionReviewStep(1)
+      setSubmissionAcknowledged(false)
+      setSubmissionReviewOpen(true)
+    } catch (error: any) {
+      Alert.alert('暂时无法重新提交', String(error?.message || '请稍后重试'))
+    } finally {
+      setSubmissionReviewLoadingWeek('')
+    }
+  }, [submissionReviewLoadingWeek, token])
+
   const closeSubmissionReview = useCallback(() => {
     if (saving) return
     setSubmissionReviewOpen(false)
+    setSubmissionReviewPreview(null)
     setSubmissionReviewToken('')
     setSubmissionReviewStep(1)
     setSubmissionAcknowledged(false)
   }, [saving])
 
   const submitWeeklyWorkload = useCallback(async () => {
-    if (!token || !submissionPreview || saving) return
-    if (!submissionAcknowledged || submissionReviewToken !== submissionPreview.confirmation_token) return
+    if (!token || !submissionReviewPreview || saving) return
+    if (
+      !submissionAcknowledged
+      || submissionReviewToken !== submissionReviewPreview.confirmation_token
+      || submissionReviewPreview.blocking_issues.length > 0
+    ) return
     try {
       setSaving(true)
       await submitMyPersonnelSettlementWeek(
         token,
-        submissionPreview.week_start,
-        submissionPreview.confirmation_token,
+        submissionReviewPreview.week_start,
+        submissionReviewPreview.confirmation_token,
       )
       setSubmissionReviewOpen(false)
+      setSubmissionReviewPreview(null)
       setSubmissionReviewToken('')
       setSubmissionReviewStep(1)
-      setSubmissionReviewToken(submissionPreview.confirmation_token)
       setSubmissionAcknowledged(false)
       await loadAll(true)
       Alert.alert('提交成功', '本周工作量已提交，等待财务核对。')
     } catch (error: any) {
       setSubmissionReviewStep(1)
       setSubmissionAcknowledged(false)
-      await refreshSubmissionPreview()
+      try {
+        const refreshed = await getMyPersonnelSettlementSubmissionPreview(token, submissionReviewPreview.week_start)
+        setSubmissionReviewPreview(refreshed)
+        if (submissionPreview?.week_start === refreshed.week_start) setSubmissionPreview(refreshed)
+      } catch {}
       Alert.alert('暂未提交', String(error?.message || '请稍后重试'))
     } finally {
       setSaving(false)
     }
-  }, [loadAll, refreshSubmissionPreview, saving, submissionAcknowledged, submissionPreview, submissionReviewToken, token])
+  }, [loadAll, saving, submissionAcknowledged, submissionPreview?.week_start, submissionReviewPreview, submissionReviewToken, token])
 
   const respondSettlement = useCallback(async (action: 'confirm' | 'dispute') => {
     if (!token || !settlementDetail || saving) return
@@ -1624,18 +1667,28 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
     [settlementDetail],
   )
   const submissionPreviewDailyLines = useMemo(
-    () => summarizePersonnelSettlementLinesByDate(submissionPreview?.lines || []),
-    [submissionPreview],
+    () => summarizePersonnelSettlementLinesByDate(submissionReviewPreview?.lines || []),
+    [submissionReviewPreview],
   )
   const submissionPreviewUnincludedClaims = useMemo(
-    () => submissionPreview ? unincludedSubmissionClaims(submissionPreview, claims) : [],
-    [claims, submissionPreview],
+    () => submissionReviewPreview ? unincludedSubmissionClaims(submissionReviewPreview, claims) : [],
+    [claims, submissionReviewPreview],
   )
+  const submissionPreviewIncludedPendingClaims = useMemo(() => {
+    const includedIds = new Set(
+      (submissionReviewPreview?.lines || [])
+        .filter((line) => line.source_type === 'workload_claim' && line.source_id)
+        .map((line) => String(line.source_id)),
+    )
+    return claims.filter((claim) => claim.status === 'submitted' && includedIds.has(claim.id))
+  }, [claims, submissionReviewPreview])
   const submissionReviewMatchesPreview = Boolean(
-    submissionPreview
-    && submissionPreview.status === 'not_submitted'
-    && submissionReviewToken === submissionPreview.confirmation_token,
+    submissionReviewPreview
+    && submissionReviewPreview.status === 'not_submitted'
+    && submissionReviewToken === submissionReviewPreview.confirmation_token,
   )
+  const submissionReviewReady = submissionReviewMatchesPreview
+    && (submissionReviewPreview?.blocking_issues.length || 0) === 0
   const currentSettlementDocuments = useMemo(
     () => selectCurrentSettlementDocuments(settlementDetail),
     [settlementDetail],
@@ -1644,6 +1697,14 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
   const pendingClaimCount = useMemo(
     () => claims.filter((claim) => claim.status === 'submitted').length,
     [claims],
+  )
+  const visibleSettlements = useMemo(
+    () => settlements.filter((settlement) => !(
+      settlement.status === 'void'
+      && submissionPreview?.status === 'not_submitted'
+      && String(submissionPreview.settlement?.id || '') === String(settlement.id)
+    )),
+    [settlements, submissionPreview],
   )
 
   return (
@@ -1919,7 +1980,7 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
           <>
             <View style={styles.notice}>
               <Text style={styles.noticeTitle}>提交每周工作量</Text>
-              <Text style={styles.help}>请先核对上一完整周的工作量和预计金额，再提交给财务核对。财务有调整时会退回，请你再次确认。</Text>
+              <Text style={styles.help}>请核对上一完整周的基础工作量、已提交补贴和最终总额，再一次性提交给财务。只有财务调整内容或金额时才需要你再次确认。</Text>
             </View>
             {submissionPreviewError ? (
               <View testID="weekly-submission-preview-error" style={styles.inlineError}>
@@ -1937,17 +1998,26 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
               <View testID="weekly-submission-preview" style={styles.card}>
                 <View style={styles.cardHeader}>
                   <Text style={styles.cardTitle}>{submissionPreview.week_start} 至 {submissionPreview.week_end}</Text>
-                  <Text style={styles.status}>待提交</Text>
+                  <Text style={styles.status}>{submissionPreview.settlement?.status === 'void' ? '待重新提交' : '待提交'}</Text>
                 </View>
                 <Text style={styles.total}>{money(submissionPreview.total_cents)}</Text>
                 <Text style={styles.muted}>税前 {money(submissionPreview.subtotal_cents)} · GST {money(submissionPreview.gst_cents)} · {submissionPreview.line_count} 项</Text>
-                {submissionPreview.blocking_issues.length ? (
-                  <Text style={styles.claimRowReviewNote}>部分金额暂无法自动计算，仍可先提交给财务核对。</Text>
+                {submissionPreview.settlement?.status === 'void' ? (
+                  <Text style={styles.claimRowReviewNote}>原结算已作废。请重新核对本周完整工作量和总额后提交。</Text>
                 ) : null}
-                <AppButton testID="weekly-submission-review" label="查看明细并核对" onPress={openSubmissionReview} fullWidth style={styles.singleButton} />
+                {submissionPreview.blocking_issues.length ? (
+                  <Text style={styles.claimRowReviewNote}>本周总额暂未计算完整，请先补齐费用规则、GST 或结算资料后再提交。</Text>
+                ) : null}
+                <AppButton
+                  testID="weekly-submission-review"
+                  label={submissionPreview.settlement?.status === 'void' ? '重新核对并提交' : '查看明细并核对'}
+                  onPress={openSubmissionReview}
+                  fullWidth
+                  style={styles.singleButton}
+                />
               </View>
             ) : null}
-            {settlements.length ? settlements.map((settlement) => (
+            {visibleSettlements.length ? visibleSettlements.map((settlement) => (
               <View key={settlement.id} style={styles.card}>
                 <View style={styles.cardHeader}>
                   <Text style={styles.cardTitle}>{settlement.week_start} 至 {settlement.week_end}</Text>
@@ -1955,7 +2025,18 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                 </View>
                 <Text style={styles.total}>{money(settlement.total_cents)}</Text>
                 <Text style={styles.muted}>税前 {money(settlement.subtotal_cents)} · GST {money(settlement.gst_cents)} · {settlement.line_count || 0} 项</Text>
-                <AppButton label={settlement.status === 'awaiting_confirmation' ? '查看并再次确认' : '查看详情'} tone={settlement.status === 'awaiting_confirmation' ? 'primary' : 'outline'} onPress={() => openSettlement(settlement)} fullWidth style={styles.singleButton} />
+                <AppButton
+                  testID={settlement.status === 'void' ? `voided-settlement-resubmit-${settlement.id}` : undefined}
+                  label={settlement.status === 'void' ? '重新核对并提交' : settlement.status === 'awaiting_confirmation' ? '查看并再次确认' : '查看详情'}
+                  tone={['void', 'awaiting_confirmation'].includes(settlement.status) ? 'primary' : 'outline'}
+                  loading={settlement.status === 'void' && submissionReviewLoadingWeek === settlement.week_start}
+                  disabled={settlement.status === 'void' && Boolean(submissionReviewLoadingWeek)}
+                  onPress={() => settlement.status === 'void'
+                    ? openVoidedSettlementSubmissionReview(settlement)
+                    : openSettlement(settlement)}
+                  fullWidth
+                  style={styles.singleButton}
+                />
               </View>
             )) : submissionPreview?.status !== 'not_submitted' ? <View style={styles.empty}><Text style={styles.muted}>暂无周结算单</Text></View> : null}
           </>
@@ -1963,7 +2044,7 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
       </ScrollView>
 
       <Modal
-        visible={submissionReviewOpen && submissionPreview?.status === 'not_submitted'}
+        visible={submissionReviewOpen && submissionReviewPreview?.status === 'not_submitted'}
         animationType="slide"
         onRequestClose={closeSubmissionReview}
       >
@@ -1991,20 +2072,20 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
             </View>
           </View>
           <ScrollView contentContainerStyle={[styles.content, { paddingBottom: 40 + insets.bottom }]}>
-            {submissionPreview && submissionReviewStep === 1 ? (
+            {submissionReviewPreview && submissionReviewStep === 1 ? (
               <>
                 <View testID="weekly-submission-review-detail" style={styles.card}>
                   <View style={styles.cardHeader}>
                     <View style={styles.submissionReviewTitleWrap}>
-                      <Text style={styles.cardTitle}>{formatPersonnelDate(submissionPreview.week_start)} 至 {formatPersonnelDate(submissionPreview.week_end)}</Text>
-                      <Text style={styles.muted}>以下项目已计入预计金额</Text>
+                      <Text style={styles.cardTitle}>{formatPersonnelDate(submissionReviewPreview.week_start)} 至 {formatPersonnelDate(submissionReviewPreview.week_end)}</Text>
+                      <Text style={styles.muted}>以下基础工作量和已提交补贴均已计入本次确认总额</Text>
                     </View>
-                    <Text style={styles.status}>{submissionPreview.line_count} 项</Text>
+                    <Text style={styles.status}>{submissionReviewPreview.line_count} 项</Text>
                   </View>
                   <View style={styles.summaryBox}>
-                    <View style={styles.summaryRow}><Text style={styles.body}>税前金额</Text><Text style={styles.summaryValue}>{money(submissionPreview.subtotal_cents)}</Text></View>
-                    <View style={styles.summaryRow}><Text style={styles.body}>GST</Text><Text style={styles.summaryValue}>{money(submissionPreview.gst_cents)}</Text></View>
-                    <View style={[styles.summaryRow, styles.summaryTotalRow]}><Text style={styles.summaryTotalLabel}>预计总额</Text><Text style={styles.summaryTotalValue}>{money(submissionPreview.total_cents)}</Text></View>
+                    <View style={styles.summaryRow}><Text style={styles.body}>税前金额</Text><Text style={styles.summaryValue}>{money(submissionReviewPreview.subtotal_cents)}</Text></View>
+                    <View style={styles.summaryRow}><Text style={styles.body}>GST</Text><Text style={styles.summaryValue}>{money(submissionReviewPreview.gst_cents)}</Text></View>
+                    <View style={[styles.summaryRow, styles.summaryTotalRow]}><Text style={styles.summaryTotalLabel}>预计总额</Text><Text style={styles.summaryTotalValue}>{money(submissionReviewPreview.total_cents)}</Text></View>
                   </View>
                 </View>
                 {submissionPreviewDailyLines.length ? submissionPreviewDailyLines.map((line) => (
@@ -2017,12 +2098,18 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                     <Text style={styles.muted}>税前 {money(line.subtotal_cents)} · GST {money(line.gst_cents)}{line.evidence_count ? ` · 证明 ${line.evidence_count} 张` : ''}</Text>
                   </View>
                 )) : (
-                  <View style={styles.empty}><Text style={styles.emptyTitle}>本周暂无已计入项目</Text><Text style={styles.muted}>仍可继续核对待公司确认的反馈。</Text></View>
+                  <View style={styles.empty}><Text style={styles.emptyTitle}>本周暂无可提交项目</Text><Text style={styles.muted}>请先检查工作量和补贴反馈。</Text></View>
                 )}
+                {submissionPreviewIncludedPendingClaims.length ? (
+                  <View testID="weekly-submission-included-pending-claims" style={styles.notice}>
+                    <Text style={styles.noticeTitle}>已包含 {submissionPreviewIncludedPendingClaims.length} 条待财务审核反馈</Text>
+                    <Text style={styles.help}>这些申报金额已经计入上方总额；财务按原内容确认时不会要求你再次确认。</Text>
+                  </View>
+                ) : null}
                 {submissionPreviewUnincludedClaims.length ? (
                   <View testID="weekly-submission-unincluded-claims" style={styles.card}>
-                    <Text style={styles.cardTitle}>尚未计入预计总额</Text>
-                    <Text style={styles.warning}>以下反馈仍需公司核对或由你补充资料，本次预计金额暂不包含这些项目。</Text>
+                    <Text style={styles.cardTitle}>尚未进入本次提交</Text>
+                    <Text style={styles.warning}>以下草稿或待补充反馈未进入本次总额，请确认是否需要先处理。</Text>
                     <View style={styles.pendingList}>
                       {submissionPreviewUnincludedClaims.map((claim) => (
                         <View key={claim.id} style={styles.pendingRow}>
@@ -2039,42 +2126,43 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                     </View>
                   </View>
                 ) : null}
-                {submissionPreview.blocking_issues.length ? (
+                {submissionReviewPreview.blocking_issues.length ? (
                   <View style={styles.notice}>
-                    <Text style={styles.noticeTitle}>部分项目等待公司计算</Text>
-                    <Text style={styles.help}>当前无法自动计算的项目不会猜测金额；提交后由公司核对。</Text>
+                    <Text style={styles.noticeTitle}>本周总额暂未计算完整</Text>
+                    <Text style={styles.help}>请先补齐费用规则、GST 或结算资料；完整总额生成后才能提交。</Text>
                   </View>
                 ) : null}
                 <AppButton
                   testID="weekly-submission-next"
                   label="我已核对，下一步"
+                  disabled={submissionReviewPreview.blocking_issues.length > 0}
                   onPress={() => setSubmissionReviewStep(2)}
                   fullWidth
                 />
               </>
-            ) : submissionPreview ? (
+            ) : submissionReviewPreview ? (
               <>
                 <View testID="weekly-submission-confirmation" style={styles.card}>
                   <Text style={styles.cardTitle}>确认提交给财务核对</Text>
-                  <Text style={styles.help}>提交后，财务会核对工作量、费用规则和最终金额；如有调整，会退回请你再次确认。</Text>
+                  <Text style={styles.help}>提交后，财务会按你确认的明细和总额核对；全部一致可直接付款，只有发生调整才会退回请你再次确认。</Text>
                   <View style={styles.summaryBox}>
-                    <View style={styles.summaryRow}><Text style={styles.body}>结算周期</Text><Text style={styles.summaryValue}>{formatPersonnelDate(submissionPreview.week_start)} 至 {formatPersonnelDate(submissionPreview.week_end)}</Text></View>
-                    <View style={styles.summaryRow}><Text style={styles.body}>已计入项目</Text><Text style={styles.summaryValue}>{submissionPreview.line_count} 项</Text></View>
-                    <View style={styles.summaryRow}><Text style={styles.body}>待公司核对</Text><Text style={styles.summaryValue}>{submissionPreviewUnincludedClaims.length} 项</Text></View>
-                    <View style={[styles.summaryRow, styles.summaryTotalRow]}><Text style={styles.summaryTotalLabel}>当前预计总额</Text><Text style={styles.summaryTotalValue}>{money(submissionPreview.total_cents)}</Text></View>
+                    <View style={styles.summaryRow}><Text style={styles.body}>结算周期</Text><Text style={styles.summaryValue}>{formatPersonnelDate(submissionReviewPreview.week_start)} 至 {formatPersonnelDate(submissionReviewPreview.week_end)}</Text></View>
+                    <View style={styles.summaryRow}><Text style={styles.body}>已计入项目</Text><Text style={styles.summaryValue}>{submissionReviewPreview.line_count} 项</Text></View>
+                    <View style={styles.summaryRow}><Text style={styles.body}>其中待财务审核反馈</Text><Text style={styles.summaryValue}>{submissionPreviewIncludedPendingClaims.length} 项（已包含）</Text></View>
+                    <View style={[styles.summaryRow, styles.summaryTotalRow]}><Text style={styles.summaryTotalLabel}>确认总额</Text><Text style={styles.summaryTotalValue}>{money(submissionReviewPreview.total_cents)}</Text></View>
                   </View>
                   <Pressable
                     testID="weekly-submission-acknowledgement"
                     accessibilityRole="checkbox"
-                    accessibilityState={{ checked: submissionAcknowledged && submissionReviewMatchesPreview, disabled: saving || !submissionReviewMatchesPreview }}
-                    disabled={saving || !submissionReviewMatchesPreview}
-                    onPress={() => setSubmissionAcknowledged((checked) => submissionReviewMatchesPreview && !checked)}
+                    accessibilityState={{ checked: submissionAcknowledged && submissionReviewReady, disabled: saving || !submissionReviewReady }}
+                    disabled={saving || !submissionReviewReady}
+                    onPress={() => setSubmissionAcknowledged((checked) => submissionReviewReady && !checked)}
                     style={({ pressed }) => [styles.submissionAcknowledgement, pressed ? styles.claimRowPressed : null]}
                   >
-                    <View style={[styles.submissionCheckbox, submissionAcknowledged && submissionReviewMatchesPreview ? styles.submissionCheckboxChecked : null]}>
-                      {submissionAcknowledged && submissionReviewMatchesPreview ? <Ionicons name="checkmark" size={18} color="#FFFFFF" /> : null}
+                    <View style={[styles.submissionCheckbox, submissionAcknowledged && submissionReviewReady ? styles.submissionCheckboxChecked : null]}>
+                      {submissionAcknowledged && submissionReviewReady ? <Ionicons name="checkmark" size={18} color="#FFFFFF" /> : null}
                     </View>
-                    <Text style={styles.body}>我已核对上述工作量，并了解待公司核对的反馈尚未计入当前预计总额。</Text>
+                    <Text style={styles.body}>我已核对上述基础工作量、申报补贴和确认总额；财务只有在修改内容或金额时才需要我再次确认。</Text>
                   </Pressable>
                 </View>
                 <View style={styles.submissionActionRow}>
@@ -2093,7 +2181,7 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                     testID="weekly-submission-submit"
                     label="确认提交"
                     loading={saving}
-                    disabled={!submissionAcknowledged || !submissionReviewMatchesPreview}
+                    disabled={!submissionAcknowledged || !submissionReviewReady}
                     onPress={submitWeeklyWorkload}
                     style={styles.submissionActionButton}
                   />

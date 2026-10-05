@@ -1,5 +1,168 @@
 # Change Release Ledger
 
+## CRL-20261003-001 — 移动端整周工作量与补贴总额一次确认
+
+- **Repository:** `mobile`
+- **Status:** selected release candidate；fresh `origin/Dev` candidate validation in progress
+- **Updated:** 2026-10-06 Australia/Melbourne
+- **Request:** 合作方一次性提交工作量、补贴和周结算时，提交前必须确认完整总金额；财务审核没有差异时不需要合作方再次确认，只有核定结果变化时才进入再次确认。
+- **Outcome:** 周提交核对明确显示待财务审核反馈已经计入项目数和应付总额，第二步确认覆盖基础工作、补贴、GST 和最终总额；权威预览存在无法计算项目时禁用确认和提交。财务核定一致时说明无需再次确认，有差异时继续使用退回确认状态。异常结算作废后，当前或历史周均显示“待重新提交／重新核对并提交”，按该记录自己的周次读取权威预览。
+
+### Implementation
+
+- Previous behavior: 两步核对把待公司审核反馈列为未计入，合作方确认金额可能不含同时提交的补贴；页面还可能在计算不完整时进入提交。历史作废周只有“查看详情”。
+- New behavior: 复用 Root 权威行项，统计并显示已纳入的待审核反馈；明细、第二步和勾选说明统一覆盖完整总额。存在阻断项时停留在核对页且不发送提交。当前/历史作废周按各自 `week_start` 单独读取预览并复用同一两步核对入口。
+- Key decisions: 移动端不自行计算费率、GST 或财务差异，不新增状态或第二套流程；最终金额和是否需要再次确认由配套 Root 决定。
+
+### Files / Areas
+
+- `src/screens/me/PersonnelSettlementScreen.tsx` — 完整总额确认、待审核反馈计入提示、阻断提交门禁和作废周重提入口。
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — 完整总额、门禁、当前/历史作废周按目标周重新进入核对的回归。
+- `docs/feature-regression-registry.md` — 移动端本人周提交保护规则。
+- `docs/change-release-ledger.md` — 本 CRL 与发布尝试证据。
+
+### Impact / Dependencies
+
+- API / data: 无新端点、原生模块、schema 或 migration。
+- Dependency: 必须配套 `root/CRL-20261003-003` 提供 submitted feedback 行项、完整总额与作废周可提交预览；只发布 Mobile 不能宣称流程闭环。
+- Risk: 只显示服务端已纳入项目，不根据本地草稿猜测金额；真实生产 API、物理设备和 OTA 不在本次提交证据中。
+
+### Validation
+
+- Source candidate：页面 Jest 19/19、TypeScript、目标/全仓 lint、button contract、iOS/Android/Web Expo export 和 `git diff --check` 已通过。
+- Fresh release candidate：Jest 19/19、TypeScript、target/full ESLint（0 errors / 568 existing warnings）、button contract、iOS/Android/Web Expo export、ledger coverage 和 `git diff --check` 均通过。
+- OTA / device / production：not run。
+
+- Post-review repair validation: blocking issues now state that the complete total must be repaired before submission; current and historical void-week tests assert the exact week/token payload through final submit; complete CI and all-platform export passed after the repair.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; candidate is isolated in a clean release worktree based on freshly fetched `origin/Dev`.
+- `docs/feature-regression-registry.md` — SHA-256: `03ed2932979c0085623b8a180c9ceb9e7c917624fcabfe6d8414aeb31d9440c5`
+- `docs/feature-regression-registry.md` — SHA-256: `1a7df3883bfb2d80e163b000a235c9d0422b81950dd535dbc616118c8ee64fc1`
+- `docs/feature-regression-registry.md` — SHA-256: `b57d78107289ae45cda55c0f472e8c320082c6b74939a561f5b05ccca5362156`
+- `docs/feature-regression-registry.md` — SHA-256: `f8a9bcbf7f5f82b29f5ef04372cff5011c0ffe8a67fd541ba3bec2a09d2343d3`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `1570661aa237d58352586357cd0c03ab55f0ec9952aa667feb8f54803e32a268`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `2d6c6aa59f9f4e1d80d0d5eba704c2ceccafb60929517d8740a2d0d2920151da`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `36d879129181e82100ad6f1414b34e5b5c34634320978758716225b491d6f13a`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `740a779f31c9f12ecdf82bb163f6d3576384640ae7af74033582382115f0286f`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `dcb223d8d0836ae41e540490901ed2d6c3dfcee4be084e773cdaf692cd50c809`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `046d850313757575e390e280e6d3531508b91087bf342654eaf3da5ddb05b1af`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `05716e2a120171d4ab66c63e4b3c1be63448d897142745096194c493deb7384a`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `09e99f01d59e388abeff8aa5ad602376b16768a643f1ae339e6d80e229cbc7a7`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `0f5a3cb00d3e60bf16f8da2d3a87914e3f968a7d48817ab41f17380c4f12a678`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `0fa003a83a1dede8a63ac07a1a5b6ba7f8c6b8d5a338a5ca05f21b9f02a880da`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `133d54e6a6bb41a8953ed9d57171435e85faadffcf1e42d15454b5fd1c8160ef`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `1a2b65c260ee5a205e941e600f4cb9be3532c3c37d25172bd6d7591039210c46`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `1b33245c719ffaa03709f7552441097ba5534c9da4b4fc6397eadcef5c844e60`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `1b58bc18fb55a571d4a2359647b35252491d58dba97ec92ebbfc2ccfd7efeb5b`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `1cfce16359b77858cee4193b5f3bca524ef6a5c19733870dfe34985b01f7e3a0`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `218607751ef3cc9908d203d48547f74ada6bc9c269b3cd6759ff9586fa491918`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `285fa072d8eb76c7f540bbb03af70422b935af68454380a116c679c5eb900fcd`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `2c4adf8ac3c64ba686c7bfda16865722bea58b846c684371d7f81fb74b6e18fa`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `3fb5c0c838cae5ea0d91c13671733fb821bb17875ef250007fa9a923a59e3356`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `45e3ef4e6cb10369d78c9cf36ed25548ba1624fa85d205b445592f89a5c5b390`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `50d4761d6051908fea383e000bb7c527563a955d7e4a3d438a1032220e14c8d3`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `518e050dfb8212d4567905148a0b122b63096cb2b96bc04910f4f11c533405ce`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `55ee062808cb5c796706d77f483c38c1d0559a3c5661d201aafb1fc2760aa4c1`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `5d63b1b50d265b76f69aa5247d189406d9beb72007a19113567b1574b72d2357`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `65644a179385bf3d38f80c934c33f5fe024145c2657e61555be96bda9912cf6e`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `65cdf4850bc6bb6a02644b1abd01ac7e8b0349bb8c86caa0dad19a52639b4986`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `7637511c249fee8afb097916b426cec0660e454263fcbd304bc6599b56225180`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `815bed4a85c0e3803957d7cb444ee5cfb51f1d13cf48e4665d7ae38b134e3ce3`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `875f7324382e83efa872585271698e2bfc1c919b1408991f5894bd56062d68d3`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `87f79741c8d93ba70b0cbc625b7d913e1345acf1cd3f9c75f2106f0381206232`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `8a6ff5577d0732513cdbd51752e81d94ec3687c0d68cdae8dca82a3ab3927a61`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `8c8b91337b97b566a494e66eec038b7ebd85567ffa7452534b6cea676538d109`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `8f44f485f7882e6b41d588b13865864ea4930f554650d3fc9db614232f566fff`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `9367dca4633263d026bb9ea3e0583a39f9c9afa00b7304fb1927b69f594b008a`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `9e011630215ebe52c8c99fc48fe8a61fc2188a715d63099f8d78b1391accc605`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `a3269a59fe969936b5e92a615717ff9abd409d5f956a9eb63fd862e3c400e6cf`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `a936330e9a8a708e6f2d94ae69e49066f83635bf71b06d3ad3c05aa50eb5a399`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ac84e5129e212b901d13f39b70b2a41684ffb8d9736bce77481729b22484cab8`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `b347f81a166b502f5d8d04be01b2199cd6e69b8be14cd63dc307a1ed01fa9693`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `b8efb289d7191e6281071dd19a87b2fd5a38424f88ec5e595e20f591bea99444`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `bc9afb72d4c058d98c20c712c254111b0f1ce9f0666b1489e63092f02b944654`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `c3750cd7855e6b3d1b2113f515406150bbf4d2cbb54522d5eabf9ae9dbe53a86`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `c87e7d307548e8baa6eb7b07df9b00db64e94d38e47be5815e66fc07d672c3ed`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `cb3be9c4ea6cd1caef82cb9e65dc47d89e602827eba353fdfa8003d748c4b568`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `cff9042e110c0f0be24e7b2d240b25ba5bcada3d0925809b59df483a7f04cf10`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `d9033fc61973f5c5a06cac9c13529671aed41de1635159b04a77fe829670a451`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `e44a80ffc9d7d7f71ce1108abf486e821ae406e6c3e20b93cd9ec25aac6000f8`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `edd1180c8cf4fab50bddc10a54c988f7215f2bee62a42a628e4dd72b791d578d`
+
+### Release Attempts
+
+#### RA-20261006-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261003-001`
+- Selected CRL identities: `mobile/CRL-20261003-001`
+- Intended action: `commit`
+- Branch: `codex/settlement-workflow-mobile-20261005`
+- Base: `origin/Dev@a026b2ed6b1a2771550ca81ce3e1f5deda66b9ba`; fetched at `2026-10-06T00:05:46+1100`
+- Candidate patch SHA-256: `90f14263d47c347383362f83d30c1c30c9b5379b9b6e4254adde0f359a52996a`
+- Commit SHA: not committed
+- Dependencies: paired `root/CRL-20261003-003` release candidate
+- Required validation: `PASS`; evidence: Jest 19/19、TypeScript、target/full lint 0 errors、button contract、iOS/Android/Web Expo export、ledger coverage 和 diff check 均通过
+- Shared-hunk review: `PASS`; evidence: latest Dev `mobile/CRL-20261003-002` ledger and registry protections were retained while adding only this settlement unit
+- Generated-file review: `PASS`; evidence: export 只写入仓库外 `/private/tmp/mz-release-settlement-20261005-mobile-export`；候选无未跟踪文件、依赖目录、缓存或构建产物
+- Technical state: `candidate`
+- User authorization: `selected-for-commit`; evidence: user explicitly requested “OK 把这三个提交推送” for the three listed CRLs; push authorization must be renewed after exact commit SHA exists
+- Independent review: `NO-GO`; evidence: reviewer found contradictory blocking-issue copy, missing final void-week submit assertions, and an unverified complete CI run
+- Action conclusion: `BLOCKED`; blockers: reviewer findings required copy, regression-test and validation updates
+
+#### RA-20261006-002
+
+- Repository: `mobile`
+- Selected CRLs: `20261003-001`
+- Selected CRL identities: `mobile/CRL-20261003-001`
+- Intended action: `commit`
+- Branch: `codex/settlement-workflow-mobile-20261005`
+- Base: `origin/Dev@a026b2ed6b1a2771550ca81ce3e1f5deda66b9ba`; fetched at `2026-10-06T00:05:46+1100`
+- Candidate patch SHA-256: `6ee847e1e2e7a4e527b8871d5bbf26497309877664ffff112564b943a178236e`
+- Commit SHA: `d66b0aff376c62f40e42649307eab1307fdd89bb`
+- Dependencies: `root/CRL-20261003-003@8d9ec5d2e651a92e00e78d7bb81dbcc24c53d592`
+- Required validation: `PASS`; evidence: targeted PersonnelSettlementScreen Jest 20/20, complete `npm run check:ci` (62 suites / 373 tests), TypeScript, lint 0 errors / 568 existing warnings, button contract, ledger coverage, and iOS/Android/Web Expo export all passed
+- Shared-hunk review: `PASS`; evidence: latest Dev `mobile/CRL-20261003-002` ledger and registry protections were retained while adding only this settlement unit
+- Generated-file review: `PASS`; evidence: Expo export wrote only outside the repository to `/private/tmp/mz-release-settlement-20261005-mobile-export-final`; candidate has no dependency symlink, cache, build output or untracked file
+- Technical state: `committed`
+- User authorization: `selected-for-commit`; evidence: user explicitly selected these three canonical CRLs for commit; push authorization must be renewed after exact commit SHAs exist
+- Independent review: `GO`; evidence: independent reviewer verified the complete staged diff, exact fingerprint, 4-file / 52-hunk scope, blocking copy, current/historical void-week final submit payloads, complete CI and sensitive/generated-file boundaries with no P0/P1/P2 findings
+- Action conclusion: `GO`; evidence: exact staged candidate is approved for the commit action only
+
+#### RA-20261006-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261003-001`
+- Selected CRL identities: `mobile/CRL-20261003-001`
+- Intended action: `push`
+- Branch: `codex/settlement-workflow-mobile-20261005`
+- Base: `origin/Dev@a026b2ed6b1a2771550ca81ce3e1f5deda66b9ba`; freshly fetched at `2026-10-06T01:23:53+1100` and confirmed unchanged
+- Candidate patch SHA-256: `6ee847e1e2e7a4e527b8871d5bbf26497309877664ffff112564b943a178236e` excluding `docs/change-release-ledger.md`
+- Candidate content commit SHA: `d66b0aff376c62f40e42649307eab1307fdd89bb`
+- Commit SHA: `d66b0aff376c62f40e42649307eab1307fdd89bb`
+- Dependencies: `root/CRL-20261003-003@8d9ec5d2e651a92e00e78d7bb81dbcc24c53d592`
+- Required validation: `PASS`; evidence: committed Mobile range retains targeted PersonnelSettlementScreen Jest 20/20, complete `npm run check:ci` (62 suites / 373 tests), TypeScript, lint 0 errors / 568 existing warnings, button contract, ledger coverage and iOS/Android/Web Expo export
+- Shared-hunk review: `PASS`; evidence: exact committed Mobile range contains only the selected settlement CRL; latest Dev ledger and registry protections remain unchanged
+- Generated-file review: `PASS`; evidence: clean release worktree contains no generated, ignored, untracked, dependency-link or cache path
+- Sensitive-information review: `PASS`; evidence: exact committed range contains no `.env`, credential, token, cookie, private key, database URL or sensitive log
+- Cross-repository dependency verification: paired Root exact range `origin/Dev@1675fd7a7d81f0db959934435e1d8cc5c7ac9783...63827df23d4de9e00754969620d0a68e5764d305` resolves candidate content commit `8d9ec5d2e651a92e00e78d7bb81dbcc24c53d592` and unchanged fingerprint `eb75e871acf9d6bcb787d8c916dc05a83097c3e0bee897c8838c2b00deb4ca9f`
+- Technical state: `pushed`
+- User authorization: `approved-for-push`; evidence: after receiving the exact Root branch/HEAD `codex/settlement-workflow-paid-pdf-20261005@63827df23d4de9e00754969620d0a68e5764d305`, Mobile branch/HEAD `codex/settlement-workflow-mobile-20261005@cb0aae63f6549209ae4ff73964491f506b9a68b5`, and the explicit separation from PR/merge/deployment/OTA, the user instructed “推送” on 2026-10-06; this authorizes only normal non-force push of these exact selected candidates and their ledger-only release receipts
+- Remote preflight: `PASS`; evidence: fresh fetch confirmed `origin/Dev` unchanged and `git ls-remote --heads origin refs/heads/codex/settlement-workflow-mobile-20261005` returned no branch
+- Independent review: `GO for ledger-only review receipt commit and controlled push`; evidence: independent read-only push review verified live Mobile base/HEAD/content ancestry, unchanged fingerprint `6ee847e1e2e7a4e527b8871d5bbf26497309877664ffff112564b943a178236e`, 4 selected paths / 52 non-ledger hunks, the paired Root exact range and fingerprint, absent remote target branch, clean generated/sensitive boundary and approved authorization; P0/P1 are zero, while the stale top-level status summary remains an accepted non-blocking P2 because this receipt gate permits only Release Attempt changes
+- Action conclusion: `GO`; evidence: exact reviewed candidate was pushed by explicit refspec with a normal non-force new-branch update, and immediate remote verification matched local HEAD; this ledger-only outcome receipt may be fast-forwarded to the same branch; PR, merge, deployment, EAS build and OTA remain unauthorized
+- Remote / PR / deployment evidence: initial push completed at `2026-10-06T01:41:07+1100` to `origin/codex/settlement-workflow-mobile-20261005@3ee08956a4c1100b4738cf1399f08d590a1c8d3c`; `git ls-remote` matched local HEAD; PR not created; not merged; OTA not published; device/production verification not run
+
+### Risks / Release Notes
+
+- No backend deploy, production write, EAS build or OTA is included in this commit candidate.
+- Rollback is a code revert before later OTA/build release; no data rollback is required.
+- Git state: fresh uncommitted candidate; not pushed, no PR, not merged, OTA not published, device/production verification not run.
+
 ## CRL-20261003-002 — 挂钥匙视频队列 single-flight 与迟到结果收敛（mobile）
 
 - **Repository:** `mobile`

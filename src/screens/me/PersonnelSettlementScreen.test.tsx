@@ -635,7 +635,7 @@ test('上一完整周必须先核对明细并二次确认才提交给财务', as
   ;(listMyPersonnelSettlements as jest.Mock).mockResolvedValueOnce([])
   ;(getMyPersonnelSettlementSubmissionPreview as jest.Mock).mockResolvedValueOnce({
     week_start: '2026-09-07', week_end: '2026-09-13', status: 'not_submitted', settlement: null,
-    subtotal_cents: 3182, gst_cents: 318, total_cents: 3500, line_count: 1,
+    subtotal_cents: 4091, gst_cents: 409, total_cents: 4500, line_count: 2,
     confirmation_token: 'a'.repeat(64),
     blocking_issues: [],
     lines: [{
@@ -644,6 +644,12 @@ test('上一完整周必须先核对明细并二次确认才提交给财务', as
       description: 'Cleaning · FG1003 · 一房一卫', quantity_numerator: 1, quantity_denominator: 1,
       unit_rate_cents: 3500, subtotal_cents: 3182, gst_cents: 318, total_cents: 3500,
       price_basis: 'inclusive_gst', evidence_count: 0,
+    }, {
+      id: 'workload_claim:pending-subsidy:subsidy_amount', component_type: 'subsidy_amount',
+      service_date: '2026-09-11', source_type: 'workload_claim', source_id: 'pending-subsidy',
+      description: '交通补贴', quantity_numerator: 1, quantity_denominator: 1,
+      unit_rate_cents: 1000, subtotal_cents: 909, gst_cents: 91, total_cents: 1000,
+      price_basis: 'inclusive_gst', evidence_count: 1,
     }],
   })
   const ui = renderPersonnelSettlementScreen()
@@ -656,15 +662,101 @@ test('上一完整周必须先核对明细并二次确认才提交给财务', as
   fireEvent.press(ui.getByTestId('weekly-submission-review'))
   expect(ui.getByTestId('weekly-submission-review-detail')).toBeTruthy()
   expect(ui.getByText('Cleaning - FG1003')).toBeTruthy()
-  expect(ui.getByTestId('weekly-submission-unincluded-claims')).toBeTruthy()
-  expect(ui.getByText('尚未计入预计总额')).toBeTruthy()
+  expect(ui.getByTestId('weekly-submission-included-pending-claims')).toBeTruthy()
+  expect(ui.getByText('已包含 1 条待财务审核反馈')).toBeTruthy()
+  expect(ui.queryByTestId('weekly-submission-unincluded-claims')).toBeNull()
+  expect(ui.getByText('以下基础工作量和已提交补贴均已计入本次确认总额')).toBeTruthy()
   expect(mockSubmitSettlementWeek).not.toHaveBeenCalled()
 
   fireEvent.press(ui.getByTestId('weekly-submission-next'))
   expect(ui.getByTestId('weekly-submission-submit').props.accessibilityState.disabled).toBe(true)
+  expect(ui.getByText('1 项（已包含）')).toBeTruthy()
+  expect(ui.getAllByText('$45.00')).toHaveLength(2)
   fireEvent.press(ui.getByTestId('weekly-submission-acknowledgement'))
   fireEvent.press(ui.getByTestId('weekly-submission-submit'))
   await waitFor(() => expect(mockSubmitSettlementWeek).toHaveBeenCalledWith('token-1', '2026-09-07', 'a'.repeat(64)))
+  ui.unmount()
+})
+
+test('周总额未计算完整时明确阻止提交', async () => {
+  ;(listMyPersonnelSettlements as jest.Mock).mockResolvedValueOnce([])
+  ;(getMyPersonnelSettlementSubmissionPreview as jest.Mock).mockResolvedValueOnce({
+    week_start: '2026-09-07', week_end: '2026-09-13', status: 'not_submitted', settlement: null,
+    subtotal_cents: 0, gst_cents: 0, total_cents: 0, line_count: 0,
+    confirmation_token: 'f'.repeat(64),
+    blocking_issues: [{ source_type: 'cleaning_task_assignment', source_id: 'task-1', code: 'missing_rule' }],
+    lines: [],
+  })
+
+  const ui = renderPersonnelSettlementScreen()
+  fireEvent.press(ui.getByTestId('personnel-settlements-tab'))
+  await waitFor(() => expect(ui.getByTestId('weekly-submission-preview')).toBeTruthy())
+  expect(ui.getByText('本周总额暂未计算完整，请先补齐费用规则、GST 或结算资料后再提交。')).toBeTruthy()
+  fireEvent.press(ui.getByTestId('weekly-submission-review'))
+  expect(ui.getByText('本周总额暂未计算完整')).toBeTruthy()
+  expect(ui.getByTestId('weekly-submission-next').props.accessibilityState.disabled).toBe(true)
+  expect(mockSubmitSettlementWeek).not.toHaveBeenCalled()
+  ui.unmount()
+})
+
+test('已作废的周结算重新显示完整核对与提交入口', async () => {
+  const voidSettlement = {
+    id: 'settlement-void', week_start: '2026-09-07', week_end: '2026-09-13', status: 'void',
+    subtotal_cents: 6364, gst_cents: 636, total_cents: 7000, currency: 'AUD', line_count: 2, evidence_count: 0,
+  }
+  ;(listMyPersonnelSettlements as jest.Mock).mockResolvedValueOnce([voidSettlement])
+  ;(getMyPersonnelSettlementSubmissionPreview as jest.Mock).mockResolvedValueOnce({
+    week_start: '2026-09-07', week_end: '2026-09-13', status: 'not_submitted', settlement: voidSettlement,
+    subtotal_cents: 6364, gst_cents: 636, total_cents: 7000, line_count: 2,
+    confirmation_token: 'c'.repeat(64), blocking_issues: [], lines: [],
+  })
+
+  const ui = renderPersonnelSettlementScreen()
+  fireEvent.press(ui.getByTestId('personnel-settlements-tab'))
+  await waitFor(() => expect(ui.getByTestId('weekly-submission-preview')).toBeTruthy())
+  expect(ui.getByText('待重新提交')).toBeTruthy()
+  expect(ui.getByText('原结算已作废。请重新核对本周完整工作量和总额后提交。')).toBeTruthy()
+  fireEvent.press(ui.getByText('重新核对并提交'))
+  expect(ui.getByTestId('weekly-submission-review-detail')).toBeTruthy()
+  fireEvent.press(ui.getByTestId('weekly-submission-next'))
+  fireEvent.press(ui.getByTestId('weekly-submission-acknowledgement'))
+  fireEvent.press(ui.getByTestId('weekly-submission-submit'))
+  await waitFor(() => expect(mockSubmitSettlementWeek).toHaveBeenCalledWith('token-1', '2026-09-07', 'c'.repeat(64)))
+  ui.unmount()
+})
+
+test('历史已作废周从列表按自身周次重新加载核对入口', async () => {
+  const historicalVoidSettlement = {
+    id: 'settlement-void-history', week_start: '2026-09-07', week_end: '2026-09-13', status: 'void',
+    subtotal_cents: 6364, gst_cents: 636, total_cents: 7000, currency: 'AUD', line_count: 2, evidence_count: 0,
+  }
+  ;(listMyPersonnelSettlements as jest.Mock).mockResolvedValueOnce([historicalVoidSettlement])
+  ;(getMyPersonnelSettlementSubmissionPreview as jest.Mock)
+    .mockResolvedValueOnce({
+      week_start: '2026-09-28', week_end: '2026-10-04', status: 'not_submitted', settlement: null,
+      subtotal_cents: 0, gst_cents: 0, total_cents: 0, line_count: 0,
+      confirmation_token: 'd'.repeat(64), blocking_issues: [], lines: [],
+    })
+    .mockResolvedValueOnce({
+      week_start: '2026-09-07', week_end: '2026-09-13', status: 'not_submitted', settlement: historicalVoidSettlement,
+      subtotal_cents: 6364, gst_cents: 636, total_cents: 7000, line_count: 2,
+      confirmation_token: 'e'.repeat(64), blocking_issues: [], lines: [],
+    })
+
+  const ui = renderPersonnelSettlementScreen()
+  fireEvent.press(ui.getByTestId('personnel-settlements-tab'))
+  const resubmit = await ui.findByTestId('voided-settlement-resubmit-settlement-void-history')
+  expect(ui.getByText('已作废')).toBeTruthy()
+  expect(ui.getByText('重新核对并提交')).toBeTruthy()
+  fireEvent.press(resubmit)
+
+  await waitFor(() => expect(getMyPersonnelSettlementSubmissionPreview).toHaveBeenCalledWith('token-1', '2026-09-07'))
+  await waitFor(() => expect(ui.getByTestId('weekly-submission-review-detail')).toBeTruthy())
+  expect(ui.getByText('07/09/2026 至 13/09/2026')).toBeTruthy()
+  fireEvent.press(ui.getByTestId('weekly-submission-next'))
+  fireEvent.press(ui.getByTestId('weekly-submission-acknowledgement'))
+  fireEvent.press(ui.getByTestId('weekly-submission-submit'))
+  await waitFor(() => expect(mockSubmitSettlementWeek).toHaveBeenCalledWith('token-1', '2026-09-07', 'e'.repeat(64)))
   ui.unmount()
 })
 
