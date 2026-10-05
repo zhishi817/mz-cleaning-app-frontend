@@ -123,12 +123,12 @@
 - Branch: `codex/settlement-workflow-mobile-20261005`
 - Base: `origin/Dev@a026b2ed6b1a2771550ca81ce3e1f5deda66b9ba`; fetched at `2026-10-06T00:05:46+1100`
 - Candidate patch SHA-256: `6ee847e1e2e7a4e527b8871d5bbf26497309877664ffff112564b943a178236e`
-- Commit SHA: not committed
+- Commit SHA: `d66b0aff376c62f40e42649307eab1307fdd89bb`
 - Dependencies: paired `root/CRL-20261003-003` release candidate
 - Required validation: `PASS`; evidence: targeted PersonnelSettlementScreen Jest 20/20, complete `npm run check:ci` (62 suites / 373 tests), TypeScript, lint 0 errors / 568 existing warnings, button contract, ledger coverage, and iOS/Android/Web Expo export all passed
 - Shared-hunk review: `PASS`; evidence: latest Dev `mobile/CRL-20261003-002` ledger and registry protections were retained while adding only this settlement unit
 - Generated-file review: `PASS`; evidence: Expo export wrote only outside the repository to `/private/tmp/mz-release-settlement-20261005-mobile-export-final`; candidate has no dependency symlink, cache, build output or untracked file
-- Technical state: `candidate`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: user explicitly selected these three canonical CRLs for commit; push authorization must be renewed after exact commit SHAs exist
 - Independent review: `GO`; evidence: independent reviewer verified the complete staged diff, exact fingerprint, 4-file / 52-hunk scope, blocking copy, current/historical void-week final submit payloads, complete CI and sensitive/generated-file boundaries with no P0/P1/P2 findings
 - Action conclusion: `GO`; evidence: exact staged candidate is approved for the commit action only
