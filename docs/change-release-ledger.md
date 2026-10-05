@@ -124,7 +124,7 @@
 - Base: `origin/Dev@a026b2ed6b1a2771550ca81ce3e1f5deda66b9ba`; fetched at `2026-10-06T00:05:46+1100`
 - Candidate patch SHA-256: `6ee847e1e2e7a4e527b8871d5bbf26497309877664ffff112564b943a178236e`
 - Commit SHA: `d66b0aff376c62f40e42649307eab1307fdd89bb`
-- Dependencies: paired `root/CRL-20261003-003` release candidate
+- Dependencies: `root/CRL-20261003-003@8d9ec5d2e651a92e00e78d7bb81dbcc24c53d592`
 - Required validation: `PASS`; evidence: targeted PersonnelSettlementScreen Jest 20/20, complete `npm run check:ci` (62 suites / 373 tests), TypeScript, lint 0 errors / 568 existing warnings, button contract, ledger coverage, and iOS/Android/Web Expo export all passed
 - Shared-hunk review: `PASS`; evidence: latest Dev `mobile/CRL-20261003-002` ledger and registry protections were retained while adding only this settlement unit
 - Generated-file review: `PASS`; evidence: Expo export wrote only outside the repository to `/private/tmp/mz-release-settlement-20261005-mobile-export-final`; candidate has no dependency symlink, cache, build output or untracked file
