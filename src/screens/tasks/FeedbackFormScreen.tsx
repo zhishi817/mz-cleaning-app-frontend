@@ -20,6 +20,7 @@ import { getJson, remove as removeStorage, setJson } from '../../lib/storage'
 import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
 import {
   completePropertyFeedbackProject,
+  correctPropertyMaintenanceCompletion,
   createPropertyFeedback,
   createPropertyFeedbackBatch,
   createPropertyFeedbackProject,
@@ -174,6 +175,11 @@ function normalizeUrls(raw: any): string[] {
   return [toAbsoluteUrl(s)]
 }
 
+function sameUrlSet(left: string[], right: string[]) {
+  const normalize = (items: string[]) => Array.from(new Set(normalizeUrls(items))).sort()
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right))
+}
+
 function fmtTime(s: string | null | undefined) {
   const raw = String(s || '').trim()
   if (!raw) return '-'
@@ -261,6 +267,7 @@ function statusLabel(item?: PropertyFeedback | null) {
   if (s === 'resolved' && String(item.review_status || '').trim() === 'pending') return '已完成（待复核）'
   if (s === 'resolved') return '已完成'
   if (s === 'in_progress') return '处理中'
+  if (s === 'cancelled') return '已取消'
   return '待处理'
 }
 
@@ -275,6 +282,15 @@ function projectStatusLabel(item?: PropertyFeedbackProject | null, feedback?: Pr
   if (item.status === 'completed' && String(feedback?.review_status || '').trim() === 'pending') return '已完成（待复核）'
   if (item.status === 'completed') return '已完成'
   return '待处理'
+}
+
+function canOpenRecordEditor(item?: PropertyFeedback | null) {
+  const capabilities = item?.capabilities
+  return !!(
+    capabilities?.can_edit_content
+    || capabilities?.can_edit_completion_content
+    || capabilities?.can_correct_completion
+  )
 }
 
 function groupByKind(list: PropertyFeedback[]) {
@@ -568,6 +584,8 @@ export default function FeedbackFormScreen(props: Props) {
   const [recordEditOpen, setRecordEditOpen] = useState(false)
   const [recordEditFeedback, setRecordEditFeedback] = useState<PropertyFeedback | null>(null)
   const [recordEditSaving, setRecordEditSaving] = useState(false)
+  const [recordEditCorrectionReason, setRecordEditCorrectionReason] = useState('')
+  const [recordEditOperationId, setRecordEditOperationId] = useState('')
   const [moveOpen, setMoveOpen] = useState(false)
   const [moveItem, setMoveItem] = useState<PropertyFeedback | null>(null)
   const [moveTargetKind, setMoveTargetKind] = useState<Kind>('maintenance')
@@ -1229,7 +1247,10 @@ export default function FeedbackFormScreen(props: Props) {
     return { nextMaintenanceDrafts, nextDeepCleaningDrafts, nextDailyDrafts, nextLocalPreviews, nextLocalPhotoMeta }
   }
 
-  async function resolveTransientFeedbackReferences(references: string[]) {
+  async function resolveTransientFeedbackReferences(
+    references: string[],
+    onReferenceResolved?: (nextReferences: string[]) => void | Promise<void>,
+  ) {
     if (!token) throw new Error('登录已失效，请重新登录后提交')
     const nextReferences = [...references]
     const nextLocalPreviews = { ...localPreviewByReference }
@@ -1260,6 +1281,7 @@ export default function FeedbackFormScreen(props: Props) {
       nextLocalPreviews[remoteReference] = localUri
       setLocalPreviewByReference(nextLocalPreviews)
       setLocalPhotoMetaByUri(nextLocalPhotoMeta)
+      await onReferenceResolved?.([...nextReferences])
     }
     return nextReferences
   }
@@ -1727,13 +1749,18 @@ export default function FeedbackFormScreen(props: Props) {
   function buildHistoryProject(feedback: PropertyFeedback) {
     const items = Array.isArray(feedback.project_items) ? feedback.project_items : []
     const target = items.find((it) => it.status !== 'completed') || items[0]
+    const authoritativeCompletionPhotos = normalizeUrls(feedback.completion_photo_urls)
+    const fallbackAfter = Array.from(new Set([
+      ...authoritativeCompletionPhotos,
+      ...normalizeUrls(feedback.repair_photo_urls),
+    ]))
     if (target) {
       const fallbackBefore = normalizeUrls(feedback.media_urls)
-      const fallbackAfter = normalizeUrls(feedback.repair_photo_urls)
       return {
         ...target,
-        before_photos: target.before_photos.length ? target.before_photos : fallbackBefore,
-        after_photos: target.after_photos.length ? target.after_photos : fallbackAfter,
+        note: String(feedback.repair_notes || '').trim() || target.note || null,
+        before_photos: Array.from(new Set([...normalizeUrls(target.before_photos), ...fallbackBefore])),
+        after_photos: Array.from(new Set([...normalizeUrls(target.after_photos), ...fallbackAfter])),
       }
     }
     return {
@@ -1750,7 +1777,7 @@ export default function FeedbackFormScreen(props: Props) {
       ended_at: null,
       duration_minutes: null,
       before_photos: normalizeUrls(feedback.media_urls),
-      after_photos: normalizeUrls(feedback.repair_photo_urls),
+      after_photos: fallbackAfter,
       status: feedback.status === 'resolved' ? 'completed' : 'open',
       completed_by: null,
       completed_at: feedback.completed_at || null,
@@ -1769,7 +1796,7 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   function openRecordEditor(item: PropertyFeedback) {
-    if (!item.capabilities?.can_edit_content) return
+    if (!canOpenRecordEditor(item)) return
     if (item.kind === 'daily_necessities') {
       openDailyEdit(item)
       return
@@ -1780,21 +1807,32 @@ export default function FeedbackFormScreen(props: Props) {
       ...buildDefaultProject(item.kind === 'maintenance' ? 'maintenance' : 'deep_cleaning'),
       ...nextProject,
       name: item.kind === 'maintenance' ? '维修记录' : '深度清洁记录',
-      before_photos: normalizeUrls(item.media_urls),
-      after_photos: [],
+      before_photos: normalizeUrls(nextProject.before_photos),
+      after_photos: normalizeUrls(nextProject.after_photos),
       detail: String(item.detail || '').trim() || nextProject.detail || null,
-      note: null,
+      note: item.kind === 'maintenance' ? String(item.repair_notes || nextProject.note || '').trim() || null : nextProject.note || null,
     })
     setRecordArea(
       item.kind === 'deep_cleaning'
         ? (((item.areas || []).find(Boolean) as DeepCleaningAreaOption | undefined) || null)
         : null,
     )
+    setRecordEditCorrectionReason('')
+    setRecordEditOperationId(makeDraftId())
     setRecordEditOpen(true)
   }
 
+  function closeRecordEditor() {
+    if (recordEditSaving) return
+    discardLocalPreviews([...projectForm.before_photos, ...projectForm.after_photos])
+    setRecordEditOpen(false)
+    setRecordEditFeedback(null)
+    setRecordEditCorrectionReason('')
+    setRecordEditOperationId('')
+  }
+
   function requestRecordEdit(item: PropertyFeedback) {
-    if (!item.capabilities?.can_edit_content || actionOpen || dailyEditOpen || recordEditOpen) return
+    if (!canOpenRecordEditor(item) || actionOpen || dailyEditOpen || recordEditOpen) return
     if (detailItem) {
       setQueuedEditItem(item)
       setDetailItem(null)
@@ -1879,14 +1917,16 @@ export default function FeedbackFormScreen(props: Props) {
     ])
   }
 
-  function buildEditedFeedbackFallback(item: PropertyFeedback): PropertyFeedback {
+  function buildEditedFeedbackFallback(item: PropertyFeedback, media?: { before?: string[]; after?: string[]; note?: string }): PropertyFeedback {
     return {
       ...item,
       area: item.kind === 'maintenance' ? String(projectForm.area || '').trim() || null : item.area || null,
       areas: item.kind === 'deep_cleaning' ? (recordArea ? [recordArea] : []) : item.areas || null,
       category: item.kind === 'maintenance' ? String(projectForm.category || '').trim() || null : item.category || null,
       detail: String(projectForm.detail || '').trim(),
-      media_urls: projectForm.before_photos,
+      media_urls: media?.before || projectForm.before_photos,
+      repair_photo_urls: media?.after || item.repair_photo_urls || [],
+      repair_notes: media?.note !== undefined ? media.note || null : item.repair_notes || null,
     }
   }
 
@@ -1997,18 +2037,73 @@ export default function FeedbackFormScreen(props: Props) {
     try {
       setRecordEditSaving(true)
       if (recordEditFeedback.kind === 'maintenance') {
-        if (!String(projectForm.area || '').trim() || !String(projectForm.detail || '').trim()) {
+        const capabilities = recordEditFeedback.capabilities
+        const canCorrectCompletion = !!capabilities?.can_correct_completion
+        const canEditCompletion = !!capabilities?.can_edit_completion_content
+        const canEditOrdinaryContent = !!capabilities?.can_edit_content && !canCorrectCompletion
+        if (!canEditOrdinaryContent && !canEditCompletion && !canCorrectCompletion) {
+          Alert.alert(t('common_error'), '当前账号无权编辑这条维修记录')
+          return
+        }
+        if (canEditOrdinaryContent && (!String(projectForm.area || '').trim() || !String(projectForm.detail || '').trim())) {
           Alert.alert(t('common_error'), '请完整填写维修记录')
           return
         }
-        const mediaUrls = await resolveTransientFeedbackReferences(projectForm.before_photos)
-        setProjectForm((prev) => ({ ...prev, before_photos: mediaUrls }))
-        const resp = await updatePropertyFeedback(token, 'maintenance', recordEditFeedback.id, {
-          area: String(projectForm.area || '').trim(),
-          detail: String(projectForm.detail || '').trim(),
-          media_urls: mediaUrls,
-        })
-        applyUpdatedFeedbackRow((resp.row as any) || { ...buildEditedFeedbackFallback(recordEditFeedback), media_urls: mediaUrls })
+        if (canCorrectCompletion && !recordEditCorrectionReason.trim()) {
+          Alert.alert(t('common_error'), '请填写修正原因')
+          return
+        }
+        const beforePhotos = canEditOrdinaryContent
+          ? await resolveTransientFeedbackReferences(projectForm.before_photos, (nextReferences) => {
+            setProjectForm((prev) => ({ ...prev, before_photos: nextReferences }))
+          })
+          : normalizeUrls(projectForm.before_photos)
+        const afterPhotos = canEditCompletion || canCorrectCompletion
+          ? await resolveTransientFeedbackReferences(projectForm.after_photos, (nextReferences) => {
+            setProjectForm((prev) => ({ ...prev, after_photos: nextReferences }))
+          })
+          : normalizeUrls(recordEditFeedback.repair_photo_urls)
+        const authoritativeCompletionPhotoSet = new Set(normalizeUrls(recordEditFeedback.completion_photo_urls))
+        const editableAfterPhotos = canCorrectCompletion
+          ? afterPhotos
+          : afterPhotos.filter((reference) => !authoritativeCompletionPhotoSet.has(reference))
+        const repairNote = String(projectForm.note || '').trim()
+        if (canCorrectCompletion && !afterPhotos.length) {
+          Alert.alert(t('common_error'), '已完成维修必须至少保留一张维修后照片')
+          return
+        }
+        setProjectForm((prev) => ({ ...prev, before_photos: beforePhotos, after_photos: afterPhotos }))
+        if (canCorrectCompletion) {
+          const original = buildHistoryProject(recordEditFeedback)
+          if (sameUrlSet(afterPhotos, original.after_photos) && repairNote === String(original.note || '').trim()) {
+            Alert.alert(t('common_error'), '没有可保存的维修后修改')
+            return
+          }
+          await correctPropertyMaintenanceCompletion(token, recordEditFeedback.id, {
+            completion_photo_urls: afterPhotos,
+            completion_note: repairNote || null,
+            reason: recordEditCorrectionReason.trim(),
+            operation_id: recordEditOperationId || makeDraftId(),
+          })
+        } else {
+          const resp = await updatePropertyFeedback(token, 'maintenance', recordEditFeedback.id, {
+            ...(canEditOrdinaryContent ? {
+              area: String(projectForm.area || '').trim(),
+              detail: String(projectForm.detail || '').trim(),
+              media_urls: beforePhotos,
+            } : {}),
+            ...(canEditCompletion ? {
+              note: repairNote,
+              repair_photo_urls: editableAfterPhotos,
+            } : {}),
+          })
+          applyUpdatedFeedbackRow((resp.row as any) || buildEditedFeedbackFallback(recordEditFeedback, {
+            before: beforePhotos,
+            after: editableAfterPhotos,
+            note: repairNote,
+          }))
+        }
+        discardLocalPreviews([...beforePhotos, ...afterPhotos])
       } else {
         if (!recordArea || !String(projectForm.detail || '').trim()) {
           Alert.alert(t('common_error'), '请完整填写深度清洁记录')
@@ -2022,10 +2117,12 @@ export default function FeedbackFormScreen(props: Props) {
           media_urls: mediaUrls,
         })
         applyUpdatedFeedbackRow((resp.row as any) || { ...buildEditedFeedbackFallback(recordEditFeedback), media_urls: mediaUrls })
+        discardLocalPreviews(mediaUrls)
       }
-      discardLocalPreviews(projectForm.before_photos)
       setRecordEditOpen(false)
       setRecordEditFeedback(null)
+      setRecordEditCorrectionReason('')
+      setRecordEditOperationId('')
       await refreshLists({ force: true })
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
@@ -2063,6 +2160,13 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   const pendingGroups = useMemo(() => groupByKind(pending), [pending])
+  const recordEditCanCorrectCompletion = !!recordEditFeedback?.capabilities?.can_correct_completion
+  const recordEditCanEditCompletion = !!recordEditFeedback?.capabilities?.can_edit_completion_content
+  const recordEditCanEditOrdinaryContent = !!recordEditFeedback?.capabilities?.can_edit_content && !recordEditCanCorrectCompletion
+  const recordEditImmutableCompletionPhotoSet = new Set([
+    ...normalizeUrls(recordEditFeedback?.completion_photo_urls),
+    ...(recordEditCanCorrectCompletion ? normalizeUrls(recordEditFeedback?.repair_photo_urls) : []),
+  ])
   const screenWidth = Dimensions.get('window').width
   const detailRecord = useMemo(() => {
     if (!detailItem || (detailItem.kind !== 'maintenance' && detailItem.kind !== 'deep_cleaning')) return null
@@ -2418,8 +2522,8 @@ export default function FeedbackFormScreen(props: Props) {
             <View style={styles.modalTop}>
               <Text style={styles.modalTitle}>反馈详情</Text>
               <View style={styles.modalActions}>
-                {detailItem?.capabilities?.can_edit_content ? (
-                  <Pressable onPress={() => requestRecordEdit(detailItem)} style={({ pressed }) => [styles.headerActionBtn, pressed ? styles.pressed : null]}>
+                {canOpenRecordEditor(detailItem) ? (
+                  <Pressable onPress={() => { if (detailItem) requestRecordEdit(detailItem) }} style={({ pressed }) => [styles.headerActionBtn, pressed ? styles.pressed : null]}>
                     <Ionicons name="create-outline" size={16} color="#2563EB" />
                     <Text style={styles.headerActionText}>编辑记录</Text>
                   </Pressable>
@@ -2547,12 +2651,12 @@ export default function FeedbackFormScreen(props: Props) {
         </View>
       </Modal>
 
-      <Modal visible={recordEditOpen} transparent presentationStyle="overFullScreen" animationType="fade" onRequestClose={() => { setRecordEditOpen(false); setRecordEditFeedback(null) }}>
+      <Modal visible={recordEditOpen} transparent presentationStyle="overFullScreen" animationType="fade" onRequestClose={closeRecordEditor}>
         <View style={styles.modalRoot}>
           <View style={styles.modalSheet}>
             <View style={styles.modalTop}>
               <Text style={styles.modalTitle}>编辑记录</Text>
-              <Pressable onPress={() => { setRecordEditOpen(false); setRecordEditFeedback(null) }}><Text style={styles.closeText}>关闭</Text></Pressable>
+              <Pressable disabled={recordEditSaving} onPress={closeRecordEditor}><Text style={styles.closeText}>关闭</Text></Pressable>
             </View>
             <View style={styles.modalBody}>
               <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalScrollBody} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
@@ -2560,16 +2664,34 @@ export default function FeedbackFormScreen(props: Props) {
                   <>
                   {recordEditFeedback.kind === 'maintenance' ? (
                     <>
-                      <Text style={styles.label}>区域</Text>
-                      <View style={styles.chipsRow}>
-                        {AREA_OPTIONS.map((x) => (
-                          <Pressable key={x} onPress={() => setProjectForm((prev) => ({ ...prev, area: x }))} style={({ pressed }) => [styles.chip, projectForm.area === x ? styles.chipActive : null, pressed ? styles.pressed : null]}>
-                            <Text style={[styles.chipText, projectForm.area === x ? styles.chipTextActive : null]}>{x}</Text>
-                          </Pressable>
-                        ))}
-                      </View>
-                      <Text style={styles.label}>问题说明</Text>
-                      <TextInput value={String(projectForm.detail || '')} onChangeText={(v) => setProjectForm((prev) => ({ ...prev, detail: v }))} style={[styles.input, styles.textarea]} placeholder="问题说明" placeholderTextColor="#9CA3AF" multiline />
+                      <Text style={styles.helperText}>当前状态：{statusLabel(recordEditFeedback)}（修改维修后内容不会改变状态）</Text>
+                      {recordEditCanEditOrdinaryContent ? (
+                        <>
+                          <Text style={styles.label}>区域</Text>
+                          <View style={styles.chipsRow}>
+                            {AREA_OPTIONS.map((x) => (
+                              <Pressable key={x} onPress={() => setProjectForm((prev) => ({ ...prev, area: x }))} style={({ pressed }) => [styles.chip, projectForm.area === x ? styles.chipActive : null, pressed ? styles.pressed : null]}>
+                                <Text style={[styles.chipText, projectForm.area === x ? styles.chipTextActive : null]}>{x}</Text>
+                              </Pressable>
+                            ))}
+                          </View>
+                          <Text style={styles.label}>问题说明</Text>
+                          <TextInput value={String(projectForm.detail || '')} onChangeText={(v) => setProjectForm((prev) => ({ ...prev, detail: v }))} style={[styles.input, styles.textarea]} placeholder="问题说明" placeholderTextColor="#9CA3AF" multiline />
+                        </>
+                      ) : (
+                        <>
+                          <Text style={styles.label}>区域</Text>
+                          <Text style={styles.helperText}>{String(projectForm.area || '').trim() || '-'}</Text>
+                          <Text style={styles.label}>问题说明</Text>
+                          <Text style={styles.helperText}>{String(projectForm.detail || '').trim() || '-'}</Text>
+                        </>
+                      )}
+                      {recordEditCanEditCompletion || recordEditCanCorrectCompletion ? (
+                        <>
+                          <Text style={styles.label}>维修后说明</Text>
+                          <TextInput value={String(projectForm.note || '')} onChangeText={(v) => setProjectForm((prev) => ({ ...prev, note: v }))} style={[styles.input, styles.textarea]} placeholder="维修后说明" placeholderTextColor="#9CA3AF" multiline />
+                        </>
+                      ) : null}
                     </>
                   ) : (
                     <>
@@ -2586,11 +2708,48 @@ export default function FeedbackFormScreen(props: Props) {
                     </>
                   )}
                   <Text style={styles.label}>{recordEditFeedback.kind === 'deep_cleaning' ? '深度清洁前照片' : '维修前照片'}</Text>
-                  <UploadButtons
-                    onCamera={() => appendProjectPhoto('before_photos', 'camera', { continuousCamera: recordEditFeedback?.kind === 'deep_cleaning' })}
-                    onLibrary={() => appendProjectPhoto('before_photos', 'library')}
-                  />
-                  <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} localPreviewByReference={localPreviewByReference} urls={projectForm.before_photos} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} onRemove={(photoIndex) => removeProjectPhoto('before_photos', photoIndex)} />
+                  {recordEditFeedback.kind === 'deep_cleaning' || recordEditCanEditOrdinaryContent ? (
+                    <>
+                      <UploadButtons
+                        onCamera={() => appendProjectPhoto('before_photos', 'camera', { continuousCamera: recordEditFeedback?.kind === 'deep_cleaning' })}
+                        onLibrary={() => appendProjectPhoto('before_photos', 'library')}
+                      />
+                      <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} localPreviewByReference={localPreviewByReference} urls={projectForm.before_photos} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} onRemove={(photoIndex) => removeProjectPhoto('before_photos', photoIndex)} />
+                    </>
+                  ) : (
+                    <PhotoStrip token={token} accessTaskId={feedbackSourceTaskId} localPreviewByReference={localPreviewByReference} urls={projectForm.before_photos} onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)} />
+                  )}
+                  {recordEditFeedback.kind === 'maintenance' && (recordEditCanEditCompletion || recordEditCanCorrectCompletion) ? (
+                    <>
+                      <Text style={styles.label}>维修后照片</Text>
+                      <UploadButtons
+                        onCamera={() => appendProjectPhoto('after_photos', 'camera')}
+                        onLibrary={() => appendProjectPhoto('after_photos', 'library')}
+                      />
+                      <PhotoStrip
+                        token={token}
+                        accessTaskId={feedbackSourceTaskId}
+                        localPreviewByReference={localPreviewByReference}
+                        urls={projectForm.after_photos}
+                        onPress={(urls, index) => openViewer(urls, index, feedbackSourceTaskId)}
+                        onRemove={(photoIndex) => removeProjectPhoto('after_photos', photoIndex)}
+                        canRemove={(reference) => !recordEditImmutableCompletionPhotoSet.has(reference)}
+                      />
+                      {recordEditImmutableCompletionPhotoSet.size ? (
+                        <Text style={styles.helperText}>
+                          {recordEditCanCorrectCompletion
+                            ? '已保存的维修后照片为只读；可添加新照片并通过修正流程保存。'
+                            : '任务完工照片为只读；可删除本次补录的维修后照片。'}
+                        </Text>
+                      ) : null}
+                      {recordEditCanCorrectCompletion ? (
+                        <>
+                          <Text style={styles.label}>修正原因（必填）</Text>
+                          <TextInput value={recordEditCorrectionReason} onChangeText={setRecordEditCorrectionReason} style={[styles.input, styles.textarea]} placeholder="请说明已完成维修的修正原因" placeholderTextColor="#9CA3AF" multiline />
+                        </>
+                      ) : null}
+                    </>
+                  ) : null}
                   </>
                 ) : (
                   <Text style={styles.muted}>记录加载中，请重新打开编辑。</Text>
@@ -2599,7 +2758,7 @@ export default function FeedbackFormScreen(props: Props) {
             </View>
             <View style={styles.modalFooter}>
               <Pressable onPress={saveRecordEdit} disabled={recordEditSaving || !recordEditFeedback} style={({ pressed }) => [styles.submitBtn, recordEditSaving || !recordEditFeedback ? styles.submitDisabled : null, pressed ? styles.pressed : null]}>
-                <Text style={styles.submitText}>{recordEditSaving ? t('common_loading') : '保存记录'}</Text>
+                <Text style={styles.submitText}>{recordEditSaving ? t('common_loading') : recordEditCanCorrectCompletion ? '保存修正' : '保存记录'}</Text>
               </Pressable>
             </View>
           </View>
@@ -2824,7 +2983,7 @@ function StepCard(props: { step: string; title: string; subtitle?: string; highl
   )
 }
 
-function PhotoStrip(props: { token?: string | null; accessTaskId?: string | null; localPreviewByReference?: Record<string, string>; urls: string[]; onPress: (urls: string[], index: number) => void; onRemove?: (index: number) => void }) {
+function PhotoStrip(props: { token?: string | null; accessTaskId?: string | null; localPreviewByReference?: Record<string, string>; urls: string[]; onPress: (urls: string[], index: number) => void; onRemove?: (index: number) => void; canRemove?: (reference: string, index: number) => boolean }) {
   if (!props.urls.length) return null
   return (
     <View style={styles.thumbRow}>
@@ -2833,8 +2992,8 @@ function PhotoStrip(props: { token?: string | null; accessTaskId?: string | null
           <Pressable onPress={() => props.onPress(props.urls, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
             <CleaningMediaImage token={props.token} localUri={isLocalFeedbackDraftReference(u) ? u : props.localPreviewByReference?.[u]} remoteReference={isLocalFeedbackDraftReference(u) ? undefined : u} accessTaskId={props.accessTaskId} style={styles.thumb} />
           </Pressable>
-          {props.onRemove ? (
-            <Pressable onPress={() => props.onRemove?.(idx)} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
+          {props.onRemove && (props.canRemove ? props.canRemove(u, idx) : true) ? (
+            <Pressable accessibilityRole="button" accessibilityLabel={`删除照片 ${idx + 1}`} onPress={() => props.onRemove?.(idx)} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
               <Ionicons name="trash-outline" size={14} color="#FFFFFF" />
             </Pressable>
           ) : null}
@@ -2891,7 +3050,7 @@ function FeedbackGroup(props: {
                 <Pressable accessibilityRole="button" accessibilityLabel="查看反馈详情" onPress={() => props.onView(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
                   <Ionicons name="eye-outline" size={18} color="#2563EB" />
                 </Pressable>
-                {item.capabilities?.can_edit_content ? (
+                {canOpenRecordEditor(item) ? (
                   <Pressable accessibilityRole="button" accessibilityLabel="编辑反馈记录" onPress={() => props.onEdit(item)} style={({ pressed }) => [styles.iconBtn, pressed ? styles.pressed : null]}>
                     <Ionicons name="create-outline" size={18} color="#2563EB" />
                   </Pressable>

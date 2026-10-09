@@ -1044,6 +1044,7 @@ export type PropertyFeedback = {
   created_by_name?: string | null
   created_at: string
   status: 'open' | 'in_progress' | 'resolved' | 'cancelled' | 'need_replace' | 'replaced' | 'no_action'
+  workflow_status?: 'pending_assignment' | 'assigned' | 'in_progress' | 'pending_review' | 'closed' | 'cancelled' | string | null
   resolved_at?: string | null
   completed_at?: string | null
   review_status?: 'pending' | 'approved' | 'rejected' | null
@@ -1053,6 +1054,8 @@ export type PropertyFeedback = {
   project_items?: PropertyFeedbackProject[] | null
   capabilities?: {
     can_edit_content: boolean
+    can_edit_completion_content?: boolean
+    can_correct_completion?: boolean
     can_delete: boolean
     can_move_category: boolean
   }
@@ -1333,6 +1336,32 @@ export async function updatePropertyFeedback(
   }
   const msg = lastRes ? await parseErrorMessage(lastRes) : ''
   throw new Error(msg || '更新反馈失败')
+}
+
+export async function correctPropertyMaintenanceCompletion(
+  token: string,
+  feedbackId: string,
+  params: {
+    completion_photo_urls: string[]
+    completion_note?: string | null
+    reason: string
+    operation_id: string
+  },
+) {
+  const urls = buildUrlCandidates(`maintenance/workflow/internal/${encodeURIComponent(feedbackId)}/correct_completion`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as { ok: true; status: string; available_actions: string[] }
 }
 
 export async function deletePropertyFeedback(
