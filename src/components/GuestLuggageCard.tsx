@@ -1,17 +1,11 @@
 import React, { useState } from 'react'
-import { Alert, Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
+import { Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { API_BASE_URL } from '../config/env'
 import { acknowledgeGuestLuggageNotice, type GuestLuggageNotice } from '../lib/api'
 import { hairline, moderateScale } from '../lib/scale'
-
-function absoluteUrl(rawUrl: string) {
-  const value = String(rawUrl || '').trim()
-  if (!value || /^https?:\/\//i.test(value)) return value
-  if (value.startsWith('//')) return `https:${value}`
-  const base = String(API_BASE_URL || '').trim().replace(/\/+$/g, '').replace(/\/auth\/?$/g, '').replace(/\/api\/?$/g, '')
-  return value.startsWith('/') ? `${base}${value}` : value
-}
+import { layoutTokens } from '../lib/theme'
+import CleaningMediaImage from './CleaningMediaImage'
+import CleaningMediaPreview from './CleaningMediaPreview'
 
 function AckGroup(props: { label: string; items: GuestLuggageNotice['acknowledgements']['cleaners'] }) {
   if (!props.items.length) return null
@@ -48,6 +42,7 @@ export default function GuestLuggageCard(props: {
   const [acknowledging, setAcknowledging] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   if (!notice) return null
+  const photoUrls = (notice.photo_urls || []).slice(0, 3)
 
   const acknowledge = async () => {
     if (!props.token || acknowledging || notice.current_user_acknowledged) return
@@ -71,19 +66,27 @@ export default function GuestLuggageCard(props: {
           </View>
           <View style={styles.headerText}>
             <Text style={styles.title}>当天任务临时通知</Text>
-            <Text style={styles.subtitle}>请查看照片和说明，并按通知内容处理。</Text>
+            <Text style={styles.subtitle}>请查看说明或照片，并按通知内容处理。</Text>
           </View>
         </View>
 
         {notice.note ? <Text style={styles.note}>{notice.note}</Text> : null}
 
-        <View style={styles.photos}>
-          {(notice.photo_urls || []).slice(0, 3).map((url, index) => (
-            <Pressable key={`${url}-${index}`} onPress={() => setPreviewUrl(absoluteUrl(url))} style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}>
-              <Image source={{ uri: absoluteUrl(url) }} style={styles.photo} />
-            </Pressable>
-          ))}
-        </View>
+        {photoUrls.length ? (
+          <View style={styles.photos}>
+            {photoUrls.map((url, index) => (
+              <Pressable testID={`guest-luggage-photo-${index}`} key={`${url}-${index}`} onPress={() => setPreviewUrl(url)} style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}>
+                <CleaningMediaImage
+                  token={props.token}
+                  localUri={String(url).startsWith('file://') ? url : null}
+                  remoteReference={url}
+                  guestLuggageId={notice.id}
+                  style={styles.photo}
+                />
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
 
         {props.showAcknowledge ? (
           notice.current_user_acknowledged ? (
@@ -113,7 +116,7 @@ export default function GuestLuggageCard(props: {
 
       <Modal visible={!!previewUrl} transparent animationType="fade" onRequestClose={() => setPreviewUrl(null)}>
         <Pressable style={styles.previewBackdrop} onPress={() => setPreviewUrl(null)}>
-          {previewUrl ? <Image source={{ uri: previewUrl }} style={styles.previewImage} resizeMode="contain" /> : null}
+          {previewUrl ? <CleaningMediaPreview token={props.token} reference={previewUrl} guestLuggageId={notice.id} style={styles.previewImage} /> : null}
         </Pressable>
       </Modal>
     </>
@@ -137,9 +140,9 @@ const styles = StyleSheet.create({
   subtitle: { marginTop: 2, color: '#B91C1C', fontSize: 12, lineHeight: 17, fontWeight: '700' },
   note: { marginTop: 9, color: '#7F1D1D', fontSize: 13, lineHeight: 19, fontWeight: '700' },
   photos: { marginTop: 10, flexDirection: 'row', gap: 8 },
-  photoWrap: { flex: 1, maxWidth: 112, aspectRatio: 1, borderRadius: 10, overflow: 'hidden', borderWidth: hairline(), borderColor: '#FCA5A5', backgroundColor: '#FFFFFF' },
+  photoWrap: { width: 96, height: 96, borderRadius: 10, overflow: 'hidden', borderWidth: hairline(), borderColor: '#FCA5A5', backgroundColor: '#FFFFFF' },
   photo: { width: '100%', height: '100%' },
-  ackButton: { marginTop: 11, minHeight: 40, borderRadius: 10, backgroundColor: '#DC2626', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  ackButton: { marginTop: 11, minHeight: layoutTokens.button.height, borderRadius: 10, backgroundColor: '#DC2626', alignItems: 'center', justifyContent: 'center', paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0 },
   ackButtonText: { color: '#FFFFFF', fontWeight: '900', fontSize: 13 },
   ackDone: { marginTop: 11, minHeight: 38, borderRadius: 10, backgroundColor: '#DCFCE7', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   ackDoneText: { color: '#166534', fontWeight: '900', fontSize: 13 },

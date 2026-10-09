@@ -1,85 +1,120 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
 import * as ImagePicker from 'expo-image-picker'
+import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { API_BASE_URL } from '../../config/env'
 import { useAuth } from '../../lib/auth'
-import { effectiveInspectionMode, inspectionModeLabel, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
+import { cleaningTaskTitleSuffix, effectiveInspectionMode, inspectionModeLabel, inspectionScopeLabel, isCheckinSiteExecutionTask, isKeyHandoverExecutionTask, isPasswordOnlyInspectionTask, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
 import { useI18n } from '../../lib/i18n'
+import {
+  discardKeyUpload,
+  enqueueKeyUpload,
+  getKeyUploadQueueItem,
+  getKeyUploadVisibleError,
+  processKeyUploadQueue,
+  selectKeyPhotoEffectiveState,
+  subscribeKeyUploadQueue,
+  type KeyUploadQueueItem,
+} from '../../lib/keyUploadQueue'
 import { hairline, isCompactWidth, moderateScale } from '../../lib/scale'
-import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, refreshWorkTasksFromServer, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
+import { layoutTokens } from '../../lib/theme'
+import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, reconcileActiveWorkTasksAfterLocalPatch, requestWorkTasksRefresh, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
-import { deleteKeyPhoto, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, startCleaningTask, uploadCleaningMedia, uploadMzappMedia } from '../../lib/api'
-import { enqueueKeyUpload } from '../../lib/keyUploadQueue'
+import { appendWorkTaskCompletionPhotos, deleteKeyPhoto, listCleaningAppPropertyCodes, listUsers, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, submitMaintenanceExecutorAction, updateCleaningOfflineTask, updateWorkTaskPhotos, uploadMzappMedia } from '../../lib/api'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import { normalizeHttpUrl } from '../../lib/urls'
+import { isPropertyFollowupTask, propertyFollowupTaskDetail, propertyFollowupTaskTitle } from '../../lib/propertyFollowupTaskDisplay'
 import { resolveKeyRequirementTags } from '../../lib/keyRequirementTags'
+import {
+  checkinTimeForDisplay,
+  checkoutTimeForDisplay,
+  executionTaskIdsForRole,
+  guestRequestForDisplay,
+  isEarlyCheckinDisplay,
+  isLateCheckinDisplay,
+  isLateCheckoutDisplay,
+  turnoverDisplayOf,
+} from '../../lib/turnoverDisplay'
+import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
+import CleaningMediaImage from '../../components/CleaningMediaImage'
+import CleaningMediaPreview from '../../components/CleaningMediaPreview'
+import AppButton from '../../components/ui/AppButton'
+import AppIconButton from '../../components/ui/AppIconButton'
+import { actionDisabledReasonText, availableActionsForTask, navigationForWorkTaskAction } from '../../lib/workTaskActions'
+import type { WorkTaskAvailableAction } from '../../lib/api'
+import { draftFileExists, persistCompressedDraftMedia } from '../../lib/localMediaDrafts'
+import {
+  clearMaintenanceCompletionPhotoDraft,
+  createMaintenanceCompletionPhotoMediaId,
+  getMaintenanceCompletionPhotoDraft,
+  removeMaintenanceCompletionPhotoDraft,
+  setMaintenanceCompletionPhotoDraft,
+  type MaintenanceCompletionPhotoDraft,
+} from '../../lib/maintenanceCompletionPhotoDraft'
+import {
+  clearPendingWorkTaskCompletionPhotoReferences,
+  getPendingWorkTaskCompletionPhotoReferences,
+  normalizePendingCompletionPhotoReferences,
+  setPendingWorkTaskCompletionPhotoReferences,
+} from '../../lib/workTaskCompletionPhotoPending'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
-
-function statusLabel(status: string) {
-  const s = String(status || '').trim().toLowerCase()
-  if (s === 'done' || s === 'completed') return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-  if (s === 'to_inspect') return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-  if (s === 'to_hang_keys') return { text: '待挂钥匙', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-  if (s === 'to_complete') return { text: '待完成', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-  if (s === 'keys_hung') return { text: '已挂钥匙', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-  if (s === 'in_progress') return { text: '进行中', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
-  if (s === 'assigned') return { text: '已分配', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
-  if (s === 'cancelled' || s === 'canceled') return { text: '已取消', pill: styles.statusGray, textStyle: styles.statusTextGray }
-  return { text: '待处理', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-}
-
-function statusLabelForTask(task: WorkTaskItem, roleNames: string[]) {
-  const s = String(task.status || '').trim().toLowerCase()
-  const meta = statusLabel(s)
-  const source = String(task.source_type || '').trim().toLowerCase()
-  const kind = String(task.task_kind || '').trim().toLowerCase()
-  if (source === 'cleaning_tasks' && kind === 'inspection' && (s === 'cleaned' || s === 'restock_pending' || s === 'restocked')) {
-    return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-  }
-  if (source === 'cleaning_tasks' && kind === 'cleaning') {
-    const isCleanerView = isCleanerRole(roleNames)
-    const inspectionStatus = String((task as any).inspection_status || '').trim().toLowerCase()
-    const hasInspection = Array.isArray((task as any).inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
-    const inspectionMode = effectiveInspectionMode(task as any)
-    if (isCleaningWorkSubmitted(s)) {
-      if (isCleanerView) return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-      if (inspectionMode === 'same_day' || inspectionMode === 'deferred' || hasInspection || inspectionStatus) {
-        if (inspectionStatus === 'keys_hung' || inspectionStatus === 'done' || inspectionStatus === 'completed') {
-          return { text: '已挂钥匙', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-        }
-        return { text: '待检查', pill: styles.statusAmber, textStyle: styles.statusTextAmber }
-      }
-      return { text: '已完成', pill: styles.statusGreen, textStyle: styles.statusTextGreen }
-    }
-    const checkedOutAt = String((task as any).checked_out_at || '').trim()
-    if (s === 'in_progress' || s === 'cleaning') return { text: '进行中', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
-    if (s !== 'cancelled' && s !== 'canceled') {
-      if (checkedOutAt) return { text: '已退房', pill: styles.statusPurple, textStyle: styles.statusTextPurple }
-      return { text: '已分配', pill: styles.statusBlue, textStyle: styles.statusTextBlue }
-    }
-  }
-  return meta
-}
+type OfflineEditUserOption = { id: string; username?: string | null; display_name?: string | null }
+type OfflineEditPropertyOption = { id: string; code: string; region?: string | null }
 
 function taskKindLabel(kind: string) {
   const s = String(kind || '').trim().toLowerCase()
   if (s === 'cleaning') return '清洁'
   if (s === 'inspection') return '检查'
+  if (s === 'execution') return '执行'
   if (s === 'maintenance') return '维修'
   if (s === 'deep_cleaning') return '深清'
+  if (s === 'daily_necessities') return '日用品'
   if (s === 'offline') return '线下'
   if (s) return s
   return '任务'
+}
+
+function taskTagStylePair(tone: TaskTone) {
+  if (tone === 'special') return { container: styles.tagSpecial, text: styles.tagSpecialText }
+  if (tone === 'pending') return { container: styles.tagPending, text: styles.tagPendingText }
+  if (tone === 'danger') return { container: styles.tagDanger, text: styles.tagDangerText }
+  if (tone === 'success') return { container: styles.tagSuccess, text: styles.tagSuccessText }
+  if (tone === 'info') return { container: styles.tagInfo, text: styles.tagInfoText }
+  return { container: styles.tagNormal, text: styles.tagNormalText }
+}
+
+function statusPillStylePair(tone: TaskTone) {
+  if (tone === 'special') return { pill: styles.statusPurple, text: styles.statusTextPurple }
+  if (tone === 'pending') return { pill: styles.statusAmber, text: styles.statusTextAmber }
+  if (tone === 'success') return { pill: styles.statusGreen, text: styles.statusTextGreen }
+  if (tone === 'neutral') return { pill: styles.statusGray, text: styles.statusTextGray }
+  return { pill: styles.statusBlue, text: styles.statusTextBlue }
 }
 
 function extractFirstUrl(text: any) {
   const s = String(text || '')
   const m = s.match(/https?:\/\/[^\s)]+/i)
   return m?.[0] ? String(m[0]) : null
+}
+
+function normalizeBase(base: string) {
+  return String(base || '').trim().replace(/\/+$/g, '')
+}
+
+function toAbsoluteUrl(rawUrl: any) {
+  const value = String(rawUrl ?? '').trim()
+  if (!value) return ''
+  if (/^https?:\/\//i.test(value)) return value
+  if (value.startsWith('//')) return `https:${value}`
+  const base = normalizeBase(API_BASE_URL)
+  const root = base.replace(/\/auth\/?$/g, '').replace(/\/api\/?$/g, '')
+  if (!root) return value
+  return value.startsWith('/') ? `${root}${value}` : value
 }
 
 function stripPhotoLines(text: any) {
@@ -114,6 +149,10 @@ function normalizePhotoUrls(input: any) {
   return Array.from(new Set(values.map((item) => String(item || '').trim()).filter(Boolean)))
 }
 
+function offlineEditUserName(user: OfflineEditUserOption) {
+  return String(user.display_name || user.username || user.id || '').trim() || user.id
+}
+
 function urgencyMeta(value: any) {
   const s = String(value || '').trim().toLowerCase()
   if (!s) return null
@@ -129,16 +168,19 @@ function isManagerRole(role: string) {
   return r === 'admin' || r === 'offline_manager' || r === 'customer_service'
 }
 
+function maintenanceDomainForSourceType(sourceType: any): 'internal' | 'external' | null {
+  const type = String(sourceType || '').trim()
+  if (type === 'property_maintenance') return 'internal'
+  if (type === 'external_maintenance_orders') return 'external'
+  return null
+}
+
 function roleNamesOf(user: any) {
   const values = Array.isArray(user?.roles) ? user.roles : []
   const ids: string[] = values.map((x: any) => String(x || '').trim()).filter(Boolean)
   const primary = String(user?.role || '').trim()
   if (primary) ids.unshift(primary)
   return Array.from(new Set(ids))
-}
-
-function isCleanerRole(roleNames: string[]) {
-  return roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector')
 }
 
 function ymd(d: Date) {
@@ -152,10 +194,22 @@ function addDays(d: Date, days: number) {
   return nd
 }
 
+function buildDetailFallbackRange(base = new Date()) {
+  return {
+    date_from: ymd(addDays(base, -7)),
+    date_to: ymd(addDays(base, 7)),
+  }
+}
+
 function isBeforeToday(taskDate0: any) {
   const taskDate = String(taskDate0 || '').slice(0, 10)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(taskDate)) return false
   return taskDate < ymd(new Date())
+}
+
+function isMaintenanceStateChangedError(error: any) {
+  if (String(error?.code || '').trim() === 'maintenance_transition_invalid') return true
+  return String(error?.message || '').includes('维修任务状态已变化')
 }
 
 function isCleaningWorkSubmitted(status0: any) {
@@ -163,47 +217,11 @@ function isCleaningWorkSubmitted(status0: any) {
   return ['cleaned', 'restock_pending', 'restocked', 'to_inspect', 'to_hang_keys', 'keys_hung', 'done', 'completed', 'ready'].includes(s)
 }
 
-function checkoutTaskIdsFromTask(task: WorkTaskItem | null) {
+function checkoutTaskIdsFromTask(task: WorkTaskItem | null, action?: WorkTaskAvailableAction) {
   if (!task || task.source_type !== 'cleaning_tasks') return []
-  return Array.from(
-    new Set(
-      [
-        ...(Array.isArray((task as any)?.cleaning_task_ids) ? (task as any).cleaning_task_ids : []),
-        ...(Array.isArray((task as any)?.source_ids) ? (task as any).source_ids : []),
-        (task as any)?.source_id,
-      ]
-        .map((x) => String(x || '').trim())
-        .filter(Boolean),
-    ),
-  )
-}
-
-function parseTimeMinutes(value: any) {
-  const raw = String(value || '').trim().toLowerCase()
-  if (!raw) return null
-  const s = raw.replace(/\s+/g, '')
-  const m12 = s.match(/^(\d{1,2})(?::(\d{1,2}))?(am|pm)$/)
-  if (m12) {
-    let hour = Number(m12[1] || 0)
-    const minute = Number(m12[2] || 0)
-    if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute < 0 || minute > 59) return null
-    hour = hour % 12
-    if (m12[3] === 'pm') hour += 12
-    return hour * 60 + minute
-  }
-  const m24 = s.match(/^(\d{1,2})(?::(\d{1,2}))?$/)
-  if (m24) {
-    const hour = Number(m24[1] || 0)
-    const minute = Number(m24[2] || 0)
-    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null
-    return hour * 60 + minute
-  }
-  return null
-}
-
-function isEarlyCheckinTime(value: any) {
-  const mins = parseTimeMinutes(value)
-  return mins != null && mins < 15 * 60
+  const actionSourceId = String(action?.source_id || '').trim()
+  if (actionSourceId) return [actionSourceId]
+  return executionTaskIdsForRole(task, 'cleaning')
 }
 
 export default function TaskDetailScreen(props: Props) {
@@ -212,23 +230,48 @@ export default function TaskDetailScreen(props: Props) {
   const { width, height } = useWindowDimensions()
   const roleNames = useMemo(() => roleNamesOf(user), [user])
   const canManagerView = useMemo(() => roleNames.some(isManagerRole), [roleNames])
+  const canViewLockboxVideo = useMemo(
+    () => roleNames.some((role) => ['admin', 'offline_manager', 'customer_service', 'cleaning_inspector', 'cleaner_inspector'].includes(String(role).trim().toLowerCase())),
+    [roleNames],
+  )
   const insets = useSafeAreaInsets()
   const [hasInit, setHasInit] = useState(false)
   const [resolvingRemote, setResolvingRemote] = useState(false)
   const [, bump] = useState(0)
   const id = props.route.params.id
   const action = props.route.params.action
+  const detailRefreshKeyRef = React.useRef<string | null>(null)
   const [marking, setMarking] = useState(false)
+  const maintenanceOperationIds = React.useRef(new Map<string, string>())
   const [markPhotoUrls, setMarkPhotoUrls] = useState<string[]>([])
+  const [pendingCompletionPhotoReferences, setPendingCompletionPhotoReferences] = useState<string[]>([])
+  const [maintenanceCompletionPhotoDrafts, setMaintenanceCompletionPhotoDrafts] = useState<MaintenanceCompletionPhotoDraft[]>([])
+  const [taskPhotoUrls, setTaskPhotoUrls] = useState<string[]>([])
+  const [taskPhotoSaving, setTaskPhotoSaving] = useState(false)
   const [markNote, setMarkNote] = useState('')
   const [deferReason, setDeferReason] = useState('')
   const [showUnfinished, setShowUnfinished] = useState(false)
-  const [localKeyPhotoUrl, setLocalKeyPhotoUrl] = useState<string | null>(null)
+  const [keyQueueItem, setKeyQueueItem] = useState<KeyUploadQueueItem | null>(null)
   const [keyUploading, setKeyUploading] = useState(false)
   const [keyDeleting, setKeyDeleting] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewWorkTaskId, setPreviewWorkTaskId] = useState<string | null>(null)
+  const [previewOfflineWorkTaskMedia, setPreviewOfflineWorkTaskMedia] = useState(false)
+  const [previewLocalUri, setPreviewLocalUri] = useState<string | null>(null)
   const [autoUploadKeyDone, setAutoUploadKeyDone] = useState(false)
   const [checkedOutPending, setCheckedOutPending] = useState(false)
+  const [offlineEditOpen, setOfflineEditOpen] = useState(false)
+  const [offlineEditBusy, setOfflineEditBusy] = useState(false)
+  const [offlineEditLoadingOptions, setOfflineEditLoadingOptions] = useState(false)
+  const [offlineEditDate, setOfflineEditDate] = useState('')
+  const [offlineEditTitle, setOfflineEditTitle] = useState('')
+  const [offlineEditContent, setOfflineEditContent] = useState('')
+  const [offlineEditPropertyId, setOfflineEditPropertyId] = useState<string | null>(null)
+  const [offlineEditAssigneeId, setOfflineEditAssigneeId] = useState<string | null>(null)
+  const [offlineEditUsers, setOfflineEditUsers] = useState<OfflineEditUserOption[]>([])
+  const [offlineEditProperties, setOfflineEditProperties] = useState<OfflineEditPropertyOption[]>([])
+  const [offlineEditAssigneeOpen, setOfflineEditAssigneeOpen] = useState(false)
+  const [offlineEditPropertyOpen, setOfflineEditPropertyOpen] = useState(false)
 
   useEffect(() => {
     setHasInit(true)
@@ -241,29 +284,155 @@ export default function TaskDetailScreen(props: Props) {
 
   const items = getWorkTasksSnapshot().items
   const task = useMemo<WorkTaskItem | null>(() => findWorkTaskItemByAnyId(id), [id, items])
+  const maintenancePhotoDraftTaskId = task && maintenanceDomainForSourceType(task.source_type) ? String(task.id || '').trim() : ''
+  const maintenancePhotoDraftOwnerId = String((user as any)?.id || (user as any)?.user_id || (user as any)?.username || '').trim()
+  const completionPhotoPendingTaskId = task && String(task.source_type || '').trim() === 'cleaning_offline_tasks' ? String(task.id || '').trim() : ''
+  const completionPhotoPendingOwnerId = maintenancePhotoDraftOwnerId
+  const taskCompletionPhotoUrlsKey = useMemo(() => JSON.stringify(normalizePhotoUrls((task as any)?.completion_photo_urls)), [task])
+  const openPreview = (url: string, workTaskId?: string | null, localUri?: string | null, offlineWorkTaskMedia = false) => {
+    setPreviewWorkTaskId(String(workTaskId || '').trim() || null)
+    setPreviewOfflineWorkTaskMedia(offlineWorkTaskMedia)
+    setPreviewLocalUri(String(localUri || '').trim() || null)
+    setPreviewUrl(url)
+  }
+  const closePreview = () => {
+    setPreviewUrl(null)
+    setPreviewWorkTaskId(null)
+    setPreviewOfflineWorkTaskMedia(false)
+    setPreviewLocalUri(null)
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    setMaintenanceCompletionPhotoDrafts([])
+    if (!maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId) return () => { cancelled = true }
+    void getMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId)
+      .then((photos) => {
+        if (!cancelled) setMaintenanceCompletionPhotoDrafts(photos)
+      })
+      .catch(() => {
+        if (!cancelled) setMaintenanceCompletionPhotoDrafts([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [maintenancePhotoDraftOwnerId, maintenancePhotoDraftTaskId])
+
+  useEffect(() => {
+    const remoteReferences = maintenanceCompletionPhotoDrafts
+      .map((photo) => String(photo.remote_reference || '').trim())
+      .filter(Boolean)
+    if (!maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId || !remoteReferences.length) return
+    const canonical = normalizePhotoUrls((task as any)?.completion_photo_urls)
+    if (!remoteReferences.every((reference) => canonical.includes(reference))) return
+    let cancelled = false
+    void clearMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId, { deleteLocalFiles: true })
+      .then(() => {
+        if (!cancelled) setMaintenanceCompletionPhotoDrafts([])
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [maintenanceCompletionPhotoDrafts, maintenancePhotoDraftOwnerId, maintenancePhotoDraftTaskId, task, taskCompletionPhotoUrlsKey])
+
+  useEffect(() => {
+    let cancelled = false
+    setPendingCompletionPhotoReferences([])
+    if (!completionPhotoPendingTaskId || !completionPhotoPendingOwnerId) return () => { cancelled = true }
+    void getPendingWorkTaskCompletionPhotoReferences(completionPhotoPendingTaskId, completionPhotoPendingOwnerId)
+      .then((references) => {
+        if (!cancelled) setPendingCompletionPhotoReferences(references)
+      })
+      .catch(() => {
+        if (!cancelled) setPendingCompletionPhotoReferences([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [completionPhotoPendingOwnerId, completionPhotoPendingTaskId])
+
+  useEffect(() => {
+    if (!completionPhotoPendingTaskId || !completionPhotoPendingOwnerId || !pendingCompletionPhotoReferences.length) return
+    const saved = normalizePhotoUrls((task as any)?.completion_photo_urls)
+    if (!pendingCompletionPhotoReferences.every((reference) => saved.includes(reference))) return
+    let cancelled = false
+    void clearPendingWorkTaskCompletionPhotoReferences(completionPhotoPendingTaskId, completionPhotoPendingOwnerId)
+      .then(() => {
+        if (!cancelled) setPendingCompletionPhotoReferences([])
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [completionPhotoPendingOwnerId, completionPhotoPendingTaskId, pendingCompletionPhotoReferences, task, taskCompletionPhotoUrlsKey])
   const previewSize = useMemo(() => ({ width, height }), [height, width])
+  const taskPhotoUrlsKey = useMemo(() => JSON.stringify(normalizePhotoUrls((task as any)?.photo_urls)), [task])
   const isCompactLayout = isCompactWidth(width)
   const guestLuggage = (task as any)?.guest_luggage || null
+  const cleaningTaskId = String((task as any)?.source_id || '').trim()
+  const isOfflineTaskForEdit = String(task?.task_kind || '').toLowerCase() === 'offline'
+  const canEditOfflineTask = isOfflineTaskForEdit && canManagerView
+
+  useEffect(() => {
+    if (!offlineEditOpen || !token || !canEditOfflineTask) return
+    let cancelled = false
+    setOfflineEditLoadingOptions(true)
+    Promise.all([
+      listUsers(token).catch(() => []),
+      listCleaningAppPropertyCodes(token).catch(() => []),
+    ]).then(([userRows, propertyRows]) => {
+      if (cancelled) return
+      setOfflineEditUsers((Array.isArray(userRows) ? userRows : [])
+        .map((item: any) => ({
+          id: String(item?.id || '').trim(),
+          username: item?.username == null ? null : String(item.username),
+          display_name: item?.display_name == null ? null : String(item.display_name),
+        }))
+        .filter((item) => !!item.id)
+        .sort((a, b) => offlineEditUserName(a).localeCompare(offlineEditUserName(b), 'en')))
+      setOfflineEditProperties((Array.isArray(propertyRows) ? propertyRows : [])
+        .map((item: any) => ({ id: String(item?.id || '').trim(), code: String(item?.code || '').trim(), region: item?.region == null ? null : String(item.region) }))
+        .filter((item) => !!item.id))
+    }).finally(() => {
+      if (!cancelled) setOfflineEditLoadingOptions(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [canEditOfflineTask, offlineEditOpen, token])
+
+  const reloadKeyQueueItem = useCallback(async () => {
+    if (!cleaningTaskId) {
+      setKeyQueueItem(null)
+      return
+    }
+    setKeyQueueItem(await getKeyUploadQueueItem(cleaningTaskId))
+  }, [cleaningTaskId])
 
   useEffect(() => {
     if (!task) return
     setMarkPhotoUrls(normalizePhotoUrls((task as any).completion_photo_urls).length ? normalizePhotoUrls((task as any).completion_photo_urls) : photoUrlsFromText(task.summary))
+    setTaskPhotoUrls(normalizePhotoUrls((task as any).photo_urls))
     setMarkNote(String((task as any).completion_note || '').trim())
     setDeferReason(String((task as any).completion_reason || '').trim())
     setShowUnfinished(false)
-  }, [task?.id])
+  }, [task?.id, taskPhotoUrlsKey])
 
   useEffect(() => {
     if (!hasInit) return
-    if (task) return
     if (!token || !user?.id) return
+    const cachedTaskId = String(task?.id || '').trim()
+    const isCachedInternalMaintenanceTask = String(task?.source_type || '').trim() === 'property_maintenance'
+    if (cachedTaskId && !isCachedInternalMaintenanceTask) return
     let cancelled = false
     const view: WorkTasksView = canManagerView ? 'all' : 'mine'
-    const now = new Date()
-    const date_from = ymd(addDays(now, -45))
-    const date_to = ymd(addDays(now, 45))
+    const refreshKey = `${id}:${String(user.id)}:${view}`
+    if (detailRefreshKeyRef.current === refreshKey) return
+    detailRefreshKeyRef.current = refreshKey
+    const { date_from, date_to } = buildDetailFallbackRange()
     setResolvingRemote(true)
-    refreshWorkTasksFromServer({ token, userId: String(user.id), date_from, date_to, view })
+    requestWorkTasksRefresh({ token, userId: String(user.id), date_from, date_to, view, mode: 'force', reason: 'task_detail_fallback' })
       .catch(() => null)
       .finally(() => {
         if (!cancelled) setResolvingRemote(false)
@@ -271,7 +440,15 @@ export default function TaskDetailScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [canManagerView, hasInit, id, task, token, user?.id])
+  }, [canManagerView, hasInit, id, task?.id, task?.source_type, token, user?.id])
+
+  useEffect(() => {
+    void reloadKeyQueueItem()
+    const unsubscribe = subscribeKeyUploadQueue(() => {
+      void reloadKeyQueueItem()
+    })
+    return unsubscribe
+  }, [reloadKeyQueueItem])
 
   async function onUploadKey() {
     if (!task) return
@@ -286,56 +463,37 @@ export default function TaskDetailScreen(props: Props) {
     if (keyUploading) return
     setKeyUploading(true)
     try {
-      const perm = await ImagePicker.requestCameraPermissionsAsync()
-      if (!perm.granted) {
-        Alert.alert('需要相机权限', '请在系统设置中允许相机权限后再拍照', [
-          { text: '取消', style: 'cancel' },
-          { text: '去设置', onPress: () => Linking.openSettings() },
-        ])
+      try {
+        const perm = await ImagePicker.requestCameraPermissionsAsync()
+        if (!perm.granted) {
+          Alert.alert('需要相机权限', '请在系统设置中允许相机权限后再拍照', [
+            { text: '取消', style: 'cancel' },
+            { text: '去设置', onPress: () => Linking.openSettings() },
+          ])
+          return
+        }
+      } catch {}
+
+      let res: ImagePicker.ImagePickerResult
+      try {
+        res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+      } catch {
+        Alert.alert(t('common_error'), '无法打开相机（模拟器不支持相机拍照，请用真机测试）')
         return
       }
-    } catch {}
+      if (res.canceled || !res.assets?.length) return
+      const a = res.assets[0] as any
+      const uri = String(a.uri || '').trim()
+      if (!uri) return
 
-    let res: ImagePicker.ImagePickerResult
-    try {
-      res = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
-    } catch (e: any) {
-      Alert.alert(t('common_error'), '无法打开相机（模拟器不支持相机拍照，请用真机测试）')
-      return
-    }
-    if (res.canceled || !res.assets?.length) return
-    const a = res.assets[0] as any
-    const uri = String(a.uri || '').trim()
-    if (!uri) return
+      const propertyCode = String((task as any)?.property?.code || '').trim()
+      const now = new Date()
+      const pad2 = (n: number) => String(n).padStart(2, '0')
+      const watermarkTime = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`
+      const username = String((user as any)?.username || '').trim()
+      const watermarkText = `${propertyCode || '未知房号'}  ${username || '未知用户'}\n${watermarkTime}`
+      const capturedAt = now.toISOString()
 
-    const propertyCode = String((task as any)?.property?.code || '').trim()
-    const now = new Date()
-    const pad2 = (n: number) => String(n).padStart(2, '0')
-    const watermarkTime = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`
-    const username = String((user as any)?.username || '').trim()
-    const watermarkText = `${propertyCode || '未知房号'}  ${username || '未知用户'}\n${watermarkTime}`
-    const capturedAt = now.toISOString()
-
-    try {
-      const name = String(a.fileName || uri.split('/').pop() || `key-${Date.now()}.jpg`)
-      const mimeType = String(a.mimeType || 'image/jpeg')
-      const up = await uploadCleaningMedia(
-        token,
-        { uri, name, mimeType },
-        { purpose: 'key_photo', watermark: '1', watermark_text: watermarkText, property_code: propertyCode, captured_at: capturedAt },
-      )
-      await startCleaningTask(token, String(task.source_id), { media_url: up.url, captured_at: capturedAt })
-      await patchWorkTaskItem(String(task.id), { status: 'in_progress', key_photo_url: up.url } as any)
-      setLocalKeyPhotoUrl(up.url)
-      Alert.alert(t('common_ok'), '钥匙上传成功')
-    } catch (e: any) {
-      const msg = String(e?.message || '上传失败')
-      const m = msg.toLowerCase()
-      const canQueue = m.includes('network request failed') || m.includes('timeout') || m.includes('aborted')
-      if (!canQueue) {
-        Alert.alert(t('common_error'), msg)
-        return
-      }
       try {
         await enqueueKeyUpload({
           cleaning_task_id: String(task.source_id),
@@ -343,20 +501,36 @@ export default function TaskDetailScreen(props: Props) {
           property_code: propertyCode,
           captured_at: capturedAt,
           watermark_text: watermarkText,
+          file_name: String(a.fileName || uri.split('/').pop() || `key-${Date.now()}.jpg`),
+          mime_type: String(a.mimeType || 'image/jpeg'),
         })
-        Alert.alert(t('common_ok'), '已离线保存，网络恢复后自动上传')
-      } catch (e2: any) {
-        Alert.alert(t('common_error'), String(e2?.message || msg))
+        await reloadKeyQueueItem()
+        void processKeyUploadQueue(token).then(() => {
+          if (!user?.id) return
+          const { date_from, date_to } = buildDetailFallbackRange()
+          return requestWorkTasksRefresh({
+            token,
+            userId: String(user.id),
+            date_from,
+            date_to,
+            view: canManagerView ? 'all' : 'mine',
+            mode: 'force',
+            reason: 'task_detail_key_upload',
+          }).catch(() => null)
+        })
+        Alert.alert(t('common_ok'), '钥匙照片已暂存，正在同步。')
+      } catch (e: any) {
+        Alert.alert(t('common_error'), String(e?.message || '保存失败'))
       }
-    }
-    finally {
+    } finally {
       setKeyUploading(false)
     }
   }
 
   async function onDeleteKey() {
     if (!task) return
-    if (!token) {
+    const remoteUrl = String((task as any).key_photo_url || '').trim()
+    if (!token && remoteUrl) {
       Alert.alert(t('common_error'), '请先登录')
       return
     }
@@ -364,9 +538,12 @@ export default function TaskDetailScreen(props: Props) {
     if (keyDeleting) return
     setKeyDeleting(true)
     try {
-      await deleteKeyPhoto(token, String(task.source_id))
-      setLocalKeyPhotoUrl(null)
-      Alert.alert(t('common_ok'), '已删除钥匙照片')
+      if (remoteUrl) {
+        await deleteKeyPhoto(token as string, String(task.source_id))
+      }
+      await discardKeyUpload(String(task.source_id), { deleteLocalFile: true })
+      await reloadKeyQueueItem()
+      Alert.alert(t('common_ok'), remoteUrl ? '已删除钥匙照片' : '已删除待同步钥匙照片')
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '删除失败'))
     } finally {
@@ -392,10 +569,199 @@ export default function TaskDetailScreen(props: Props) {
     }
   }
 
+  async function saveMaintenanceCompletionPhotoDrafts(photos: MaintenanceCompletionPhotoDraft[]) {
+    if (!maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId) throw new Error('缺少维修照片草稿归属')
+    const saved = await setMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId, photos)
+    setMaintenanceCompletionPhotoDrafts(saved)
+    return saved
+  }
+
+  async function uploadMaintenanceCompletionPhoto(photo: MaintenanceCompletionPhotoDraft) {
+    if (!token) throw new Error('请先登录')
+    if (!maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId) throw new Error('缺少维修照片草稿归属')
+    const current = await getMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId)
+    const currentPhoto = current.find((item) => item.media_id === photo.media_id) || photo
+    if (String(currentPhoto.remote_reference || '').trim()) return current
+    if (!currentPhoto.local_uri || !draftFileExists(currentPhoto.local_uri)) {
+      const next = current.map((item) => item.media_id === currentPhoto.media_id
+        ? { ...item, local_uri: null, upload_state: 'blocked_local_missing' as const, error_code: 'LOCAL_MEDIA_MISSING' }
+        : item)
+      await saveMaintenanceCompletionPhotoDrafts(next)
+      throw new Error('本地照片已丢失，请重新拍摄')
+    }
+
+    const uploading = current.map((item) => item.media_id === currentPhoto.media_id
+      ? { ...item, upload_state: 'uploading' as const, error_code: null }
+      : item)
+    await saveMaintenanceCompletionPhotoDrafts(uploading)
+    try {
+      const uploaded = await uploadMzappMedia(
+        token,
+        { uri: currentPhoto.local_uri, name: currentPhoto.name, mimeType: currentPhoto.mime_type },
+        undefined,
+        { skipImageCompression: true },
+      )
+      const remoteReference = String(uploaded?.url || '').trim()
+      if (!remoteReference) throw new Error('上传成功但未返回照片引用')
+      const next = uploading.map((item) => item.media_id === currentPhoto.media_id
+        ? { ...item, remote_reference: remoteReference, upload_state: 'remote_stored' as const, error_code: null }
+        : item)
+      return await saveMaintenanceCompletionPhotoDrafts(next)
+    } catch (error: any) {
+      const rawCode = error && typeof error === 'object' ? String((error as { code?: unknown }).code || '').trim() : ''
+      const code = /^[A-Za-z0-9_.-]{1,48}$/.test(rawCode) ? rawCode : 'UPLOAD_FAILED'
+      const next = uploading.map((item) => item.media_id === currentPhoto.media_id
+        ? { ...item, upload_state: 'failed' as const, error_code: code }
+        : item)
+      await saveMaintenanceCompletionPhotoDrafts(next)
+      throw error
+    }
+  }
+
+  async function retryMaintenanceCompletionPhotoUploads() {
+    const pending = maintenanceCompletionPhotoDrafts.filter((photo) => !String(photo.remote_reference || '').trim())
+    if (!pending.length) return
+    setMarking(true)
+    let firstError: any = null
+    for (const photo of pending) {
+      try {
+        await uploadMaintenanceCompletionPhoto(photo)
+      } catch (error) {
+        firstError = firstError || error
+      }
+    }
+    setMarking(false)
+    if (firstError) {
+      Alert.alert(t('common_error'), `照片未能上传，已保留本地草稿：${String(firstError?.message || '请重试')}`)
+      return
+    }
+    Alert.alert(t('common_ok'), pending.length > 1 ? `已上传 ${pending.length} 张照片` : '照片已上传')
+  }
+
+  async function onAppendMaintenanceCompletionPhotos(source: 'camera' | 'library') {
+    if (!task || !token) return
+    if (!maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId) {
+      Alert.alert(t('common_error'), '缺少维修照片草稿归属')
+      return
+    }
+    const permitted = source === 'camera' ? await ensureCameraPerm() : await ensureLibraryPerm()
+    if (!permitted) {
+      Alert.alert(t('common_error'), source === 'camera' ? '请先开启相机权限' : '请先开启相册权限')
+      return
+    }
+    setMarking(true)
+    let uploadedCount = 0
+    let firstError: any = null
+    try {
+      const result = source === 'camera'
+        ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: 'images',
+            quality: 0.75,
+            allowsEditing: false,
+            allowsMultipleSelection: true,
+            selectionLimit: 0,
+          })
+      if (result.canceled || !result.assets?.length) return
+      for (const asset of result.assets as any[]) {
+        const sourceUri = String(asset?.uri || '').trim()
+        if (!sourceUri) continue
+        const name = String(asset?.fileName || sourceUri.split('/').pop() || `maintenance-${Date.now()}.jpg`)
+        const mimeType = String(asset?.mimeType || 'image/jpeg')
+        const local = await persistCompressedDraftMedia({
+          dirName: 'mzstay-maintenance-completion-media',
+          prefix: 'maintenance-completion',
+          sourceUri,
+          name,
+          mimeType,
+          maxWidth: 1920,
+          quality: 0.76,
+        })
+        const photo: MaintenanceCompletionPhotoDraft = {
+          media_id: createMaintenanceCompletionPhotoMediaId(),
+          local_uri: local.localUri,
+          remote_reference: null,
+          name: local.name,
+          mime_type: local.mimeType,
+          captured_at: new Date().toISOString(),
+          upload_state: 'local_persisted',
+          error_code: null,
+        }
+        const current = await getMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId)
+        const saved = await saveMaintenanceCompletionPhotoDrafts([...current, photo])
+        const savedPhoto = saved.find((item) => item.media_id === photo.media_id) || photo
+        try {
+          await uploadMaintenanceCompletionPhoto(savedPhoto)
+          uploadedCount += 1
+        } catch (error) {
+          firstError = firstError || error
+        }
+      }
+      if (firstError) {
+        Alert.alert(t('common_error'), `照片未能上传，已保留本地草稿：${String(firstError?.message || '请重试')}`)
+      } else if (uploadedCount) {
+        Alert.alert(t('common_ok'), uploadedCount > 1 ? `已上传 ${uploadedCount} 张照片` : '照片已上传')
+      }
+    } catch (error: any) {
+      Alert.alert(t('common_error'), String(error?.message || '保存照片失败'))
+    } finally {
+      setMarking(false)
+    }
+  }
+
+  async function saveUploadedCompletionPhotoReferences(references: string[]) {
+    if (!task || !token) return false
+    if (!completionPhotoPendingTaskId || !completionPhotoPendingOwnerId) {
+      Alert.alert(t('common_error'), '缺少完成照片待保存归属')
+      return false
+    }
+    const pending = normalizePendingCompletionPhotoReferences([...pendingCompletionPhotoReferences, ...references])
+    if (!pending.length) return false
+    // Keep a visible in-page retry state even if local storage itself is temporarily unavailable.
+    // The append request is deliberately not attempted until its remote references are durably recorded.
+    setPendingCompletionPhotoReferences(pending)
+    let persisted: string[]
+    try {
+      persisted = await setPendingWorkTaskCompletionPhotoReferences(completionPhotoPendingTaskId, completionPhotoPendingOwnerId, pending)
+      setPendingCompletionPhotoReferences(persisted)
+    } catch (error: any) {
+      Alert.alert(t('common_error'), `照片已上传，但待保存记录写入失败；请保持当前页面并点击重试保存：${String(error?.message || '请重试')}`)
+      return false
+    }
+    try {
+      const receipt = await appendWorkTaskCompletionPhotos(token, String(task.id), { photo_urls: persisted })
+      const saved = normalizePhotoUrls(receipt.completion_photo_urls)
+      setMarkPhotoUrls(saved)
+      setPendingCompletionPhotoReferences([])
+      void clearPendingWorkTaskCompletionPhotoReferences(completionPhotoPendingTaskId, completionPhotoPendingOwnerId).catch(() => undefined)
+      // The server receipt is the business-save confirmation. A local list-cache failure must not turn that success into a false error.
+      await patchWorkTaskItem(String(task.id), { completion_photo_urls: saved } as any).catch(() => undefined)
+      Alert.alert(t('common_ok'), persisted.length > 1 ? `已保存 ${persisted.length} 张补充完成照片` : '补充完成照片已保存')
+      return true
+    } catch (error: any) {
+      Alert.alert(t('common_error'), `照片已上传，尚未保存到完成记录：${String(error?.message || '请重试')}。可点击重试保存，无需重新上传。`)
+      return false
+    }
+  }
+
+  async function retrySavingUploadedCompletionPhotos() {
+    if (!pendingCompletionPhotoReferences.length) return
+    setMarking(true)
+    try {
+      await saveUploadedCompletionPhotoReferences([])
+    } finally {
+      setMarking(false)
+    }
+  }
+
   async function onAppendPhotosForMarking(source: 'camera' | 'library') {
     if (!task) return
     if (!token) {
       Alert.alert(t('common_error'), '请先登录')
+      return
+    }
+    if (maintenanceDomainForSourceType(task.source_type)) {
+      await onAppendMaintenanceCompletionPhotos(source)
       return
     }
     const permitted = source === 'camera' ? await ensureCameraPerm() : await ensureLibraryPerm()
@@ -432,23 +798,145 @@ export default function TaskDetailScreen(props: Props) {
           const name = String(asset?.fileName || uri.split('/').pop() || `task-${Date.now()}.jpg`)
           const mimeType = String(asset?.mimeType || 'image/jpeg')
           const up = await uploadMzappMedia(token, { uri, name, mimeType })
-          uploaded.push(up.url)
+          const remoteReference = String(up.remoteReference || up.url || '').trim()
+          if (!remoteReference) throw new Error('上传成功但未返回照片引用')
+          uploaded.push(remoteReference)
         }
         keepCapturing = continuousCamera
       }
       if (!uploaded.length) return
+      if (isAlreadyDone) {
+        await saveUploadedCompletionPhotoReferences(uploaded)
+        return
+      }
       applyUploaded()
       if (!continuousCamera) Alert.alert(t('common_ok'), uploaded.length > 1 ? `已上传 ${uploaded.length} 张照片` : '照片已上传')
     } catch (e: any) {
-      applyUploaded()
-      Alert.alert(t('common_error'), String(e?.message || '上传失败'))
+      if (isAlreadyDone) {
+        Alert.alert(t('common_error'), `补充完成照片上传失败：${String(e?.message || '请重试')}`)
+      } else {
+        applyUploaded()
+        Alert.alert(t('common_error'), String(e?.message || '上传失败'))
+      }
     } finally {
       setMarking(false)
     }
   }
 
   function removeMarkPhoto(index: number) {
+    if (maintenanceDomainForSourceType(task?.source_type)) {
+      const removed = maintenanceCompletionPhotoDrafts[index]
+      if (!removed || !maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId) return
+      setMaintenanceCompletionPhotoDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index))
+      void removeMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId, removed.media_id)
+        .catch(() => setMaintenanceCompletionPhotoDrafts((current) => current))
+      return
+    }
     setMarkPhotoUrls((prev) => prev.filter((_, idx) => idx !== index))
+  }
+
+  async function saveTaskPhotos(nextUrls: string[]) {
+    if (!task) return
+    if (!token) throw new Error('请先登录')
+    const normalized = normalizePhotoUrls(nextUrls)
+    const result = await updateWorkTaskPhotos(token, String(task.id), { photo_urls: normalized })
+    const saved = normalizePhotoUrls(result.photo_urls)
+    setTaskPhotoUrls(saved)
+    await patchWorkTaskItem(String(task.id), { photo_urls: saved } as any)
+  }
+
+  async function onAppendTaskPhotos(source: 'camera' | 'library') {
+    if (!task) return
+    if (!token) {
+      Alert.alert(t('common_error'), '请先登录')
+      return
+    }
+    const permitted = source === 'camera' ? await ensureCameraPerm() : await ensureLibraryPerm()
+    if (!permitted) {
+      Alert.alert(t('common_error'), source === 'camera' ? '请先开启相机权限' : '请先开启相册权限')
+      return
+    }
+    const uploaded: string[] = []
+    try {
+      setTaskPhotoSaving(true)
+      const res =
+        source === 'camera'
+          ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+          : await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: 'images',
+              quality: 0.75,
+              allowsEditing: false,
+              allowsMultipleSelection: true,
+              selectionLimit: 0,
+            })
+      if (res.canceled || !res.assets?.length) return
+      for (const asset of res.assets as any[]) {
+        const uri = String(asset?.uri || '').trim()
+        if (!uri) continue
+        const name = String(asset?.fileName || uri.split('/').pop() || `offline-task-${Date.now()}.jpg`)
+        const mimeType = String(asset?.mimeType || 'image/jpeg')
+        const up = await uploadMzappMedia(token, { uri, name, mimeType })
+        const remoteReference = String(up.remoteReference || up.url || '').trim()
+        if (!remoteReference) throw new Error('上传成功但未返回照片引用')
+        uploaded.push(remoteReference)
+      }
+      if (!uploaded.length) return
+      await saveTaskPhotos([...taskPhotoUrls, ...uploaded])
+      Alert.alert(t('common_ok'), uploaded.length > 1 ? `已上传 ${uploaded.length} 张照片` : '照片已上传')
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '上传失败'))
+    } finally {
+      setTaskPhotoSaving(false)
+    }
+  }
+
+  async function removeTaskPhoto(index: number) {
+    if (taskPhotoSaving) return
+    try {
+      setTaskPhotoSaving(true)
+      await saveTaskPhotos(taskPhotoUrls.filter((_, idx) => idx !== index))
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '删除失败'))
+    } finally {
+      setTaskPhotoSaving(false)
+    }
+  }
+
+  function maintenanceOperationId(actionName: 'executor_complete' | 'executor_unfinished', photoUrls: string[], note: string | null, reason: string | null) {
+    const signature = [String(task?.id || ''), actionName, ...photoUrls, note || '', reason || ''].join('\u001f')
+    const existing = maintenanceOperationIds.current.get(signature)
+    if (existing) return existing
+    const operationId = `maintenance-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+    maintenanceOperationIds.current.set(signature, operationId)
+    return operationId
+  }
+
+  async function applyMaintenanceExecutorReceipt(receipt: { status?: string; available_actions?: string[] }) {
+    if (!task) return
+    const status = String(receipt?.status || '').trim()
+    if (!status) return
+    const currentWorkflow = (task as any).maintenance_workflow
+    const domain = maintenanceDomainForSourceType(task.source_type)
+    await patchWorkTaskItem(String(task.id), {
+      status,
+      maintenance_workflow: {
+        ...(currentWorkflow && typeof currentWorkflow === 'object' ? currentWorkflow : {}),
+        ...(domain ? { domain } : {}),
+        status,
+        available_actions: Array.isArray(receipt?.available_actions) ? receipt.available_actions : [],
+      },
+    } as Partial<WorkTaskItem>)
+    void reconcileActiveWorkTasksAfterLocalPatch().catch(() => undefined)
+    setShowUnfinished(false)
+  }
+
+  async function cleanupSyncedMaintenanceCompletionPhotoDrafts(submittedReferences: string[]) {
+    if (!maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId || !submittedReferences.length) return
+    const refreshed = findWorkTaskItemByAnyId(String(task?.id || ''))
+    const canonical = normalizePhotoUrls((refreshed as any)?.completion_photo_urls)
+    if (!submittedReferences.every((reference) => canonical.includes(reference))) return
+    await clearMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId, { deleteLocalFiles: true })
+    setMaintenanceCompletionPhotoDrafts([])
   }
 
   async function onMarkDone() {
@@ -457,13 +945,40 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_error'), '请先登录')
       return
     }
-    if (!effectiveMarkPhotoUrls.length) {
+    if (requiresMarkPhotos && !effectiveMarkPhotoUrls.length) {
       Alert.alert(t('common_error'), '请先拍照上传')
+      return
+    }
+    if (maintenanceDomain && maintenanceCompletionPhotoDrafts.some((photo) => !String(photo.remote_reference || '').trim())) {
+      Alert.alert(t('common_error'), '仍有照片等待上传，请先重试照片上传或删除该照片')
+      return
+    }
+    if (isMaintenanceTask && !maintenanceCanComplete) {
+      Alert.alert(t('common_error'), '当前维修任务暂无完成操作，请刷新后重试。')
       return
     }
     try {
       setMarking(true)
       const note = markNote.trim() || null
+      if (maintenanceDomain) {
+        const receipt = await submitMaintenanceExecutorAction(token, {
+          domain: maintenanceDomain,
+          recordId: String(task.source_id || '').trim(),
+          action: 'executor_complete',
+          completionPhotoUrls: effectiveMarkPhotoUrls,
+          completionNote: note,
+          operationId: maintenanceOperationId('executor_complete', effectiveMarkPhotoUrls, note, null),
+        })
+        await applyMaintenanceExecutorReceipt(receipt)
+        // Keep the authoritative executor receipt in the currently displayed
+        // task-list bucket. A detail fallback refresh uses a different bucket;
+        // switching to it here can restore the original day's stale `assigned`
+        // cache when navigation returns to the task list.
+        await cleanupSyncedMaintenanceCompletionPhotoDrafts(effectiveMarkPhotoUrls)
+        Alert.alert(t('common_ok'), '已提交完成，等待审核')
+        props.navigation.goBack()
+        return
+      }
       await markWorkTask(token, String(task.id), {
         action: 'done',
         photo_url: effectiveMarkPhotoUrls[0] || null,
@@ -474,6 +989,19 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_ok'), '已标记完成')
       props.navigation.goBack()
     } catch (e: any) {
+      if (isMaintenanceTask && isMaintenanceStateChangedError(e)) {
+        try {
+          const refreshed = await reconcileActiveWorkTasksAfterLocalPatch()
+          if (refreshed) {
+            Alert.alert(t('common_ok'), '维修任务状态已同步，请查看最新状态。')
+            return
+          }
+        } catch {
+          // Fall through to the actionable manual-refresh message below.
+        }
+        Alert.alert(t('common_error'), '维修任务状态已变化，请下拉刷新后查看最新状态。')
+        return
+      }
       Alert.alert(t('common_error'), String(e?.message || '提交失败'))
     } finally {
       setMarking(false)
@@ -486,7 +1014,9 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_error'), '请先登录')
       return
     }
-    if (!effectiveMarkPhotoUrls.length) {
+    // A maintenance executor may report an unfinished task before completion
+    // evidence exists. The server requires its reason, while photos are optional.
+    if (!isMaintenanceTask && requiresMarkPhotos && !effectiveMarkPhotoUrls.length) {
       Alert.alert(t('common_error'), '请先拍照上传')
       return
     }
@@ -495,9 +1025,33 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_error'), '请填写未完成原因')
       return
     }
+    if (maintenanceDomain && maintenanceCompletionPhotoDrafts.some((photo) => !String(photo.remote_reference || '').trim())) {
+      Alert.alert(t('common_error'), '仍有照片等待上传，请先重试照片上传或删除该照片')
+      return
+    }
+    if (isMaintenanceTask && !maintenanceCanUnfinished) {
+      Alert.alert(t('common_error'), '当前维修任务暂无未完成操作，请刷新后重试。')
+      return
+    }
     try {
       setMarking(true)
       const note = markNote.trim() || null
+      if (maintenanceDomain) {
+        const receipt = await submitMaintenanceExecutorAction(token, {
+          domain: maintenanceDomain,
+          recordId: String(task.source_id || '').trim(),
+          action: 'executor_unfinished',
+          completionPhotoUrls: effectiveMarkPhotoUrls,
+          completionNote: note,
+          reason: r,
+          operationId: maintenanceOperationId('executor_unfinished', effectiveMarkPhotoUrls, note, r),
+        })
+        await applyMaintenanceExecutorReceipt(receipt)
+        await cleanupSyncedMaintenanceCompletionPhotoDrafts(effectiveMarkPhotoUrls)
+        Alert.alert(t('common_ok'), '已记录未完成原因，任务仍待处理')
+        props.navigation.goBack()
+        return
+      }
       await markWorkTask(token, String(task.id), {
         action: 'defer',
         photo_url: effectiveMarkPhotoUrls[0] || null,
@@ -509,9 +1063,50 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_ok'), '已挪到下次')
       props.navigation.goBack()
     } catch (e: any) {
+      if (isMaintenanceTask && isMaintenanceStateChangedError(e)) {
+        try {
+          const refreshed = await reconcileActiveWorkTasksAfterLocalPatch()
+          if (refreshed) {
+            Alert.alert(t('common_ok'), '维修任务状态已同步，请查看最新状态。')
+            return
+          }
+        } catch {
+          // Fall through to the actionable manual-refresh message below.
+        }
+        Alert.alert(t('common_error'), '维修任务状态已变化，请下拉刷新后查看最新状态。')
+        return
+      }
       Alert.alert(t('common_error'), String(e?.message || '提交失败'))
     } finally {
       setMarking(false)
+    }
+  }
+
+  async function onToggleGuestCheckedOut(action?: WorkTaskAvailableAction) {
+    if (!task) return
+    if (!token) return
+    const currentCheckedOutAt = String((task as any).checked_out_at || '').trim()
+    const taskDate = String(task.scheduled_date || task.date || '').trim()
+    if (isBeforeToday(taskDate)) return
+    const nextCheckedOutAt = currentCheckedOutAt ? null : new Date().toISOString()
+    try {
+      setCheckedOutPending(true)
+      const taskIds = checkoutTaskIdsFromTask(task, action)
+      await patchWorkTaskItem(String(task.id), { checked_out_at: nextCheckedOutAt } as any)
+      if (taskIds.length) {
+        await markGuestCheckedOutByTasks(token, { task_ids: taskIds, action: currentCheckedOutAt ? 'unset' : 'set' })
+      } else {
+        const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
+        if (!orderId) throw new Error('缺少订单ID')
+        await markGuestCheckedOutByOrder(token, { order_id: orderId, action: currentCheckedOutAt ? 'unset' : 'set' })
+      }
+      Alert.alert(t('common_ok'), currentCheckedOutAt ? '已取消退房' : '已标记已退房')
+      props.navigation.goBack()
+    } catch (e: any) {
+      await patchWorkTaskItem(String(task.id), { checked_out_at: currentCheckedOutAt || null } as any)
+      Alert.alert(t('common_error'), String(e?.message || '提交失败'))
+    } finally {
+      setCheckedOutPending(false)
     }
   }
 
@@ -542,32 +1137,53 @@ export default function TaskDetailScreen(props: Props) {
     )
   }
 
-  const meta = statusLabelForTask(task, roleNames)
+  const meta = getTaskStatusMeta(task, roleNames, user?.id)
+  const metaStyles = statusPillStylePair(meta.tone)
   const kind = taskKindLabel(task.task_kind)
   const region = String(task.property?.region || '').trim()
   const code = String(task.property?.code || '').trim()
   const unitType = String(task.property?.unit_type || '').trim()
-  const title = `${region ? `${region} ` : ''}${code || task.title || '-'}`.trim()
-  const checkoutTime = String(task.start_time || '').trim()
-  const checkinTime = String(task.end_time || '').trim()
+  const followupTitle = isPropertyFollowupTask(task) ? propertyFollowupTaskTitle(task) : ''
+  const title = isPropertyFollowupTask(task) && followupTitle
+    ? [region ? `${region} ${code}` : code, followupTitle || task.title || '-'].filter(Boolean).join(' · ').trim()
+    : `${region ? `${region} ` : ''}${code || task.title || '-'}`.trim()
+  const checkoutTime = checkoutTimeForDisplay(task)
+  const checkinTime = checkinTimeForDisplay(task)
   const guideUrl = normalizeHttpUrl(task.property?.access_guide_link)
   const taskType = String((task as any).task_type || '').trim().toLowerCase()
   const isCheckoutTask = taskType === 'checkout_clean' || !!checkoutTime
-  const oldCode = String((task as any).old_code || '').trim()
-  const newCode = String((task as any).new_code || '').trim()
+  const turnoverDisplay = turnoverDisplayOf(task)
+  const oldCode = String(turnoverDisplay?.old_code || (task as any).old_code || '').trim()
+  const newCode = String(turnoverDisplay?.new_code || (task as any).new_code || '').trim()
+  const guestSpecialRequest = guestRequestForDisplay(task)
   const urgency = urgencyMeta(task.urgency)
   const isCleaningSource = task.source_type === 'cleaning_tasks'
+  const isKeyHandoverTask = isKeyHandoverExecutionTask(task as any)
   const isStayoverTask = isCleaningSource && isStayoverTaskType(taskType)
-  const isCleaningOrInspection = isCleaningSource && (String(task.task_kind || '').toLowerCase() === 'cleaning' || String(task.task_kind || '').toLowerCase() === 'inspection')
+  const isCheckinSiteExecution = isCheckinSiteExecutionTask(task as any)
+  const isCleaningOrInspection = isCleaningSource && (String(task.task_kind || '').toLowerCase() === 'cleaning' || String(task.task_kind || '').toLowerCase() === 'inspection' || isKeyHandoverTask || isCheckinSiteExecution)
   const wifiSsid = String((task as any)?.property?.wifi_ssid || '').trim()
   const wifiPassword = String((task as any)?.property?.wifi_password || '').trim()
-  const routerLocation = String((task as any)?.property?.router_location || '').trim()
   const hasCheckout = !!checkoutTime
   const hasCheckin = !!checkinTime
-  const isEarlyCheckin = hasCheckin && isEarlyCheckinTime(checkinTime)
-  const titleSuffix = hasCheckout || hasCheckin ? `${hasCheckout ? '退房' : ''}${hasCheckout && hasCheckin ? ' ' : ''}${hasCheckin ? '入住' : ''}` : ''
+  const isLateCheckout = hasCheckout && isLateCheckoutDisplay(task, checkoutTime)
+  const isEarlyCheckin = hasCheckin && isEarlyCheckinDisplay(task, checkinTime)
+  const isLateCheckin = hasCheckin && isLateCheckinDisplay(task, checkinTime)
+  const titleSuffix = cleaningTaskTitleSuffix(task as any)
   const title2 = `${title}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
-  const keyPhotoUrl = String(localKeyPhotoUrl || (task as any).key_photo_url || '').trim() || null
+  const remoteKeyPhotoUrl = String((task as any).key_photo_url || '').trim() || null
+  const pendingKeyPhotoUrl = String(keyQueueItem?.local_uri || keyQueueItem?.uploaded_url || '').trim() || null
+  const keyPhotoEffectiveState = selectKeyPhotoEffectiveState({
+    key_photo_url: remoteKeyPhotoUrl,
+    has_local_pending: !!keyQueueItem,
+  })
+  const keyPhotoUrl = remoteKeyPhotoUrl || pendingKeyPhotoUrl
+  const keyPhotoStatusText = keyPhotoEffectiveState === 'recorded'
+    ? '钥匙已正式记录'
+    : keyPhotoEffectiveState === 'pending_sync'
+      ? '钥匙照片待同步'
+      : '未上传钥匙照片'
+  const keyPhotoVisibleError = getKeyUploadVisibleError(keyQueueItem?.last_error)
   const lockboxVideoUrl = String((task as any).lockbox_video_url || '').trim() || null
   const taskNote = String((task as any).note || '').trim()
   const checkedOutAt = String((task as any).checked_out_at || '').trim()
@@ -579,29 +1195,231 @@ export default function TaskDetailScreen(props: Props) {
   const checkinSets = keyRequirementTags.checkinSets
   const showCheckout = isCleaningSource && keyRequirementTags.showCheckout
   const showCheckin = isCleaningSource && keyRequirementTags.showCheckin
-  const restockItems = Array.isArray((task as any).restock_items) ? ((task as any).restock_items as any[]) : []
   const isCleaningTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'cleaning'
   const isInspectionTask = isCleaningSource && String(task.task_kind || '').toLowerCase() === 'inspection'
   const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
+  const maintenanceDomain = maintenanceDomainForSourceType(task.source_type)
+  const isMaintenanceTask = maintenanceDomain !== null
+  const isInternalMaintenanceTask = maintenanceDomain === 'internal'
+  const maintenanceWorkflow = task.maintenance_workflow || null
+  const maintenanceActions = new Set(Array.isArray(maintenanceWorkflow?.available_actions) ? maintenanceWorkflow.available_actions : [])
+  const maintenanceCanComplete = maintenanceActions.has('executor_complete')
+  const maintenanceCanUnfinished = maintenanceActions.has('executor_unfinished')
+  const maintenanceCanAct = maintenanceCanComplete || maintenanceCanUnfinished
+  const isAlreadyDone = (() => {
+    const s = String(task.status || '').trim().toLowerCase()
+    return s === 'done' || s === 'completed' || s === 'ready'
+  })()
+  const taskActions = availableActionsForTask(task, { roleNames })
+  const completionPhotoAppendAction = taskActions.find((action) => action.id === 'append_completion_photo') || null
+  const canAppendCompletionPhotos = !isMaintenanceTask && isAlreadyDone && completionPhotoAppendAction?.enabled === true
+  const canEditTaskHandling = (!isMaintenanceTask && !isAlreadyDone) || maintenanceCanAct
+  const maintenancePendingReview = isMaintenanceTask && String(maintenanceWorkflow?.status || '').trim() === 'pending_review'
+  // The server receipt removes executor actions after submission. Keep the two
+  // maintenance actions visible in pending review as disabled status controls;
+  // do not infer a new action or locally close the workflow.
+  const showTaskHandlingControls = canEditTaskHandling || maintenancePendingReview
+  const maintenanceBeforePhotoUrls = isInternalMaintenanceTask
+    ? normalizePhotoUrls((task as any).maintenance_before_photo_urls)
+    : []
+  const maintenanceDisplayPhotoDrafts: MaintenanceCompletionPhotoDraft[] = maintenanceCompletionPhotoDrafts.length
+    ? maintenanceCompletionPhotoDrafts
+    : normalizePhotoUrls((task as any).completion_photo_urls).map((reference, index) => ({
+        media_id: `saved-maintenance-photo-${index}`,
+        local_uri: null,
+        remote_reference: reference,
+        name: `maintenance-${index + 1}.jpg`,
+        mime_type: 'image/jpeg',
+        captured_at: '',
+        upload_state: 'remote_stored',
+        error_code: null,
+      }))
+  const selectedOfflineEditAssignee = offlineEditUsers.find((item) => item.id === offlineEditAssigneeId) || null
+  const selectedOfflineEditProperty = offlineEditProperties.find((item) => item.id === offlineEditPropertyId) || null
+
+  function openOfflineEdit() {
+    if (!task || !canEditOfflineTask) return
+    setOfflineEditDate(String(task.scheduled_date || task.date || '').slice(0, 10))
+    setOfflineEditTitle(String(task.title || '').trim())
+    setOfflineEditContent(stripPhotoLines(task.summary))
+    setOfflineEditPropertyId(String(task.property_id || task.property?.id || '').trim() || null)
+    setOfflineEditAssigneeId(String(task.assignee_id || '').trim() || null)
+    setOfflineEditAssigneeOpen(false)
+    setOfflineEditPropertyOpen(false)
+    setOfflineEditOpen(true)
+  }
+
+  async function saveOfflineEdit() {
+    if (!task || !token || !canEditOfflineTask || offlineEditBusy) return
+    const date = String(offlineEditDate || '').trim()
+    const title0 = String(offlineEditTitle || '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      Alert.alert(t('common_error'), '请输入正确的执行日期（YYYY-MM-DD）')
+      return
+    }
+    if (!title0) {
+      Alert.alert(t('common_error'), '请输入任务标题')
+      return
+    }
+    const sourceId = String(task.source_id || '').trim() || String(task.id || '').replace(/^cleaning_offline_tasks:/, '')
+    if (!sourceId) return
+    setOfflineEditBusy(true)
+    try {
+      const updated = await updateCleaningOfflineTask(token, sourceId, {
+        date,
+        title: title0,
+        content: String(offlineEditContent || '').trim(),
+        property_id: offlineEditPropertyId,
+        assignee_id: offlineEditAssigneeId,
+      })
+      const nextProperty = selectedOfflineEditProperty
+        ? {
+            id: selectedOfflineEditProperty.id,
+            code: selectedOfflineEditProperty.code,
+            region: selectedOfflineEditProperty.region || null,
+            address: String(task.property?.address || ''),
+            unit_type: String(task.property?.unit_type || ''),
+          }
+        : null
+      patchWorkTaskItem(task.id, {
+        title: String(updated?.title || title0),
+        summary: updated?.content == null ? String(offlineEditContent || '').trim() : String(updated.content || ''),
+        scheduled_date: String(updated?.date || date).slice(0, 10),
+        date: String(updated?.date || date).slice(0, 10),
+        property_id: updated?.property_id == null ? offlineEditPropertyId : updated.property_id,
+        property: nextProperty,
+        assignee_id: updated?.assignee_id == null ? offlineEditAssigneeId : updated.assignee_id,
+        status: String(updated?.status || (offlineEditAssigneeId ? 'assigned' : task.status)),
+      } as any)
+      setOfflineEditOpen(false)
+      Alert.alert(t('common_ok'), '线下任务已保存')
+    } catch (e: any) {
+      Alert.alert(t('common_error'), String(e?.message || '保存失败'))
+    } finally {
+      setOfflineEditBusy(false)
+    }
+  }
+
   const inspectionMode = effectiveInspectionMode(task as any)
   const inspectionPlanLabel = inspectionModeLabel(inspectionMode, String((task as any).inspection_due_date || '').trim() || null)
+  const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
+  const showInspectionScope = isPasswordOnlyInspection || isCheckinSiteExecution
+  const inspectionScopeText = isPasswordOnlyInspection ? '仅改密码' : (showInspectionScope ? inspectionScopeLabel((task as any).inspection_scope) : '')
+  const stayoverTagStyles = taskTagStylePair('normal')
+  const kindTagStyles = taskTagStylePair(getTaskKindTone(task.task_kind))
+  const checkoutTagStyles = taskTagStylePair('danger')
+  const checkinTagStyles = taskTagStylePair('pending')
+  const lateCheckoutTagStyles = taskTagStylePair('danger')
+  const earlyCheckinTagStyles = taskTagStylePair('info')
+  const inspectionPlanTagStyles = taskTagStylePair(getInspectionModeTone(inspectionMode))
+  const inspectionScopeTagStyles = taskTagStylePair(getInspectionScopeTone(isPasswordOnlyInspection))
   const isSelfCompleteEligible = isCleaningTask && isSelfCompleteMode(task as any) && (isCheckoutTask || isStayoverTask)
   const isDirectCompleteEligible = isCleaningTask && (isSelfCompleteEligible || isStayoverTask)
   const isPendingInspectionDecision = isCleaningTask && !isStayoverTask && inspectionMode === 'pending_decision'
-  const isCustomerService = roleNames.includes('customer_service')
-  const canDeleteKeyPhoto = (roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector')) && isCleaningTask
+  const showInspectionPlanTag = (isCleaningTask || isInspectionTask) && !isStayoverTask && !isPasswordOnlyInspection
+  const canDeleteKeyPhoto = (roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector')) && isCleaningTask && !!keyPhotoUrl
   const isCleaningSubmitted = isCleaningTask && isCleaningWorkSubmitted(task.status)
+  const restockItems = Array.isArray((task as any)?.restock_items) ? ((task as any).restock_items as any[]) : []
+  const restockSummary = restockItems
+    .map((item) => {
+      const label = String(item?.label || item?.item_id || '').trim()
+      if (!label) return null
+      const qty = item?.qty == null ? null : Number(item.qty)
+      const suffix = Number.isFinite(qty as any) && qty ? ` x${qty}` : ''
+      return String(item?.status || '').trim() === 'carry_forward'
+        ? `${label}${suffix}（上次检查要求下次退房补）`
+        : `${label}${suffix}`
+    })
+    .filter(Boolean) as string[]
+  const hasServerTaskActions = Array.isArray((task as any)?.available_actions)
+  const renderTaskActionButton = (action: WorkTaskAvailableAction) => {
+    const disabledReason = action.disabled_reason ? actionDisabledReasonText(action.disabled_reason) : ''
+    const checkedOutVisual = action.id === 'mark_guest_checkout' && isCheckedOut
+    const isEqualWidthAction = action.id === 'upload_key_photo' || action.id === 'fill_supplies' || action.id === 'complete_cleaning'
+    const isFullWidthAction = action.id === 'report_issue'
+    const localDisabled =
+      (action.id === 'upload_key_photo' && (keyUploading || keyPhotoEffectiveState !== 'missing'))
+      || (action.id === 'mark_guest_checkout' && (!token || isHistoricalTask || checkedOutPending))
+    const isTaskCompletedAction = action.disabled_reason === 'task_completed'
+    const isReadOnlyInspectionAction = action.id === 'submit_inspection' && action.read_only === true
+    const isReadOnlyTaskAction = isReadOnlyInspectionAction
+    const isSuppliesRecordedAction = action.id === 'fill_supplies' && (isCleaningSubmitted || isTaskCompletedAction)
+    const disabled = !isReadOnlyTaskAction && (isSuppliesRecordedAction || !action.enabled || localDisabled)
+    const showActionReason = disabled
+      && !!disabledReason
+      && hasServerTaskActions
+      && !(action.id === 'upload_key_photo' && keyPhotoEffectiveState !== 'missing')
+      && !isTaskCompletedAction
+      && !isSuppliesRecordedAction
+    const label = action.id === 'upload_key_photo'
+      ? (keyUploading
+        ? t('common_loading')
+        : keyPhotoEffectiveState === 'recorded'
+          ? '钥匙已记录'
+          : keyPhotoEffectiveState === 'pending_sync'
+            ? '钥匙待同步'
+            : action.label)
+      : isSuppliesRecordedAction
+        ? '补品已记录'
+        : isReadOnlyInspectionAction
+          ? '查看检查照片'
+        : isTaskCompletedAction
+          ? '任务已完成'
+          : action.id === 'mark_guest_checkout' && checkedOutPending
+            ? '提交中...'
+            : action.label
+    const onPress = () => {
+      if (isSuppliesRecordedAction) {
+        const route = navigationForWorkTaskAction(task, action)
+        if (route) props.navigation.navigate(route.screen as any, route.params as any)
+        return
+      }
+      if (isReadOnlyTaskAction) {
+        const route = navigationForWorkTaskAction(task, action)
+        if (route) props.navigation.navigate(route.screen as any, route.params as any)
+        return
+      }
+      if (disabled) {
+        if (disabledReason && hasServerTaskActions) Alert.alert('暂不可操作', disabledReason)
+        return
+      }
+      if (action.id === 'upload_key_photo') return void onUploadKey()
+      if (action.id === 'mark_guest_checkout') return void onToggleGuestCheckedOut(action)
+      const route = navigationForWorkTaskAction(task, action)
+      if (route) props.navigation.navigate(route.screen as any, route.params as any)
+    }
+    return (
+      <Pressable
+        key={`${action.id}:${action.target || ''}:${action.label}`}
+        testID={`task-detail-action-${task.id}-${action.id}`}
+        onPress={onPress}
+        disabled={disabled && !disabledReason && !isSuppliesRecordedAction}
+        style={({ pressed }) => [
+          styles.actionBtn,
+          isCompactLayout ? styles.actionBtnCompact : null,
+          isEqualWidthAction ? styles.actionBtnEqualWidth : null,
+          isFullWidthAction ? styles.actionBtnFullWidth : null,
+          pressed ? styles.pressed : null,
+          checkedOutVisual || (disabled && !isReadOnlyTaskAction) ? styles.actionBtnDisabled : null,
+        ]}
+      >
+        <Text style={[styles.actionText, checkedOutVisual || (disabled && !isReadOnlyTaskAction) ? { color: '#6B7280' } : null]}>{label}</Text>
+        {showActionReason ? <Text style={styles.actionReasonText}>{disabledReason}</Text> : null}
+      </Pressable>
+    )
+  }
   const detailText = (() => {
     if (isCleaningSource) return null
     if (isOfflineTask) return null
     const s = stripPhotoLines(task.summary)
-    return s || null
+    return propertyFollowupTaskDetail(task, s) || null
   })()
-  const isAlreadyDone = (() => {
-    const s = String(task.status || '').trim().toLowerCase()
-    return s === 'done' || s === 'completed'
-  })()
-  const effectiveMarkPhotoUrls = markPhotoUrls
+  const effectiveMarkPhotoUrls = isMaintenanceTask
+    ? maintenanceDisplayPhotoDrafts.map((photo) => String(photo.remote_reference || '').trim()).filter(Boolean)
+    : markPhotoUrls
+  const maintenancePhotosAwaitingUpload = isMaintenanceTask && maintenanceDisplayPhotoDrafts.some((photo) => !String(photo.remote_reference || '').trim())
+  const hasPendingCompletionPhotoSave = !isMaintenanceTask && isAlreadyDone && pendingCompletionPhotoReferences.length > 0
+  const requiresMarkPhotos = !isOfflineTask
   const offlineDetail = (() => {
     if (!isOfflineTask) return null
     const code2 = String(task.property?.code || '').trim()
@@ -614,8 +1432,6 @@ export default function TaskDetailScreen(props: Props) {
     if (t1 === title2) return null
     return t1
   })()
-  const effectiveLockboxUrl = lockboxVideoUrl
-
   return (
     <>
     <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, moderateScale(20)) + moderateScale(12) }]} showsVerticalScrollIndicator={false}>
@@ -628,56 +1444,92 @@ export default function TaskDetailScreen(props: Props) {
       />
 
       <View style={styles.card}>
-        <View style={[styles.titleRow, isCompactLayout ? styles.titleRowCompact : null]}>
-          <Text style={styles.title}>{title2}</Text>
-          <View style={[styles.statusPill, meta.pill]}>
-            <Text style={[styles.statusText, meta.textStyle]}>{meta.text}</Text>
+        <View style={[styles.titleMetaRow, isCompactLayout ? styles.titleRowCompact : null]}>
+          <View style={styles.titleMainColumn}>
+            <Text style={styles.title}>{title2}</Text>
+            <View style={styles.tagsRow}>
+              {isStayoverTask ? (
+                <View style={stayoverTagStyles.container}>
+                  <Text style={stayoverTagStyles.text}>入住中清洁</Text>
+                </View>
+              ) : (
+                <>
+                  <View style={kindTagStyles.container}>
+                    <Text style={kindTagStyles.text}>{isKeyHandoverTask || isCheckinSiteExecution ? '执行' : kind}</Text>
+                  </View>
+                  {showCheckout ? (
+                    <View style={checkoutTagStyles.container}>
+                      <Text style={checkoutTagStyles.text}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
+                    </View>
+                  ) : null}
+                  {showCheckin ? (
+                    <View style={checkinTagStyles.container}>
+                      <Text style={checkinTagStyles.text}>{`需挂${checkinSets}套钥匙`}</Text>
+                    </View>
+                  ) : null}
+                  {isLateCheckout ? (
+                    <View style={lateCheckoutTagStyles.container}>
+                      <Text style={lateCheckoutTagStyles.text}>晚退房</Text>
+                    </View>
+                  ) : null}
+                  {isEarlyCheckin ? (
+                    <View style={earlyCheckinTagStyles.container}>
+                      <Text style={earlyCheckinTagStyles.text}>早入住</Text>
+                    </View>
+                  ) : null}
+                  {isLateCheckin ? (
+                    <View style={earlyCheckinTagStyles.container}>
+                      <Text style={earlyCheckinTagStyles.text}>晚入住</Text>
+                    </View>
+                  ) : null}
+                  {showInspectionPlanTag ? (
+                    <View style={inspectionPlanTagStyles.container}>
+                      <Text style={inspectionPlanTagStyles.text}>{inspectionPlanLabel}</Text>
+                    </View>
+                  ) : null}
+                  {showInspectionScope ? (
+                    <View style={inspectionScopeTagStyles.container}>
+                      <Text style={inspectionScopeTagStyles.text}>{inspectionScopeText}</Text>
+                    </View>
+                  ) : null}
+                  {!isOfflineTask && urgency ? (
+                    <View style={[styles.urgencyPill, urgency.pill]}>
+                      <Text style={[styles.urgencyText, urgency.textStyle]}>{urgency.text}</Text>
+                    </View>
+                  ) : null}
+                  {unitType ? (
+                    <View style={styles.tagGray}>
+                      <Text style={styles.tagGrayText}>{unitType}</Text>
+                    </View>
+                  ) : null}
+                </>
+              )}
+            </View>
+          </View>
+          <View style={styles.titleSideColumn}>
+            <View style={[styles.statusPill, metaStyles.pill]}>
+              <Text style={[styles.statusText, metaStyles.text]}>{meta.text}</Text>
+            </View>
+            {canEditOfflineTask ? (
+              <Pressable
+                testID="offline-edit-button"
+                onPress={openOfflineEdit}
+                disabled={offlineEditBusy}
+                style={({ pressed }) => [styles.editOfflineBtn, pressed ? styles.pressed : null, offlineEditBusy ? styles.editOfflineBtnDisabled : null]}
+              >
+                <Ionicons name="create-outline" size={moderateScale(14)} color={offlineEditBusy ? '#9CA3AF' : '#2563EB'} />
+                <Text style={[styles.editOfflineText, offlineEditBusy ? styles.editOfflineTextDisabled : null]}>编辑任务</Text>
+              </Pressable>
+            ) : null}
           </View>
         </View>
 
-        <View style={styles.tagsRow}>
-          {isStayoverTask ? (
-            <View style={styles.tag}>
-              <Text style={styles.tagText}>入住中清洁</Text>
-            </View>
-          ) : (
-            <>
-              <View style={styles.tag}>
-                <Text style={styles.tagText}>{kind}</Text>
-              </View>
-              {showCheckout ? (
-                <View style={styles.tagKey}>
-                  <Text style={styles.tagKeyText}>{`请确认已退${Math.max(2, Math.trunc(Number(checkoutSets || 0)))}套钥匙`}</Text>
-                </View>
-              ) : null}
-              {showCheckin ? (
-                <View style={styles.tagWarn}>
-                  <Text style={styles.tagWarnText}>{`需挂${checkinSets}套钥匙`}</Text>
-                </View>
-              ) : null}
-              {isEarlyCheckin ? (
-                <View style={styles.tagWarn}>
-                  <Text style={styles.tagWarnText}>早入住</Text>
-                </View>
-              ) : null}
-              <View style={inspectionMode === 'pending_decision' ? styles.tagWarn : styles.tag}>
-                <Text style={inspectionMode === 'pending_decision' ? styles.tagWarnText : styles.tagText}>{inspectionPlanLabel}</Text>
-              </View>
-              {urgency ? (
-                <View style={[styles.urgencyPill, urgency.pill]}>
-                  <Text style={[styles.urgencyText, urgency.textStyle]}>{urgency.text}</Text>
-                </View>
-              ) : null}
-              {unitType ? (
-                <View style={styles.tagGray}>
-                  <Text style={styles.tagGrayText}>{unitType}</Text>
-                </View>
-              ) : null}
-            </>
-          )}
-        </View>
-
-        {isDirectCompleteEligible || isPendingInspectionDecision ? (
+        {isCheckinSiteExecution ? (
+          <View style={styles.row}>
+            <Ionicons name="person-outline" size={moderateScale(14)} color="#9CA3AF" />
+            <Text style={styles.rowText}>执行人员：{String((task as any).executor_name || (task as any).assignee_name || (task as any).cleaner_name || (task as any).inspector_name || task.assignee_id || '').trim() || '-'}</Text>
+          </View>
+        ) : isDirectCompleteEligible || isPendingInspectionDecision ? (
           <View style={styles.row}>
             <Ionicons name="person-outline" size={moderateScale(14)} color="#9CA3AF" />
             <Text style={styles.rowText}>检查人员：无</Text>
@@ -749,10 +1601,38 @@ export default function TaskDetailScreen(props: Props) {
           </View>
         ) : null}
 
+        {showInspectionScope ? (
+          <View style={styles.row}>
+            <Ionicons name={isPasswordOnlyInspection ? 'flash-outline' : 'checkmark-done-outline'} size={moderateScale(14)} color={TASK_TONE_COLORS[getInspectionScopeTone(isPasswordOnlyInspection)].text} />
+            <View style={[styles.inlineTonePill, inspectionScopeTagStyles.container]}>
+              <Text style={[styles.inlineTonePillText, inspectionScopeTagStyles.text]}>{`检查执行方式：${inspectionScopeText}`}</Text>
+            </View>
+          </View>
+        ) : null}
+
         {taskNote ? (
           <View style={styles.row}>
             <Ionicons name="document-text-outline" size={moderateScale(14)} color="#9CA3AF" />
             <Text style={styles.rowText}>{`备注：${taskNote}`}</Text>
+          </View>
+        ) : null}
+
+        {guestSpecialRequest ? (
+          <View style={styles.row}>
+            <Ionicons name="chatbubble-ellipses-outline" size={moderateScale(14)} color="#9CA3AF" />
+            <Text style={styles.rowText}>{`客人需求：${guestSpecialRequest}`}</Text>
+          </View>
+        ) : null}
+
+        {restockSummary.length ? (
+          <View style={styles.restockWrap}>
+            <Text style={styles.sectionTitle}>待补消耗品</Text>
+            {restockSummary.map((item, index) => (
+              <View key={`${item}-${index}`} style={styles.restockItem}>
+                <Text style={styles.restockTitle}>{item}</Text>
+                <Text style={styles.restockNote}>进入补品填报或检查与补充时，请优先处理这一项。</Text>
+              </View>
+            ))}
           </View>
         ) : null}
 
@@ -792,14 +1672,24 @@ export default function TaskDetailScreen(props: Props) {
           <>
             <View style={styles.line} />
             <Text style={styles.sectionTitle}>钥匙照片</Text>
+            <Text style={styles.summary}>{keyPhotoStatusText}</Text>
             <Pressable
-              onPress={() => setPreviewUrl(keyPhotoUrl)}
+              testID="task-detail-key-photo"
+              onPress={() => openPreview(keyPhotoUrl)}
               style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
             >
-              <Image source={{ uri: keyPhotoUrl }} style={styles.photo} resizeMode="contain" />
+              <CleaningMediaImage
+                token={token}
+                localUri={String(keyPhotoUrl).startsWith('file://') ? keyPhotoUrl : null}
+                remoteReference={keyPhotoUrl}
+                style={styles.photo}
+                resizeMode="contain"
+              />
             </Pressable>
+            {keyPhotoVisibleError ? <Text style={styles.summary}>{keyPhotoVisibleError}</Text> : null}
             {canDeleteKeyPhoto ? (
               <Pressable
+                testID="task-detail-delete-key-photo"
                 onPress={() =>
                   Alert.alert('确认删除？', '删除后需要重新上传钥匙照片。', [
                     { text: '取消', style: 'cancel' },
@@ -815,84 +1705,34 @@ export default function TaskDetailScreen(props: Props) {
           </>
         ) : null}
 
-        {isCleaningTask ? (
-          <View style={[styles.actionsRow, isCompactLayout ? styles.actionsRowCompact : null]}>
-            {isCustomerService ? (
-              <>
-                {isCheckoutTask ? (
-                  <Pressable
-                    onPress={async () => {
-                      if (isHistoricalTask) return
-                      if (!token) return
-                      const nextCheckedOutAt = isCheckedOut ? null : new Date().toISOString()
-                      try {
-                        setCheckedOutPending(true)
-                        const taskIds = checkoutTaskIdsFromTask(task)
-                        await patchWorkTaskItem(String(task.id), { checked_out_at: nextCheckedOutAt } as any)
-                        if (taskIds.length) {
-                          await markGuestCheckedOutByTasks(token, { task_ids: taskIds, action: isCheckedOut ? 'unset' : 'set' })
-                        } else {
-                          const orderId = String((task as any)?.order_id_checkout || (task as any)?.order_id || '').trim()
-                          if (!orderId) throw new Error('缺少订单ID')
-                          await markGuestCheckedOutByOrder(token, { order_id: orderId, action: isCheckedOut ? 'unset' : 'set' })
-                        }
-                        Alert.alert(t('common_ok'), isCheckedOut ? '已取消退房' : '已标记已退房')
-                        props.navigation.goBack()
-                      } catch (e: any) {
-                        await patchWorkTaskItem(String(task.id), { checked_out_at: checkedOutAt || null } as any)
-                        Alert.alert(t('common_error'), String(e?.message || '提交失败'))
-                      } finally {
-                        setCheckedOutPending(false)
-                      }
-                    }}
-                    disabled={!token || isHistoricalTask || checkedOutPending}
-                    style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, isCheckedOut || isHistoricalTask || checkedOutPending ? styles.actionBtnDisabled : null]}
-                  >
-                    <Text style={[styles.actionText, isCheckedOut || isHistoricalTask || checkedOutPending ? { color: '#6B7280' } : null]}>{checkedOutPending ? '提交中...' : isCheckedOut ? '取消已退房' : '标记已退房'}</Text>
-                  </Pressable>
-                ) : null}
-                <Pressable
-                  onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                  style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null]}
-                >
-                  <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-                </Pressable>
-              </>
-            ) : (
-              <>
-                {!isStayoverTask ? (
-                  <Pressable
-                    onPress={onUploadKey}
-                    disabled={keyUploading || isCleaningSubmitted || !!keyPhotoUrl}
-                    style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, (keyUploading || !!keyPhotoUrl) ? styles.actionBtnDisabled : null]}
-                  >
-                    <Text style={styles.actionText}>{keyUploading ? t('common_loading') : (isCleaningSubmitted || !!keyPhotoUrl ? '钥匙记录' : t('tasks_btn_upload_key'))}</Text>
-                  </Pressable>
-                ) : null}
-                <Pressable
-                  onPress={() => {
-                    if (isPendingInspectionDecision) return
-                    props.navigation.navigate(isDirectCompleteEligible ? 'CleaningSelfComplete' : 'SuppliesForm', { taskId: task.id } as any)
-                  }}
-                  style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, isPendingInspectionDecision ? styles.actionBtnDisabled : null]}
-                >
-                  <Text style={styles.actionText}>
-                    {isPendingInspectionDecision
-                      ? '待确认检查安排'
-                      : isCleaningSubmitted
-                        ? (isDirectCompleteEligible ? '完成记录' : '补品记录')
-                        : (isStayoverTask ? '标记已完成' : (isSelfCompleteEligible ? '补充与完成' : '补品填报'))}
-                  </Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-                  style={({ pressed }) => [styles.actionBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null]}
-                >
-                  <Text style={styles.actionText}>{t('tasks_btn_repair')}</Text>
-                </Pressable>
-              </>
-            )}
-          </View>
+        {canViewLockboxVideo && isCleaningSource && lockboxVideoUrl ? (
+          <>
+            <View style={styles.line} />
+            <Text style={styles.sectionTitle}>执行人上传的视频</Text>
+            <View testID="task-detail-lockbox-video" style={styles.videoCard}>
+              <Video
+                source={{ uri: toAbsoluteUrl(lockboxVideoUrl) }}
+                style={styles.videoInline}
+                resizeMode={ResizeMode.CONTAIN}
+                shouldPlay={false}
+                useNativeControls
+              />
+            </View>
+          </>
+        ) : null}
+
+        {isCleaningSource ? (
+          taskActions.length ? (
+            <>
+              <View style={[styles.actionsRow, isCompactLayout ? styles.actionsRowCompact : null]}>
+                {taskActions.map(renderTaskActionButton)}
+              </View>
+            </>
+          ) : (
+            <View style={styles.markWrap}>
+              <Text style={styles.mutedSmall}>当前任务暂无可用操作，请刷新任务后重试。</Text>
+            </View>
+          )
         ) : (
           <View style={styles.markWrap}>
             {offlineDetail || detailText ? (
@@ -901,66 +1741,204 @@ export default function TaskDetailScreen(props: Props) {
                 <Text style={styles.summary}>{offlineDetail || detailText}</Text>
               </View>
             ) : null}
+            {maintenanceBeforePhotoUrls.length ? (
+              <View style={styles.taskPhotosPanel}>
+                <Text style={styles.sectionTitle}>维修前照片</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.markPhotoList}>
+                  {maintenanceBeforePhotoUrls.map((url, index) => (
+                    <View key={`${url}:${index}`} style={styles.markPhotoCard}>
+                      <Pressable
+                        testID={`maintenance-before-photo-${index}`}
+                        onPress={() => openPreview(String(url), task.id)}
+                        style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
+                      >
+                        <CleaningMediaImage token={token} remoteReference={String(url)} accessWorkTaskId={task.id} style={styles.markPhotoThumb} resizeMode="cover" />
+                      </Pressable>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null}
+            {isOfflineTask ? (
+              <View style={styles.taskPhotosPanel}>
+                <Text style={styles.sectionTitle}>任务照片</Text>
+                <Text style={styles.mutedSmall}>
+                  {taskPhotoUrls.length ? `已添加 ${taskPhotoUrls.length} 张照片，线下执行人可查看` : '可添加现场说明照片给线下执行人查看'}
+                </Text>
+                <View style={styles.compactActionRow}>
+                  <Pressable testID="offline-task-photo-camera" onPress={() => onAppendTaskPhotos('camera')} disabled={taskPhotoSaving} style={({ pressed }) => [styles.compactActionBtn, pressed ? styles.pressed : null, taskPhotoSaving ? styles.compactActionBtnDisabled : null]}>
+                    <Ionicons name="camera-outline" size={moderateScale(16)} color={taskPhotoSaving ? '#9CA3AF' : '#2563EB'} />
+                    <Text style={[styles.compactActionText, taskPhotoSaving ? styles.compactActionTextDisabled : null]}>{taskPhotoSaving ? '保存中...' : '拍照添加'}</Text>
+                  </Pressable>
+                  <Pressable testID="offline-task-photo-library" onPress={() => onAppendTaskPhotos('library')} disabled={taskPhotoSaving} style={({ pressed }) => [styles.compactActionBtn, pressed ? styles.pressed : null, taskPhotoSaving ? styles.compactActionBtnDisabled : null]}>
+                    <Ionicons name="images-outline" size={moderateScale(16)} color={taskPhotoSaving ? '#9CA3AF' : '#2563EB'} />
+                    <Text style={[styles.compactActionText, taskPhotoSaving ? styles.compactActionTextDisabled : null]}>相册添加</Text>
+                  </Pressable>
+                </View>
+                {taskPhotoUrls.length ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.markPhotoList}>
+                    {taskPhotoUrls.map((url, index) => (
+                      <View key={`${url}:${index}`} style={styles.markPhotoCard}>
+                        <Pressable
+                          onPress={() => openPreview(String(url), task.id, null, true)}
+                          style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
+                        >
+                          <CleaningMediaImage token={token} remoteReference={url} accessWorkTaskId={task.id} offlineWorkTaskMedia style={styles.markPhotoThumb} resizeMode="cover" />
+                        </Pressable>
+                        <AppIconButton accessibilityLabel="删除任务照片" onPress={() => removeTaskPhoto(index)} disabled={taskPhotoSaving} style={styles.markPhotoRemoveBtn} visualStyle={styles.markPhotoRemoveVisual}>
+                          <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
+                        </AppIconButton>
+                      </View>
+                    ))}
+                  </ScrollView>
+                ) : null}
+              </View>
+            ) : null}
             <Text style={styles.sectionTitle}>任务处理</Text>
             <Text style={styles.mutedSmall} numberOfLines={2}>
-              {effectiveMarkPhotoUrls.length ? `已上传 ${effectiveMarkPhotoUrls.length} 张照片，可继续追加或删除` : '未上传照片（需要拍照/相册上传后才能提交）'}
+              {maintenancePendingReview
+                ? '已提交完成，等待审核'
+                : isMaintenanceTask && !maintenanceCanAct
+                  ? '当前维修任务暂无可操作动作，请刷新后重试。'
+                  : hasPendingCompletionPhotoSave
+                    ? `已有 ${pendingCompletionPhotoReferences.length} 张照片已上传，等待保存到完成记录`
+                    : canAppendCompletionPhotos
+                    ? (effectiveMarkPhotoUrls.length ? `已保存 ${effectiveMarkPhotoUrls.length} 张完成记录照片，可继续补充` : '任务已完成，可补充完成记录照片')
+                    : !isMaintenanceTask && isAlreadyDone
+                      ? (completionPhotoAppendAction?.disabled_reason
+                        ? `任务已完成；${actionDisabledReasonText(completionPhotoAppendAction.disabled_reason)}`
+                        : '任务已完成；当前账号没有补充完成记录照片权限。')
+                  : maintenancePhotosAwaitingUpload
+                    ? `已保存 ${maintenanceDisplayPhotoDrafts.length} 张本地照片，等待上传后再提交`
+                    : effectiveMarkPhotoUrls.length
+                      ? `已上传 ${effectiveMarkPhotoUrls.length} 张照片，可继续追加或删除`
+                    : (isMaintenanceTask && showUnfinished
+                      ? '未完成须填写原因；照片可选，可补充拍照留档'
+                      : (requiresMarkPhotos ? '未上传照片（需要拍照/相册上传后才能提交）' : '照片可选，可直接提交，也可补充拍照留档'))}
             </Text>
-            <View style={[styles.markUploadRow, isCompactLayout ? styles.actionsRowCompact : null]}>
-              <Pressable onPress={() => onAppendPhotosForMarking('camera')} disabled={marking} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}>
-                <Text style={styles.markBtnText}>拍照上传</Text>
+            {canEditTaskHandling || canAppendCompletionPhotos ? <View style={styles.compactActionRow}>
+              <Pressable testID="offline-task-mark-camera" onPress={() => onAppendPhotosForMarking('camera')} disabled={marking || (isMaintenanceTask && !maintenanceCanAct)} style={({ pressed }) => [styles.compactActionBtn, pressed ? styles.pressed : null, marking || (isMaintenanceTask && !maintenanceCanAct) ? styles.compactActionBtnDisabled : null]}>
+                <Ionicons name="camera-outline" size={moderateScale(16)} color={marking || (isMaintenanceTask && !maintenanceCanAct) ? '#9CA3AF' : '#2563EB'} />
+                <Text style={[styles.compactActionText, marking || (isMaintenanceTask && !maintenanceCanAct) ? styles.compactActionTextDisabled : null]}>{canAppendCompletionPhotos ? '补充拍照' : '拍照上传'}</Text>
               </Pressable>
-              <Pressable onPress={() => onAppendPhotosForMarking('library')} disabled={marking} style={({ pressed }) => [styles.markBtn, styles.markUploadBtn, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}>
-                <Text style={styles.markBtnText}>相册上传</Text>
+              <Pressable testID="offline-task-mark-library" onPress={() => onAppendPhotosForMarking('library')} disabled={marking || (isMaintenanceTask && !maintenanceCanAct)} style={({ pressed }) => [styles.compactActionBtn, pressed ? styles.pressed : null, marking || (isMaintenanceTask && !maintenanceCanAct) ? styles.compactActionBtnDisabled : null]}>
+                <Ionicons name="images-outline" size={moderateScale(16)} color={marking || (isMaintenanceTask && !maintenanceCanAct) ? '#9CA3AF' : '#2563EB'} />
+                <Text style={[styles.compactActionText, marking || (isMaintenanceTask && !maintenanceCanAct) ? styles.compactActionTextDisabled : null]}>{canAppendCompletionPhotos ? '补充相册' : '相册上传'}</Text>
               </Pressable>
-            </View>
-            {effectiveMarkPhotoUrls.length ? (
+            </View> : null}
+            {maintenancePhotosAwaitingUpload && canEditTaskHandling ? (
+              <AppButton
+                testID="maintenance-photo-retry-upload"
+                label="重试照片上传"
+                loading={marking}
+                disabled={!maintenanceCanAct}
+                tone="outline"
+                onPress={() => { void retryMaintenanceCompletionPhotoUploads() }}
+                style={styles.maintenancePhotoRetryBtn}
+              />
+            ) : null}
+            {hasPendingCompletionPhotoSave ? (
+              <AppButton
+                testID="offline-task-completion-photo-retry-save"
+                label="重试保存已上传照片"
+                loading={marking}
+                disabled={!canAppendCompletionPhotos}
+                tone="outline"
+                onPress={() => { void retrySavingUploadedCompletionPhotos() }}
+                style={styles.maintenancePhotoRetryBtn}
+              />
+            ) : null}
+            {(isMaintenanceTask ? maintenanceDisplayPhotoDrafts.length : effectiveMarkPhotoUrls.length) ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.markPhotoList}>
-                {effectiveMarkPhotoUrls.map((url, index) => (
-                  <View key={`${url}:${index}`} style={styles.markPhotoCard}>
+                {(isMaintenanceTask
+                  ? maintenanceDisplayPhotoDrafts
+                  : effectiveMarkPhotoUrls.map((url, index) => ({
+                      media_id: `mark-photo-${index}`,
+                      local_uri: null,
+                      remote_reference: url,
+                      name: `mark-${index + 1}.jpg`,
+                      mime_type: 'image/jpeg',
+                      captured_at: '',
+                      upload_state: 'remote_stored' as const,
+                      error_code: null,
+                    }))
+                ).map((photo, index) => (
+                  <View key={`${photo.media_id}:${index}`} style={styles.markPhotoCard}>
                     <Pressable
-                      onPress={() => setPreviewUrl(String(url))}
+                      onPress={() => openPreview(String(photo.remote_reference || ''), task.id, photo.local_uri)}
                       style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
                     >
-                      <Image source={{ uri: String(url) }} style={styles.markPhotoThumb} resizeMode="cover" />
+                      <CleaningMediaImage testID={`maintenance-action-photo-${index}`} token={token} localUri={photo.local_uri} remoteReference={String(photo.remote_reference || '')} accessWorkTaskId={task.id} style={styles.markPhotoThumb} resizeMode="cover" />
                     </Pressable>
-                    <Pressable onPress={() => removeMarkPhoto(index)} style={({ pressed }) => [styles.markPhotoRemoveBtn, pressed ? styles.pressed : null]}>
-                      <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
-                    </Pressable>
+                    {(!isAlreadyDone && !isMaintenanceTask) || (isMaintenanceTask && maintenanceCanAct && maintenanceCompletionPhotoDrafts.length) ? (
+                      <AppIconButton accessibilityLabel="删除标记照片" onPress={() => removeMarkPhoto(index)} style={styles.markPhotoRemoveBtn} visualStyle={styles.markPhotoRemoveVisual}>
+                        <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
+                      </AppIconButton>
+                    ) : null}
                   </View>
                 ))}
               </ScrollView>
             ) : null}
 
-            <Text style={styles.label}>备注（可选）</Text>
-            <TextInput
-              value={markNote}
-              onChangeText={setMarkNote}
-              style={styles.input}
-              placeholder="备注"
-              placeholderTextColor="#9CA3AF"
-            />
+            {showTaskHandlingControls ? <>
+              <Text style={styles.label}>备注（可选）</Text>
+              <TextInput
+                value={markNote}
+                onChangeText={setMarkNote}
+                style={styles.input}
+                placeholder="备注"
+                placeholderTextColor="#9CA3AF"
+                editable={!maintenancePendingReview}
+              />
 
-            <View style={[styles.markRow, isCompactLayout ? styles.actionsRowCompact : null]}>
-              <Pressable
-                onPress={() => {
-                  setShowUnfinished(false)
-                  onMarkDone()
-                }}
-                disabled={marking || isAlreadyDone}
-                style={({ pressed }) => [styles.markPrimary, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking || isAlreadyDone ? styles.markBtnDisabled : null]}
-              >
-                <Text style={styles.markPrimaryText}>标记完成</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setShowUnfinished(v => !v)}
-                disabled={marking}
-                style={({ pressed }) => [styles.markBtn, { flex: 1, marginTop: 0 }, isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}
-              >
-                <Text style={styles.markBtnText}>未完成</Text>
-              </Pressable>
-            </View>
+              <View style={isOfflineTask ? styles.compactCompletionRow : [styles.markRow, isCompactLayout ? styles.actionsRowCompact : null]}>
+                {isMaintenanceTask ? (
+                  <AppButton
+                    testID="maintenance-task-complete"
+                    label="标记完成"
+                    onPress={() => {
+                      setShowUnfinished(false)
+                      void onMarkDone()
+                    }}
+                    loading={marking}
+                    disabled={!maintenanceCanComplete}
+                    style={isCompactLayout ? [styles.maintenanceActionButton, styles.maintenanceActionButtonCompact] : styles.maintenanceActionButton}
+                  />
+                ) : (
+                  <Pressable
+                    testID={isOfflineTask ? 'offline-task-complete' : undefined}
+                    onPress={() => {
+                      setShowUnfinished(false)
+                      onMarkDone()
+                    }}
+                    disabled={marking || isAlreadyDone}
+                    style={({ pressed }) => [isOfflineTask ? styles.compactPrimaryBtn : styles.markPrimary, styles.completionActionButton, !isOfflineTask && isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking || isAlreadyDone ? styles.markBtnDisabled : null]}
+                  >
+                    <Text style={styles.markPrimaryText}>标记完成</Text>
+                  </Pressable>
+                )}
+                {isMaintenanceTask ? (
+                  <AppButton
+                    testID="maintenance-task-not-complete"
+                    label="未完成"
+                    onPress={() => setShowUnfinished(v => !v)}
+                    loading={marking}
+                    disabled={!maintenanceCanUnfinished}
+                    style={isCompactLayout ? [styles.maintenanceActionButton, styles.maintenanceActionButtonCompact] : styles.maintenanceActionButton}
+                  />
+                ) : (
+                  <Pressable
+                    testID={isOfflineTask ? 'offline-task-not-complete' : undefined}
+                    onPress={() => setShowUnfinished(v => !v)}
+                    disabled={marking}
+                    style={({ pressed }) => [isOfflineTask ? styles.compactSecondaryBtn : [styles.markBtn, { marginTop: 0 }], styles.completionActionButton, !isOfflineTask && isCompactLayout ? styles.actionBtnCompact : null, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}
+                  >
+                    <Text style={isOfflineTask ? styles.compactSecondaryText : styles.markBtnText}>未完成</Text>
+                  </Pressable>
+                )}
+              </View>
 
-            {showUnfinished ? (
+              {showUnfinished ? (
               <>
                 <View style={styles.line} />
                 <Text style={styles.label}>未完成原因（必填）</Text>
@@ -971,20 +1949,85 @@ export default function TaskDetailScreen(props: Props) {
                   placeholder="未完成原因"
                   placeholderTextColor="#9CA3AF"
                 />
-                <Pressable onPress={onMarkDefer} disabled={marking} style={({ pressed }) => [styles.markBtn, pressed ? styles.pressed : null, marking ? styles.markBtnDisabled : null]}>
+                <Pressable onPress={onMarkDefer} disabled={marking || (isMaintenanceTask && !maintenanceCanUnfinished)} style={({ pressed }) => [styles.markBtn, pressed ? styles.pressed : null, marking || (isMaintenanceTask && !maintenanceCanUnfinished) ? styles.markBtnDisabled : null]}>
                   <Text style={styles.markBtnText}>提交</Text>
                 </Pressable>
               </>
-            ) : null}
+              ) : null}
+            </> : null}
           </View>
         )}
       </View>
     </ScrollView>
-    <Modal visible={!!previewUrl} transparent animationType="fade" onRequestClose={() => setPreviewUrl(null)}>
-      <Pressable style={styles.previewBackdrop} onPress={() => setPreviewUrl(null)}>
+    <Modal visible={offlineEditOpen} transparent animationType="slide" onRequestClose={() => (offlineEditBusy ? undefined : setOfflineEditOpen(false))}>
+      <View style={styles.editModalBackdrop}>
+        <View style={[styles.editModalCard, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+          <View style={styles.editModalHeader}>
+            <Text style={styles.editModalTitle}>编辑线下任务</Text>
+            <Pressable onPress={() => setOfflineEditOpen(false)} disabled={offlineEditBusy} style={({ pressed }) => [styles.previewCloseBtn, pressed ? styles.pressed : null]}>
+              <Text style={styles.editModalCloseText}>关闭</Text>
+            </Pressable>
+          </View>
+          <ScrollView style={styles.editModalScroll} contentContainerStyle={styles.editModalContent} keyboardShouldPersistTaps="handled">
+            <Text style={styles.label}>执行日期</Text>
+            <TextInput accessibilityLabel="offline-edit-date" value={offlineEditDate} onChangeText={setOfflineEditDate} editable={!offlineEditBusy} style={styles.input} placeholder="YYYY-MM-DD" placeholderTextColor="#9CA3AF" />
+            <Text style={styles.label}>任务标题</Text>
+            <TextInput accessibilityLabel="offline-edit-title" value={offlineEditTitle} onChangeText={setOfflineEditTitle} editable={!offlineEditBusy} style={styles.input} placeholder="任务标题" placeholderTextColor="#9CA3AF" />
+            <Text style={styles.label}>任务内容</Text>
+            <TextInput accessibilityLabel="offline-edit-content" value={offlineEditContent} onChangeText={setOfflineEditContent} editable={!offlineEditBusy} style={[styles.input, styles.editModalTextArea]} placeholder="补充说明" placeholderTextColor="#9CA3AF" multiline />
+            <Text style={styles.label}>房源（可选）</Text>
+            <Pressable accessibilityLabel="offline-edit-property" onPress={() => setOfflineEditPropertyOpen((prev) => !prev)} disabled={offlineEditBusy} style={({ pressed }) => [styles.editModalSelect, pressed ? styles.pressed : null]}>
+              <Text style={styles.editModalSelectText} numberOfLines={1}>{selectedOfflineEditProperty?.code || String(task.property?.code || offlineEditPropertyId || '').trim() || '未关联房源'}</Text>
+              <Ionicons name={offlineEditPropertyOpen ? 'chevron-up' : 'chevron-down'} size={moderateScale(16)} color="#6B7280" />
+            </Pressable>
+            {offlineEditPropertyOpen ? (
+              <View testID="offline-edit-property-options" style={styles.editModalOptionList}>
+                <ScrollView style={styles.editModalOptionScroll} nestedScrollEnabled showsVerticalScrollIndicator keyboardShouldPersistTaps="handled">
+                  <Pressable accessibilityLabel="offline-edit-property-none" onPress={() => { setOfflineEditPropertyId(null); setOfflineEditPropertyOpen(false) }} style={styles.editModalOptionItem}>
+                    <Text style={styles.editModalOptionText}>未关联房源</Text>
+                  </Pressable>
+                  {offlineEditProperties.map((item) => (
+                    <Pressable key={item.id} accessibilityLabel={`offline-edit-property-${item.id}`} onPress={() => { setOfflineEditPropertyId(item.id); setOfflineEditPropertyOpen(false) }} style={[styles.editModalOptionItem, item.id === offlineEditPropertyId ? styles.editModalOptionItemOn : null]}>
+                      <Text style={styles.editModalOptionText}>{item.code || item.id}</Text>
+                    </Pressable>
+                  ))}
+                  {!offlineEditProperties.length ? <Text style={styles.mutedSmall}>{offlineEditLoadingOptions ? '房源加载中...' : '暂无房源选项'}</Text> : null}
+                </ScrollView>
+              </View>
+            ) : null}
+            <Text style={styles.label}>执行人</Text>
+            <Pressable accessibilityLabel="offline-edit-assignee" onPress={() => setOfflineEditAssigneeOpen((prev) => !prev)} disabled={offlineEditBusy} style={({ pressed }) => [styles.editModalSelect, pressed ? styles.pressed : null]}>
+              <Text style={[styles.editModalSelectText, !selectedOfflineEditAssignee && !offlineEditAssigneeId ? styles.editModalPlaceholder : null]} numberOfLines={1}>{selectedOfflineEditAssignee ? offlineEditUserName(selectedOfflineEditAssignee) : (offlineEditAssigneeId || '未分配')}</Text>
+              <Ionicons name={offlineEditAssigneeOpen ? 'chevron-up' : 'chevron-down'} size={moderateScale(16)} color="#6B7280" />
+            </Pressable>
+            {offlineEditAssigneeOpen ? (
+              <View testID="offline-edit-assignee-options" style={styles.editModalOptionList}>
+                <ScrollView style={styles.editModalOptionScroll} nestedScrollEnabled showsVerticalScrollIndicator keyboardShouldPersistTaps="handled">
+                  <Pressable accessibilityLabel="offline-edit-assignee-none" onPress={() => { setOfflineEditAssigneeId(null); setOfflineEditAssigneeOpen(false) }} style={[styles.editModalOptionItem, !offlineEditAssigneeId ? styles.editModalOptionItemOn : null]}>
+                    <Text style={styles.editModalOptionText}>未分配</Text>
+                  </Pressable>
+                  {offlineEditUsers.map((item) => (
+                    <Pressable key={item.id} accessibilityLabel={`offline-edit-assignee-${item.id}`} onPress={() => { setOfflineEditAssigneeId(item.id); setOfflineEditAssigneeOpen(false) }} style={[styles.editModalOptionItem, item.id === offlineEditAssigneeId ? styles.editModalOptionItemOn : null]}>
+                      <Text style={styles.editModalOptionText} numberOfLines={1}>{offlineEditUserName(item)}</Text>
+                    </Pressable>
+                  ))}
+                  {!offlineEditUsers.length ? <Text style={styles.mutedSmall}>{offlineEditLoadingOptions ? '执行人加载中...' : '暂无可选执行人'}</Text> : null}
+                </ScrollView>
+              </View>
+            ) : null}
+            <Text style={styles.mutedSmall}>任务类型保持创建时设置。</Text>
+          </ScrollView>
+          <Pressable testID="offline-edit-save" onPress={() => { void saveOfflineEdit() }} disabled={offlineEditBusy} style={({ pressed }) => [styles.editModalSaveBtn, pressed ? styles.pressed : null, offlineEditBusy ? styles.actionBtnDisabled : null]}>
+            <Text style={styles.editModalSaveText}>{offlineEditBusy ? '保存中...' : '保存修改'}</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+    <Modal visible={!!previewUrl} transparent animationType="fade" onRequestClose={closePreview}>
+      <Pressable style={styles.previewBackdrop} onPress={closePreview}>
         <Pressable style={styles.previewCard} onPress={() => {}}>
           <View style={[styles.previewTopRow, { paddingTop: Math.max(10, insets.top) }]}>
-            <Pressable onPress={() => setPreviewUrl(null)} style={({ pressed }) => [styles.previewCloseBtn, pressed ? styles.pressed : null]}>
+            <Pressable onPress={closePreview} style={({ pressed }) => [styles.previewCloseBtn, pressed ? styles.pressed : null]}>
               <Text style={styles.previewCloseText}>关闭</Text>
             </Pressable>
           </View>
@@ -1000,7 +2043,7 @@ export default function TaskDetailScreen(props: Props) {
           >
             {previewUrl ? (
               <View style={{ width: previewSize.width, height: Math.max(240, previewSize.height - insets.top - insets.bottom - 80) }}>
-                <Image source={{ uri: previewUrl }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+                <CleaningMediaPreview token={token} reference={previewUrl} localUri={previewLocalUri} accessWorkTaskId={previewWorkTaskId} offlineWorkTaskMedia={previewOfflineWorkTaskMedia} style={{ width: '100%', height: '100%' }} />
               </View>
             ) : null}
           </ScrollView>
@@ -1015,24 +2058,36 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#F6F7FB' },
   content: { padding: 16 },
   card: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14, borderWidth: hairline(), borderColor: '#EEF0F6' },
-  titleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  titleMetaRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  titleMainColumn: { flex: 1, minWidth: 0 },
+  titleSideColumn: { width: 96, alignItems: 'flex-end' },
   titleRowCompact: { alignItems: 'flex-start' },
   title: { flex: 1, minWidth: 0, flexShrink: 1, fontSize: moderateScale(18), lineHeight: moderateScale(23), fontWeight: '900', color: '#111827' },
   statusPill: { minHeight: 26, paddingHorizontal: 10, paddingVertical: 3, borderRadius: 13, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   statusText: { fontSize: 12, fontWeight: '900', textAlign: 'center' },
-  statusBlue: { backgroundColor: '#DBEAFE' },
-  statusAmber: { backgroundColor: '#FEF3C7' },
-  statusGreen: { backgroundColor: '#DCFCE7' },
-  statusPurple: { backgroundColor: '#EDE9FE' },
-  statusGray: { backgroundColor: '#F3F4F6' },
-  statusTextBlue: { color: '#2563EB' },
-  statusTextAmber: { color: '#B45309' },
-  statusTextGreen: { color: '#16A34A' },
-  statusTextPurple: { color: '#7C3AED' },
-  statusTextGray: { color: '#6B7280' },
+  statusBlue: { backgroundColor: TASK_TONE_COLORS.normal.bg },
+  statusAmber: { backgroundColor: TASK_TONE_COLORS.pending.bg },
+  statusGreen: { backgroundColor: TASK_TONE_COLORS.success.bg },
+  statusPurple: { backgroundColor: TASK_TONE_COLORS.special.bg },
+  statusGray: { backgroundColor: TASK_TONE_COLORS.neutral.bg },
+  statusTextBlue: { color: TASK_TONE_COLORS.normal.text },
+  statusTextAmber: { color: TASK_TONE_COLORS.pending.text },
+  statusTextGreen: { color: TASK_TONE_COLORS.success.text },
+  statusTextPurple: { color: TASK_TONE_COLORS.special.text },
+  statusTextGray: { color: TASK_TONE_COLORS.neutral.text },
   tagsRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  tag: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
-  tagText: { fontSize: 11, fontWeight: '900', color: '#2563EB' },
+  tagNormal: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.normal.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.normal.border, alignItems: 'center', justifyContent: 'center' },
+  tagNormalText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.normal.text },
+  tagSpecial: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.special.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.special.border, alignItems: 'center', justifyContent: 'center' },
+  tagSpecialText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.special.text },
+  tagPending: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.pending.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.pending.border, alignItems: 'center', justifyContent: 'center' },
+  tagPendingText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.pending.text },
+  tagDanger: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.danger.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.danger.border, alignItems: 'center', justifyContent: 'center' },
+  tagDangerText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.danger.text },
+  tagSuccess: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.success.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.success.border, alignItems: 'center', justifyContent: 'center' },
+  tagSuccessText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.success.text },
+  tagInfo: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: TASK_TONE_COLORS.info.bg, borderWidth: hairline(), borderColor: TASK_TONE_COLORS.info.border, alignItems: 'center', justifyContent: 'center' },
+  tagInfoText: { fontSize: 11, fontWeight: '900', color: TASK_TONE_COLORS.info.text },
   urgencyPill: { paddingHorizontal: 10, height: 24, borderRadius: 12, borderWidth: hairline(), alignItems: 'center', justifyContent: 'center' },
   urgencyText: { fontSize: 11, fontWeight: '900' },
   urgencyUrgent: { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5' },
@@ -1045,57 +2100,96 @@ const styles = StyleSheet.create({
   urgencyLowText: { color: '#4B5563' },
   tagGray: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   tagGrayText: { fontSize: 11, fontWeight: '800', color: '#6B7280' },
-  tagKey: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
-  tagKeyText: { fontSize: 11, fontWeight: '900', color: '#B91C1C' },
-  tagWarn: { paddingHorizontal: 10, height: 24, borderRadius: 12, backgroundColor: '#FFFBEB', borderWidth: hairline(), borderColor: '#FDE68A', alignItems: 'center', justifyContent: 'center' },
-  tagWarnText: { fontSize: 11, fontWeight: '900', color: '#B45309' },
   row: { marginTop: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  inlineTonePill: { minHeight: 28, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 14, borderWidth: hairline(), alignItems: 'center', justifyContent: 'center' },
+  inlineTonePillText: { fontSize: moderateScale(13), fontWeight: '800' },
   rowText: { flex: 1, minWidth: 0, flexShrink: 1, color: '#6B7280', fontSize: moderateScale(13), fontWeight: '600', lineHeight: moderateScale(19) },
   actionsRow: { marginTop: 14, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   actionsRowCompact: { flexDirection: 'column' },
-  actionBtn: { flex: 1, flexGrow: 1, flexShrink: 1, minWidth: 128, minHeight: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  actionBtn: { flex: 1, flexGrow: 1, flexShrink: 1, minWidth: 128, minHeight: 44, borderRadius: 10, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 0 },
   actionBtnCompact: { width: '100%', flexBasis: '100%', flexGrow: 0 },
+  actionBtnEqualWidth: { flex: 1, flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 },
+  actionBtnFullWidth: { flex: 0, flexGrow: 0, flexBasis: '100%', width: '100%' },
   actionBtnDisabled: { backgroundColor: '#E5E7EB' },
   actionText: { flexShrink: 1, fontWeight: '900', color: '#FFFFFF', fontSize: 13, lineHeight: 17, textAlign: 'center' },
-  dangerBtn: { marginTop: 10, minHeight: 40, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  actionReasonText: { marginTop: 2, color: '#6B7280', fontSize: 11, lineHeight: 14, textAlign: 'center' },
+  editOfflineBtn: { alignSelf: 'flex-end', marginTop: 8, minHeight: 44, borderRadius: 9, backgroundColor: '#F5F8FF', borderWidth: hairline(), borderColor: '#BFDBFE', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingHorizontal: 16, paddingVertical: 0 },
+  editOfflineBtnDisabled: { backgroundColor: '#F3F4F6', borderColor: '#E5E7EB' },
+  editOfflineText: { fontWeight: '900', color: '#2563EB', fontSize: 12 },
+  editOfflineTextDisabled: { color: '#9CA3AF' },
+  dangerBtn: { marginTop: 10, minHeight: 44, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: hairline(), borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 0 },
   dangerText: { fontWeight: '900', color: '#B91C1C', fontSize: 13 },
   line: { marginTop: 14, height: hairline(), backgroundColor: '#EEF0F6' },
   sectionTitle: { marginTop: 14, fontSize: 13, fontWeight: '900', color: '#111827' },
   summary: { marginTop: 8, color: '#374151', fontWeight: '700', lineHeight: 18 },
   linkInlineRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
   linkInlineText: { flexShrink: 1, minWidth: 0, color: '#2563EB', fontSize: moderateScale(14), fontWeight: '800' },
-  photoWrap: { marginTop: 10, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6' },
-  photo: { width: '100%', height: moderateScale(220), backgroundColor: '#F3F4F6' },
+  photoWrap: { width: '100%', height: moderateScale(220), marginTop: 10, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#0B0F17' },
+  photo: { width: '100%', height: '100%', backgroundColor: '#0B0F17' },
   metaText: { marginTop: 12, color: '#9CA3AF', fontWeight: '700', fontSize: 12 },
   pressed: { opacity: 0.92 },
   muted: { padding: 16, color: '#6B7280', fontWeight: '700' },
   mutedSmall: { marginTop: 8, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   markWrap: { marginTop: 14 },
   detailPanel: { marginBottom: 4 },
+  taskPhotosPanel: { marginTop: 4, marginBottom: 4 },
   label: { marginTop: 14, marginBottom: 8, color: '#111827', fontWeight: '900' },
   input: { height: 44, borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, fontWeight: '700', color: '#111827' },
   markRow: { marginTop: 14, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
-  markBtn: { marginTop: 12, minHeight: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  markBtn: { marginTop: 12, minHeight: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 0 },
   markUploadRow: { marginTop: 12, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   markUploadBtn: { flex: 1, marginTop: 0 },
+  compactActionRow: { marginTop: 10, flexDirection: 'row', gap: 8 },
+  compactActionBtn: { flex: 1, minHeight: 44, borderRadius: 10, borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#F5F8FF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 0 },
+  compactActionBtnDisabled: { borderColor: '#E5E7EB', backgroundColor: '#F3F4F6' },
+  compactActionText: { color: '#2563EB', fontSize: 12, fontWeight: '900' },
+  compactActionTextDisabled: { color: '#9CA3AF' },
+  compactCompletionRow: { marginTop: 14, flexDirection: 'row', gap: layoutTokens.button.rowGap },
+  compactPrimaryBtn: { flex: 1, minHeight: 44, borderRadius: 10, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 0 },
+  compactSecondaryBtn: { flex: 1, minHeight: 44, borderRadius: 10, borderWidth: hairline(), borderColor: '#D1D5DB', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 0 },
+  compactSecondaryText: { color: '#4B5563', fontSize: 13, fontWeight: '900' },
   markPhotoList: { gap: 10, paddingTop: 12, paddingBottom: 4 },
-  markPhotoCard: { width: moderateScale(112), position: 'relative' },
+  markPhotoCard: { width: 96, position: 'relative' },
   markPhotoThumbWrap: { borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F3F4F6' },
-  markPhotoThumb: { width: '100%', height: moderateScale(112) },
-  markPhotoRemoveBtn: { position: 'absolute', top: 8, right: 8, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(17,24,39,0.84)', alignItems: 'center', justifyContent: 'center' },
+  markPhotoThumb: { width: '100%', height: 96 },
+  markPhotoRemoveBtn: { position: 'absolute', top: 4, right: 4 },
+  markPhotoRemoveVisual: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(17,24,39,0.84)' },
+  maintenancePhotoRetryBtn: { alignSelf: 'flex-start', marginTop: 10, borderColor: '#BFDBFE', backgroundColor: '#F5F8FF' },
   markBtnText: { flexShrink: 1, fontWeight: '900', color: '#FFFFFF', fontSize: 13, lineHeight: 17, textAlign: 'center' },
-  markPrimary: { flex: 1, flexShrink: 1, minWidth: 128, minHeight: 40, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  markPrimary: { flex: 1, flexShrink: 1, minWidth: 128, minHeight: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 0 },
   markPrimaryText: { flexShrink: 1, color: '#FFFFFF', fontWeight: '900', fontSize: 13, lineHeight: 17, textAlign: 'center' },
+  completionActionButton: { flex: 1, flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 },
+  maintenanceActionButton: { flex: 1, flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 },
+  maintenanceActionButtonCompact: { flexGrow: 0, width: '100%' },
   markBtnDisabled: { backgroundColor: '#E5E7EB' },
+  editModalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,23,42,0.45)' },
+  editModalCard: { maxHeight: '92%', borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingTop: 14 },
+  editModalHeader: { minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  editModalTitle: { flex: 1, color: '#111827', fontSize: moderateScale(18), fontWeight: '900' },
+  editModalCloseText: { color: '#374151', fontWeight: '900' },
+  editModalScroll: { flexGrow: 0 },
+  editModalContent: { paddingBottom: 12 },
+  editModalTextArea: { minHeight: 88, paddingTop: 10, textAlignVertical: 'top' },
+  editModalSelect: { minHeight: 44, borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  editModalSelectText: { flex: 1, minWidth: 0, color: '#111827', fontWeight: '800' },
+  editModalPlaceholder: { color: '#9CA3AF' },
+  editModalOptionList: { height: 190, marginTop: 4, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' },
+  editModalOptionScroll: { flex: 1 },
+  editModalOptionItem: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', borderBottomWidth: hairline(), borderBottomColor: '#F3F4F6' },
+  editModalOptionItemOn: { backgroundColor: '#EFF6FF' },
+  editModalOptionText: { color: '#111827', fontWeight: '900' },
+  editModalSaveBtn: { minHeight: 44, marginTop: 8, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  editModalSaveText: { color: '#FFFFFF', fontWeight: '900', fontSize: 14 },
   restockWrap: { marginTop: 10, gap: 12 },
   restockItem: { padding: 12, borderRadius: 14, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6' },
   restockTitle: { color: '#111827', fontWeight: '900' },
   restockNote: { marginTop: 6, color: '#6B7280', fontWeight: '700' },
-  videoInline: { width: '100%', height: moderateScale(220), backgroundColor: '#0B0F17' },
+  videoCard: { width: '100%', height: moderateScale(220), marginTop: 10, borderRadius: 12, overflow: 'hidden', backgroundColor: '#0B0F17' },
+  videoInline: { width: '100%', height: '100%', backgroundColor: '#0B0F17' },
   previewBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.86)', padding: 12, justifyContent: 'center' },
   previewCard: { flex: 1, borderRadius: 16, overflow: 'hidden', backgroundColor: '#000000' },
   previewTopRow: { minHeight: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'flex-end', paddingHorizontal: 10 },
-  previewCloseBtn: { height: 32, paddingHorizontal: 12, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
+  previewCloseBtn: { minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
   previewCloseText: { color: '#FFFFFF', fontWeight: '900' },
   previewScrollContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
 })

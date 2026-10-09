@@ -25,7 +25,7 @@ export function isCompactWidth(width: number) {
   return width < compactWidth
 }
 
-export function configureDefaultTextScaling(maxFontSizeMultiplier = 1.15) {
+export function configureDefaultTextScaling(maxFontSizeMultiplier = 1.35) {
   const textDefaults = (RNText as any).defaultProps || {}
   const inputDefaults = (RNTextInput as any).defaultProps || {}
   ;(RNText as any).defaultProps = {

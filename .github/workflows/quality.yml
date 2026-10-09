@@ -1,0 +1,40 @@
+name: Mobile quality
+
+on:
+  push:
+    branches: [Dev, main]
+  pull_request:
+    branches: [Dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Audit pull request Ledger range
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 scripts/audit_change_release_ledger.py \
+            --base '${{ github.event.pull_request.base.sha }}' \
+            --head '${{ github.event.pull_request.head.sha }}'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run non-interactive quality gate
+        run: npm run check:ci

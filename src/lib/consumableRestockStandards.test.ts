@@ -1,0 +1,31 @@
+import { consumableRestockStandard } from './consumableRestockStandards'
+
+test('returns the agreed restock standard for every seeded consumable', () => {
+  expect(consumableRestockStandard('toilet_paper')).toBe('每个卫生间按入住天数补充')
+  expect(consumableRestockStandard('facial_tissue')).toBe('每个房间 1–2 盒')
+  expect(consumableRestockStandard('shampoo')).toBe('不少于 1/3')
+  expect(consumableRestockStandard('conditioner')).toBe('不少于 1/3')
+  expect(consumableRestockStandard('body_wash')).toBe('不少于 1/3')
+  expect(consumableRestockStandard('hand_soap')).toBe('不少于 1/2')
+  expect(consumableRestockStandard('dish_sponge')).toBe('1 个')
+  expect(consumableRestockStandard('tea_bags')).toBe('不少于 2/3')
+  expect(consumableRestockStandard('coffee')).toBe('不少于 2/3')
+  expect(consumableRestockStandard('sugar_sticks')).toBe('不少于 2/3')
+  expect(consumableRestockStandard('bin_bags_large')).toBe('不少于 5 个')
+  expect(consumableRestockStandard('bin_bags_small')).toBe('不少于 5 个')
+  expect(consumableRestockStandard('cooking_oil')).toBe('不少于 1/3')
+  expect(consumableRestockStandard('dish_detergent')).toBe('不少于 1/3')
+  expect(consumableRestockStandard('dish_soap')).toBe('不少于 1/3')
+  expect(consumableRestockStandard('laundry_powder')).toBe('不少于 1/4')
+  expect(consumableRestockStandard('salt_sugar')).toBe('柜子里需有补充装，台面罐内不少于 1/2')
+  expect(consumableRestockStandard('pepper')).toBe('不少于 1/3')
+  expect(consumableRestockStandard('toilet_cleaner')).toBe('不少于 1/3')
+  expect(consumableRestockStandard('bleach')).toBe('不少于 1/3')
+  expect(consumableRestockStandard('spare_pillowcase')).toBe('按需确认')
+})
+
+test('uses the current or historical Chinese label when an item id is unavailable', () => {
+  expect(consumableRestockStandard(null, '大垃圾袋（有大垃圾桶才需要）')).toBe('不少于 5 个')
+  expect(consumableRestockStandard(null, '洗碗皂')).toBe('不少于 1/3')
+  expect(consumableRestockStandard(null, '未知用品')).toBeNull()
+})
