@@ -102,16 +102,38 @@
 - Branch: `codex/mz018-mobile-dev-20261009`
 - Base: `origin/Dev@360452878fde5435bd01966bd0131a989c38350e`; fetched at `2026-10-09T02:32:31Z` and confirmed unchanged at `2026-10-09T02:37:42Z` from GitHub
 - Candidate patch SHA-256: `7a33f163f8de0cb7bb1e0326adf326125db31ba8b196513d7b41009c8a91eb8e` excluding `docs/change-release-ledger.md`
-- Commit SHA: not committed
-- Dependencies: paired `root/CRL-20261007-002@eb67d181952fe2b00b5d0eb98ca0399b8104f664` in branch `codex/mz015-mz018-mz020-dev-20261009`
+- Commit SHA: `2a476ea4426ab05c40d42f3fc0ee2c859da5cd2b`
+- Dependencies: `root/CRL-20261007-002@eb67d181952fe2b00b5d0eb98ca0399b8104f664`
 - Required validation: `PASS`; evidence: post-review targeted `FeedbackFormScreen` 16/16 and complete `npm run check:ci` passed with TypeScript, ledger range/coverage, button contract, lint 0 errors / 588 warnings, and 62 suites / 379 tests; paired Root `DATABASE_URL='' npm run check:full` repeated the same Mobile typecheck/lint/Jest successfully; `git diff --check` also passed.
 - Shared-hunk review: `PASS`; evidence: five staged files and 44 non-ledger hunks are assigned only to this Mobile CRL; paired Root code is not present in this repository.
 - Generated-file review: `PASS`; evidence: dependency symlink was removed after tests and the candidate has no build output, cache or untracked file.
 - Sensitive-information review: `PASS`; evidence: candidate contains no `.env`, credentials, tokens, cookies, database URL, production data or supplied image bytes.
-- Technical state: `candidate`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: delegated user instruction explicitly selected the joint Root/Mobile batch and authorized commit, normal non-force push and Draft PR while excluding merge, deployment, OTA and production writes.
 - Independent review: `GO for commit`; evidence: final independent read-only review matched fingerprint `7a33f163f8de0cb7bb1e0326adf326125db31ba8b196513d7b41009c8a91eb8e`, pre-commit 5 files / 44 hunks and diff checks, confirmed the Root union photo gate, per-photo upload persistence and closed-history read-only boundary, and found no P0/P1/P2.
-- Action conclusion: `GO`; exact staged candidate is approved for local commit only. Push, PR, merge, deployment, OTA and production writes are not implied by this review conclusion.
+- Action conclusion: `GO`; exact reviewed candidate was committed locally as `2a476ea4426ab05c40d42f3fc0ee2c859da5cd2b`. Push is evaluated separately below; merge, deployment, OTA and production writes remain excluded.
+
+#### RA-20261009-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261007-001`
+- Selected CRL identities: `mobile/CRL-20261007-001`
+- Intended action: `push`
+- Branch: `codex/mz018-mobile-dev-20261009`
+- Base: `origin/Dev@360452878fde5435bd01966bd0131a989c38350e`; fetched at `2026-10-09T02:32:31Z` and confirmed unchanged at `2026-10-09T02:37:42Z` from GitHub
+- Candidate patch SHA-256: `7a33f163f8de0cb7bb1e0326adf326125db31ba8b196513d7b41009c8a91eb8e` excluding `docs/change-release-ledger.md`
+- Candidate content commit SHA: `2a476ea4426ab05c40d42f3fc0ee2c859da5cd2b`
+- Commit SHA: `2a476ea4426ab05c40d42f3fc0ee2c859da5cd2b`
+- Dependencies: `root/CRL-20261007-002@eb67d181952fe2b00b5d0eb98ca0399b8104f664`
+- Required validation: `PASS`; evidence: final target 16/16, TypeScript and target lint passed; paired Root `check:full` passed Mobile lint 0 errors / 588 warnings and 62 suites / 379 tests.
+- Shared-hunk review: `PASS`; evidence: exact committed range contains five selected files / 44 non-ledger hunks in this CRL.
+- Generated-file review: `PASS`; evidence: dependency symlink was removed before commit; committed range contains no generated output or cache.
+- Sensitive-information review: `PASS`; evidence: exact committed range contains no configured sensitive category, credentials, private media bytes or production data.
+- Cross-repository dependency verification: `PASS`; evidence: `root/CRL-20261007-002@eb67d181952fe2b00b5d0eb98ca0399b8104f664` resolves on the paired branch, directly descends from its recorded Root Dev base, and retains fingerprint `4984f21059c547cfcea77de4d58e4a6e54b22c0dbd5289e135f1014ba6b0bf93`.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: delegated user instruction explicitly authorized normal non-force push and Draft PR for this exact Mobile batch while excluding merge, deployment, OTA and production writes.
+- Independent review: `GO for ledger-only receipt commit and conditional controlled push`; evidence: independent read-only push gate verified exact base/content ancestry, five files / 44 hunks, fingerprint, receipt-only staged scope, paired Root commit, clean generated/sensitive boundaries, fresh unchanged Dev and absent target branch; no P0/P1. A stale pre-commit top-level status is accepted as non-blocking P2 because receipt-only governance permits changes only inside Release Attempts and this RA is authoritative.
+- Action conclusion: `GO`; commit this ledger-only receipt, then require a clean exact release report and one final live remote-boundary check before explicit-refspec normal non-force push. Merge, deployment, OTA and production writes remain excluded.
 
 ### Risks / Release Notes
 
