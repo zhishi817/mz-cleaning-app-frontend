@@ -1,5 +1,125 @@
 # Change Release Ledger
 
+## CRL-20261007-001 — 编辑维修记录补充维修后照片与说明
+
+- **Repository:** `mobile`
+- **Status:** integrated release candidate re-validated and independently reviewed；ready for local commit；not pushed / not deployed
+- **Updated:** 2026-10-09 14:06 AEDT (Australia/Melbourne)
+- **Request:** MZ-018 编辑维修记录只有维修前照片，缺少补充维修后照片和说明的入口。执行人、维修管理员和管理员可补录；已完成记录只允许维修管理员/管理员走现有修正流程。
+- **Outcome:** 维修编辑弹窗现在根据服务端 capability 显示已保存的维修后说明/照片与新增入口。普通补录可删除由补录接口管理的照片，但服务端单独标识的任务权威完工照片保持只读；已关闭记录继续由管理员通过带原因和稳定幂等键的 `correct_completion` 完整修正。两条路径都不在客户端改状态。
+
+### Implementation
+
+- Previous behavior: `FeedbackFormScreen` 打开历史维修编辑时强制把 `after_photos` 清空且 `note` 设为空，页面仅提供区域、问题说明和维修前照片。
+- New behavior: 打开编辑时合并项目级与记录级已保存前/后照片，初始化维修后说明，并按 `can_edit_completion_content` / `can_correct_completion` 切换普通补录或关闭后修正。
+- Failure safety: 每张照片上传成功后立即把远端引用写回编辑状态；后续照片上传失败或业务保存失败时保留弹窗和本地预览，重试只上传尚未成功的本地照片。待复核权威图与已关闭记录中后端不能由当前路由删除的历史照片均显示为只读，避免伪删除入口。取消会清理本地草稿；保存期间锁定按钮防止并发重复提交。
+- Key decisions: 不用创建人身份推断完工权限，不新建业务状态或权限；客户端只消费 Root capability。
+
+### Files / Areas
+
+- `src/lib/api.ts` — 增加完工内容/关闭修正 capability 类型和既有 `correct_completion` 路由封装。
+- `src/screens/tasks/FeedbackFormScreen.tsx` — 维修后图文编辑、权威/历史完工图只读、逐张上传确认、已保存内容重开、修正原因、失败/取消保护与保存锁。
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — 初始显示、payload 隔离、部分上传失败只重试未完成照片、权威图只读/补录图删除重开、业务保存失败重试、取消、关闭修正和并发防重。
+- `docs/feature-regression-registry.md` — FR-MNT-001 补充历史维修完工内容补录不变量。
+- `docs/change-release-ledger.md` — 本 CRL 与本地验证状态。
+
+### Impact / Dependencies
+
+- API / data: 依赖 `root/CRL-20261007-002` 的 capability 和受权 PATCH；已关闭修正复用现有 maintenance workflow API。无 schema、migration 或数据回填。
+- Native / config: 不增加原生模块或配置；复用现有相机/相册和私有媒体上传。
+- Delivery: Root 与 Mobile 需作为配套单元审查，但本轮未发布 OTA/原生包。
+
+### Validation
+
+- `./node_modules/.bin/tsc -p tsconfig.json --noEmit` — passed。
+- `./node_modules/.bin/jest --runInBand --no-cache src/screens/tasks/FeedbackFormScreen.test.tsx` — passed：16/16，包括执行人补录、部分上传失败只重试未完成照片、权威完工图只读、补录图删除后保存重开、业务保存失败重试、取消清理、关闭修正和并发防重。
+- `./node_modules/.bin/eslint src/lib/api.ts src/screens/tasks/FeedbackFormScreen.tsx src/screens/tasks/FeedbackFormScreen.test.tsx` — passed with 0 errors；86 warnings 为仓库现有风格类规则（包括测试 `require` 和既有 hook/unused 告警）。
+- `npm run check:ci` — post-review complete run passed：ledger range/coverage、TypeScript、button contract、lint 0 errors / 588 warnings，以及 62 suites / 379 tests。
+- Cross-repository review repair：Root 待复核照片门槛改为权威图+补录图并集；Mobile 已关闭历史图改为只读。目标 16/16、TypeScript、目标 lint 0 errors / 86 warnings 通过，配对 Root `check:full` 再次通过 Mobile 62 suites / 379 tests 与 lint 0 errors / 588 warnings。
+- `python3 scripts/audit_change_release_ledger.py` — passed：5 changed files / 5 recorded files。
+- `git diff --check` — passed。
+- Real camera/library, physical device, authenticated non-production API/database and pixel comparison with the supplied screenshot: not run。Library 素材按消费流程两次 materialize 均不可用，因此未使用未读取的图片作视觉断言。
+- OTA/build, production API/database write, migration, external sync and notification: not run。
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none；候选来自最新 `origin/Dev` 的隔离干净工作区；测试依赖软链接已清理，未跟踪文件、构建产物和缓存为零。
+- `docs/feature-regression-registry.md` — SHA-256: `1bd22a9cca15dc4a445e2259e6b08a5c792394a723544fbeaae264bda142e87b`
+- `docs/feature-regression-registry.md` — SHA-256: `91f00ae7a032f18adfab7b913af90b11f46f64a09da7b30527226334860ae622`
+- `docs/feature-regression-registry.md` — SHA-256: `a016f37c40702a51ee64d77a4cc8ca8178e97383418616079ac673baaeef6c1e`
+- `docs/feature-regression-registry.md` — SHA-256: `a1827d8093035871bf8fc9d5edda2d058413f0d583ff28a479a06908a73f9452`
+- `src/lib/api.ts` — SHA-256: `0b495a3c9c8fc7431709c22b022522607de526bfb41ddf4eef3d497a572cdc74`
+- `src/lib/api.ts` — SHA-256: `5a8b9795ae7a0a26ffb67584539f30e107f875225011e97766ea2ec2c70f6ee4`
+- `src/lib/api.ts` — SHA-256: `bcca5bfba738e9446215fd962bcc48e134bde699d6e016981e228edfed3e5815`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `313b762d48fea1bd8c7c816ce636a16d91b100ba9065ef707e542b25fb5439ef`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `cc4b7180edb89e8651e8801a214d51d10e2002e7a15d1a6ea7f31f5e2a0a9ce9`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `70003356ca4be4989cc12c2f903af497f42aac75e5b0fa27fdd1cbe38774788d`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `040f7a0cc37f542ee87cfad686620b951ffa4a2f7ca2db66d4cc99fb7456a673`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `057ffc6d7fe7d6aee3bd53ce68322e333521e69002a78d7a7ef589b340fe3518`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `08b52b0d82449c04e4e719005aeff0c4f672647b49878fc364f46c3e04c67391`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `164865e2ad9fa305c6f10e93f9d2b227eca823c02461d75337675da1ebe37aa7`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `1bb8d777fec9a738b22aedd534de69f3d13cbb24832da79bb415ae992efa1d40`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `20198b95f73939c88861fb06d22ba6c9eca697fd3a75728ec2dac8319e3bfcc4`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `2194c152878558698ec2ef2f8f03f6fee930478312e794a2eb202ac4ec7a92e8`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `2fff309cd46044b8b384b2bc506539af881bcb5ab4c1d8c60922f7a1fe6696d5`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `2edf73e9bd493f7433eebc9f52ae4ba269b371e673e866a5ba067ea03cabfbbb`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `5ba2b21142c19b7d9446639efac13252f10dcbd744f4399c3fb623d844a1a4f0`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `44e9063e4896e282244ae72ea9123e6d34f73310b6cc8a3370294fc0811ed518`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `4f5835914bb0db2a5bb4db380436324cd9d9fd0750fef6ac62cb666b478e565f`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `6a2d2e134809507ffcb3accb0daf61ae94c2eb91aae7e13674a7db0cca520a9b`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `623d217b646610cfbe215ef6227e74b027495f94b0dfacde1e4ae0404f3674e1`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `6c803838918b8d95f9b24321677ae9fa67ea331f4d7e34ff3c0c4771d62cbdae`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `6f30c8fd3e32913384d8fd8225b2858cb21882f95065c909a6d0989d3e5f76c5`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `7dd314ab4f452738f316f01cfaaeaa4e0fb381f381005b33d9df82e5747a90d1`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `8e554b7faea9634db2e4da0eb1f7fb71065166c8f8ef5685f5da7f8641d06724`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `897fe5413694266f42bd2c112de70a07de6085b3fdb11c631cc90563a2a9ab88`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `8990b475f1b3f53e866572c6de80c62ee04639a5cdec7713dbf56df36cf132c2`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `8efccf18957b009d0dbb63087d75b4133b7354a0482f16a856e8ebc68384240d`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `9ad5465cd348ce42af210c1f7f1b3638efcb26ccac29e2ef1f315accf948003e`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `a08c878ec9e3f680c6bfc0fc6c0e2fbf85f88fc073b874bed0bd550f98a6f66b`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `ad001a675bd18695c9df2b73218164070b05b5e450bdfd1e87f9ee611f3053a3`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `b09474b5b2537c01c1205a08a5600a7ad31793be9dd0ad504339f5d234e0e17b`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `ad2fa1dc49560cd35d8910faf368b465bc54ec8b0155a1a859ff04efa41dd965`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `badfe0ff69a936a9332e8297773b3be530e1b9c4b7ea5016eb3862a1464a8353`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `bcf05b9cfe360c90ec821582314ded8ca02cc2da8a3a987b9116d768fb3147ca`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `d76963ae77242e20fa5c375e1a5ca1f500484e468799461c836e83fef1eee4ad`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `d17072b53c52a1465b372fc19527a1d4a03ff35ca7d833018e72c6c0479f4f24`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `d7d85d783110572ac5ad90879954b9ba8b3f0e1e7f4d92f1bd681384eeabe4de`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `e59ea5a4c6dd24d285453c7bc16dcd9f03a46ec5b892adeee3351a12378b776a`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `ef20f55cba986062a71eb822f96906ff6ec7fb6106a12cb0ad716305c530e105`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `f9de831dac85a2d463f069f141813ea952d413d197ee1122f286bb18476c7117`
+
+### Release Attempts
+
+#### RA-20261009-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261007-001`
+- Selected CRL identities: `mobile/CRL-20261007-001`
+- Intended action: `commit`
+- Branch: `codex/mz018-mobile-dev-20261009`
+- Base: `origin/Dev@360452878fde5435bd01966bd0131a989c38350e`; fetched at `2026-10-09T02:32:31Z` and confirmed unchanged at `2026-10-09T02:37:42Z` from GitHub
+- Candidate patch SHA-256: `7a33f163f8de0cb7bb1e0326adf326125db31ba8b196513d7b41009c8a91eb8e` excluding `docs/change-release-ledger.md`
+- Commit SHA: not committed
+- Dependencies: paired `root/CRL-20261007-002@eb67d181952fe2b00b5d0eb98ca0399b8104f664` in branch `codex/mz015-mz018-mz020-dev-20261009`
+- Required validation: `PASS`; evidence: post-review targeted `FeedbackFormScreen` 16/16 and complete `npm run check:ci` passed with TypeScript, ledger range/coverage, button contract, lint 0 errors / 588 warnings, and 62 suites / 379 tests; paired Root `DATABASE_URL='' npm run check:full` repeated the same Mobile typecheck/lint/Jest successfully; `git diff --check` also passed.
+- Shared-hunk review: `PASS`; evidence: five staged files and 44 non-ledger hunks are assigned only to this Mobile CRL; paired Root code is not present in this repository.
+- Generated-file review: `PASS`; evidence: dependency symlink was removed after tests and the candidate has no build output, cache or untracked file.
+- Sensitive-information review: `PASS`; evidence: candidate contains no `.env`, credentials, tokens, cookies, database URL, production data or supplied image bytes.
+- Technical state: `candidate`
+- User authorization: `selected-for-commit`; evidence: delegated user instruction explicitly selected the joint Root/Mobile batch and authorized commit, normal non-force push and Draft PR while excluding merge, deployment, OTA and production writes.
+- Independent review: `GO for commit`; evidence: final independent read-only review matched fingerprint `7a33f163f8de0cb7bb1e0326adf326125db31ba8b196513d7b41009c8a91eb8e`, pre-commit 5 files / 44 hunks and diff checks, confirmed the Root union photo gate, per-photo upload persistence and closed-history read-only boundary, and found no P0/P1/P2.
+- Action conclusion: `GO`; exact staged candidate is approved for local commit only. Push, PR, merge, deployment, OTA and production writes are not implied by this review conclusion.
+
+### Risks / Release Notes
+
+- Risk: 本地 Jest 使用 mock API 和 mock 媒体，不等于真机或真实权限账号验收；需在获批的非生产环境做执行人、维修管理员、admin 和无权账号的端到端验证。
+- Rollback: 回退本 CRL 的非 ledger 代码即可；本单元无数据回滚。
+- Sensitive-information review: 不含凭据、token、生产数据、图片字节或数据库 URL。
+- Git state: integrated isolated branch `codex/mz018-mobile-dev-20261009` based on freshly fetched GitHub `origin/Dev@360452878fde5435bd01966bd0131a989c38350e`；not committed, pushed, merged, built or published by OTA；production/device verification not run。
+
 ## CRL-20261003-001 — 移动端整周工作量与补贴总额一次确认
 
 - **Repository:** `mobile`

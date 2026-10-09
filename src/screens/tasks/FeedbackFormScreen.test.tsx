@@ -1,5 +1,5 @@
 import React from 'react'
-import { fireEvent, render, waitFor } from '@testing-library/react-native'
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
 import { Image, StyleSheet } from 'react-native'
 import { I18nProvider } from '../../lib/i18n'
 
@@ -37,6 +37,7 @@ jest.mock('../../lib/cleaningMediaCache', () => ({
 }))
 jest.mock('../../lib/api', () => ({
   completePropertyFeedbackProject: jest.fn(async () => ({})),
+  correctPropertyMaintenanceCompletion: jest.fn(async () => ({})),
   createPropertyFeedback: jest.fn(async () => ({})),
   createPropertyFeedbackBatch: jest.fn(async () => ({})),
   createPropertyFeedbackProject: jest.fn(async () => ({})),
@@ -381,4 +382,376 @@ test('日用品更换前后照片在反馈详情都通过认证代理显示', as
     uri: expect.stringContaining('key=inventory%2Fdaily-after.jpg'),
   }))
   expect(ui.UNSAFE_getAllByType(Image).every((image) => !String(image.props.source?.uri || '').includes('/cleaning-app/media/image'))).toBe(true)
+})
+
+function editableMaintenanceFeedback(overrides: Record<string, any> = {}) {
+  return {
+    id: 'maintenance-edit-1',
+    property_id: 'property-1',
+    kind: 'maintenance',
+    area: '浴室',
+    detail: '洗手池漏网需更换安装',
+    media_urls: ['cleaning/maintenance-before.jpg'],
+    repair_photo_urls: ['cleaning/maintenance-after-old.jpg'],
+    repair_notes: '旧的维修后说明',
+    created_at: '2026-10-07T00:00:00.000Z',
+    status: 'in_progress',
+    workflow_status: 'assigned',
+    capabilities: {
+      can_edit_content: false,
+      can_edit_completion_content: true,
+      can_correct_completion: false,
+      can_delete: false,
+      can_move_category: false,
+    },
+    project_items: [{
+      id: 'maintenance-project-1',
+      name: '维修记录',
+      area: '浴室',
+      category: null,
+      detail: '洗手池漏网需更换安装',
+      note: '旧项目说明',
+      before_photos: ['cleaning/maintenance-before.jpg'],
+      after_photos: ['cleaning/maintenance-after-old.jpg'],
+      status: 'open',
+    }],
+    ...overrides,
+  }
+}
+
+function mockFeedbackHistory(api: { listPropertyFeedbacks: jest.Mock }, getCurrent: () => any) {
+  api.listPropertyFeedbacks.mockReset().mockImplementation(async (_token: string, params: any) => {
+    const current = getCurrent()
+    const statuses = Array.isArray(params?.status) ? params.status : []
+    if (statuses.includes('resolved')) return current?.status === 'resolved' ? [current] : []
+    if (statuses.includes('open')) return current && current.status !== 'resolved' ? [current] : []
+    return []
+  })
+}
+
+test('真实维修执行人可补充维修后图文，失败后重试不重复上传并可重新打开', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
+  const api = require('../../lib/api') as {
+    listPropertyFeedbacks: jest.Mock
+    updatePropertyFeedback: jest.Mock
+    uploadCleaningMedia: jest.Mock
+  }
+  const imagePicker = require('expo-image-picker') as { launchCameraAsync: jest.Mock }
+  const localMedia = require('../../lib/localMediaDrafts') as { persistCompressedDraftMedia: jest.Mock }
+  let current = editableMaintenanceFeedback()
+  mockFeedbackHistory(api, () => current)
+  api.updatePropertyFeedback
+    .mockReset()
+    .mockRejectedValueOnce(new Error('temporary_save_failure'))
+    .mockImplementation(async (_token: string, _kind: string, _id: string, params: any) => {
+      current = { ...current, repair_notes: params.note, repair_photo_urls: params.repair_photo_urls }
+      return { ok: true, row: current }
+    })
+  api.uploadCleaningMedia.mockReset().mockResolvedValue({ key: 'cleaning/maintenance-after-new.jpg', url: 'https://example.test/maintenance-after-new.jpg' })
+  imagePicker.launchCameraAsync.mockReset().mockResolvedValue({
+    canceled: false,
+    assets: [{ uri: 'file:///maintenance-after-picked.jpg', fileName: 'maintenance-after-picked.jpg', mimeType: 'image/jpeg' }],
+  })
+  localMedia.persistCompressedDraftMedia.mockReset().mockResolvedValue({ localUri: 'file:///maintenance-after-local.jpg', name: 'maintenance-after-local.jpg', mimeType: 'image/jpeg' })
+  mockUser = { id: 'executor-1', username: 'executor', role: 'maintenance_staff', roles: ['maintenance_staff'] }
+  const ui = render(
+    <I18nProvider>
+      <FeedbackFormScreen navigation={{ navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }} route={{ key: 'feedback-maintenance-executor-edit', name: 'FeedbackForm', params: { taskId: 'w-feedback' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByRole('button', { name: '编辑反馈记录' })).toBeTruthy())
+  fireEvent.press(ui.getByRole('button', { name: '编辑反馈记录' }))
+  await waitFor(() => expect(ui.getByDisplayValue('旧的维修后说明')).toBeTruthy())
+  expect(ui.getByText('浴室')).toBeTruthy()
+  expect(ui.getByText('洗手池漏网需更换安装')).toBeTruthy()
+  expect(ui.queryByPlaceholderText('问题说明')).toBeNull()
+  fireEvent.changeText(ui.getByPlaceholderText('维修后说明'), '已更换漏网并测试')
+  fireEvent.press(ui.getByRole('button', { name: '拍照上传' }))
+  await waitFor(() => expect(localMedia.persistCompressedDraftMedia).toHaveBeenCalledTimes(1))
+
+  fireEvent.press(ui.getByText('保存记录'))
+  await waitFor(() => expect(api.updatePropertyFeedback).toHaveBeenCalledTimes(1))
+  expect(api.updatePropertyFeedback).toHaveBeenLastCalledWith('test-token', 'maintenance', 'maintenance-edit-1', {
+    note: '已更换漏网并测试',
+    repair_photo_urls: ['cleaning/maintenance-after-old.jpg', 'cleaning/maintenance-after-new.jpg'],
+  })
+  expect(api.updatePropertyFeedback.mock.calls[0][3]).not.toHaveProperty('area')
+  expect(api.updatePropertyFeedback.mock.calls[0][3]).not.toHaveProperty('detail')
+  expect(api.updatePropertyFeedback.mock.calls[0][3]).not.toHaveProperty('media_urls')
+  expect(api.updatePropertyFeedback.mock.calls[0][3]).not.toHaveProperty('status')
+  await waitFor(() => expect(ui.getByText('保存记录').parent?.props.disabled).toBeFalsy())
+  expect(ui.getByDisplayValue('已更换漏网并测试')).toBeTruthy()
+
+  fireEvent.press(ui.getByText('保存记录'))
+  await waitFor(() => expect(api.updatePropertyFeedback).toHaveBeenCalledTimes(2))
+  await waitFor(() => expect(ui.queryByText('编辑记录')).toBeNull())
+  expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
+
+  await waitFor(() => expect(ui.getByRole('button', { name: '编辑反馈记录' })).toBeTruthy())
+  fireEvent.press(ui.getByRole('button', { name: '编辑反馈记录' }))
+  await waitFor(() => expect(ui.getByDisplayValue('已更换漏网并测试')).toBeTruthy())
+  fireEvent.press(ui.getByText('保存记录'))
+  await waitFor(() => expect(api.updatePropertyFeedback).toHaveBeenCalledTimes(3))
+  expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
+})
+
+test('多张维修后照片部分上传失败后只重试尚未上传的照片', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
+  const api = require('../../lib/api') as {
+    listPropertyFeedbacks: jest.Mock
+    updatePropertyFeedback: jest.Mock
+    uploadCleaningMedia: jest.Mock
+  }
+  const imagePicker = require('expo-image-picker') as { launchCameraAsync: jest.Mock }
+  const localMedia = require('../../lib/localMediaDrafts') as { persistCompressedDraftMedia: jest.Mock }
+  const current = editableMaintenanceFeedback()
+  mockFeedbackHistory(api, () => current)
+  api.updatePropertyFeedback.mockReset().mockResolvedValue({ ok: true, row: current })
+  api.uploadCleaningMedia
+    .mockReset()
+    .mockResolvedValueOnce({ key: 'cleaning/maintenance-after-partial-1.jpg' })
+    .mockRejectedValueOnce(new Error('second_upload_failed'))
+    .mockResolvedValueOnce({ key: 'cleaning/maintenance-after-partial-2.jpg' })
+  imagePicker.launchCameraAsync
+    .mockReset()
+    .mockResolvedValueOnce({
+      canceled: false,
+      assets: [{ uri: 'file:///maintenance-partial-picked-1.jpg', fileName: 'maintenance-partial-picked-1.jpg', mimeType: 'image/jpeg' }],
+    })
+    .mockResolvedValueOnce({
+      canceled: false,
+      assets: [{ uri: 'file:///maintenance-partial-picked-2.jpg', fileName: 'maintenance-partial-picked-2.jpg', mimeType: 'image/jpeg' }],
+    })
+  localMedia.persistCompressedDraftMedia
+    .mockReset()
+    .mockResolvedValueOnce({ localUri: 'file:///maintenance-partial-local-1.jpg', name: 'maintenance-partial-local-1.jpg', mimeType: 'image/jpeg' })
+    .mockResolvedValueOnce({ localUri: 'file:///maintenance-partial-local-2.jpg', name: 'maintenance-partial-local-2.jpg', mimeType: 'image/jpeg' })
+  const ui = render(
+    <I18nProvider>
+      <FeedbackFormScreen navigation={{ navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }} route={{ key: 'feedback-maintenance-partial-upload', name: 'FeedbackForm', params: { taskId: 'w-feedback' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByRole('button', { name: '编辑反馈记录' })).toBeTruthy())
+  fireEvent.press(ui.getByRole('button', { name: '编辑反馈记录' }))
+  fireEvent.press(ui.getByRole('button', { name: '拍照上传' }))
+  await waitFor(() => expect(localMedia.persistCompressedDraftMedia).toHaveBeenCalledTimes(1))
+  fireEvent.press(ui.getByRole('button', { name: '拍照上传' }))
+  await waitFor(() => expect(localMedia.persistCompressedDraftMedia).toHaveBeenCalledTimes(2))
+
+  fireEvent.press(ui.getByText('保存记录'))
+  await waitFor(() => expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(2))
+  expect(api.updatePropertyFeedback).not.toHaveBeenCalled()
+  await waitFor(() => expect(ui.getByText('保存记录').parent?.props.disabled).toBeFalsy())
+
+  fireEvent.press(ui.getByText('保存记录'))
+  await waitFor(() => expect(api.updatePropertyFeedback).toHaveBeenCalledTimes(1))
+  expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(3)
+  expect(api.uploadCleaningMedia.mock.calls[2][1]).toEqual(expect.objectContaining({ uri: 'file:///maintenance-partial-local-2.jpg' }))
+  expect(api.updatePropertyFeedback).toHaveBeenCalledWith('test-token', 'maintenance', 'maintenance-edit-1', {
+    note: '旧的维修后说明',
+    repair_photo_urls: [
+      'cleaning/maintenance-after-old.jpg',
+      'cleaning/maintenance-after-partial-1.jpg',
+      'cleaning/maintenance-after-partial-2.jpg',
+    ],
+  })
+})
+
+test('待复核任务完工照片只读且补录照片删除后重开不会恢复', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
+  const api = require('../../lib/api') as { listPropertyFeedbacks: jest.Mock; updatePropertyFeedback: jest.Mock }
+  const completionPhotos = ['cleaning/maintenance-authoritative.jpg']
+  let current = editableMaintenanceFeedback({
+    workflow_status: 'pending_review',
+    review_status: 'pending',
+    completion_photo_urls: completionPhotos,
+    repair_photo_urls: ['cleaning/maintenance-authoritative.jpg', 'cleaning/maintenance-supplement.jpg'],
+    project_items: [{
+      id: 'maintenance-project-1',
+      name: '维修记录',
+      area: '浴室',
+      category: null,
+      detail: '洗手池漏网需更换安装',
+      note: '旧的维修后说明',
+      before_photos: ['cleaning/maintenance-before.jpg'],
+      after_photos: ['cleaning/maintenance-authoritative.jpg', 'cleaning/maintenance-supplement.jpg'],
+      status: 'completed',
+    }],
+  })
+  mockFeedbackHistory(api, () => current)
+  api.updatePropertyFeedback.mockReset().mockImplementation(async (_token: string, _kind: string, _id: string, params: any) => {
+    current = {
+      ...current,
+      repair_photo_urls: [...completionPhotos, ...params.repair_photo_urls],
+      project_items: current.project_items?.map((project: any) => ({
+        ...project,
+        after_photos: [...completionPhotos, ...params.repair_photo_urls],
+      })),
+    }
+    return { ok: true, row: current }
+  })
+  const ui = render(
+    <I18nProvider>
+      <FeedbackFormScreen navigation={{ navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }} route={{ key: 'feedback-maintenance-readonly-completion', name: 'FeedbackForm', params: { taskId: 'w-feedback' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByRole('button', { name: '编辑反馈记录' })).toBeTruthy())
+  fireEvent.press(ui.getByRole('button', { name: '编辑反馈记录' }))
+  await waitFor(() => expect(ui.getByText('任务完工照片为只读；可删除本次补录的维修后照片。')).toBeTruthy())
+  expect(ui.queryByRole('button', { name: '删除照片 1' })).toBeNull()
+  fireEvent.press(ui.getByRole('button', { name: '删除照片 2' }))
+  fireEvent.press(ui.getByText('保存记录'))
+  await waitFor(() => expect(api.updatePropertyFeedback).toHaveBeenCalledTimes(1))
+  expect(api.updatePropertyFeedback.mock.calls[0][3].repair_photo_urls).toEqual([])
+  await waitFor(() => expect(ui.queryByText('编辑记录')).toBeNull())
+
+  fireEvent.press(ui.getByRole('button', { name: '编辑反馈记录' }))
+  await waitFor(() => expect(ui.getByText('任务完工照片为只读；可删除本次补录的维修后照片。')).toBeTruthy())
+  expect(ui.queryByRole('button', { name: '删除照片 1' })).toBeNull()
+  expect(ui.queryByRole('button', { name: '删除照片 2' })).toBeNull()
+})
+
+test('取消维修后编辑会清理本地草稿且不写入', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
+  const api = require('../../lib/api') as { listPropertyFeedbacks: jest.Mock; updatePropertyFeedback: jest.Mock; uploadCleaningMedia: jest.Mock }
+  const imagePicker = require('expo-image-picker') as { launchCameraAsync: jest.Mock }
+  const localMedia = require('../../lib/localMediaDrafts') as { persistCompressedDraftMedia: jest.Mock; deleteDraftMedia: jest.Mock }
+  const current = editableMaintenanceFeedback()
+  mockFeedbackHistory(api, () => current)
+  api.updatePropertyFeedback.mockReset().mockResolvedValue({ ok: true })
+  api.uploadCleaningMedia.mockReset()
+  imagePicker.launchCameraAsync.mockReset().mockResolvedValue({
+    canceled: false,
+    assets: [{ uri: 'file:///maintenance-cancel-picked.jpg', fileName: 'maintenance-cancel-picked.jpg', mimeType: 'image/jpeg' }],
+  })
+  localMedia.persistCompressedDraftMedia.mockReset().mockResolvedValue({ localUri: 'file:///maintenance-cancel-local.jpg', name: 'maintenance-cancel-local.jpg', mimeType: 'image/jpeg' })
+  localMedia.deleteDraftMedia.mockClear()
+  const ui = render(
+    <I18nProvider>
+      <FeedbackFormScreen navigation={{ navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }} route={{ key: 'feedback-maintenance-cancel-edit', name: 'FeedbackForm', params: { taskId: 'w-feedback' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByRole('button', { name: '编辑反馈记录' })).toBeTruthy())
+  fireEvent.press(ui.getByRole('button', { name: '编辑反馈记录' }))
+  fireEvent.changeText(ui.getByPlaceholderText('维修后说明'), '这次不保存')
+  fireEvent.press(ui.getByRole('button', { name: '拍照上传' }))
+  await waitFor(() => expect(localMedia.persistCompressedDraftMedia).toHaveBeenCalledTimes(1))
+  fireEvent.press(ui.getByText('关闭'))
+  await waitFor(() => expect(ui.queryByText('编辑记录')).toBeNull())
+  expect(api.updatePropertyFeedback).not.toHaveBeenCalled()
+  expect(api.uploadCleaningMedia).not.toHaveBeenCalled()
+  expect(localMedia.deleteDraftMedia).toHaveBeenCalledWith('file:///maintenance-cancel-local.jpg')
+
+  fireEvent.press(ui.getByRole('button', { name: '编辑反馈记录' }))
+  await waitFor(() => expect(ui.getByDisplayValue('旧的维修后说明')).toBeTruthy())
+  expect(ui.queryByDisplayValue('这次不保存')).toBeNull()
+})
+
+test('已完成维修只通过带原因和稳定幂等键的修正流程保存', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
+  const api = require('../../lib/api') as {
+    correctPropertyMaintenanceCompletion: jest.Mock
+    listPropertyFeedbacks: jest.Mock
+    updatePropertyFeedback: jest.Mock
+    uploadCleaningMedia: jest.Mock
+  }
+  const imagePicker = require('expo-image-picker') as { launchCameraAsync: jest.Mock }
+  const localMedia = require('../../lib/localMediaDrafts') as { persistCompressedDraftMedia: jest.Mock }
+  let current = editableMaintenanceFeedback({
+    status: 'resolved',
+    workflow_status: 'closed',
+    review_status: 'approved',
+    capabilities: {
+      can_edit_content: false,
+      can_edit_completion_content: false,
+      can_correct_completion: true,
+      can_delete: true,
+      can_move_category: false,
+    },
+  })
+  mockFeedbackHistory(api, () => current)
+  api.updatePropertyFeedback.mockReset()
+  api.correctPropertyMaintenanceCompletion
+    .mockReset()
+    .mockRejectedValueOnce(new Error('temporary_correction_failure'))
+    .mockImplementation(async (_token: string, _id: string, params: any) => {
+      current = { ...current, repair_notes: params.completion_note, repair_photo_urls: params.completion_photo_urls }
+      return { ok: true, status: 'closed', available_actions: ['correct_completion'] }
+    })
+  api.uploadCleaningMedia.mockReset().mockResolvedValue({ key: 'cleaning/maintenance-correction-new.jpg', url: 'https://example.test/maintenance-correction-new.jpg' })
+  imagePicker.launchCameraAsync.mockReset().mockResolvedValue({
+    canceled: false,
+    assets: [{ uri: 'file:///maintenance-correction-picked.jpg', fileName: 'maintenance-correction-picked.jpg', mimeType: 'image/jpeg' }],
+  })
+  localMedia.persistCompressedDraftMedia.mockReset().mockResolvedValue({ localUri: 'file:///maintenance-correction-local.jpg', name: 'maintenance-correction-local.jpg', mimeType: 'image/jpeg' })
+  mockUser = { id: 'admin-1', username: 'admin', role: 'admin', roles: ['admin'] }
+  const ui = render(
+    <I18nProvider>
+      <FeedbackFormScreen navigation={{ navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }} route={{ key: 'feedback-maintenance-correction', name: 'FeedbackForm', params: { taskId: 'w-feedback' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByText('已完成待复核')).toBeTruthy())
+  fireEvent.press(ui.getByText('展开'))
+  await waitFor(() => expect(ui.getByRole('button', { name: '编辑反馈记录' })).toBeTruthy())
+  fireEvent.press(ui.getByRole('button', { name: '编辑反馈记录' }))
+  await waitFor(() => expect(ui.getByText('保存修正')).toBeTruthy())
+  expect(ui.getByText('已保存的维修后照片为只读；可添加新照片并通过修正流程保存。')).toBeTruthy()
+  expect(ui.queryByRole('button', { name: '删除照片 1' })).toBeNull()
+  fireEvent.changeText(ui.getByPlaceholderText('维修后说明'), '已完成记录的补充说明')
+  fireEvent.changeText(ui.getByPlaceholderText('请说明已完成维修的修正原因'), '现场后续补回照片')
+  fireEvent.press(ui.getByRole('button', { name: '拍照上传' }))
+  await waitFor(() => expect(localMedia.persistCompressedDraftMedia).toHaveBeenCalledTimes(1))
+
+  fireEvent.press(ui.getByText('保存修正'))
+  await waitFor(() => expect(api.correctPropertyMaintenanceCompletion).toHaveBeenCalledTimes(1))
+  const firstPayload = api.correctPropertyMaintenanceCompletion.mock.calls[0][2]
+  expect(firstPayload).toEqual({
+    completion_photo_urls: ['cleaning/maintenance-after-old.jpg', 'cleaning/maintenance-correction-new.jpg'],
+    completion_note: '已完成记录的补充说明',
+    reason: '现场后续补回照片',
+    operation_id: expect.any(String),
+  })
+  expect(firstPayload).not.toHaveProperty('status')
+  expect(api.updatePropertyFeedback).not.toHaveBeenCalled()
+  await waitFor(() => expect(ui.getByText('保存修正').parent?.props.disabled).toBeFalsy())
+
+  fireEvent.press(ui.getByText('保存修正'))
+  await waitFor(() => expect(api.correctPropertyMaintenanceCompletion).toHaveBeenCalledTimes(2))
+  expect(api.correctPropertyMaintenanceCompletion.mock.calls[1][2].operation_id).toBe(firstPayload.operation_id)
+  expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
+  await waitFor(() => expect(ui.queryByText('编辑记录')).toBeNull())
+})
+
+test('维修后保存进行中会锁定按钮避免并发重复提交', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
+  const api = require('../../lib/api') as { listPropertyFeedbacks: jest.Mock; updatePropertyFeedback: jest.Mock }
+  const current = editableMaintenanceFeedback()
+  mockFeedbackHistory(api, () => current)
+  let resolveUpdate: ((value: any) => void) | null = null
+  api.updatePropertyFeedback.mockReset().mockImplementation(() => new Promise((resolve) => { resolveUpdate = resolve }))
+  const ui = render(
+    <I18nProvider>
+      <FeedbackFormScreen navigation={{ navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }} route={{ key: 'feedback-maintenance-concurrent-save', name: 'FeedbackForm', params: { taskId: 'w-feedback' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByRole('button', { name: '编辑反馈记录' })).toBeTruthy())
+  fireEvent.press(ui.getByRole('button', { name: '编辑反馈记录' }))
+  fireEvent.changeText(ui.getByPlaceholderText('维修后说明'), '并发保存验证')
+  fireEvent.press(ui.getByText('保存记录'))
+  await waitFor(() => expect(api.updatePropertyFeedback).toHaveBeenCalledTimes(1))
+  let savingButton: any = ui.getByText('加载中…')
+  while (savingButton && savingButton.props?.disabled !== true) savingButton = savingButton.parent
+  expect(savingButton).toBeTruthy()
+  fireEvent.press(savingButton)
+  expect(api.updatePropertyFeedback).toHaveBeenCalledTimes(1)
+  await act(async () => {
+    resolveUpdate?.({ ok: true, row: current })
+  })
+  await waitFor(() => expect(ui.queryByText('编辑记录')).toBeNull())
 })
