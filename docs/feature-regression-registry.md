@@ -1,21 +1,74 @@
 # Feature Regression Registry
 
-## FR-P1-MED-07 — 挂钥匙视频上传与任务保存单一所有权
+## FR-P1-DEV-01 — Mobile 固定开发 Preview 活动心跳
 
-- **Status:** active
-- **Maintenance scope:** `mobile`; reuses the existing Root cleaning upload and lockbox-video business-save contracts without modifying them.
-- **Last reviewed:** 2026-10-03 Australia/Melbourne
-- **Business outcome:** 同一个挂钥匙视频队列项在一个 App 进程中只能有一个真实上传和一个真实任务保存执行者。界面等待超时只结束本次等待，不得释放仍运行的底层任务、启动第二次请求或把 `LOCAL_MEDIA_LOCKED` 暴露给用户；迟到的上传/保存成功仍必须写回队列并继续后续业务保存。完成页只触发队列，不得直接调用第二套任务保存路径。本地视频必须保留到任务保存成功后才清理；App 重启后可从持久化队列恢复一次新尝试。
-- **Related CRLs:** `mobile/CRL-20261003-002`.
+- **Status:** active; local integrated candidate, not released.
+- **Maintenance scope:** `mobile`; paired idle controller is root/CRL-20261010-003.
+- **Last reviewed:** 2026-10-10 UTC
+- **Business outcome:** 只有显式固定 dev Preview 才从 App 根交互上报活动；普通开发、TestFlight、生产和 OTA 不启用，也不因报告失败影响业务。
+- **Related CRLs:** `mobile/CRL-20261010-003`.
 
 ### Test-to-invariant mapping
 
-- `src/lib/inspectionMediaQueue.test.ts` — 并发队列处理与等待超时共享同一上传/业务保存 Promise；迟到成功覆盖临时超时并继续完成；持久化 `uploading` 在新进程语义下恢复；外部本地媒体锁冲突转为可重试中文状态且不泄漏内部错误码；上传成功前不删除本地文件。
+- `src/components/DevPreviewActivityBoundary.test.tsx` — 覆盖显式门禁、本机 URL 和真实交互节流。
+- `src/components/DevPreviewActivityBoundary.disabled.test.tsx` — 非 Preview 不包装 App、不订阅 AppState 且不报告。
+
+### Delivery boundary
+
+- 不启动 Preview/Metro，不改变业务 API、数据库、原生依赖或发布通道；真实设备交互另行验收。
+
+## FR-P1-TSK-03 — 每日任务分组、Melbourne 跨日与客人通知记录
+
+- **Status:** active; local integrated candidate, not released.
+- **Maintenance scope:** `mobile`; paired Root API/schema is root/CRL-20261010-002.
+- **Last reviewed:** 2026-10-10 UTC
+- **Business outcome:** 只在权威可见任务上把同房源/日期的入住与退房合并计一次，线下任务独立计数；列表和详情使用服务端授权的客人通知 mark/revoke；跟随 today 时按 Australia/Melbourne 零点自动切换，历史浏览不跳转。
+- **Related CRLs:** `mobile/CRL-20261010-002`.
+
+### Test-to-invariant mapping
+
+- `src/lib/dailyTaskPresentation.test.ts` — 可见性先行、周转去重和线下计数。
+- `src/lib/taskBusinessDate.test.ts` — 标准时、DST、下次边界与 today 跟随规则。
+- `src/lib/workTaskActions.test.ts`, `src/lib/workTasksStore.test.ts`, `src/screens/tabs/TasksScreen.test.tsx` — 通知状态/actions 保真和页面交互。
+
+### Delivery boundary
+
+- Mobile 不自行放宽 Root 可见性或权限，不发送客人消息；真实 migration/API/账号/设备/OTA 另行授权。
+
+## FR-P1-TSK-02 — 日常任务执行列表权威可见性
+
+- **Status:** active; local integrated candidate, not released.
+- **Maintenance scope:** `mobile`; paired Root projection is root/CRL-20261010-001.
+- **Last reviewed:** 2026-10-10 UTC
+- **Business outcome:** 审核中、已关闭和未分配任务不得进入日常执行列表；服务端显式拒绝、来源工作流状态和类型别名优先，未知房源跟进来源 fail-closed，普通合法完成任务保留。
+- **Related CRLs:** `mobile/CRL-20261010-001`.
+
+### Test-to-invariant mapping
+
+- `src/lib/dailyTaskExecutionVisibility.test.ts` — 审核状态、别名、分派、合法完成和显式投影矩阵。
+- `src/lib/workTasksStore.test.ts`, `src/screens/tabs/TasksScreen.test.tsx` — 服务端字段保真与页面使用共享 helper。
+
+### Delivery boundary
+
+- 不删除审核/历史记录，不改变 Root 鉴权或数据库；真实账号和设备验收另行执行。
+
+## FR-P1-MED-07 — 挂钥匙视频上传与任务保存单一所有权
+
+- **Status:** active
+- **Maintenance scope:** `mobile`; paired with the Root immutable cleaning upload and lockbox-video receipt contracts.
+- **Last reviewed:** 2026-10-09 Australia/Melbourne
+- **Business outcome:** 同一个挂钥匙视频队列项在一个 App 进程中只能有一个真实上传和一个真实任务保存执行者。界面等待超时只结束本次等待，不得释放仍运行的底层任务、启动第二次请求或把 `LOCAL_MEDIA_LOCKED` 暴露给用户；迟到的上传/保存成功仍必须写回队列并继续后续业务保存。完成页只触发队列，不得直接调用第二套任务保存路径。本地视频必须保留到任务保存成功后才清理；App 重启后必须沿用持久化队列项的同一 `task_id + media_id + operation_id`，让服务端复用已成功的对象和业务 receipt，不能重新存储或重复挂载。
+- **Related CRLs:** `mobile/CRL-20261003-002`, `mobile/CRL-20261009-001`; paired `root/CRL-20261009-001`.
+
+### Test-to-invariant mapping
+
+- `src/lib/inspectionMediaQueue.test.ts` — 并发队列处理与等待超时共享同一上传/业务保存 Promise；迟到成功覆盖临时超时并继续完成；持久化 `uploading` 在新进程语义下恢复且媒体上传和两条业务路由都沿用队列 ID；外部本地媒体锁冲突转为可重试中文状态且不泄漏内部错误码；上传成功前不删除本地文件。
+- `src/lib/dayEndHandoverQueue.test.ts`, `src/lib/keyUploadQueue.test.ts`, `src/lib/inspectionPanelSubmitQueue.test.ts` — 所有持久化照片队列都发送稳定 task/media ID，并直接上传已持久化字节，避免 App 重启后重新压缩产生不同内容。
 - `src/screens/tasks/InspectionCompleteScreen.test.tsx` — 挂钥匙完成页只调用 `processInspectionMediaQueue`，不直接调用 `uploadLockboxVideo`；密码任务、普通检查、客人已到达、离线本地队列与服务器禁用动作继续遵守原业务门禁。
 
 ### Delivery boundary
 
-- 本条只改变 Mobile 挂钥匙视频队列的进程内执行所有权、超时后的迟到结果处理和完成页调用路径；不改变 Root API、数据库、R2、鉴权、任务成员资格、生产配置或依赖。
+- 本条与 Root 配套改变上传/业务幂等参数，不改变水印、鉴权、任务成员资格、业务门槛、数据库 schema、生产配置或依赖。
 - 单元测试不证明真实 iOS/Android 弱网、App 被系统杀死后的恢复、真实对象存储或生产任务最终状态；OTA/build、真实设备与生产验证均需单独授权。
 
 ## FR-P1-FIN-03 — 工作量反馈、私有证明、周结算确认与文件
