@@ -442,7 +442,7 @@
 - Intended action: `push`
 - Branch: `codex/mz010-mz011-mz021-integration-20261010`
 - Remote branch: absent at `2026-10-10T07:36:34Z`; live `git ls-remote --heads` returned no target ref.
-- Base: `origin/Dev@c3a6bf43d5a6178bf7f8a8117e104563599e1ceb`; live fetch at `2026-10-10T07:36:34Z` confirmed unchanged.
+- Base: `origin/Dev@c3a6bf43d5a6178bf7f8a8117e104563599e1ceb`; fetched at `2026-10-10T07:36:34Z` and confirmed unchanged by live fetch.
 - Candidate patch SHA-256: `2589f8c5914548ad61773f3f518f43eae8085475bba3dede96459139b2397745` excluding `docs/change-release-ledger.md`
 - Commit SHA: `a880e0203ed436697f4589317b049fdf8d16fd4f`
 - Dependencies: `root/CRL-20261009-001@94fc510992aff5bd8bc0c514cff91bc9313647e1`; `root/CRL-20261010-001@94fc510992aff5bd8bc0c514cff91bc9313647e1`; `root/CRL-20261010-002@94fc510992aff5bd8bc0c514cff91bc9313647e1`; `root/CRL-20261010-003@94fc510992aff5bd8bc0c514cff91bc9313647e1`
