@@ -441,7 +441,7 @@
 - Selected CRL identities: `mobile/CRL-20261009-001`, `mobile/CRL-20261010-001`, `mobile/CRL-20261010-002`, `mobile/CRL-20261010-003`
 - Intended action: `push`
 - Branch: `codex/mz010-mz011-mz021-integration-20261010`
-- Remote branch: absent at `2026-10-10T07:36:34Z`; live `git ls-remote --heads` returned no target ref.
+- Remote branch: `origin/codex/mz010-mz011-mz021-integration-20261010@e3a95252cc8c86393604bf626fc72170be143939`; initial normal non-force push and immediate SHA verification completed before this outcome receipt.
 - Base: `origin/Dev@c3a6bf43d5a6178bf7f8a8117e104563599e1ceb`; fetched at `2026-10-10T07:36:34Z` and confirmed unchanged by live fetch.
 - Candidate patch SHA-256: `2589f8c5914548ad61773f3f518f43eae8085475bba3dede96459139b2397745` excluding `docs/change-release-ledger.md`
 - Commit SHA: `a880e0203ed436697f4589317b049fdf8d16fd4f`
@@ -451,10 +451,11 @@
 - Generated-file review: `PASS`; evidence: exact range contains no generated build output, cache or dependency directory.
 - Sensitive-information review: `PASS`; evidence: exact range contains no configured sensitive categories.
 - Cross-repository dependency verification: `PASS`; evidence: paired Root range `e9e32847c49782a34163267681174c57db3a8952...0bae99eabc304490fe2861a24bb1941affafc653` contains content commit `94fc510992aff5bd8bc0c514cff91bc9313647e1`, binds the four canonical Root CRLs, and retains fingerprint `b82511faa430f363d05e89b74762849910ff6b25d797a8ed560667a3e34a1869`; Root must be delivered before Mobile.
-- Technical state: `committed`
+- PR / CI evidence: Draft PR `https://github.com/zhishi817/mz-cleaning-app-frontend/pull/47` is open, unmerged and targets `Dev`; `Mobile quality` run `38035485862` / `#118` completed successfully for head `e3a95252cc8c86393604bf626fc72170be143939`.
+- Technical state: `pushed`
 - User authorization: `approved-for-push`; evidence: delegated instruction explicitly authorized the separate Mobile normal push and paired Draft PR while forbidding merge, auto-merge, main push, deployment, OTA and production writes.
 - Independent review: `GO for ledger-only review receipt commit and conditional controlled push`; evidence: independent read-only push review verified exact base/content/HEAD ancestry, unchanged 34-path / 129-hunk fingerprint, receipt-only staged scope, four-CRL paired dependency ranges/content commits/fingerprints, clean diff/generated/sensitive boundaries, and recorded live unchanged-Dev/absent-target evidence; no P0/P1.
-- Action conclusion: `GO`; commit this ledger-only receipt, require exact release-report verification and one final live remote-boundary check, then use one normal non-force explicit-refspec push per repository, Root before Mobile. Draft PR may follow under existing authorization; merge, main push, deployment, migration, OTA and production writes remain excluded.
+- Action conclusion: `GO`; after the verified Root push, the authorized Mobile branch push succeeded, remote SHA matched local head, Draft PR #47 was created, and its first quality run completed successfully. This ledger-only outcome receipt may be fast-forwarded to the same branch. PR remains Draft/open/unmerged; main push, merge, deployment, migration, OTA and production writes remain excluded.
 
 ## CRL-20261007-001 — 编辑维修记录补充维修后照片与说明
 
