@@ -423,16 +423,16 @@
 - Branch: `codex/mz010-mz011-mz021-integration-20261010`
 - Base: `origin/Dev@c3a6bf43d5a6178bf7f8a8117e104563599e1ceb`; fetched at `2026-10-10T06:51:42Z` from GitHub
 - Candidate patch SHA-256: `2589f8c5914548ad61773f3f518f43eae8085475bba3dede96459139b2397745` excluding `docs/change-release-ledger.md`
-- Commit SHA: `not committed`
+- Commit SHA: `a880e0203ed436697f4589317b049fdf8d16fd4f`
 - Dependencies: none
 - Required validation: `PASS`; evidence: MZ-003 six focused suites / 42 tests passed; complete `npm run check:ci` passed ledger/type/button/lint 0 errors / 593 warnings and 67 suites / 400 tests; fresh paired Root `npm run check:full` repeated the same Mobile quality chain successfully.
 - Shared-hunk review: `PASS`; evidence: shared API/store/task-screen/package and Feature Registry hunks are intentionally recorded in every relevant selected CRL and audited as one exact union; MZ-003 is integrated with MZ-010/MZ-011/MZ-021 without MZ-022/MZ-023.
 - Generated-file review: `PASS`; evidence: candidate contains no generated build output, cache or dependency directory.
 - Sensitive-information review: `PASS`; evidence: candidate contains no `.env`, credentials, tokens, cookies, private keys, database URL, production media or production data.
-- Technical state: `candidate`
+- Technical state: `committed`
 - User authorization: `approved-for-push`; evidence: delegated instruction explicitly authorized separate Root/Mobile commits, normal pushes and paired Draft PRs, while forbidding merge, auto-merge, main push, deployment, OTA and production writes.
 - Independent review: `GO`; evidence: independent read-only review at `2026-10-10T07:32:46Z` verified the exact 34-path / 129-non-ledger-hunk candidate, base/HEAD/index boundary, `2589f8c5914548ad61773f3f518f43eae8085475bba3dede96459139b2397745` fingerprint, clean diff checks, no P0/P1, the repaired shared day-end upload identity, no MZ-022/MZ-023 source changes, and no generated or sensitive paths.
-- Action conclusion: `GO`; the exact candidate may be committed locally. Push and Draft PR remain separately gated actions; merge, main push, deployment, OTA and production writes remain excluded.
+- Action conclusion: `GO`; exact content commit `a880e0203ed436697f4589317b049fdf8d16fd4f` was created locally after the pre-commit audit passed. Push and Draft PR remain separately gated actions; merge, main push, deployment, OTA and production writes remain excluded.
 
 ## CRL-20261007-001 — 编辑维修记录补充维修后照片与说明
 
