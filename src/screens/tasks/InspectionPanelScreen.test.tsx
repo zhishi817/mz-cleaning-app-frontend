@@ -411,7 +411,8 @@ test('进入检查与补充先确认房号，成功同步后仅可从相册追�
     expect(api.uploadCleaningMedia).toHaveBeenCalledWith(
       'test-token',
       expect.objectContaining({ uri: 'file:///test.jpg' }),
-      expect.objectContaining({ purpose: 'inspection_issue' }),
+      expect.objectContaining({ purpose: 'inspection_issue', task_id: 'cleaning-1', media_id: 'media-1' }),
+      { skipImageCompression: true },
     )
     expect(api.appendInspectionIssuePhotos).toHaveBeenCalledWith(
       'test-token',

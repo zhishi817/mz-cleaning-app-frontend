@@ -829,10 +829,13 @@ export default function InspectionPanelScreen(props: Props) {
             {
               watermark: '1',
               purpose: 'inspection_issue',
+              task_id: cleaningTaskId,
+              media_id: uploaded.id,
               property_code: propertyCode || undefined,
               captured_at: cleanText(uploaded.captured_at) || undefined,
               watermark_text: `${propertyCode || '未知房号'}\n${cleanText(uploaded.captured_at).replace('T', ' ').slice(0, 16)}`,
             },
+            { skipImageCompression: true },
           )
           remoteReference = cleaningMediaReference(upload)
           if (!remoteReference) throw new Error('问题照片上传后缺少媒体引用')

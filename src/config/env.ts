@@ -19,3 +19,5 @@ export const LOCAL_LOGIN_ENABLED = String(process.env.EXPO_PUBLIC_LOCAL_LOGIN_EN
 export const LOCAL_LOGIN_USERNAME = (process.env.EXPO_PUBLIC_LOCAL_LOGIN_USERNAME || 'demo').trim()
 export const LOCAL_LOGIN_PASSWORD = (process.env.EXPO_PUBLIC_LOCAL_LOGIN_PASSWORD || 'demo1234').trim()
 export const LOCAL_LOGIN_ROLE = (process.env.EXPO_PUBLIC_LOCAL_LOGIN_ROLE || 'cleaner').trim() || 'cleaner'
+export const DEV_PREVIEW_ACTIVITY_ENABLED = __DEV__
+  && String(process.env.EXPO_PUBLIC_MZ_DEV_PREVIEW_ACTIVITY || '').trim() === '1'

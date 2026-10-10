@@ -59,6 +59,15 @@ test('keeps the local day-end photo after object upload when the handover save i
   const result = await queueMod.processDayEndHandoverQueue('token-1')
 
   expect(result).toEqual({ processed: 0, remaining: 1 })
+  expect(api.uploadCleaningMedia).toHaveBeenCalledWith(
+    'token-1',
+    expect.objectContaining({ name: 'key-key-local-1.jpg', mimeType: 'image/jpeg' }),
+    expect.objectContaining({
+      task_id: 'day-end:cleaner-1:2026-08-12',
+      media_id: 'key-local-1',
+    }),
+    { skipImageCompression: true },
+  )
   expect((await queueMod.getDayEndHandoverDraft('cleaner-1', '2026-08-12'))?.key_items[0]).toEqual(expect.objectContaining({
     uri: 'file:///local/day-end-key.jpg',
     uploaded_url: 'cleaning/day-end-key.jpg',

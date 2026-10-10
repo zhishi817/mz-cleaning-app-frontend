@@ -626,6 +626,15 @@ test('does not re-upload media when restock save retries after upload_media alre
 
   expect(first).toEqual({ processed: 0, remaining: 1 })
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
+  expect(api.uploadCleaningMedia).toHaveBeenCalledWith(
+    'token-2',
+    expect.any(Object),
+    expect.objectContaining({
+      task_id: 'cleaning-task-restock',
+      media_id: 'proof-1',
+    }),
+    { skipAuthInvalidation: true, skipImageCompression: true },
+  )
   const failedBatch = await queueMod.getInspectionPanelBatch('task-restock')
   expect(failedBatch?.steps.upload_media.status).toBe('succeeded')
   expect(failedBatch?.snapshot.restock[0]?.proof_media[0]?.uploaded_key).toBe('cleaning/restock-proof.jpg')

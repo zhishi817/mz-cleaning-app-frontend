@@ -34,6 +34,11 @@ jest.mock('../../lib/api', () => ({
 }))
 
 jest.mock('../../lib/dayEndHandoverQueue', () => ({
+  buildDayEndMediaUploadIdentity: jest.fn(({ user_id, date, prefix, media_id }) => ({
+    name: `${prefix}-${media_id}.jpg`,
+    task_id: `day-end:${user_id}:${date}`,
+    media_id,
+  })),
   clearDayEndHandoverDraft: jest.fn(async () => {}),
   getDayEndHandoverDraft: jest.fn(async () => null),
   persistDayEndDraftPhoto: jest.fn(async () => null),
@@ -162,8 +167,13 @@ test('new day-end photos keep the durable local preview until the handover recor
 
   await waitFor(() => expect(api.uploadCleaningMedia).toHaveBeenCalledWith(
     'local:test',
-    expect.objectContaining({ uri: 'file:///private/day-end-key.jpg' }),
-    expect.objectContaining({ purpose: 'backup_key_return', media_id: 'key-local-1' }),
+    expect.objectContaining({ uri: 'file:///private/day-end-key.jpg', name: 'key-key-local-1.jpg', mimeType: 'image/jpeg' }),
+    expect.objectContaining({
+      purpose: 'backup_key_return',
+      task_id: 'day-end:cleaner-1:2026-08-12',
+      media_id: 'key-local-1',
+    }),
+    { skipImageCompression: true },
   ))
   await waitFor(() => expect(ui.getByText('已上传，待提交关联')).toBeTruthy())
   expect(ui.UNSAFE_getAllByType(Image).map((node) => node.props.source)).toContainEqual({ uri: 'file:///private/day-end-key.jpg' })

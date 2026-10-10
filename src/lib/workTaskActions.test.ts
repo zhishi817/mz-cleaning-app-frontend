@@ -1,4 +1,4 @@
-import { actionDisabledReasonText, availableActionsForTask, navigationForWorkTaskAction } from './workTaskActions'
+import { actionDisabledReasonText, availableActionsForTask, mergeGuestReadyNotificationActions, navigationForWorkTaskAction } from './workTaskActions'
 
 test('清洁未提交时，即使共享任务状态已进入 inspected，补品入口仍可编辑', () => {
   const task: any = {
@@ -72,6 +72,43 @@ test('客服合并卡只继承服务端确认的退房 action source ID', () => 
     source_id: 'checkout-source',
   }))
   expect(availableActionsForTask({ ...task, available_actions: [] }, { roleNames: ['customer_service'] }).map((action) => action.id)).toEqual(['report_issue'])
+})
+
+test('客服保留服务端独立授权的客人已通知动作，不从旧角色规则推导', () => {
+  const task: any = {
+    id: 'ready-checkin',
+    source_type: 'cleaning_tasks',
+    source_id: 'checkin-source',
+    task_kind: 'cleaning',
+    task_type: 'turnover',
+    order_id_checkin: 'checkin-order',
+    status: 'ready',
+    available_actions: [
+      { id: 'record_guest_ready_notified', label: '记录已通知客人', placement: 'primary', enabled: true, target: 'TaskDetail', intent: 'manager', source_id: 'checkin-order' },
+    ],
+  }
+
+  expect(availableActionsForTask(task, { roleNames: ['customer_service'] }).map((action) => action.id)).toEqual([
+    'record_guest_ready_notified',
+    'report_issue',
+  ])
+  expect(availableActionsForTask({ ...task, available_actions: [] }, { roleNames: ['customer_service'] }).map((action) => action.id)).toEqual([
+    'report_issue',
+  ])
+})
+
+test('通知状态回执只替换对应动作，不覆盖任务原有操作', () => {
+  const existing: any[] = [
+    { id: 'fill_supplies', label: '补品填报' },
+    { id: 'record_guest_ready_notified', label: '已通知客人' },
+    { id: 'report_issue', label: '问题反馈' },
+  ]
+  const receipt: any[] = [{ id: 'revoke_guest_ready_notified', label: '撤销已通知客人' }]
+  expect(mergeGuestReadyNotificationActions(existing, receipt).map((action) => action.id)).toEqual([
+    'fill_supplies',
+    'report_issue',
+    'revoke_guest_ready_notified',
+  ])
 })
 
 test('入住检查不会显示退房动作，旧服务端缓存动作同样会被隐藏', () => {

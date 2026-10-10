@@ -128,6 +128,19 @@ function makeSubmitId() {
   return makeId('inspection_batch')
 }
 
+function stableUploadMediaId(submitId: string, value: string) {
+  const normalized = cleanText(value)
+  if (/^[a-zA-Z0-9_-]{1,96}$/.test(normalized)) return normalized
+  let first = 0x811c9dc5
+  let second = 0x9e3779b9
+  for (let index = 0; index < normalized.length; index++) {
+    const code = normalized.charCodeAt(index)
+    first = Math.imul(first ^ code, 0x01000193) >>> 0
+    second = Math.imul(second ^ (code + index), 0x85ebca6b) >>> 0
+  }
+  return `${cleanText(submitId).slice(0, 48)}_${first.toString(16).padStart(8, '0')}${second.toString(16).padStart(8, '0')}`
+}
+
 function normalizeSubmitId(value: any) {
   const submitId = cleanText(value)
   return submitId.length <= MAX_SUBMIT_ID_LENGTH ? submitId : makeSubmitId()
@@ -728,13 +741,15 @@ async function processUploadMediaStep(token: string, taskId: string) {
       { uri: localUri, name: entry.media.name, mimeType: entry.media.mime_type },
       {
         ...entry.meta,
+        task_id: cleanText(current.snapshot.cleaning_task_id) || cleanText(current.task_id),
+        media_id: stableUploadMediaId(current.submit_id, entry.media.id || entry.key),
         captured_at: entry.media.captured_at,
         watermark: cleanText(entry.media.watermark_text) ? '1' : '',
         watermark_text: cleanText(entry.media.watermark_text) || '',
         property_code: cleanText(current.snapshot.property_code) || undefined,
         note: cleanText(entry.media.note) || undefined,
       },
-      { skipAuthInvalidation: true },
+      { skipAuthInvalidation: true, skipImageCompression: true },
     ))
     uploadedByKey[entry.key] = {
       remote_key: normalizeCleaningObjectKey(up.key) || undefined,
