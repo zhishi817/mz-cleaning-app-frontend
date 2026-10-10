@@ -434,6 +434,28 @@
 - Independent review: `GO`; evidence: independent read-only review at `2026-10-10T07:32:46Z` verified the exact 34-path / 129-non-ledger-hunk candidate, base/HEAD/index boundary, `2589f8c5914548ad61773f3f518f43eae8085475bba3dede96459139b2397745` fingerprint, clean diff checks, no P0/P1, the repaired shared day-end upload identity, no MZ-022/MZ-023 source changes, and no generated or sensitive paths.
 - Action conclusion: `GO`; exact content commit `a880e0203ed436697f4589317b049fdf8d16fd4f` was created locally after the pre-commit audit passed. Push and Draft PR remain separately gated actions; merge, main push, deployment, OTA and production writes remain excluded.
 
+#### RA-20261010-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261009-001`, `CRL-20261010-001`, `CRL-20261010-002`, `CRL-20261010-003`
+- Selected CRL identities: `mobile/CRL-20261009-001`, `mobile/CRL-20261010-001`, `mobile/CRL-20261010-002`, `mobile/CRL-20261010-003`
+- Intended action: `push`
+- Branch: `codex/mz010-mz011-mz021-integration-20261010`
+- Remote branch: absent at `2026-10-10T07:36:34Z`; live `git ls-remote --heads` returned no target ref.
+- Base: `origin/Dev@c3a6bf43d5a6178bf7f8a8117e104563599e1ceb`; live fetch at `2026-10-10T07:36:34Z` confirmed unchanged.
+- Candidate patch SHA-256: `2589f8c5914548ad61773f3f518f43eae8085475bba3dede96459139b2397745` excluding `docs/change-release-ledger.md`
+- Commit SHA: `a880e0203ed436697f4589317b049fdf8d16fd4f`
+- Dependencies: `root/CRL-20261009-001@94fc510992aff5bd8bc0c514cff91bc9313647e1`; `root/CRL-20261010-001@94fc510992aff5bd8bc0c514cff91bc9313647e1`; `root/CRL-20261010-002@94fc510992aff5bd8bc0c514cff91bc9313647e1`; `root/CRL-20261010-003@94fc510992aff5bd8bc0c514cff91bc9313647e1`
+- Required validation: `PASS`; evidence: MZ-003 six focused suites / 42 tests, DayEnd repair 2 suites / 6 tests and complete `npm run check:ci` 67 suites / 400 tests passed; fresh paired Root `npm run check:full` repeated the complete Mobile quality chain; content and ledger-only receipt gates passed.
+- Shared-hunk review: `PASS`; evidence: 129 exact non-ledger hunks match the selected four-CRL union with no MZ-022/MZ-023 source changes.
+- Generated-file review: `PASS`; evidence: exact range contains no generated build output, cache or dependency directory.
+- Sensitive-information review: `PASS`; evidence: exact range contains no configured sensitive categories.
+- Cross-repository dependency verification: `PASS`; evidence: paired Root range `e9e32847c49782a34163267681174c57db3a8952...0bae99eabc304490fe2861a24bb1941affafc653` contains content commit `94fc510992aff5bd8bc0c514cff91bc9313647e1`, binds the four canonical Root CRLs, and retains fingerprint `b82511faa430f363d05e89b74762849910ff6b25d797a8ed560667a3e34a1869`; Root must be delivered before Mobile.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: delegated instruction explicitly authorized the separate Mobile normal push and paired Draft PR while forbidding merge, auto-merge, main push, deployment, OTA and production writes.
+- Independent review: `GO for ledger-only review receipt commit and conditional controlled push`; evidence: independent read-only push review verified exact base/content/HEAD ancestry, unchanged 34-path / 129-hunk fingerprint, receipt-only staged scope, four-CRL paired dependency ranges/content commits/fingerprints, clean diff/generated/sensitive boundaries, and recorded live unchanged-Dev/absent-target evidence; no P0/P1.
+- Action conclusion: `GO`; commit this ledger-only receipt, require exact release-report verification and one final live remote-boundary check, then use one normal non-force explicit-refspec push per repository, Root before Mobile. Draft PR may follow under existing authorization; merge, main push, deployment, migration, OTA and production writes remain excluded.
+
 ## CRL-20261007-001 — 编辑维修记录补充维修后照片与说明
 
 - **Repository:** `mobile`
