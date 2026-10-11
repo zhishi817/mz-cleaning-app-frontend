@@ -249,11 +249,14 @@ export async function processKeyUploadQueue(token: string) {
             { uri: item.local_uri, name: item.name, mimeType: item.mime_type },
             {
               purpose: 'key_photo',
+              task_id: item.cleaning_task_id,
+              media_id: item.id,
               watermark: cleanText(item.watermark_text) ? '1' : '',
               watermark_text: item.watermark_text || '',
               property_code: item.property_code || '',
               captured_at: item.captured_at || '',
             },
+            { skipImageCompression: true },
           ))
           const remoteReference = cleaningMediaReference(up)
           await updateQueueItem(item.cleaning_task_id, (current) => current ? {

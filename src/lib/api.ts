@@ -590,6 +590,8 @@ export type WorkTaskActionId =
   | 'append_completion_photo'
   | 'report_issue'
   | 'mark_guest_checkout'
+  | 'record_guest_ready_notified'
+  | 'revoke_guest_ready_notified'
 
 export type WorkTaskActionTarget =
   | 'TaskDetail'
@@ -621,6 +623,17 @@ export type WorkTaskParticipant = {
   source_id?: string | null
 }
 
+export type GuestReadyNotification = {
+  order_id: string
+  status: 'not_notified' | 'notified'
+  notified_at: string | null
+  notified_by_user_id: string | null
+  notified_by_name: string | null
+  version: number
+  eligible: boolean
+  disabled_reason?: 'property_not_ready' | 'no_checkin_order' | 'checkin_order_changed' | null
+}
+
 export type WorkTask = {
   id: string
   task_kind: string
@@ -637,6 +650,10 @@ export type WorkTask = {
   order_id?: string | null
   order_id_checkin?: string | null
   order_id_checkout?: string | null
+  execution_list_visible?: boolean
+  daily_stats_group?: 'turnover' | 'offline' | null
+  daily_stats_key?: string | null
+  guest_ready_notification?: GuestReadyNotification | null
   property_id: string | null
   title: string
   summary: string | null
@@ -651,6 +668,7 @@ export type WorkTask = {
   inspection_scope?: 'inspect_and_hang' | 'password_only' | null
   inspection_due_date?: string | null
   status: string
+  source_workflow_status?: string | null
   cleaning_status?: string | null
   cleaning_submission_ready?: boolean | null
   inspection_status?: string | null
@@ -996,6 +1014,37 @@ export async function listWorkTasks(token: string, params: { date_from: string; 
   const data = (await parseJsonOrThrow(res)) as any
   if (!Array.isArray(data)) throw new Error('任务列表返回格式不正确')
   return data as WorkTask[]
+}
+
+export async function changeGuestReadyNotification(
+  token: string,
+  params: { order_id: string; action: 'mark' | 'revoke'; operation_id: string; expected_version: number },
+) {
+  const urls = buildUrlCandidates('mzapp/guest-ready-notifications')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  return (await parseJsonOrThrow(res)) as {
+    ok: true
+    operation_id: string
+    changed: boolean
+    idempotent_replay: boolean
+    guest_ready_notification: GuestReadyNotification
+    available_actions: WorkTaskAvailableAction[]
+  }
 }
 
 export type ChecklistItem = {
@@ -1545,11 +1594,21 @@ export async function uploadCleaningMedia(
   return { url: u, key: key || null }
 }
 
-export async function uploadCleaningVideo(token: string, file: { uri: string; name: string; mimeType: string }) {
+export async function uploadCleaningVideo(
+  token: string,
+  file: { uri: string; name: string; mimeType: string },
+  meta?: Record<string, string | undefined | null>,
+) {
   const urls = buildUrlCandidates('cleaning-app/upload')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   if (!new File(file.uri).exists) throw new ApiError('本地文件已丢失，请重新拍摄', 0, 'MISSING_LOCAL_FILE', false)
   const form = new FormData()
+  if (meta) {
+    for (const [key, value] of Object.entries(meta)) {
+      const normalized = String(value ?? '').trim()
+      if (normalized) form.append(key, normalized)
+    }
+  }
   form.append('file', { uri: file.uri, name: file.name, type: file.mimeType } as any)
 
   let lastRes: Response | null = null
@@ -1821,7 +1880,7 @@ export async function createWarehouseKeyEvent(
   return (await parseJsonOrThrow(res)) as any
 }
 
-export async function uploadLockboxVideo(token: string, cleaningTaskId: string, params: { media_url: string }) {
+export async function uploadLockboxVideo(token: string, cleaningTaskId: string, params: { media_url: string; operation_id?: string }) {
   const urls = buildUrlCandidates(`mzapp/cleaning-tasks/${encodeURIComponent(cleaningTaskId)}/lockbox-video`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
@@ -1866,7 +1925,7 @@ export async function deleteLockboxVideo(token: string, cleaningTaskId: string) 
   throw new Error(await parseErrorMessage(res))
 }
 
-export async function uploadSelfLockboxVideo(token: string, cleaningTaskId: string, params: { media_url: string; captured_at?: string }) {
+export async function uploadSelfLockboxVideo(token: string, cleaningTaskId: string, params: { media_url: string; operation_id?: string; captured_at?: string }) {
   const urls = buildUrlCandidates(`cleaning-app/tasks/${encodeURIComponent(cleaningTaskId)}/lockbox-video`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null

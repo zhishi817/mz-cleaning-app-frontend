@@ -4,6 +4,7 @@ import { listWorkTasks, type WorkTask } from './api'
 import EventSource from 'react-native-sse'
 import { notifyAuthInvalidated } from './authEvents'
 import { invalidateCleaningMediaCache } from './cleaningMediaCache'
+import { isDailyTaskExecutionVisible } from './dailyTaskExecutionVisibility'
 
 export type WorkTaskItem = WorkTask & {
   date: string
@@ -114,6 +115,20 @@ const SAFE_PATCH_FIELDS = new Set([
   'property.wifi_ssid',
   'property.wifi_password',
   'property.router_location',
+])
+const EXECUTION_VISIBILITY_INPUT_FIELDS = new Set([
+  'source_type',
+  'task_kind',
+  'task_type',
+  'status',
+  'source_workflow_status',
+  'maintenance_workflow',
+  'scheduled_date',
+  'task_date',
+  'date',
+  'assignee_id',
+  'cleaner_id',
+  'inspector_id',
 ])
 
 const listeners = new Set<() => void>()
@@ -393,6 +408,33 @@ function getPatchValue(patch: Record<string, any>, key: string) {
   return cursor
 }
 
+export function reconcileExecutionListVisibilityAfterPatch(task: WorkTaskItem, changedFields: string[]) {
+  const touchesVisibility = changedFields.some((field) => {
+    const root = String(field || '').trim().split('.')[0]
+    return EXECUTION_VISIBILITY_INPUT_FIELDS.has(root)
+  })
+  if (!touchesVisibility) return task
+  const fieldRoots = new Set(changedFields.map((field) => String(field || '').trim().split('.')[0]))
+  const source = String(task.source_type || '').trim().toLowerCase()
+  const maintenanceWorkflowChanged = fieldRoots.has('status') || fieldRoots.has('maintenance_workflow')
+  const isMaintenance = source === 'property_maintenance' || source === 'external_maintenance_orders'
+  const workflowStatus = String(
+    fieldRoots.has('maintenance_workflow')
+      ? (task.maintenance_workflow?.status || task.status || '')
+      : fieldRoots.has('status')
+        ? (task.status || '')
+        : (task.source_workflow_status || task.maintenance_workflow?.status || task.status || ''),
+  ).trim()
+  const next = isMaintenance && maintenanceWorkflowChanged && !fieldRoots.has('source_workflow_status')
+    ? { ...task, source_workflow_status: workflowStatus || null }
+    : task
+  const { execution_list_visible: _staleProjection, ...candidate } = next
+  return {
+    ...next,
+    execution_list_visible: isDailyTaskExecutionVisible(candidate),
+  }
+}
+
 export function mergePatchIntoTask(task: WorkTaskItem, event: WorkTaskStreamEvent) {
   const payload = event.payload && typeof event.payload === 'object' ? event.payload : {}
   const patch = payload.patch && typeof payload.patch === 'object' ? payload.patch : {}
@@ -434,7 +476,7 @@ export function mergePatchIntoTask(task: WorkTaskItem, event: WorkTaskStreamEven
   }
   const date = String(next.scheduled_date || '').slice(0, 10)
   next.date = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : task.date
-  return next
+  return reconcileExecutionListVisibilityAfterPatch(next, changedFields)
 }
 
 export function projectCleaningStatusForTask(task: WorkTaskItem, value: any) {
@@ -894,7 +936,10 @@ export async function patchWorkTaskItem(id0: string, patch: Partial<WorkTaskItem
   const idx = state.items.findIndex((x) => x.id === id)
   if (idx < 0) return
   const prev = state.items[idx]
-  const next = { ...prev, ...patch }
+  const next = reconcileExecutionListVisibilityAfterPatch(
+    { ...prev, ...patch },
+    Object.keys(patch),
+  )
   const items = state.items.slice()
   items[idx] = next
   recordLocalTaskPatch(state.bucketKey, next.id)
@@ -915,7 +960,10 @@ export async function patchWorkTaskItems(patches0: Array<{ id: string; patch: Pa
     const patch = patchById.get(String(task.id || '').trim())
     if (!patch) return task
     changed = true
-    const next = { ...task, ...patch }
+    const next = reconcileExecutionListVisibilityAfterPatch(
+      { ...task, ...patch },
+      Object.keys(patch),
+    )
     recordLocalTaskPatch(state.bucketKey, next.id)
     return next
   })

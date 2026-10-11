@@ -40,7 +40,7 @@ test('retries key upload from start_cleaning_task without re-uploading media', a
 
   const queueMod = require('./keyUploadQueue') as typeof import('./keyUploadQueue')
 
-  await queueMod.enqueueKeyUpload({
+  const queuedItem = await queueMod.enqueueKeyUpload({
     cleaning_task_id: 'cleaning-task-1',
     source_uri: 'file:///camera/key-1.heic',
     property_code: 'A1201',
@@ -53,6 +53,15 @@ test('retries key upload from start_cleaning_task without re-uploading media', a
 
   expect(first).toEqual({ processed: 0, remaining: 1 })
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
+  expect(api.uploadCleaningMedia).toHaveBeenCalledWith(
+    'token-1',
+    expect.any(Object),
+    expect.objectContaining({
+      task_id: 'cleaning-task-1',
+      media_id: queuedItem?.id,
+    }),
+    { skipImageCompression: true },
+  )
   expect(api.startCleaningTask).toHaveBeenCalledTimes(1)
   expect(api.startCleaningTask).toHaveBeenNthCalledWith(1, 'token-1', 'cleaning-task-1', expect.objectContaining({
     media_url: 'cleaning/media/cleaning-task-1/key-1',

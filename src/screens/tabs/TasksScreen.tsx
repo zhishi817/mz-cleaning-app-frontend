@@ -9,7 +9,7 @@ import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { layoutTokens } from '../../lib/theme'
-import { createCleaningOfflineTask, createManualCleaningTask, listCleaningAppPropertyCodes, listUsers, reorderMixedWorkTasks } from '../../lib/api'
+import { changeGuestReadyNotification, createCleaningOfflineTask, createManualCleaningTask, listCleaningAppPropertyCodes, listUsers, reorderMixedWorkTasks } from '../../lib/api'
 import { markGuestCheckedOutByOrder, markGuestCheckedOutByTasks } from '../../lib/api'
 import { listMzappAlerts, markMzappAlertRead } from '../../lib/api'
 import { getMyProfile } from '../../lib/api'
@@ -40,6 +40,7 @@ import {
   isStayoverTaskType,
 } from '../../lib/cleaningInspection'
 import { canSwitchTaskMode, isTaskManagerUser } from '../../lib/roles'
+import { isDailyTaskExecutionVisible } from '../../lib/dailyTaskExecutionVisibility'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { resolveKeyRequirementTags } from '../../lib/keyRequirementTags'
 import { normalizeAuMobile } from '../../lib/phone'
@@ -56,7 +57,9 @@ import {
   turnoverDisplayOf,
 } from '../../lib/turnoverDisplay'
 import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
-import { navigationForWorkTaskAction, primaryActionsForTask } from '../../lib/workTaskActions'
+import { mergeGuestReadyNotificationActions, navigationForWorkTaskAction, primaryActionsForTask } from '../../lib/workTaskActions'
+import { dailyTaskGroupCounts } from '../../lib/dailyTaskPresentation'
+import { millisecondsUntilNextTaskBusinessDate, shouldFollowTaskBusinessDate, taskBusinessDateKey } from '../../lib/taskBusinessDate'
 import {
   activateWorkTasksRealtime,
   deactivateWorkTasksRealtime,
@@ -129,7 +132,7 @@ function addDays(d: Date, days: number) {
 function isBeforeToday(taskDate0: any) {
   const taskDate = String(taskDate0 || '').slice(0, 10)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(taskDate)) return false
-  return taskDate < ymd(new Date())
+  return taskDate < taskBusinessDateKey()
 }
 
 function startOfWeekMonday(d: Date) {
@@ -144,6 +147,11 @@ function startOfWeekMonday(d: Date) {
 export function shouldScrollWeekRowToEnd(date: Date) {
   const day = date.getDay()
   return day === 0 || day >= 5
+}
+
+export function taskWeekDateKeys(selectedDate: string) {
+  const start = startOfWeekMonday(parseYmd(selectedDate))
+  return Array.from({ length: 7 }, (_, index) => ymd(addDays(start, index)))
 }
 
 function daysInMonth(d: Date) {
@@ -618,7 +626,7 @@ export default function TasksScreen(props: Props) {
   const canSwitchMode = useMemo(() => canSwitchTaskMode(user), [user])
   const [mode, setMode] = useState<'cleaning' | 'manager'>('cleaning')
   const [period, setPeriod] = useState<Period>('today')
-  const [selectedDate, setSelectedDate] = useState<string>(() => ymd(new Date()))
+  const [selectedDate, setSelectedDate] = useState<string>(() => taskBusinessDateKey())
   const [hasInit, setHasInit] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -646,7 +654,7 @@ export default function TasksScreen(props: Props) {
   const [quickCreateMode, setQuickCreateMode] = useState<QuickCreateMode>('checkin')
   const [quickCreateBusy, setQuickCreateBusy] = useState(false)
   const [quickCreateProperty, setQuickCreateProperty] = useState('')
-  const [quickCreateDate, setQuickCreateDate] = useState(() => ymd(new Date()))
+  const [quickCreateDate, setQuickCreateDate] = useState(() => taskBusinessDateKey())
   const [quickCreateTime, setQuickCreateTime] = useState('3pm')
   const [quickCreateOldCode, setQuickCreateOldCode] = useState('')
   const [quickCreateNewCode, setQuickCreateNewCode] = useState('')
@@ -670,9 +678,28 @@ export default function TasksScreen(props: Props) {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [taskNoticeArmed, setTaskNoticeArmed] = useState(false)
   const [checkedOutPendingMap, setCheckedOutPendingMap] = useState<Record<string, boolean>>({})
+  const [guestReadyPendingMap, setGuestReadyPendingMap] = useState<Record<string, boolean>>({})
+  const selectedDateRef = useRef(selectedDate)
+  const periodRef = useRef<Period>(period)
+  const businessDateRef = useRef(taskBusinessDateKey())
   const [taskCacheHint, setTaskCacheHint] = useState<TaskCacheHint>(null)
   const [isShowingCachedTasks, setIsShowingCachedTasks] = useState(false)
   const [collapsedTaskIds, setCollapsedTaskIds] = useState<Record<string, boolean>>({})
+
+  const advanceFollowedBusinessDate = useCallback(() => {
+    const previousBusinessDate = businessDateRef.current
+    const nextBusinessDate = taskBusinessDateKey()
+    businessDateRef.current = nextBusinessDate
+    if (!shouldFollowTaskBusinessDate({
+      period: periodRef.current,
+      selectedDate: selectedDateRef.current,
+      previousBusinessDate,
+      nextBusinessDate,
+    })) return false
+    selectedDateRef.current = nextBusinessDate
+    setSelectedDate(nextBusinessDate)
+    return true
+  }, [])
   const [copiedFeedbackKey, setCopiedFeedbackKey] = useState<string | null>(null)
   const copyFeedbackTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const allowDerivedTaskNotices = String(token || '').startsWith('local:')
@@ -830,8 +857,35 @@ export default function TasksScreen(props: Props) {
   const headerInitials = useMemo(() => initialsOf(greetingName), [greetingName])
 
   useEffect(() => {
-    if (period === 'today') setSelectedDate(ymd(new Date()))
+    periodRef.current = period
+    if (period === 'today') {
+      const today = taskBusinessDateKey()
+      businessDateRef.current = today
+      setSelectedDate(today)
+    }
   }, [period])
+
+  useEffect(() => {
+    selectedDateRef.current = selectedDate
+  }, [selectedDate])
+
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const scheduleNextBoundary = () => {
+      const delay = millisecondsUntilNextTaskBusinessDate()
+      timer = setTimeout(() => {
+        if (cancelled) return
+        advanceFollowedBusinessDate()
+        scheduleNextBoundary()
+      }, delay + 250)
+    }
+    scheduleNextBoundary()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [advanceFollowedBusinessDate])
 
   useEffect(() => {
     const unsub = subscribeWorkTasks(() => bump(v => v + 1))
@@ -899,7 +953,7 @@ export default function TasksScreen(props: Props) {
       const end = new Date(base.getFullYear(), base.getMonth(), daysInMonth(start))
       return { date_from: ymd(start), date_to: ymd(end) }
     }
-    const base = period === 'today' ? new Date() : selected
+    const base = selected
     const start = startOfWeekMonday(base)
     const end = addDays(start, 6)
     return { date_from: ymd(start), date_to: ymd(end) }
@@ -982,6 +1036,7 @@ export default function TasksScreen(props: Props) {
     if (status !== 'signedIn' || !token || !user?.id) return
     const nav: any = props.navigation as any
     const onFocus = async () => {
+      if (advanceFollowedBusinessDate()) return
       try {
         await refreshTasksData({ silent: true, preserveError: true, mode: 'passive', reason: 'tasks_screen_focus' })
       } catch {}
@@ -992,7 +1047,7 @@ export default function TasksScreen(props: Props) {
         if (typeof unsub === 'function') unsub()
       } catch {}
     }
-  }, [props.navigation, refreshTasksData, status, token, user?.id])
+  }, [advanceFollowedBusinessDate, props.navigation, refreshTasksData, status, token, user?.id])
 
   useEffect(() => {
     if (!token || !user?.id) return
@@ -1000,6 +1055,7 @@ export default function TasksScreen(props: Props) {
     setWorkTasksRefreshForeground(AppState.currentState === 'active')
     const onAppActive = async () => {
       if (cancelled) return
+      if (advanceFollowedBusinessDate()) return
       try {
         await refreshTasksData({ silent: true, preserveError: true, mode: 'passive', reason: 'tasks_app_active' })
       } catch {}
@@ -1015,7 +1071,7 @@ export default function TasksScreen(props: Props) {
         sub.remove()
       } catch {}
     }
-  }, [refreshTasksData, token, user?.id])
+  }, [advanceFollowedBusinessDate, refreshTasksData, token, user?.id])
 
   const items = getWorkTasksSnapshot().items
   const tasksByDate = useMemo(() => {
@@ -1134,19 +1190,16 @@ export default function TasksScreen(props: Props) {
   }
 
   const weekDays = useMemo(() => {
-    const base = period === 'today' ? new Date() : selected
-    const start = startOfWeekMonday(base)
     const labelsZh = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
     const labelsEn = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-    return Array.from({ length: 7 }).map((_, idx) => {
-      const date = addDays(start, idx)
-      const key = ymd(date)
+    return taskWeekDateKeys(selectedDate).map((key, idx) => {
+      const date = parseYmd(key)
       const hasTask = (tasksByDate.get(key) || []).length > 0
       const isSelected = key === selectedDate
       const dow = locale === 'en' ? labelsEn[idx] : labelsZh[idx]
       return { key, dow, day: date.getDate(), hasTask, isSelected }
     })
-  }, [locale, period, selected, selectedDate, tasksByDate])
+  }, [locale, selectedDate, tasksByDate])
 
   useEffect(() => {
     if (period !== 'today') return
@@ -1248,6 +1301,7 @@ export default function TasksScreen(props: Props) {
 
   const selectedTasks = useMemo(() => {
     const list = (tasksByDate.get(selectedDate) || []).filter((task) => {
+      if (!isDailyTaskExecutionVisible(task)) return false
       if (!(canManagerMode && mode === 'manager' && view === 'all')) return hasMobileExecutor(task)
       if (isCleaningExecutionTask(task) || isInspectionExecutionTask(task) || isKeyHandoverExecutionTask(task)) return true
       if (isPropertyFollowupTask(task)) return hasMobileExecutor(task)
@@ -1284,6 +1338,8 @@ export default function TasksScreen(props: Props) {
     return list
   }, [canManagerMode, mode, period, selectedDate, tasksByDate, view])
 
+  const dailyGroupStats = useMemo(() => dailyTaskGroupCounts(selectedTasks), [selectedTasks])
+
   const canReorder = useMemo(() => {
     if (roleNames.includes('cleaner') || roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')) return true
     if (canManagerMode && mode === 'manager') return false
@@ -1312,7 +1368,7 @@ export default function TasksScreen(props: Props) {
 
   const renderTasks = useMemo(() => selectedTasks, [selectedTasks])
   const dayEndDate = selectedDate
-  const staffProgressTitle = dayEndDate === ymd(new Date()) ? '今日工作情况' : `${dayEndDate} 工作情况`
+  const staffProgressTitle = dayEndDate === taskBusinessDateKey() ? '今日工作情况' : `${dayEndDate} 工作情况`
   const currentUserId = String((user as any)?.id || '').trim()
   const showWarehouseKeyCard = useMemo(() => {
     if (period !== 'today') return false
@@ -1713,9 +1769,48 @@ function showBanner(title: string, message: string) {
     }
   }
 
+  async function toggleGuestReadyNotification(task: WorkTaskItem, action: WorkTaskAvailableAction) {
+    if (!token || !user?.id || guestReadyPendingMap[task.id]) return
+    const notification = task.guest_ready_notification
+    const orderId = String(notification?.order_id || action.source_id || task.order_id_checkin || '').trim()
+    if (!notification || !orderId) {
+      showBanner('失败', '入住订单已变化，请刷新后重试')
+      return
+    }
+    setGuestReadyPendingMap((prev) => ({ ...prev, [task.id]: true }))
+    try {
+      const receipt = await changeGuestReadyNotification(token, {
+        order_id: orderId,
+        action: action.id === 'revoke_guest_ready_notified' ? 'revoke' : 'mark',
+        operation_id: `guest-ready-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+        expected_version: notification.version,
+      })
+      const patches = (getWorkTasksSnapshot().items || [])
+        .filter((item) => String(item.order_id_checkin || '') === orderId)
+        .map((item) => ({
+          id: item.id,
+          patch: {
+            guest_ready_notification: receipt.guest_ready_notification,
+            available_actions: mergeGuestReadyNotificationActions(item.available_actions, receipt.available_actions),
+          } as Partial<WorkTaskItem>,
+        }))
+      if (patches.length) await patchWorkTaskItems(patches)
+      showBanner('已保存', action.id === 'revoke_guest_ready_notified' ? '已撤销“已通知客人”记录' : '已记录“已通知客人”')
+    } catch (error: any) {
+      showBanner('失败', String(error?.message || '保存失败；当前状态未改变'))
+    } finally {
+      setGuestReadyPendingMap((prev) => {
+        const next = { ...prev }
+        delete next[task.id]
+        return next
+      })
+    }
+  }
+
   function handleTaskActionPress(task: WorkTaskItem, action: WorkTaskAvailableAction) {
     if (!action.enabled) return
     if (action.id === 'mark_guest_checkout') return void toggleGuestCheckedOut(task, action)
+    if (action.id === 'record_guest_ready_notified' || action.id === 'revoke_guest_ready_notified') return void toggleGuestReadyNotification(task, action)
     const route = navigationForWorkTaskAction(task, action)
     if (route) props.navigation.navigate(route.screen as any, route.params as any)
   }
@@ -2180,7 +2275,7 @@ function showBanner(title: string, message: string) {
             <Pressable
               onPress={() => {
                 setPeriod('today')
-                setSelectedDate(ymd(new Date()))
+                setSelectedDate(taskBusinessDateKey())
               }}
               style={({ pressed }) => [styles.segmentItem, prefersWrappedSegments ? styles.segmentItemResponsive : null, period === 'today' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
             >
@@ -2189,7 +2284,7 @@ function showBanner(title: string, message: string) {
             <Pressable
               onPress={() => {
                 setPeriod('week')
-                setSelectedDate(ymd(new Date()))
+                setSelectedDate(taskBusinessDateKey())
               }}
               style={({ pressed }) => [styles.segmentItem, prefersWrappedSegments ? styles.segmentItemResponsive : null, period === 'week' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
             >
@@ -2198,7 +2293,7 @@ function showBanner(title: string, message: string) {
             <Pressable
               onPress={() => {
                 setPeriod('month')
-                setSelectedDate(ymd(new Date()))
+                setSelectedDate(taskBusinessDateKey())
               }}
               style={({ pressed }) => [styles.segmentItem, prefersWrappedSegments ? styles.segmentItemResponsive : null, period === 'month' ? styles.segmentItemActive : null, pressed ? styles.segmentPressed : null]}
             >
@@ -2428,7 +2523,8 @@ function showBanner(title: string, message: string) {
                 <Text style={styles.reorderBtnText}>{reorderMode ? '保存顺序' : '排序'}</Text>
               </Pressable>
             ) : null}
-            <Text style={styles.sectionCount}>{`${visibleTasks.length} ${t('tasks_tasks_suffix')}`}</Text>
+            <Text style={styles.sectionCount}>{`入住＋退房 ${dailyGroupStats.turnover} · 线下 ${dailyGroupStats.offline}`}</Text>
+            {search.trim() ? <Text style={styles.sectionCount}>{`搜索 ${visibleTasks.length} ${t('tasks_tasks_suffix')}`}</Text> : null}
           </View>
         </View>
 
@@ -2825,6 +2921,10 @@ function showBanner(title: string, message: string) {
               const checkinTagStyles = taskTagStylePair('pending')
               const lateCheckoutTagStyles = taskTagStylePair('danger')
               const earlyCheckinTagStyles = taskTagStylePair('info')
+              const guestReadyNotification = task.guest_ready_notification
+              const guestReadyNotificationTagStyles = taskTagStylePair(
+                guestReadyNotification?.status === 'notified' ? 'success' : 'pending',
+              )
               const isSelfCompleteEligible = isCleaningTask && isSelfCompleteMode(task as any) && (isCheckoutTask || isStayoverTask)
               const isDirectCompleteEligible = isCleaningTask && (isSelfCompleteEligible || isStayoverTask)
               const isPendingInspectionDecision = isCleaningTask && !isStayoverTask && inspectionMode === 'pending_decision'
@@ -2840,11 +2940,14 @@ function showBanner(title: string, message: string) {
                 const localDisabled =
                   (action.id === 'upload_key_photo' && keyPhotoState !== 'missing')
                   || (action.id === 'mark_guest_checkout' && (!token || isHistoricalTask || !!checkedOutPendingMap[task.id]))
+                  || ((action.id === 'record_guest_ready_notified' || action.id === 'revoke_guest_ready_notified') && (!token || !!guestReadyPendingMap[task.id]))
                 const disabled = !action.enabled || localDisabled
                 const label = action.id === 'upload_key_photo'
                   ? (keyPhotoState === 'recorded' ? '钥匙已记录' : keyPhotoState === 'pending_sync' ? '钥匙待同步' : action.label)
                   : action.id === 'mark_guest_checkout' && checkedOutPendingMap[task.id]
                     ? '提交中...'
+                    : (action.id === 'record_guest_ready_notified' || action.id === 'revoke_guest_ready_notified') && guestReadyPendingMap[task.id]
+                      ? '保存中...'
                     : action.label
                 return (
                   <Pressable
@@ -3121,6 +3224,13 @@ function showBanner(title: string, message: string) {
                         ) : null}
                       </>
                     )}
+                    {guestReadyNotification ? (
+                      <View style={guestReadyNotificationTagStyles.container}>
+                        <Text style={guestReadyNotificationTagStyles.text}>
+                          {guestReadyNotification.status === 'notified' ? '已通知客人' : '客人未通知'}
+                        </Text>
+                      </View>
+                    ) : null}
                   </View>
 
                   {taskCollapsed && guestSpecialRequest ? (

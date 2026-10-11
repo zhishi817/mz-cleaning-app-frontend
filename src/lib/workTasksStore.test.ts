@@ -10,6 +10,7 @@ import {
   mergeRemoteWorkTaskItems,
   patchWorkTaskItem,
   projectCleaningStatusForTask,
+  reconcileExecutionListVisibilityAfterPatch,
   requestWorkTasksRefresh,
   setWorkTasksRefreshForeground,
   type WorkTaskItem,
@@ -67,6 +68,57 @@ function makeTask(patch: Partial<WorkTaskItem>): WorkTaskItem {
     ...patch,
   } as WorkTaskItem
 }
+
+test('recomputes a cached visible projection when local or SSE visibility inputs change', () => {
+  const maintenance = makeTask({
+    id: 'property_maintenance:m-visibility',
+    task_kind: 'maintenance',
+    source_type: 'property_maintenance',
+    source_id: 'm-visibility',
+    execution_list_visible: true,
+    assignee_id: 'staff-1',
+    source_workflow_status: 'assigned',
+    maintenance_workflow: { domain: 'internal', status: 'assigned', available_actions: ['executor_complete'] },
+  } as any)
+  expect(reconcileExecutionListVisibilityAfterPatch({
+    ...maintenance,
+    status: 'pending_review',
+    maintenance_workflow: { domain: 'internal', status: 'pending_review', available_actions: [] },
+  }, ['status', 'maintenance_workflow'])).toMatchObject({
+    source_workflow_status: 'pending_review',
+    execution_list_visible: false,
+  })
+  expect(reconcileExecutionListVisibilityAfterPatch({
+    ...maintenance,
+    status: 'pending_review',
+  }, ['status'])).toMatchObject({
+    source_workflow_status: 'pending_review',
+    execution_list_visible: false,
+  })
+  expect(reconcileExecutionListVisibilityAfterPatch({
+    ...maintenance,
+    maintenance_workflow: { domain: 'internal', status: 'pending_review', available_actions: [] },
+  }, ['maintenance_workflow'])).toMatchObject({
+    source_workflow_status: 'pending_review',
+    execution_list_visible: false,
+  })
+
+  const offline = makeTask({
+    id: 'offline:visibility',
+    task_kind: 'offline',
+    source_type: 'cleaning_offline_tasks',
+    execution_list_visible: true,
+    assignee_id: 'staff-2',
+  } as any)
+  expect(reconcileExecutionListVisibilityAfterPatch(
+    { ...offline, assignee_id: null },
+    ['assignee_id'],
+  ).execution_list_visible).toBe(false)
+  expect(reconcileExecutionListVisibilityAfterPatch(
+    { ...offline, scheduled_date: null },
+    ['scheduled_date'],
+  ).execution_list_visible).toBe(false)
+})
 
 test('keeps a local checkout marker when the refreshed cleaning payload omits the field', () => {
   const previous = [makeTask({ id: 'old-merged-card', source_ids: ['checkout-1', 'checkin-1'], checked_out_at: '2026-07-25T01:00:00.000Z' } as any)]
@@ -345,6 +397,12 @@ test('treats key re-upload as an incremental event so existing consumable photos
     change_scope: 'list',
     changed_fields: ['status', 'started_at', 'key_photo_uploaded_at'],
     payload: { patch: { status: 'in_progress', started_at: '2026-07-27T00:00:00.000Z', key_photo_uploaded_at: '2026-07-27T00:00:00.000Z' } },
+  })).toBe(false)
+  expect(isSafePatchEvent({
+    event_type: 'TASK_UPDATED',
+    change_scope: 'list',
+    changed_fields: ['guest_ready_notification', 'available_actions'],
+    payload: { patch: { guest_ready_notification: { status: 'notified' } } },
   })).toBe(false)
   expect(mergePatchIntoTask(task, event).restock_items).toEqual(task.restock_items)
 })

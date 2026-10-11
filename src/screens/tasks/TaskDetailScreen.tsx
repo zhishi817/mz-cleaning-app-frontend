@@ -22,9 +22,9 @@ import {
 } from '../../lib/keyUploadQueue'
 import { hairline, isCompactWidth, moderateScale } from '../../lib/scale'
 import { layoutTokens } from '../../lib/theme'
-import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, reconcileActiveWorkTasksAfterLocalPatch, requestWorkTasksRefresh, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
+import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, patchWorkTaskItems, reconcileActiveWorkTasksAfterLocalPatch, requestWorkTasksRefresh, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
-import { appendWorkTaskCompletionPhotos, deleteKeyPhoto, listCleaningAppPropertyCodes, listUsers, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, submitMaintenanceExecutorAction, updateCleaningOfflineTask, updateWorkTaskPhotos, uploadMzappMedia } from '../../lib/api'
+import { appendWorkTaskCompletionPhotos, changeGuestReadyNotification, deleteKeyPhoto, listCleaningAppPropertyCodes, listUsers, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, submitMaintenanceExecutorAction, updateCleaningOfflineTask, updateWorkTaskPhotos, uploadMzappMedia } from '../../lib/api'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { isPropertyFollowupTask, propertyFollowupTaskDetail, propertyFollowupTaskTitle } from '../../lib/propertyFollowupTaskDisplay'
@@ -44,7 +44,7 @@ import CleaningMediaImage from '../../components/CleaningMediaImage'
 import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 import AppButton from '../../components/ui/AppButton'
 import AppIconButton from '../../components/ui/AppIconButton'
-import { actionDisabledReasonText, availableActionsForTask, navigationForWorkTaskAction } from '../../lib/workTaskActions'
+import { actionDisabledReasonText, availableActionsForTask, mergeGuestReadyNotificationActions, navigationForWorkTaskAction } from '../../lib/workTaskActions'
 import type { WorkTaskAvailableAction } from '../../lib/api'
 import { draftFileExists, persistCompressedDraftMedia } from '../../lib/localMediaDrafts'
 import {
@@ -61,6 +61,7 @@ import {
   normalizePendingCompletionPhotoReferences,
   setPendingWorkTaskCompletionPhotoReferences,
 } from '../../lib/workTaskCompletionPhotoPending'
+import { taskBusinessDateKey } from '../../lib/taskBusinessDate'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
 type OfflineEditUserOption = { id: string; username?: string | null; display_name?: string | null }
@@ -204,7 +205,7 @@ function buildDetailFallbackRange(base = new Date()) {
 function isBeforeToday(taskDate0: any) {
   const taskDate = String(taskDate0 || '').slice(0, 10)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(taskDate)) return false
-  return taskDate < ymd(new Date())
+  return taskDate < taskBusinessDateKey(new Date())
 }
 
 function isMaintenanceStateChangedError(error: any) {
@@ -260,6 +261,7 @@ export default function TaskDetailScreen(props: Props) {
   const [previewLocalUri, setPreviewLocalUri] = useState<string | null>(null)
   const [autoUploadKeyDone, setAutoUploadKeyDone] = useState(false)
   const [checkedOutPending, setCheckedOutPending] = useState(false)
+  const [guestReadyPending, setGuestReadyPending] = useState(false)
   const [offlineEditOpen, setOfflineEditOpen] = useState(false)
   const [offlineEditBusy, setOfflineEditBusy] = useState(false)
   const [offlineEditLoadingOptions, setOfflineEditLoadingOptions] = useState(false)
@@ -1110,6 +1112,40 @@ export default function TaskDetailScreen(props: Props) {
     }
   }
 
+  async function onToggleGuestReadyNotification(action: WorkTaskAvailableAction) {
+    if (!task || !token || guestReadyPending) return
+    const notification = task.guest_ready_notification
+    const orderId = String(notification?.order_id || action.source_id || task.order_id_checkin || '').trim()
+    if (!notification || !orderId) {
+      Alert.alert(t('common_error'), '入住订单已变化，请刷新后重试')
+      return
+    }
+    setGuestReadyPending(true)
+    try {
+      const receipt = await changeGuestReadyNotification(token, {
+        order_id: orderId,
+        action: action.id === 'revoke_guest_ready_notified' ? 'revoke' : 'mark',
+        operation_id: `guest-ready-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+        expected_version: notification.version,
+      })
+      const patches = (getWorkTasksSnapshot().items || [])
+        .filter((item) => String(item.order_id_checkin || '') === orderId)
+        .map((item) => ({
+          id: item.id,
+          patch: {
+            guest_ready_notification: receipt.guest_ready_notification,
+            available_actions: mergeGuestReadyNotificationActions(item.available_actions, receipt.available_actions),
+          } as Partial<WorkTaskItem>,
+        }))
+      if (patches.length) await patchWorkTaskItems(patches)
+      Alert.alert(t('common_ok'), action.id === 'revoke_guest_ready_notified' ? '已撤销“已通知客人”记录' : '已记录“已通知客人”')
+    } catch (error: any) {
+      Alert.alert(t('common_error'), String(error?.message || '保存失败；当前状态未改变'))
+    } finally {
+      setGuestReadyPending(false)
+    }
+  }
+
   useEffect(() => {
     if (!task) return
     if (action !== 'upload_key') return
@@ -1211,6 +1247,7 @@ export default function TaskDetailScreen(props: Props) {
     return s === 'done' || s === 'completed' || s === 'ready'
   })()
   const taskActions = availableActionsForTask(task, { roleNames })
+  const guestReadyNotification = task.guest_ready_notification
   const completionPhotoAppendAction = taskActions.find((action) => action.id === 'append_completion_photo') || null
   const canAppendCompletionPhotos = !isMaintenanceTask && isAlreadyDone && completionPhotoAppendAction?.enabled === true
   const canEditTaskHandling = (!isMaintenanceTask && !isAlreadyDone) || maintenanceCanAct
@@ -1311,6 +1348,9 @@ export default function TaskDetailScreen(props: Props) {
   const checkinTagStyles = taskTagStylePair('pending')
   const lateCheckoutTagStyles = taskTagStylePair('danger')
   const earlyCheckinTagStyles = taskTagStylePair('info')
+  const guestReadyNotificationTagStyles = taskTagStylePair(
+    guestReadyNotification?.status === 'notified' ? 'success' : 'pending',
+  )
   const inspectionPlanTagStyles = taskTagStylePair(getInspectionModeTone(inspectionMode))
   const inspectionScopeTagStyles = taskTagStylePair(getInspectionScopeTone(isPasswordOnlyInspection))
   const isSelfCompleteEligible = isCleaningTask && isSelfCompleteMode(task as any) && (isCheckoutTask || isStayoverTask)
@@ -1340,6 +1380,7 @@ export default function TaskDetailScreen(props: Props) {
     const localDisabled =
       (action.id === 'upload_key_photo' && (keyUploading || keyPhotoEffectiveState !== 'missing'))
       || (action.id === 'mark_guest_checkout' && (!token || isHistoricalTask || checkedOutPending))
+      || ((action.id === 'record_guest_ready_notified' || action.id === 'revoke_guest_ready_notified') && (!token || guestReadyPending))
     const isTaskCompletedAction = action.disabled_reason === 'task_completed'
     const isReadOnlyInspectionAction = action.id === 'submit_inspection' && action.read_only === true
     const isReadOnlyTaskAction = isReadOnlyInspectionAction
@@ -1367,6 +1408,8 @@ export default function TaskDetailScreen(props: Props) {
           ? '任务已完成'
           : action.id === 'mark_guest_checkout' && checkedOutPending
             ? '提交中...'
+            : (action.id === 'record_guest_ready_notified' || action.id === 'revoke_guest_ready_notified') && guestReadyPending
+              ? '保存中...'
             : action.label
     const onPress = () => {
       if (isSuppliesRecordedAction) {
@@ -1385,6 +1428,7 @@ export default function TaskDetailScreen(props: Props) {
       }
       if (action.id === 'upload_key_photo') return void onUploadKey()
       if (action.id === 'mark_guest_checkout') return void onToggleGuestCheckedOut(action)
+      if (action.id === 'record_guest_ready_notified' || action.id === 'revoke_guest_ready_notified') return void onToggleGuestReadyNotification(action)
       const route = navigationForWorkTaskAction(task, action)
       if (route) props.navigation.navigate(route.screen as any, route.params as any)
     }
@@ -1504,6 +1548,13 @@ export default function TaskDetailScreen(props: Props) {
                   ) : null}
                 </>
               )}
+              {guestReadyNotification ? (
+                <View style={guestReadyNotificationTagStyles.container}>
+                  <Text style={guestReadyNotificationTagStyles.text}>
+                    {guestReadyNotification.status === 'notified' ? '已通知客人' : '客人未通知'}
+                  </Text>
+                </View>
+              ) : null}
             </View>
           </View>
           <View style={styles.titleSideColumn}>
@@ -1586,6 +1637,17 @@ export default function TaskDetailScreen(props: Props) {
           <Ionicons name="calendar-outline" size={moderateScale(14)} color="#9CA3AF" />
           <Text style={styles.rowText}>{task.scheduled_date || task.date}</Text>
         </View>
+
+        {guestReadyNotification ? (
+          <View style={styles.row}>
+            <Ionicons name="notifications-outline" size={moderateScale(14)} color="#9CA3AF" />
+            <Text style={styles.rowText}>
+              {guestReadyNotification.status === 'notified'
+                ? `客人入住通知：已由 ${guestReadyNotification.notified_by_name || guestReadyNotification.notified_by_user_id || '-'} 于 ${guestReadyNotification.notified_at ? new Date(guestReadyNotification.notified_at).toLocaleString() : '-'} 记录`
+                : '客人入住通知：尚未记录（本操作只记录人工通知状态，不会发送消息）'}
+            </Text>
+          </View>
+        ) : null}
 
         {checkoutTime ? (
           <View style={styles.row}>

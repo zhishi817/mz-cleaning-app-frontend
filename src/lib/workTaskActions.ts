@@ -24,6 +24,9 @@ export function actionDisabledReasonText(reason: any) {
   if (value === 'pending_inspection_decision') return '待确认检查安排'
   if (value === 'cleaning_submission_required') return '请先等待清洁提交补品记录和房源照片'
   if (value === 'already_recorded') return '已记录'
+  if (value === 'property_not_ready') return '房屋尚未设为可入住'
+  if (value === 'no_checkin_order') return '没有本次入住订单'
+  if (value === 'checkin_order_changed') return '入住订单已变化，请刷新后重试'
   return value
 }
 
@@ -34,6 +37,18 @@ export type WorkTaskActionRoute =
   | { screen: 'InspectionComplete'; params: { taskId: string; sourceId?: string; skipInspectionPhotos?: boolean } }
   | { screen: 'CleaningSelfComplete'; params: { taskId: string } }
   | { screen: 'FeedbackForm'; params: { taskId: string; source?: 'inspection_panel_batch' } }
+
+export function mergeGuestReadyNotificationActions(
+  current0: WorkTaskAvailableAction[] | null | undefined,
+  guestReady0: WorkTaskAvailableAction[] | null | undefined,
+) {
+  const current = Array.isArray(current0) ? current0 : []
+  const guestReady = Array.isArray(guestReady0) ? guestReady0 : []
+  return [
+    ...current.filter((action) => action.id !== 'record_guest_ready_notified' && action.id !== 'revoke_guest_ready_notified'),
+    ...guestReady,
+  ]
+}
 
 function isCleaningWorkSubmitted(status0: any) {
   const status = lower(status0)
@@ -76,9 +91,14 @@ export function availableActionsForTask(task: WorkTaskItem | null | undefined, o
   if (isCleaningSource && isCustomerService) {
     const isPasswordOnly = isPasswordOnlyInspectionTask(task as any)
     const actions: WorkTaskAvailableAction[] = []
-    const serverCheckoutAction = hasServerActions(task)
-      ? (((task as any).available_actions || []) as WorkTaskAvailableAction[]).find((action) => action?.id === 'mark_guest_checkout' && canRenderServerAction(task, action))
-      : null
+    const serverManagerActions = hasServerActions(task)
+      ? (((task as any).available_actions || []) as WorkTaskAvailableAction[]).filter((action) => (
+          action?.id === 'mark_guest_checkout'
+          || action?.id === 'record_guest_ready_notified'
+          || action?.id === 'revoke_guest_ready_notified'
+        ) && canRenderServerAction(task, action))
+      : []
+    const serverCheckoutAction = serverManagerActions.find((action) => action.id === 'mark_guest_checkout') || null
     const topLevelCheckout = lower((task as any).task_type || (task as any).type) === 'checkout_clean'
     const checkoutSourceId = cleanText(serverCheckoutAction?.source_id)
     if (!isPasswordOnly && isGuestCheckoutTask(task) && (checkoutSourceId || topLevelCheckout)) {
@@ -91,6 +111,7 @@ export function availableActionsForTask(task: WorkTaskItem | null | undefined, o
         ...(checkoutSourceId ? { source_id: checkoutSourceId } : {}),
       }))
     }
+    actions.push(...serverManagerActions.filter((action) => action.id !== 'mark_guest_checkout'))
     actions.push(legacyAction({ id: 'report_issue', label: '问题反馈', placement: 'primary', target: 'FeedbackForm', intent: 'issue' }))
     return actions
   }
@@ -182,6 +203,7 @@ export function navigationForWorkTaskAction(task: WorkTaskItem, action: WorkTask
   const actionSourceId = cleanText((action as any)?.source_id)
   if (action.id === 'upload_key_photo') return { screen: 'TaskDetail', params: { id: task.id, action: 'upload_key' } }
   if (action.id === 'mark_guest_checkout') return { screen: 'TaskDetail', params: { id: task.id } }
+  if (action.id === 'record_guest_ready_notified' || action.id === 'revoke_guest_ready_notified') return { screen: 'TaskDetail', params: { id: task.id } }
   if (action.id === 'fill_supplies') {
     const hasCleaningSubmissionSignal = typeof (task as any)?.cleaning_submission_ready === 'boolean'
     const readOnly = action.disabled_reason === 'task_completed'

@@ -289,9 +289,11 @@ function isMissingLocalFileError(error: unknown) {
 
 function uploadMeta(item: InspectionMediaQueueItem) {
   const meta = item.meta || {}
-  if (item.kind === 'lockbox_video') return null
+  const identity = { task_id: item.task_id, media_id: item.id }
+  if (item.kind === 'lockbox_video') return { ...identity, purpose: 'lockbox_video', captured_at: item.captured_at }
   if (item.kind === 'restock_proof') {
     return {
+      ...identity,
       purpose: 'restock_proof',
       watermark: meta.watermark_text ? '1' : '',
       watermark_text: meta.watermark_text || '',
@@ -300,6 +302,7 @@ function uploadMeta(item: InspectionMediaQueueItem) {
     }
   }
   return {
+    ...identity,
     purpose: 'inspection_photo',
     area: meta.area || undefined,
     watermark: meta.watermark_text ? '1' : '',
@@ -314,19 +317,25 @@ async function uploadQueueItem(token: string, item: InspectionMediaQueueItem) {
   if (!localUri) throw new ApiError('缺少本地文件', 0, 'MISSING_LOCAL_FILE', false)
   if (!fileExists(localUri)) throw new ApiError('本地文件已丢失，请重新拍摄', 0, 'MISSING_LOCAL_FILE', false)
   if (item.kind === 'lockbox_video') {
-    return await withLocalMediaLock(localUri, () => uploadCleaningVideo(token, { uri: localUri, name: item.name, mimeType: item.mime_type }))
+    return await withLocalMediaLock(localUri, () => uploadCleaningVideo(token, { uri: localUri, name: item.name, mimeType: item.mime_type }, uploadMeta(item)))
   }
-  return await withLocalMediaLock(localUri, () => uploadCleaningMedia(token, { uri: localUri, name: item.name, mimeType: item.mime_type }, uploadMeta(item) || undefined))
+  return await withLocalMediaLock(localUri, () => uploadCleaningMedia(
+    token,
+    { uri: localUri, name: item.name, mimeType: item.mime_type },
+    uploadMeta(item) || undefined,
+    { skipImageCompression: true },
+  ))
 }
 
 async function saveLockboxVideoBusinessRecord(token: string, item: InspectionMediaQueueItem, uploadedUrl: string) {
   if (item.meta?.lockbox_submission_mode === 'self_complete') {
     return await uploadSelfLockboxVideo(token, item.task_id, {
       media_url: uploadedUrl,
+      operation_id: item.id,
       captured_at: item.captured_at,
     })
   }
-  return await uploadLockboxVideo(token, item.task_id, { media_url: uploadedUrl })
+  return await uploadLockboxVideo(token, item.task_id, { media_url: uploadedUrl, operation_id: item.id })
 }
 
 function isOperationTimeout(error: unknown) {

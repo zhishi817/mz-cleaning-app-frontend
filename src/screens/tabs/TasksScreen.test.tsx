@@ -980,6 +980,121 @@ test.each([
   }
 })
 
+test.each([
+  ['admin', ['admin']],
+  ['offline manager', ['offline_manager']],
+  ['customer service', ['customer_service']],
+])('daily execution list applies the server visibility projection for %s', async (_label, roles) => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  const base = previousItems[0]
+
+  snapshot.items = [
+    {
+      ...base,
+      id: 'maintenance-assigned-visible',
+      source_type: 'property_maintenance',
+      source_id: 'maintenance-assigned-visible',
+      task_kind: 'maintenance',
+      title: '已安排维修',
+      status: 'assigned',
+      source_workflow_status: 'assigned',
+      assignee_id: 'staff-1',
+      execution_list_visible: true,
+    },
+    {
+      ...base,
+      id: 'offline-done-visible',
+      source_type: 'cleaning_offline_tasks',
+      source_id: 'offline-done-visible',
+      task_kind: 'offline',
+      title: '当日已完成线下任务',
+      status: 'done',
+      assignee_id: 'staff-2',
+      execution_list_visible: true,
+    },
+    {
+      ...base,
+      id: 'turnover-unassigned-visible',
+      source_type: 'cleaning_tasks',
+      source_id: 'turnover-unassigned-visible',
+      task_kind: 'cleaning',
+      task_type: 'turnover',
+      title: '未分配周转任务',
+      status: 'ready',
+      assignee_id: null,
+      cleaner_id: null,
+      inspector_id: null,
+      execution_list_visible: true,
+    },
+    {
+      ...base,
+      id: 'maintenance-review-hidden',
+      source_type: 'property_maintenance',
+      source_id: 'maintenance-review-hidden',
+      task_kind: 'maintenance',
+      title: '待审核维修',
+      status: 'pending_review',
+      assignee_id: 'staff-1',
+      execution_list_visible: false,
+    },
+    {
+      ...base,
+      id: 'maintenance-closed-hidden',
+      source_type: 'property_maintenance',
+      source_id: 'maintenance-closed-hidden',
+      task_kind: 'maintenance',
+      title: '已关闭维修',
+      status: 'done',
+      source_workflow_status: 'closed',
+      assignee_id: 'staff-1',
+      execution_list_visible: false,
+    },
+    {
+      ...base,
+      id: 'necessities-unassigned-hidden',
+      source_type: 'property_daily_necessities',
+      source_id: 'necessities-unassigned-hidden',
+      task_kind: 'daily_necessities',
+      title: '未分配日用品任务',
+      status: 'todo',
+      assignee_id: null,
+      execution_list_visible: false,
+    },
+  ]
+  mockAuthState.user = { id: 'role-test', username: 'role-test', role: roles[0], roles }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: `daily-execution-${roles[0]}`, name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByLabelText('task-card-maintenance-assigned-visible')).toBeTruthy()
+    expect(ui.getByLabelText('task-card-offline-done-visible')).toBeTruthy()
+    expect(ui.getByLabelText('task-card-turnover-unassigned-visible')).toBeTruthy()
+    expect(ui.queryByLabelText('task-card-maintenance-review-hidden')).toBeNull()
+    expect(ui.queryByLabelText('task-card-maintenance-closed-hidden')).toBeNull()
+    expect(ui.queryByLabelText('task-card-necessities-unassigned-hidden')).toBeNull()
+  })
+
+  ui.unmount()
+  snapshot.items = previousItems
+  mockAuthState.user = previousUser
+  mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+  mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+})
+
 test('inspector fallback card tap passes source id to inspection panel', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
@@ -1377,6 +1492,20 @@ test('warehouse key latest event uses today, yesterday, then explicit date label
     actor_name: 'Cara',
     created_at: new Date(2026, 6, 26, 8, 6).toISOString(),
   }, referenceDate)).toBe('2026-07-26 Cara归还 08:06')
+})
+
+test('today week strip follows the selected Melbourne business date across a Monday boundary', () => {
+  const { taskWeekDateKeys } = require('./TasksScreen') as typeof import('./TasksScreen')
+
+  expect(taskWeekDateKeys('2026-10-05')).toEqual([
+    '2026-10-05',
+    '2026-10-06',
+    '2026-10-07',
+    '2026-10-08',
+    '2026-10-09',
+    '2026-10-10',
+    '2026-10-11',
+  ])
 })
 
 test('admin manager view shows MSQ warehouse key card for Southbank work even when not assigned to admin', async () => {

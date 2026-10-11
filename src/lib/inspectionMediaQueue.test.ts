@@ -67,6 +67,7 @@ jest.mock('./api', () => ({
 function getAsyncStorage() {
   return require('@react-native-async-storage/async-storage') as {
     clear: () => Promise<void>
+    setItem: (key: string, value: string) => Promise<void>
   }
 }
 
@@ -100,7 +101,7 @@ test('retries lockbox business save without re-uploading the local video', async
 
   const queueMod = require('./inspectionMediaQueue') as typeof import('./inspectionMediaQueue')
 
-  await queueMod.enqueueInspectionMediaItem({
+  const item = await queueMod.enqueueInspectionMediaItem({
     task_id: 'cleaning-task-1',
     kind: 'lockbox_video',
     source_uri: 'file:///camera/lock-1.mov',
@@ -113,6 +114,16 @@ test('retries lockbox business save without re-uploading the local video', async
   expect(first).toEqual({ processed: 1, remaining: 1 })
   expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
   expect(api.uploadLockboxVideo).toHaveBeenCalledTimes(1)
+  expect(api.uploadCleaningVideo).toHaveBeenCalledWith('token-1', expect.any(Object), {
+    task_id: 'cleaning-task-1',
+    media_id: item.id,
+    purpose: 'lockbox_video',
+    captured_at: item.captured_at,
+  })
+  expect(api.uploadLockboxVideo).toHaveBeenLastCalledWith('token-1', 'cleaning-task-1', {
+    media_url: 'https://cdn.example.com/lock-1.mov',
+    operation_id: item.id,
+  })
 
   const queuedAfterFirst = await queueMod.listInspectionMediaQueueItemsForTask('cleaning-task-1', ['lockbox_video'])
   expect(queuedAfterFirst[0]).toMatchObject({
@@ -146,7 +157,7 @@ test('uses the self-complete business route while retaining the same local-first
   api.uploadSelfLockboxVideo.mockResolvedValue({ ok: true })
 
   const queueMod = require('./inspectionMediaQueue') as typeof import('./inspectionMediaQueue')
-  await queueMod.enqueueInspectionMediaItem({
+  const item = await queueMod.enqueueInspectionMediaItem({
     task_id: 'self-complete-task',
     kind: 'lockbox_video',
     source_uri: 'file:///camera/lock-1.mov',
@@ -161,6 +172,7 @@ test('uses the self-complete business route while retaining the same local-first
   expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
   expect(api.uploadSelfLockboxVideo).toHaveBeenCalledWith('token-self-complete', 'self-complete-task', {
     media_url: 'https://cdn.example.com/self-complete-lock.mov',
+    operation_id: item.id,
     captured_at: capturedAt,
   })
   expect(api.uploadLockboxVideo).not.toHaveBeenCalled()
@@ -195,12 +207,64 @@ test('retries an interrupted uploading lockbox video after recovery', async () =
   expect(result).toEqual({ processed: 1, remaining: 0 })
   expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
   expect(api.uploadLockboxVideo).toHaveBeenCalledTimes(1)
+  expect(api.uploadCleaningVideo).toHaveBeenCalledWith('token-1', expect.any(Object), {
+    task_id: 'cleaning-task-2',
+    media_id: item.id,
+    purpose: 'lockbox_video',
+    captured_at: item.captured_at,
+  })
+  expect(api.uploadLockboxVideo).toHaveBeenCalledWith('token-1', 'cleaning-task-2', {
+    media_url: 'https://cdn.example.com/lock-recovered.mov',
+    operation_id: item.id,
+  })
 
   const queuedAfterRecovery = await queueMod.listInspectionMediaQueueItemsForTask('cleaning-task-2', ['lockbox_video'])
   expect(queuedAfterRecovery[0]).toMatchObject({
     uploaded_url: 'https://cdn.example.com/lock-recovered.mov',
     upload_status: 'uploaded',
     business_saved: true,
+  })
+})
+
+test('reuses the persisted media and operation ids after an app restart', async () => {
+  const persistedId = 'lockbox_video_persisted_operation'
+  const capturedAt = '2026-10-09T01:02:03.000Z'
+  mockFileSet.add('file:///camera/lock-1.mov')
+  await getAsyncStorage().setItem('mzstay.inspection_media_queue.v1', JSON.stringify([{
+    id: persistedId,
+    task_id: 'cleaning-task-restart',
+    kind: 'lockbox_video',
+    local_uri: 'file:///camera/lock-1.mov',
+    name: 'lock-1.mov',
+    mime_type: 'video/quicktime',
+    created_at: capturedAt,
+    captured_at: capturedAt,
+    uploaded_url: null,
+    upload_status: 'uploading',
+    business_saved: false,
+    retain_until: '2026-11-09T01:02:03.000Z',
+    local_file_deleted_at: null,
+    last_error: null,
+  }]))
+
+  const api = require('./api') as {
+    uploadCleaningVideo: jest.Mock
+    uploadLockboxVideo: jest.Mock
+  }
+  api.uploadCleaningVideo.mockResolvedValue({ url: 'https://cdn.example.com/restart.mov' })
+  api.uploadLockboxVideo.mockResolvedValue({ ok: true })
+  const queueMod = require('./inspectionMediaQueue') as typeof import('./inspectionMediaQueue')
+
+  await expect(queueMod.processInspectionMediaQueue('token-restart')).resolves.toEqual({ processed: 1, remaining: 0 })
+  expect(api.uploadCleaningVideo).toHaveBeenCalledWith('token-restart', expect.any(Object), {
+    task_id: 'cleaning-task-restart',
+    media_id: persistedId,
+    purpose: 'lockbox_video',
+    captured_at: capturedAt,
+  })
+  expect(api.uploadLockboxVideo).toHaveBeenCalledWith('token-restart', 'cleaning-task-restart', {
+    media_url: 'https://cdn.example.com/restart.mov',
+    operation_id: persistedId,
   })
 })
 

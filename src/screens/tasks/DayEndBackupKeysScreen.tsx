@@ -8,7 +8,7 @@ import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { isRetryableApiError, listCleaningAppLinenTypes, listCleaningAppPropertyCodes, listCleaningAppTasks, listDayEndBackupKeys, listDayEndHandover, listWorkTasks, uploadCleaningMedia, uploadDayEndHandover } from '../../lib/api'
-import { clearDayEndHandoverDraft, getDayEndHandoverDraft, persistDayEndDraftPhoto, saveDayEndHandoverDraft, type DayEndHandoverDraft, type DayEndRejectDraftItem } from '../../lib/dayEndHandoverQueue'
+import { buildDayEndMediaUploadIdentity, clearDayEndHandoverDraft, getDayEndHandoverDraft, persistDayEndDraftPhoto, saveDayEndHandoverDraft, type DayEndHandoverDraft, type DayEndRejectDraftItem } from '../../lib/dayEndHandoverQueue'
 import { cleaningMediaReference } from '../../lib/cleaningMedia'
 import CleaningMediaImage from '../../components/CleaningMediaImage'
 import CleaningMediaPreview from '../../components/CleaningMediaPreview'
@@ -735,10 +735,15 @@ export default function DayEndBackupKeysScreen(props: Props) {
 
     setUploading(true)
     try {
-      const name = String(a.fileName || tempItem.uri.split('/').pop() || `${kind}-${Date.now()}.jpg`)
-      const mimeType = String(a.mimeType || 'image/jpeg')
       const purpose = kind === 'key' ? 'backup_key_return' : kind === 'return_wash' ? 'return_wash_linen' : kind === 'warehouse_key' ? 'warehouse_key_return' : kind === 'consumable' ? 'remaining_consumables' : 'reject_linen_return'
-      const up = await uploadCleaningMedia(token, { uri: tempItem.uri, name, mimeType }, { purpose, media_id: tempId, captured_at: capturedAt, watermark: '1', watermark_text: watermarkText })
+      const prefix = kind === 'key' ? 'key' : kind === 'return_wash' ? 'return-wash' : kind === 'warehouse_key' ? 'warehouse-key' : kind === 'consumable' ? 'consumables' : `reject-${String(rejectItemId || '').trim()}`
+      const identity = buildDayEndMediaUploadIdentity({
+        user_id: currentUserId,
+        date,
+        prefix,
+        media_id: tempId,
+      })
+      const up = await uploadCleaningMedia(token, { uri: tempItem.uri, name: identity.name, mimeType: 'image/jpeg' }, { purpose, task_id: identity.task_id, media_id: identity.media_id, captured_at: capturedAt, watermark: '1', watermark_text: watermarkText }, { skipImageCompression: true })
       const remoteReference = cleaningMediaReference(up)
       if (kind === 'key') {
         setKeyItems((prev) => {
