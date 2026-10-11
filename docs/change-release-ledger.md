@@ -1,5 +1,77 @@
 # Change Release Ledger
 
+## CRL-20261011-001 — TasksScreen Melbourne 业务日期测试固定时钟（mobile）
+
+- **Status:** isolated test-only candidate verified and independently reviewed GO；commit-ready；not committed, pushed, merged, released, or deployed
+- **Repository:** `mobile`
+- **Updated:** 2026-10-11 13:36 UTC
+- **Request:** 修复 Root PR #387 的 Full Regression：`TasksScreen.test.tsx` 在 runner 的 UTC 日期仍为 2026-10-11、Melbourne 已进入 2026-10-12 时，以 runner 本地年月日创建 fixture，导致业务页面选择 2026-10-12 后把 fixture 全部过滤。测试必须统一使用现有 Melbourne 业务日期 helper 并固定时钟，不改变业务日期逻辑或删除、跳过断言。
+- **Outcome:** TasksScreen 测试业务时钟固定为失败 run 对应的 `2026-10-11T13:26:00.000Z`，fixture 日期通过真实 `taskBusinessDateKey` 得到 `2026-10-12`；页面测试对无参数业务日期和下个边界计算使用同一固定时刻。新增断言直接证明 UTC 日历仍为 10 月 11 日时 Melbourne 业务日期已为 10 月 12 日；现有 DST helper 回归保持不变并与页面测试一起执行。
+
+### Implementation
+
+- 不改 `src/lib/taskBusinessDate.ts` 或 `TasksScreen.tsx`；业务时区继续是 `Australia/Melbourne`。
+- 测试 fixture 不再从 runner 本地 `getFullYear/getMonth/getDate` 读取“今天”，而是从固定 instant 经过真实业务日期 helper 生成。
+- 测试 mock 只固定 helper 的默认时钟；显式传入日期仍调用真实实现，所有原有卡片、过滤、角色、刷新、日期栏和日终断言保留。
+
+### Files / Areas
+
+- `src/screens/tabs/TasksScreen.test.tsx` — 固定测试业务时钟、统一 Melbourne fixture 日期并增加 UTC/Melbourne 跨日断言。
+- `docs/change-release-ledger.md` — 本独立测试修复、验证、范围和发布尝试证据。
+
+### Impact / Dependencies
+
+- 失败来源是 Root `root/CRL-20261011-006` 合入 `Dev` 后的 merge commit `4d55e3d72a474d1e6ad03a0d4260d4c4271a3b09`；Root Full Regression run `38142880555` checkout 本 Mobile `Dev@e521cb68833f37d968b437dd829d89c44a0a8c1a`。这些是复现边界，不是本 Mobile 测试修复的独立发布依赖。
+- Root 的 `Dev/main` push Full Regression 固定 checkout Mobile `Dev`；仅推本临时分支不能解除 Root PR #387，必须先经单独授权/审查把本修复合入 Mobile `Dev`，再重跑对应 Root workflow。
+- 不改变任务、权限、日期、筛选、API、缓存、原生依赖、schema 或生产数据；不包含本地未发布结算候选。
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/screens/tabs/TasksScreen.test.tsx` — PASS；1 suite / 31 tests。
+- `npm test -- --runInBand --no-cache src/lib/taskBusinessDate.test.ts src/screens/tabs/TasksScreen.test.tsx` — PASS；2 suites / 35 tests；覆盖 UTC/Melbourne 跨日、DST 开始 23 小时日、DST 回拨重复小时和页面 fixture。
+- Mobile `npm run check:ci` — PASS；ledger auditor 44 tests、TypeScript、button contract、lint 0 errors / 593 existing warnings、fast 8 suites / 42 tests、full 67 suites / 401 tests。
+- Paired Root `Dev@4d55e3d72a474d1e6ad03a0d4260d4c4271a3b09` + this exact staged Mobile candidate `npm run check:full` — PASS；Root backend contracts、frontend lint / 53 files / 267 tests / production build，以及 Mobile type/lint/67 suites / 401 tests 全部通过。首次沙箱内尝试因本机 loopback `EPERM` 中断；在第二个全新干净 Root clone 中允许本机临时端口后从头通过，没有访问生产 API 或业务数据。
+- Independent exact-candidate review — GO for commit；P0=0 / P1=0 / P2=0；复核两文件/三 hunks、真实 Melbourne helper、业务源码未改、候选指纹、生成物和敏感信息边界。
+- 原生构建、模拟器/设备、OTA、生产：not run。
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** isolated fresh clone；临时 dependency symlink 已移出候选，当前无未跟踪文件；不包含环境文件、密钥、缓存、构建产物或本地结算源码。
+- **Shared-hunk note:** `TasksScreen.test.tsx` 历史上属于其他 CRL，但本候选仅包含三个新的固定业务时钟/跨日测试 hunks；需独立审查 exact fingerprint。
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `03b4e68d9dabd9f21475bef36080e26e628477cebfc49fe052295c88037610c4`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `aa9398e2efcf86f4eef22c67c298088e5f19785695728e967811c442f3ea2e9a`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `d9dc6f4cef3e6954222608c91370adc5a1e7de8f711bdeaf03ae68e15e09ad5f`
+
+### Release Attempts
+
+#### RA-20261011-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261011-001`
+- Selected CRL identities: `mobile/CRL-20261011-001`
+- Intended action: `commit`
+- Branch: `codex/fix-task-business-date-test-20261011`
+- Base: `origin/Dev@e521cb68833f37d968b437dd829d89c44a0a8c1a`; fresh clone completed 2026-10-11 13:33 UTC
+- Candidate patch SHA-256: `2dad8430e3c7ca017403bf5dee465c4c3bb6018922d810915aef65e7ccbcf84d` excluding `docs/change-release-ledger.md`
+- Commit SHA: not committed
+- Dependencies: none
+- Required validation: `PASS`; targeted 2 suites / 35 tests, Mobile `check:ci` 67 suites / 401 tests, and paired Root `Dev@4d55e3d...` `check:full` all passed; lint has 0 errors and only existing warnings
+- Shared-hunk review: `PASS`; independent review verified that all three new hunks belong only to this test-stability CRL and retain every existing business assertion
+- Generated-file review: `PASS`; candidate contains no generated, dependency, cache, build, environment, or settlement source paths
+- Sensitive-information review: `PASS`; candidate contains no credentials, tokens, cookies, private keys, database URLs, device logs, production payloads, or screenshots
+- Technical state: `verified`
+- User authorization: `approved-for-push`; evidence: user explicitly approved the minimal timezone/fixed-clock test repair and push, while excluding main merge, deployment, production writes, business-logic changes, assertion removal, and branch-protection bypass
+- Independent review: `GO`; evidence: independent read-only review verified the exact two-file / three-hunk candidate, unchanged `2dad8430e3c7ca017403bf5dee465c4c3bb6018922d810915aef65e7ccbcf84d` fingerprint, real Melbourne helper use, unchanged business/DST source, full validation evidence, and generated/sensitive/settlement boundaries; P0=0 / P1=0 / P2=0; GO applies only to commit
+- Action conclusion: `GO`; blockers: none for the selected local commit; exact committed-range report and separate push review remain mandatory before the authorized push
+
+### Risks / Release Notes
+
+- 固定时刻刻意处于 UTC/Melbourne 不同日，防止测试再次依赖 CI runner 时区或跨午夜运行时间。
+- Jest 仍不能证明真实设备时钟、系统时区变化、App 后台跨日或生产 API；本修复只纠正测试基准。
+- Rollback: revert this test-only CRL；没有数据或 schema 回滚。
+
 ## CRL-20261010-001 — 日常任务执行列表权威可见性（mobile）
 
 - **Status:** four-CRL staged candidate validated；final independent commit review pending；not committed, not pushed, not released/OTA

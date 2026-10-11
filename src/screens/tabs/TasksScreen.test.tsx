@@ -14,8 +14,11 @@ jest.mock('react-native-safe-area-context', () => {
 })
 
 const pad2 = (value: number) => String(value).padStart(2, '0')
-const mockToday = new Date()
-const mockTodayKey = `${mockToday.getFullYear()}-${pad2(mockToday.getMonth() + 1)}-${pad2(mockToday.getDate())}`
+const mockNow = new Date('2026-10-11T13:26:00.000Z')
+const actualTaskBusinessDate = jest.requireActual('../../lib/taskBusinessDate') as typeof import('../../lib/taskBusinessDate')
+const mockTodayKey = actualTaskBusinessDate.taskBusinessDateKey(mockNow)
+const [mockTodayYear, mockTodayMonth, mockTodayDay] = mockTodayKey.split('-').map(Number)
+const mockToday = new Date(mockTodayYear, mockTodayMonth - 1, mockTodayDay, 12)
 const mockAuthState = {
   status: 'signedIn',
   token: 'local:test',
@@ -43,6 +46,16 @@ function flattenTestStyle(style: any): Record<string, any> {
 }
 
 jest.mock('../../components/GuestLuggageCard', () => () => null)
+
+jest.mock('../../lib/taskBusinessDate', () => {
+  const actual = jest.requireActual('../../lib/taskBusinessDate') as typeof import('../../lib/taskBusinessDate')
+  const fixedNow = new Date('2026-10-11T13:26:00.000Z')
+  return {
+    ...actual,
+    taskBusinessDateKey: (date: Date = fixedNow) => actual.taskBusinessDateKey(date),
+    millisecondsUntilNextTaskBusinessDate: (date: Date = fixedNow) => actual.millisecondsUntilNextTaskBusinessDate(date),
+  }
+})
 
 jest.mock('../../lib/auth', () => ({
   useAuth: () => mockAuthState,
@@ -146,6 +159,11 @@ jest.mock('../../lib/workTasksStore', () => {
     setWorkTasksRefreshForeground: jest.fn(),
     subscribeWorkTasks: () => () => {},
   }
+})
+
+test('tasks fixtures use the fixed Melbourne business date when UTC is still the previous day', () => {
+  expect(mockNow.toISOString().slice(0, 10)).toBe('2026-10-11')
+  expect(mockTodayKey).toBe('2026-10-12')
 })
 
 test('tasks screen defaults tasks collapsed, shows guest request, and expands details', async () => {
