@@ -66,6 +66,26 @@
 - Independent review: `GO`; evidence: independent read-only review verified the exact two-file / three-hunk candidate, unchanged `2dad8430e3c7ca017403bf5dee465c4c3bb6018922d810915aef65e7ccbcf84d` fingerprint, real Melbourne helper use, unchanged business/DST source, full validation evidence, and generated/sensitive/settlement boundaries; P0=0 / P1=0 / P2=0; GO applies only to commit
 - Action conclusion: `GO`; blockers: none for the selected local commit; exact committed-range report and separate push review remain mandatory before the authorized push
 
+#### RA-20261011-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261011-001`
+- Selected CRL identities: `mobile/CRL-20261011-001`
+- Intended action: `push`
+- Branch: `codex/fix-task-business-date-test-20261011`
+- Base: `origin/Dev@e521cb68833f37d968b437dd829d89c44a0a8c1a`; fetched at 2026-10-11 13:50:55 UTC; unchanged from the fresh-clone base and an ancestor of the content commit
+- Candidate patch SHA-256: `2dad8430e3c7ca017403bf5dee465c4c3bb6018922d810915aef65e7ccbcf84d` excluding `docs/change-release-ledger.md`
+- Commit SHA: content commit `6842419b3824f04b0e9fc5b96b6551005a4c1068`
+- Dependencies: none
+- Required validation: `PASS`; targeted 2 suites / 35 tests, Mobile `check:ci` 67 suites / 401 tests, and paired Root `Dev@4d55e3d72a474d1e6ad03a0d4260d4c4271a3b09` `check:full` all passed; lint has 0 errors and only existing warnings
+- Shared-hunk review: `PASS`; the exact committed range has only the three declared `TasksScreen.test.tsx` test-stability hunks plus this CRL ledger
+- Generated-file review: `PASS`; exact committed range contains no generated, dependency, cache, build, environment, or settlement source paths
+- Sensitive-information review: `PASS`; exact committed range contains no credentials, tokens, cookies, private keys, database URLs, device logs, production payloads, or screenshots
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: user explicitly approved the minimal timezone/fixed-clock test repair and push, while excluding main merge, deployment, production writes, business-logic changes, assertion removal, and branch-protection bypass
+- Independent review: `GO`; evidence: independent read-only review verified RA-20261011-002, exact `e521cb68833f37d968b437dd829d89c44a0a8c1a...6842419b3824f04b0e9fc5b96b6551005a4c1068` ancestry/range, the unchanged three-hunk fingerprint, validation receipts, generated/sensitive/production-write boundaries, branch trigger scope, and normal non-force push boundary；P0=0 / P1=0 / P2=0；GO applies only to push after the final clean release report
+- Action conclusion: `GO`; blockers: none for normal non-force push to the named temporary branch after the ledger-only receipt commit and final clean exact-range report return GO；PR, merge, `Dev/main` push, deploy, OTA, and production writes remain unauthorized
+
 ### Risks / Release Notes
 
 - 固定时刻刻意处于 UTC/Melbourne 不同日，防止测试再次依赖 CI runner 时区或跨午夜运行时间。
