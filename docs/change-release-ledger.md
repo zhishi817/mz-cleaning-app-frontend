@@ -598,18 +598,18 @@
 - Selected CRL identities: `mobile/CRL-20261012-004`.
 - Intended action: `push`.
 - Branch: `codex/mz010-mz012-mz028-mz029-mz031-release-20261012`.
-- Base: `origin/codex/mz010-mz012-mz028-mz029-mz031-release-20261012@7bb6caa514456166c460981f6c08d30d3fe8d804`; verified after the initial normal push at 2026-10-12 UTC.
+- Base: `7bb6caa514456166c460981f6c08d30d3fe8d804` (`origin/codex/mz010-mz012-mz028-mz029-mz031-release-20261012` at the same commit); verified after the initial normal push at 2026-10-12 UTC.
 - Candidate patch SHA-256: `2a3a1475811d23dd2e2fd2b06842080af4342cdce10b356c8826c1eee31f3ab2` excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed.
+- Commit SHA: `2dd323d982c46ff062a6e5bef94c67e4fe1b77bd`.
 - Dependencies: `none`.
 - Required validation: PASS; the no-cache settlement suite passed 27/27 and Mobile `check:full` passed typecheck, lint with 0 errors, button/ledger gates, 67 suites and 420 tests.
 - Shared-hunk review: PASS; exact one-file / three-hunk staged CI follow-up, with no runtime source change.
 - Generated-file review: PASS; no generated, cache, dependency, binary, environment, or native file is selected.
-- Technical state: verified.
+- Technical state: committed locally; receipt commit and exact post-commit release report pending.
 - User authorization: approved-for-push; the user authorized in-scope CI fixes and normal release-candidate branch updates for the selected five items, while merge, deployment, OTA, migration, queue work, and production writes remain excluded.
 - Independent review: GO for local commit; P0=0 / P1=0 / P2=0. Reviewer independently matched the candidate patch and all three hunk fingerprints, confirmed only test time budgets changed, and found no removed/weakened assertions, sleep, runtime-source change, or sensitive/generated content.
-- Remote evidence: base head `7bb6caa514456166c460981f6c08d30d3fe8d804` is already on the authorized remote branch and Draft PR #49; this follow-up is not yet committed or pushed.
-- Action conclusion: GO for the local content commit; normal push remains pending the exact post-commit range audit and independent push review.
+- Remote evidence: base head `7bb6caa514456166c460981f6c08d30d3fe8d804` is already on the authorized remote branch and Draft PR #49; content commit `2dd323d982c46ff062a6e5bef94c67e4fe1b77bd` is local only and not yet pushed.
+- Action conclusion: local content commit created; normal push remains pending the receipt-only gate, exact post-commit range audit, and independent push review.
 
 ### Risks / Release Notes
 
