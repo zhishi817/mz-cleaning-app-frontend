@@ -314,14 +314,15 @@
 - Branch: `codex/mz010-mz012-mz028-mz029-mz031-release-20261012`.
 - Base: `origin/Dev@d675ad49414d1ee01d8d10f468e84f11eb027ee4`; fetched at 2026-10-12 UTC.
 - Candidate patch SHA-256: `d4c8da09076fbe208520903b6c2dceb1bacd85322a5f1243810441d171cdd689` excluding `docs/change-release-ledger.md`.
-- Commit SHA: not committed.
+- Commit SHA: `347431ad303a967e77025e6577a5a0d9569c1ecb`.
 - Dependencies: `none`.
 - Required validation: PASS; targeted Mobile suites and typecheck passed, and the paired full gate passed Mobile typecheck/lint/all tests plus Root backend/frontend build and tests without production credentials, integrations, migration, queue, deployment, OTA, or production writes.
 - Shared-hunk review: PASS; exact 18-file / 257-non-ledger-hunk staged union matches the six selected CRLs.
 - Generated-file review: PASS; no generated files selected.
-- Technical state: verified.
+- Technical state: committed.
 - User authorization: approved-for-push; user explicitly selected MZ-010/MZ-012/MZ-028/MZ-029/MZ-031 together and authorized candidate commits, release-candidate pushes, and draft PRs, but not merge/deploy/OTA/migration/production writes.
 - Independent review: GO for the exact staged commit candidate; independent read-only review matched candidate fingerprint `d4c8da09076fbe208520903b6c2dceb1bacd85322a5f1243810441d171cdd689`, found P0=0 / P1=0 / P2=0, verified stable guest-ready retry keys across both Mobile entry points, and confirmed no generated, binary, secret, native, OTA, production-write, or unselected content.
+- Action conclusion: GO for the local content commit; exact commit `347431ad303a967e77025e6577a5a0d9569c1ecb` was created after the pre-commit gate. Push and Draft PR remain separately gated; merge, deployment, OTA, migration, queue work, and production writes remain excluded.
 - Remote evidence: not run.
 
 ### Risks / Release Notes
