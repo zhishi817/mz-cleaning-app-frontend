@@ -14,7 +14,7 @@ import { registerExpoPushToken } from '../lib/api'
 import { syncInboxNotifications } from '../lib/notificationInbox'
 import { getPushDeviceId, setRegisteredExpoPushToken } from '../lib/pushTokenStorage'
 import { isTaskManagerUser, roleNamesOf } from '../lib/roles'
-import { navigationForWorkTaskAction, preferredNoticeActionForTask } from '../lib/workTaskActions'
+import { navigationForWorkTaskAction, preferredNoticeActionForTask, shouldOpenGuestReadyTaskDetail } from '../lib/workTaskActions'
 import { isPersonnelSettlementNoticeData } from '../lib/noticePresentation'
 import type { CompanyContentCategory, CompanyGuideRole } from '../lib/api'
 import LoginScreen from '../screens/LoginScreen'
@@ -176,11 +176,15 @@ async function refreshWorkTasksForNotice(params: { token: string; user: any; tas
 
 function resolveTaskNoticeNavigation(params: { taskRouteId: string; user: any; noticeData?: any }) {
   const roleNames = roleNamesOf(params.user)
+  const activeRole = String(params.user?.role || '').trim().toLowerCase()
   const task = findWorkTaskItemByAnyId(params.taskRouteId)
   const isCleaningTask = String(task?.source_type || '').trim() === 'cleaning_tasks'
-  if (isTaskManagerUser(params.user) && isCleaningTask) return { screen: 'ManagerDailyTask', params: { taskId: params.taskRouteId } }
+  if (isTaskManagerUser(params.user) && isCleaningTask && !shouldOpenGuestReadyTaskDetail(task, activeRole)) return { screen: 'ManagerDailyTask', params: { taskId: params.taskRouteId } }
   if (task && Array.isArray((task as any).available_actions)) {
-    const preferredAction = preferredNoticeActionForTask(task, params.noticeData || {}, { roleNames })
+    const preferredAction = preferredNoticeActionForTask(task, params.noticeData || {}, {
+      roleNames,
+      activeRole,
+    })
     if (preferredAction?.enabled) {
       const route = navigationForWorkTaskAction(task, preferredAction)
       if (route) return route

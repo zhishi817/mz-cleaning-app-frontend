@@ -18,7 +18,7 @@ import { syncInboxNotifications } from '../../lib/notificationInbox'
 import { isTaskInspectorUser, isTaskManagerUser, roleNamesOf } from '../../lib/roles'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { getWorkTasksSnapshot, subscribeWorkTasks } from '../../lib/workTasksStore'
-import { navigationForWorkTaskAction, preferredNoticeActionForTask } from '../../lib/workTaskActions'
+import { navigationForWorkTaskAction, preferredNoticeActionForTask, shouldOpenGuestReadyTaskDetail } from '../../lib/workTaskActions'
 import {
   listCompanyAnnouncementsForApp,
   listCompanyDocsForApp,
@@ -708,12 +708,16 @@ export default function NoticesScreen(props: Props) {
       const isCleaningTask = String(item.taskSourceType || '').trim() === 'cleaning_tasks'
       const isInspection = isCleaningTask && String(item.taskKind || '').trim() === 'inspection'
       const task = historyTasks.find((it) => String(it.id || '').trim() === item.taskId) || null
-      if (isTaskManagerUser(user) && isCleaningTask) {
+      const activeRole = String((user as any)?.role || '').trim().toLowerCase()
+      if (isTaskManagerUser(user) && isCleaningTask && !shouldOpenGuestReadyTaskDetail(task, activeRole)) {
         props.navigation.navigate('ManagerDailyTask', { taskId: item.taskId })
         return
       }
       if (task && Array.isArray((task as any).available_actions)) {
-        const action = preferredNoticeActionForTask(task as any, {}, { roleNames: roleNamesOf(user) })
+        const action = preferredNoticeActionForTask(task as any, {}, {
+          roleNames: roleNamesOf(user),
+          activeRole,
+        })
         const route = action?.enabled ? navigationForWorkTaskAction(task as any, action) : null
         if (route) {
           props.navigation.navigate(route.screen as any, route.params as any)

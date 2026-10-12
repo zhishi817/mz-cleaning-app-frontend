@@ -57,7 +57,7 @@ import {
   turnoverDisplayOf,
 } from '../../lib/turnoverDisplay'
 import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
-import { mergeGuestReadyNotificationActions, navigationForWorkTaskAction, primaryActionsForTask } from '../../lib/workTaskActions'
+import { guestReadyNotificationForActiveRole, guestReadyOperationId, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, primaryActionsForTask, shouldOpenGuestReadyTaskDetail } from '../../lib/workTaskActions'
 import { dailyTaskGroupCounts } from '../../lib/dailyTaskPresentation'
 import { millisecondsUntilNextTaskBusinessDate, shouldFollowTaskBusinessDate, taskBusinessDateKey } from '../../lib/taskBusinessDate'
 import {
@@ -620,6 +620,7 @@ export default function TasksScreen(props: Props) {
     if (primary) ids.unshift(primary)
     return Array.from(new Set(ids))
   }, [user])
+  const activeRole = String((user as any)?.role || '').trim().toLowerCase()
   const canManagerMode = useMemo(() => isManagerRole(roleNames), [roleNames])
   const canSeeDayEndOverview = useMemo(() => roleNames.includes('admin') || roleNames.includes('offline_manager'), [roleNames])
   const canTaskManagerView = useMemo(() => isTaskManagerUser(user), [user])
@@ -1770,10 +1771,24 @@ function showBanner(title: string, message: string) {
   }
 
   async function toggleGuestReadyNotification(task: WorkTaskItem, action: WorkTaskAvailableAction) {
-    if (!token || !user?.id || guestReadyPendingMap[task.id]) return
+    if (activeRole !== 'customer_service' || !token || !user?.id || guestReadyPendingMap[task.id]) return
     const notification = task.guest_ready_notification
-    const orderId = String(notification?.order_id || action.source_id || task.order_id_checkin || '').trim()
-    if (!notification || !orderId) {
+    const outsideKey = task.guest_ready_outside_key
+    const orderId = String(notification?.order_id || outsideKey?.order_id || action.source_id || task.order_id_checkin || '').trim()
+    const expectedVersion = notification?.version ?? outsideKey?.version
+    if (!orderId || expectedVersion == null) {
+      showBanner('失败', '入住订单已变化，请刷新后重试')
+      return
+    }
+    const mutationAction = action.id === 'revoke_guest_ready_notified'
+      ? 'revoke'
+      : action.id === 'register_guest_ready_outside_key'
+        ? 'register_outside_key'
+        : action.id === 'cancel_guest_ready_outside_key'
+          ? 'cancel_outside_key'
+          : 'mark'
+    const operationId = guestReadyOperationId({ orderId, action: mutationAction, expectedVersion })
+    if (!operationId) {
       showBanner('失败', '入住订单已变化，请刷新后重试')
       return
     }
@@ -1781,9 +1796,9 @@ function showBanner(title: string, message: string) {
     try {
       const receipt = await changeGuestReadyNotification(token, {
         order_id: orderId,
-        action: action.id === 'revoke_guest_ready_notified' ? 'revoke' : 'mark',
-        operation_id: `guest-ready-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
-        expected_version: notification.version,
+        action: mutationAction,
+        operation_id: operationId,
+        expected_version: expectedVersion,
       })
       const patches = (getWorkTasksSnapshot().items || [])
         .filter((item) => String(item.order_id_checkin || '') === orderId)
@@ -1791,11 +1806,18 @@ function showBanner(title: string, message: string) {
           id: item.id,
           patch: {
             guest_ready_notification: receipt.guest_ready_notification,
+            guest_ready_outside_key: receipt.guest_ready_outside_key,
             available_actions: mergeGuestReadyNotificationActions(item.available_actions, receipt.available_actions),
           } as Partial<WorkTaskItem>,
         }))
       if (patches.length) await patchWorkTaskItems(patches)
-      showBanner('已保存', action.id === 'revoke_guest_ready_notified' ? '已撤销“已通知客人”记录' : '已记录“已通知客人”')
+      showBanner('已保存', action.id === 'revoke_guest_ready_notified'
+        ? '已撤销“已通知客人”记录'
+        : action.id === 'register_guest_ready_outside_key'
+          ? '已登记“钥匙外挂”'
+          : action.id === 'cancel_guest_ready_outside_key'
+            ? '已取消“钥匙外挂”'
+            : '已记录“已通知客人”')
     } catch (error: any) {
       showBanner('失败', String(error?.message || '保存失败；当前状态未改变'))
     } finally {
@@ -1810,7 +1832,10 @@ function showBanner(title: string, message: string) {
   function handleTaskActionPress(task: WorkTaskItem, action: WorkTaskAvailableAction) {
     if (!action.enabled) return
     if (action.id === 'mark_guest_checkout') return void toggleGuestCheckedOut(task, action)
-    if (action.id === 'record_guest_ready_notified' || action.id === 'revoke_guest_ready_notified') return void toggleGuestReadyNotification(task, action)
+    if (action.id === 'record_guest_ready_notified'
+      || action.id === 'revoke_guest_ready_notified'
+      || action.id === 'register_guest_ready_outside_key'
+      || action.id === 'cancel_guest_ready_outside_key') return void toggleGuestReadyNotification(task, action)
     const route = navigationForWorkTaskAction(task, action)
     if (route) props.navigation.navigate(route.screen as any, route.params as any)
   }
@@ -2921,7 +2946,7 @@ function showBanner(title: string, message: string) {
               const checkinTagStyles = taskTagStylePair('pending')
               const lateCheckoutTagStyles = taskTagStylePair('danger')
               const earlyCheckinTagStyles = taskTagStylePair('info')
-              const guestReadyNotification = task.guest_ready_notification
+              const guestReadyNotification = guestReadyNotificationForActiveRole(task.guest_ready_notification, activeRole)
               const guestReadyNotificationTagStyles = taskTagStylePair(
                 guestReadyNotification?.status === 'notified' ? 'success' : 'pending',
               )
@@ -2934,7 +2959,7 @@ function showBanner(title: string, message: string) {
               const isHistoricalTask = isBeforeToday(String(task.scheduled_date || (task as any).date || ''))
               const isManager = canManagerMode && mode === 'manager'
               const isInspectorUser = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
-              const taskPrimaryActions = primaryActionsForTask(task, { roleNames, limit: 2 })
+              const taskPrimaryActions = primaryActionsForTask(task, { roleNames, activeRole, limit: 2 })
               const renderPrimaryAction = (action: WorkTaskAvailableAction) => {
                 const checkedOutVisual = action.id === 'mark_guest_checkout' && !!checkedOutAt
                 const localDisabled =
@@ -3118,7 +3143,7 @@ function showBanner(title: string, message: string) {
                       return
                     }
                     const isCleaningTask0 = isCleaningExecutionTask(task) || isInspectionExecutionTask(task) || isKeyHandoverExecutionTask(task)
-                    if (view === 'all' && canTaskManagerView && isCleaningTask0) {
+                    if (view === 'all' && canTaskManagerView && isCleaningTask0 && !shouldOpenGuestReadyTaskDetail(task, activeRole)) {
                       props.navigation.navigate('ManagerDailyTask', { taskId: task.id })
                       return
                     }

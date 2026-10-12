@@ -26,6 +26,7 @@ import { hasAnyRole } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getEffectiveTaskStatus, isTaskWorkflowProgressStatus } from '../../lib/taskVisualTheme'
 import { findWorkTaskItemByAnyId, patchWorkTaskItem, requestWorkTasksRefresh, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
+import { guestReadyCachePatchAfterCheckinTimeChange } from '../../lib/workTaskActions'
 import {
   completionPhotoTaskIdsFromTask,
   inspectionPhotoTaskIdsFromTask,
@@ -483,6 +484,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     const taskIds = executionTaskIdsForRole(task, task.task_kind)
     try {
       setSaving(true)
+      let refreshFailed = false
       const norm = (v: any) => String(v ?? '').replace(/\s+/g, ' ').trim()
       const toNull = (v: any) => {
         const s = norm(v)
@@ -555,6 +557,9 @@ export default function ManagerDailyTaskScreen(props: Props) {
         const mergedCheckout = payload.checkout_time !== undefined ? payload.checkout_time : prevCheckout
         const mergedCheckin = payload.checkin_time !== undefined ? payload.checkin_time : prevCheckin
         patch.summary = buildCleaningSummary(mergedCheckout, mergedCheckin)
+        if (payload.checkin_time !== undefined) {
+          Object.assign(patch, guestReadyCachePatchAfterCheckinTimeChange(task, mergedCheckin))
+        }
         if (Object.keys(patch).length) await patchWorkTaskItem(task.id, patch)
       }
       if (changedLines.length) {
@@ -598,11 +603,15 @@ export default function ManagerDailyTaskScreen(props: Props) {
       }
       if (token && user?.id) {
         const { date_from, date_to } = buildDetailFallbackRange()
-        requestWorkTasksRefresh({ token, userId: String(user.id), date_from, date_to, view: 'all', mode: 'force', reason: 'manager_task_saved' }).catch(() => null)
+        try {
+          await requestWorkTasksRefresh({ token, userId: String(user.id), date_from, date_to, view: 'all', mode: 'force', reason: 'manager_task_saved' })
+        } catch {
+          refreshFailed = true
+        }
       }
       setKeysDirty(false)
       const skippedAll = !saveResult || saveResult?.skipped
-      Alert.alert(t('common_ok'), skippedAll ? '已保存（无变化）' : '已保存')
+      Alert.alert(t('common_ok'), refreshFailed ? '已保存；通知状态刷新失败，请稍后重试' : skippedAll ? '已保存（无变化）' : '已保存')
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
     } finally {

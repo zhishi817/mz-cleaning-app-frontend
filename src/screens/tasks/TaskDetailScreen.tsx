@@ -44,7 +44,7 @@ import CleaningMediaImage from '../../components/CleaningMediaImage'
 import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 import AppButton from '../../components/ui/AppButton'
 import AppIconButton from '../../components/ui/AppIconButton'
-import { actionDisabledReasonText, availableActionsForTask, mergeGuestReadyNotificationActions, navigationForWorkTaskAction } from '../../lib/workTaskActions'
+import { actionDisabledReasonText, availableActionsForTask, guestReadyNotificationForActiveRole, guestReadyOperationId, guestReadyOutsideKeyForActiveRole, mergeGuestReadyNotificationActions, navigationForWorkTaskAction } from '../../lib/workTaskActions'
 import type { WorkTaskAvailableAction } from '../../lib/api'
 import { draftFileExists, persistCompressedDraftMedia } from '../../lib/localMediaDrafts'
 import {
@@ -230,6 +230,7 @@ export default function TaskDetailScreen(props: Props) {
   const { user, token } = useAuth()
   const { width, height } = useWindowDimensions()
   const roleNames = useMemo(() => roleNamesOf(user), [user])
+  const activeRole = String((user as any)?.role || '').trim().toLowerCase()
   const canManagerView = useMemo(() => roleNames.some(isManagerRole), [roleNames])
   const canViewLockboxVideo = useMemo(
     () => roleNames.some((role) => ['admin', 'offline_manager', 'customer_service', 'cleaning_inspector', 'cleaner_inspector'].includes(String(role).trim().toLowerCase())),
@@ -1113,10 +1114,24 @@ export default function TaskDetailScreen(props: Props) {
   }
 
   async function onToggleGuestReadyNotification(action: WorkTaskAvailableAction) {
-    if (!task || !token || guestReadyPending) return
+    if (activeRole !== 'customer_service' || !task || !token || guestReadyPending) return
     const notification = task.guest_ready_notification
-    const orderId = String(notification?.order_id || action.source_id || task.order_id_checkin || '').trim()
-    if (!notification || !orderId) {
+    const outsideKey = task.guest_ready_outside_key
+    const orderId = String(notification?.order_id || outsideKey?.order_id || action.source_id || task.order_id_checkin || '').trim()
+    const expectedVersion = notification?.version ?? outsideKey?.version
+    if (!orderId || expectedVersion == null) {
+      Alert.alert(t('common_error'), '入住订单已变化，请刷新后重试')
+      return
+    }
+    const mutationAction = action.id === 'revoke_guest_ready_notified'
+      ? 'revoke'
+      : action.id === 'register_guest_ready_outside_key'
+        ? 'register_outside_key'
+        : action.id === 'cancel_guest_ready_outside_key'
+          ? 'cancel_outside_key'
+          : 'mark'
+    const operationId = guestReadyOperationId({ orderId, action: mutationAction, expectedVersion })
+    if (!operationId) {
       Alert.alert(t('common_error'), '入住订单已变化，请刷新后重试')
       return
     }
@@ -1124,9 +1139,9 @@ export default function TaskDetailScreen(props: Props) {
     try {
       const receipt = await changeGuestReadyNotification(token, {
         order_id: orderId,
-        action: action.id === 'revoke_guest_ready_notified' ? 'revoke' : 'mark',
-        operation_id: `guest-ready-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
-        expected_version: notification.version,
+        action: mutationAction,
+        operation_id: operationId,
+        expected_version: expectedVersion,
       })
       const patches = (getWorkTasksSnapshot().items || [])
         .filter((item) => String(item.order_id_checkin || '') === orderId)
@@ -1134,11 +1149,18 @@ export default function TaskDetailScreen(props: Props) {
           id: item.id,
           patch: {
             guest_ready_notification: receipt.guest_ready_notification,
+            guest_ready_outside_key: receipt.guest_ready_outside_key,
             available_actions: mergeGuestReadyNotificationActions(item.available_actions, receipt.available_actions),
           } as Partial<WorkTaskItem>,
         }))
       if (patches.length) await patchWorkTaskItems(patches)
-      Alert.alert(t('common_ok'), action.id === 'revoke_guest_ready_notified' ? '已撤销“已通知客人”记录' : '已记录“已通知客人”')
+      Alert.alert(t('common_ok'), action.id === 'revoke_guest_ready_notified'
+        ? '已撤销“已通知客人”记录'
+        : action.id === 'register_guest_ready_outside_key'
+          ? '已登记“钥匙外挂”'
+          : action.id === 'cancel_guest_ready_outside_key'
+            ? '已取消“钥匙外挂”'
+            : '已记录“已通知客人”')
     } catch (error: any) {
       Alert.alert(t('common_error'), String(error?.message || '保存失败；当前状态未改变'))
     } finally {
@@ -1246,8 +1268,9 @@ export default function TaskDetailScreen(props: Props) {
     const s = String(task.status || '').trim().toLowerCase()
     return s === 'done' || s === 'completed' || s === 'ready'
   })()
-  const taskActions = availableActionsForTask(task, { roleNames })
-  const guestReadyNotification = task.guest_ready_notification
+  const taskActions = availableActionsForTask(task, { roleNames, activeRole })
+  const guestReadyNotification = guestReadyNotificationForActiveRole(task.guest_ready_notification, activeRole)
+  const guestReadyOutsideKey = guestReadyOutsideKeyForActiveRole(task.guest_ready_outside_key, activeRole)
   const completionPhotoAppendAction = taskActions.find((action) => action.id === 'append_completion_photo') || null
   const canAppendCompletionPhotos = !isMaintenanceTask && isAlreadyDone && completionPhotoAppendAction?.enabled === true
   const canEditTaskHandling = (!isMaintenanceTask && !isAlreadyDone) || maintenanceCanAct
@@ -1380,7 +1403,10 @@ export default function TaskDetailScreen(props: Props) {
     const localDisabled =
       (action.id === 'upload_key_photo' && (keyUploading || keyPhotoEffectiveState !== 'missing'))
       || (action.id === 'mark_guest_checkout' && (!token || isHistoricalTask || checkedOutPending))
-      || ((action.id === 'record_guest_ready_notified' || action.id === 'revoke_guest_ready_notified') && (!token || guestReadyPending))
+      || ((action.id === 'record_guest_ready_notified'
+        || action.id === 'revoke_guest_ready_notified'
+        || action.id === 'register_guest_ready_outside_key'
+        || action.id === 'cancel_guest_ready_outside_key') && (!token || guestReadyPending))
     const isTaskCompletedAction = action.disabled_reason === 'task_completed'
     const isReadOnlyInspectionAction = action.id === 'submit_inspection' && action.read_only === true
     const isReadOnlyTaskAction = isReadOnlyInspectionAction
@@ -1408,7 +1434,10 @@ export default function TaskDetailScreen(props: Props) {
           ? '任务已完成'
           : action.id === 'mark_guest_checkout' && checkedOutPending
             ? '提交中...'
-            : (action.id === 'record_guest_ready_notified' || action.id === 'revoke_guest_ready_notified') && guestReadyPending
+            : (action.id === 'record_guest_ready_notified'
+              || action.id === 'revoke_guest_ready_notified'
+              || action.id === 'register_guest_ready_outside_key'
+              || action.id === 'cancel_guest_ready_outside_key') && guestReadyPending
               ? '保存中...'
             : action.label
     const onPress = () => {
@@ -1428,7 +1457,10 @@ export default function TaskDetailScreen(props: Props) {
       }
       if (action.id === 'upload_key_photo') return void onUploadKey()
       if (action.id === 'mark_guest_checkout') return void onToggleGuestCheckedOut(action)
-      if (action.id === 'record_guest_ready_notified' || action.id === 'revoke_guest_ready_notified') return void onToggleGuestReadyNotification(action)
+      if (action.id === 'record_guest_ready_notified'
+        || action.id === 'revoke_guest_ready_notified'
+        || action.id === 'register_guest_ready_outside_key'
+        || action.id === 'cancel_guest_ready_outside_key') return void onToggleGuestReadyNotification(action)
       const route = navigationForWorkTaskAction(task, action)
       if (route) props.navigation.navigate(route.screen as any, route.params as any)
     }
@@ -1645,6 +1677,17 @@ export default function TaskDetailScreen(props: Props) {
               {guestReadyNotification.status === 'notified'
                 ? `客人入住通知：已由 ${guestReadyNotification.notified_by_name || guestReadyNotification.notified_by_user_id || '-'} 于 ${guestReadyNotification.notified_at ? new Date(guestReadyNotification.notified_at).toLocaleString() : '-'} 记录`
                 : '客人入住通知：尚未记录（本操作只记录人工通知状态，不会发送消息）'}
+            </Text>
+          </View>
+        ) : null}
+
+        {guestReadyOutsideKey ? (
+          <View style={styles.row}>
+            <Ionicons name="key-outline" size={moderateScale(14)} color="#9CA3AF" />
+            <Text style={styles.rowText}>
+              {guestReadyOutsideKey.required
+                ? `钥匙外挂：已由 ${guestReadyOutsideKey.registered_by_name || guestReadyOutsideKey.registered_by_user_id || '-'} 登记`
+                : '钥匙外挂：未登记'}
             </Text>
           </View>
         ) : null}

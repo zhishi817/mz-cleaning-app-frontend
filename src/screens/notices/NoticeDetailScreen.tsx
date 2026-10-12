@@ -15,7 +15,7 @@ import { getAuthToken, getStoredUser } from '../../lib/authStorage'
 import { markInboxNotificationsRead } from '../../lib/api'
 import { isTaskManagerUser, roleNamesOf } from '../../lib/roles'
 import { findWorkTaskItemByAnyId, requestWorkTasksRefresh } from '../../lib/workTasksStore'
-import { actionDisabledReasonText, navigationForWorkTaskAction, preferredNoticeActionForTask } from '../../lib/workTaskActions'
+import { actionDisabledReasonText, navigationForWorkTaskAction, preferredNoticeActionForTask, shouldOpenGuestReadyTaskDetail } from '../../lib/workTaskActions'
 import AppButton from '../../components/ui/AppButton'
 
 type Props = NativeStackScreenProps<NoticesStackParamList, 'NoticeDetail'>
@@ -219,15 +219,19 @@ export default function NoticeDetailScreen(props: Props) {
         })
       }
       const task = findWorkTaskItemByAnyId(taskRouteId) || existingTask
+      const activeRole = String((storedUser as any)?.role || '').trim().toLowerCase()
       if (!task) {
         props.navigation.navigate('TaskDetail', { id: taskRouteId })
         return
       }
-      if (isTaskManagerUser(storedUser) && String(task.source_type || '').trim() === 'cleaning_tasks') {
+      if (isTaskManagerUser(storedUser) && String(task.source_type || '').trim() === 'cleaning_tasks' && !shouldOpenGuestReadyTaskDetail(task, activeRole)) {
         props.navigation.navigate('ManagerDailyTask', { taskId: task.id })
         return
       }
-      const preferredAction = preferredNoticeActionForTask(task, noticeData, { roleNames: roleNamesOf(storedUser) })
+      const preferredAction = preferredNoticeActionForTask(task, noticeData, {
+        roleNames: roleNamesOf(storedUser),
+        activeRole,
+      })
       if (preferredAction && !preferredAction.enabled) {
         Alert.alert('暂不可操作', actionDisabledReasonText(preferredAction.disabled_reason || '任务已不可执行'))
         props.navigation.navigate('TaskDetail', { id: task.id })
