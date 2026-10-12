@@ -632,7 +632,7 @@ test('修改待核对反馈失败后关闭核对层并在原表单持续显示�
   expect(ui.getByTestId('claim-service-date-value').props.children).toBe('--')
   expect(ui.queryByDisplayValue('修改后的说明')).toBeNull()
   expect(updateMyPersonnelClaim).toHaveBeenCalledTimes(1)
-})
+}, 15000)
 
 test('迟到的修改草稿和重复新增点击都不能覆盖最新新增会话', async () => {
   const submittedClaim = {

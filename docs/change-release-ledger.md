@@ -1,5 +1,75 @@
 # Change Release Ledger
 
+## CRL-20261012-005 — 结算失败反馈测试总时限补修（mobile）
+
+- **Status:** verified source-only test fix; selected and authorized for commit, push, and Draft PR; not yet committed, pushed, merged, deployed, or published by OTA
+- **Repository:** `mobile`
+- **Updated:** 2026-10-12 13:08 UTC
+- **Request:** 修复 Mobile `Dev` 合入后 Root 全量门禁中“修改待核对反馈失败后关闭核对层并在原表单持续显示错误”用例触发 Jest 默认 5 秒总时限的问题；不改业务逻辑、不全局放宽测试。
+- **Outcome:** 仅把该单条异步用例的 Jest 总预算设为 15 秒；内部等待、断言、运行时代码、API、数据、权限和结算语义均不变。
+
+### Implementation
+
+- Previous behavior: 用例内部已有最长 5 秒等待，但测试本身仍受 Jest 默认 5 秒总时限约束，在 Root+Mobile 全量联跑负载下会先触发外层超时。
+- New behavior: 仅该用例使用 15 秒总预算，仍保留现有 5 秒/3 秒局部等待和全部断言。
+- Key decisions: 不添加 sleep、不降低断言、不改变全局 Jest 配置，也不修改任何产品源码。
+
+### Files / Areas
+
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — modified: 为唯一失败用例增加 15 秒局部 Jest 总预算。
+- `docs/change-release-ledger.md` — modified: 记录本次独立 Mobile 补修、验证和发布证据。
+
+### Impact / Dependencies
+
+- API: none.
+- Database / migration: none.
+- Config / environment: none.
+- Dependencies: Mobile 基线 `origin/Dev@69d70e6cc3fb8262283fa87162b718cb75b812e4`；配对验证使用 Root `origin/Dev@9570a7c3066d5f3b08026fa3a391d23d19b97505`。
+- Related units: follows merged `mobile/CRL-20261012-004`; no Root mutation or new Root CRL.
+
+### Validation
+
+- 目标用例无缓存单进程首次运行：PASS，1/1；用例约 4.084 秒。
+- 目标用例无缓存单进程连续重复 5 次：PASS，5/5；每轮文件总耗时约 6.1–7.1 秒。
+- Mobile `npm run check:ci`: PASS；ledger-range tests 44/44、typecheck、lint 0 errors / 600 existing warnings、button/ledger gates、67 suites / 420 tests。
+- Root+Mobile `npm run check:full`: PASS；Root `9570a7c` 后端合同、Web lint/test/build及修复 Mobile typecheck/lint/67 suites/420 tests 全部通过；Mobile 目标文件约 13.5 秒。首次沙箱运行的本地监听 `EPERM` 与一次受污染临时验证树不计为候选失败，干净 detached Root 工作树外层重跑通过。
+- iOS simulator / Android emulator / physical devices / EAS or native build / production: not run.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; only an ignored dependency symlink is used for local validation and is not selected.
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `2e827f47eae053f0d8bcb8c24d611db23b48c7b1f1d7012217bef58812cd2dfd`
+
+### Release Attempts
+
+#### RA-20261012-003
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20261012-005`.
+- Selected CRL identities: `mobile/CRL-20261012-005`.
+- Intended action: `push` followed by an authorized Draft PR targeting `Dev`; no merge.
+- Branch: `codex/personnel-settlement-timeout-fix-20261012`.
+- Base: `origin/Dev@69d70e6cc3fb8262283fa87162b718cb75b812e4`; fetched at `2026-10-12 12:53 UTC`.
+- Candidate patch SHA-256: `9a50775f111845b0ea850500e333a7e6a3d482c584e216b99aa725978b5263c3`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `not committed`; audit head is emitted by the report command.
+- Dependencies: paired verification against Root `origin/Dev@9570a7c3066d5f3b08026fa3a391d23d19b97505`; no same-repository CRL dependency.
+- Required validation: PASS; evidence: targeted 6/6, Mobile `check:ci`, and exact Root+Mobile `check:full` all passed.
+- Shared-hunk review: PASS; `PersonnelSettlementScreen.test.tsx` is shared historically, but the selected delta is one isolated closing-line timeout argument after the previously merged CRLs.
+- Generated-file review: not applicable; only TypeScript test source and Markdown ledger are selected.
+- Technical state: `verified`.
+- User authorization: `approved-for-push`; evidence: user explicitly approved the scoped test repair, commit, push, validation, and separately approved creation of a Draft PR targeting Mobile `Dev`.
+- Independent review: `GO` for commit only; evidence: independent reviewer found P0=0 / P1=0 / P2=0, reproduced the exact staged fingerprint, confirmed the one-line test-only scope, reran the target 1/1 PASS, and found no untracked, generated, secret, production-write, or unrelated content.
+- Action conclusion: `GO` for commit; blockers: none. Push and Draft PR remain separate authorized actions that require the exact committed-range audit and remote verification.
+
+### Risks / Release Notes
+
+- Risk: a genuine failure may now take up to 15 seconds for this one test, but all assertions remain fail-closed and global timeout behavior is unchanged.
+- Rollback: revert the one test timeout argument and this CRL; no runtime or user data rollback is required.
+- Sensitive-information review: no secrets, `.env`, credentials, tokens, private media, production logs, database URLs, generated artifacts, native files, or production data are selected.
+- Git state: clean `origin/Dev`-based release worktree with two intended changed paths; not committed or pushed, no PR yet, no merge, deployment, OTA, device, or production verification.
+
 ## CRL-20261011-002 — MZ-010 客人已通知与任务状态闭环（mobile）
 
 - **Status:** validated and independently reviewed clean Dev release candidate; not committed, pushed, merged, released, or published by OTA
