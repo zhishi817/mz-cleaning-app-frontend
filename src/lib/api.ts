@@ -592,6 +592,8 @@ export type WorkTaskActionId =
   | 'mark_guest_checkout'
   | 'record_guest_ready_notified'
   | 'revoke_guest_ready_notified'
+  | 'register_guest_ready_outside_key'
+  | 'cancel_guest_ready_outside_key'
 
 export type WorkTaskActionTarget =
   | 'TaskDetail'
@@ -630,8 +632,20 @@ export type GuestReadyNotification = {
   notified_by_user_id: string | null
   notified_by_name: string | null
   version: number
+  requirement_reasons: Array<'early_arrival' | 'outside_key'>
+  automatic_early_arrival: boolean
+  outside_key_required: boolean
   eligible: boolean
   disabled_reason?: 'property_not_ready' | 'no_checkin_order' | 'checkin_order_changed' | null
+}
+
+export type GuestReadyOutsideKey = {
+  order_id: string
+  required: boolean
+  registered_at: string | null
+  registered_by_user_id: string | null
+  registered_by_name: string | null
+  version: number
 }
 
 export type WorkTask = {
@@ -654,6 +668,7 @@ export type WorkTask = {
   daily_stats_group?: 'turnover' | 'offline' | null
   daily_stats_key?: string | null
   guest_ready_notification?: GuestReadyNotification | null
+  guest_ready_outside_key?: GuestReadyOutsideKey | null
   property_id: string | null
   title: string
   summary: string | null
@@ -1018,7 +1033,7 @@ export async function listWorkTasks(token: string, params: { date_from: string; 
 
 export async function changeGuestReadyNotification(
   token: string,
-  params: { order_id: string; action: 'mark' | 'revoke'; operation_id: string; expected_version: number },
+  params: { order_id: string; action: 'mark' | 'revoke' | 'register_outside_key' | 'cancel_outside_key'; operation_id: string; expected_version: number },
 ) {
   const urls = buildUrlCandidates('mzapp/guest-ready-notifications')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
@@ -1042,7 +1057,8 @@ export async function changeGuestReadyNotification(
     operation_id: string
     changed: boolean
     idempotent_replay: boolean
-    guest_ready_notification: GuestReadyNotification
+    guest_ready_notification: GuestReadyNotification | null
+    guest_ready_outside_key: GuestReadyOutsideKey | null
     available_actions: WorkTaskAvailableAction[]
   }
 }
@@ -2663,10 +2679,12 @@ export type PersonnelWorkloadClaim = {
   evidence_count: number
   evidence?: PersonnelClaimEvidence[]
   available_actions?: ('edit' | 'submit')[]
+  updated_at?: string | null
 }
 
 export type PersonnelClaimPayload = {
   client_request_id?: string | null
+  expected_updated_at?: string | null
   service_date: string
   claim_type: PersonnelClaimType
   property_id?: string | null
@@ -2676,6 +2694,28 @@ export type PersonnelClaimPayload = {
   requested_quantity?: number | string | null
   requested_amount_cents?: number | null
   note: string
+}
+
+export type PersonnelSettlementWorkItem = {
+  execution_key?: string
+  audit_id?: string | null
+  task_id?: string
+  component_type?: string
+  service_date?: string | null
+  performed_at?: string | null
+  performed_by_user_id?: string | null
+  performed_by_name?: string | null
+  property_id?: string | null
+  property_label?: string | null
+  scheduled_service_date?: string | null
+  current_scheduled_service_date?: string | null
+  inspection_due_date?: string | null
+  inspection_mode?: string | null
+  evidence_count?: number
+  status?: 'completed' | 'rescheduled' | 'incomplete' | 'management_closed' | 'legacy_completed_unverified' | 'cancelled' | string
+  status_reason?: string
+  included_in_amount?: boolean
+  requires_manual_review?: boolean
 }
 
 export type PersonnelSettlementLine = {
@@ -2693,6 +2733,21 @@ export type PersonnelSettlementLine = {
   total_cents: number
   price_basis?: 'inclusive_gst' | 'exclusive_gst'
   evidence_count: number
+  calculation_snapshot?: {
+    executed_property_count?: number
+    executed_task_count?: number
+    work_items?: PersonnelSettlementWorkItem[]
+  } | null
+}
+
+export type PersonnelSettlementPendingPricingItem = {
+  id: string
+  source_type: string
+  source_id: string
+  component_type: string
+  service_date: string
+  description: string
+  code: string
 }
 
 export type PersonnelSettlementDocument = {
@@ -2720,12 +2775,16 @@ export type PersonnelWeeklySettlement = {
   currency: string
   line_count: number
   evidence_count: number
+  calculation_status?: 'complete' | 'partial'
+  pending_pricing_count?: number
+  pending_pricing_items?: PersonnelSettlementPendingPricingItem[]
   profile_snapshot?: {
     gst_status?: 'unconfirmed' | 'registered' | 'not_registered'
   } | null
   dispute_note?: string | null
   available_actions?: string[]
   lines?: PersonnelSettlementLine[]
+  work_checklist?: PersonnelSettlementWorkItem[]
   documents?: PersonnelSettlementDocument[]
   phase5_schema_ready?: boolean
 }
@@ -2740,8 +2799,13 @@ export type PersonnelSettlementSubmissionPreview = {
   total_cents: number
   line_count: number
   lines: PersonnelSettlementLine[]
+  calculation_status: 'complete' | 'partial'
+  pending_pricing_count: number
+  pending_pricing_items: PersonnelSettlementPendingPricingItem[]
+  work_checklist?: PersonnelSettlementWorkItem[]
   blocking_issues: { source_type?: string; source_id?: string; code: string }[]
   confirmation_token: string
+  amount_state?: 'current_calculation' | 'frozen_awaiting_confirmation' | 'historical_frozen_pending_verification'
 }
 
 export async function getMyProfile(token: string) {

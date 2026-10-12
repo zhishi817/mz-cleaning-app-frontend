@@ -2,6 +2,7 @@ import {
   activateWorkTasksRealtime,
   deactivateWorkTasksRealtime,
   establishWorkTasksSession,
+  eventRequiresGuestReadyAuthorityRefresh,
   getWorkTasksSnapshot,
   initWorkTasksStore,
   isSafePatchEvent,
@@ -404,5 +405,88 @@ test('treats key re-upload as an incremental event so existing consumable photos
     changed_fields: ['guest_ready_notification', 'available_actions'],
     payload: { patch: { guest_ready_notification: { status: 'notified' } } },
   })).toBe(false)
+  expect(eventRequiresGuestReadyAuthorityRefresh({
+    event_type: 'TASK_UPDATED',
+    change_scope: 'list',
+    changed_fields: ['checkin_time'],
+    payload: { patch: { checkin_time: '2:30pm' } },
+  })).toBe(true)
+  expect(isSafePatchEvent({
+    event_type: 'TASK_UPDATED',
+    change_scope: 'list',
+    changed_fields: ['checkin_time'],
+    payload: { patch: { checkin_time: '2:30pm' } },
+  })).toBe(false)
   expect(mergePatchIntoTask(task, event).restock_items).toEqual(task.restock_items)
+})
+
+test('forces an authoritative refresh instead of merging a partial guest-ready qualification event', async () => {
+  const api = require('./api')
+  await activateWorkTasksRealtime({ token: 't1', userId: 'refresh-user', date_from: '2026-08-30', date_to: '2026-08-30', view: 'all' })
+  api.listWorkTasks.mockClear()
+
+  mockStreamListeners.work_task_event?.[0]({
+    type: 'work_task_event',
+    data: JSON.stringify({
+      event_id: 'evt-checkin-time',
+      event_type: 'TASK_UPDATED',
+      change_scope: 'list',
+      task_id: 'cleaning_task:task-1',
+      changed_fields: ['checkin_time'],
+      payload: { patch: { checkin_time: '2:30pm' } },
+    }),
+  })
+  await Promise.resolve()
+  await Promise.resolve()
+
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+})
+
+test('forces guest-ready authority before handling a sync membership removal', async () => {
+  const api = require('./api')
+  const mediaCache = require('./cleaningMediaCache')
+  await activateWorkTasksRealtime({ token: 't1', userId: 'refresh-user', date_from: '2026-08-30', date_to: '2026-08-30', view: 'all' })
+  api.listWorkTasks.mockClear()
+
+  mockStreamListeners.work_task_event?.[0]({
+    type: 'work_task_event',
+    data: JSON.stringify({
+      event_id: 'evt-sync-checkin-removed',
+      event_type: 'TASK_REMOVED',
+      change_scope: 'membership',
+      task_id: 'cleaning_task:task-1',
+      changed_fields: ['execution_state', 'order_id_checkin', 'guest_ready_notification'],
+      payload: { patch: {} },
+    }),
+  })
+  await Promise.resolve()
+  await Promise.resolve()
+
+  expect(mediaCache.invalidateCleaningMediaCache).toHaveBeenCalledTimes(1)
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+})
+
+test('bounds and consumes a failed guest-ready refresh before one consistency retry', async () => {
+  jest.useFakeTimers()
+  const api = require('./api')
+  api.listWorkTasks.mockRejectedValueOnce(new Error('temporary network failure')).mockResolvedValue([])
+  await activateWorkTasksRealtime({ token: 't1', userId: 'refresh-user', date_from: '2026-08-30', date_to: '2026-08-30', view: 'all' })
+
+  mockStreamListeners.work_task_event?.[0]({
+    type: 'work_task_event',
+    data: JSON.stringify({
+      event_id: 'evt-checkin-time-retry',
+      event_type: 'TASK_UPDATED',
+      change_scope: 'list',
+      changed_fields: ['checkin_time'],
+      payload: { patch: { checkin_time: '2:30pm' } },
+    }),
+  })
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+
+  await jest.advanceTimersByTimeAsync(60_000)
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
 })

@@ -1,4 +1,4 @@
-import { actionDisabledReasonText, availableActionsForTask, mergeGuestReadyNotificationActions, navigationForWorkTaskAction } from './workTaskActions'
+import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyNotificationForActiveRole, guestReadyOperationId, guestReadyOutsideKeyForActiveRole, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, preferredNoticeActionForTask, shouldOpenGuestReadyTaskDetail } from './workTaskActions'
 
 test('清洁未提交时，即使共享任务状态已进入 inspected，补品入口仍可编辑', () => {
   const task: any = {
@@ -97,18 +97,142 @@ test('客服保留服务端独立授权的客人已通知动作，不从旧角�
   ])
 })
 
+test('客人通知标签和服务端缓存动作只跟随当前生效的客服角色', () => {
+  const notification = { status: 'not_notified' }
+  const outsideKey = { required: true }
+  expect(guestReadyNotificationForActiveRole(notification, 'customer_service')).toBe(notification)
+  expect(guestReadyOutsideKeyForActiveRole(outsideKey, 'customer_service')).toBe(outsideKey)
+  for (const activeRole of ['admin', 'offline_manager', 'cleaner', 'cleaning_inspector']) {
+    expect(guestReadyNotificationForActiveRole(notification, activeRole)).toBeNull()
+    expect(guestReadyOutsideKeyForActiveRole(outsideKey, activeRole)).toBeNull()
+  }
+
+  const task: any = {
+    id: 'multi-role-turnover',
+    source_type: 'cleaning_tasks',
+    task_kind: 'cleaning',
+    task_type: 'turnover',
+    available_actions: [
+      { id: 'record_guest_ready_notified', label: '已通知客人', placement: 'primary', enabled: true, target: 'TaskDetail', intent: 'manager' },
+      { id: 'cancel_guest_ready_outside_key', label: '取消钥匙外挂', placement: 'more', enabled: true, target: 'TaskDetail', intent: 'manager' },
+      { id: 'report_issue', label: '问题反馈', placement: 'more', enabled: true, target: 'FeedbackForm', intent: 'issue' },
+    ],
+  }
+  const assignedRoles = ['customer_service', 'admin']
+  expect(availableActionsForTask(task, { roleNames: assignedRoles, activeRole: 'customer_service' }).map((action) => action.id)).toEqual([
+    'record_guest_ready_notified',
+    'cancel_guest_ready_outside_key',
+    'report_issue',
+  ])
+  expect(availableActionsForTask(task, { roleNames: assignedRoles, activeRole: 'admin' }).map((action) => action.id)).toEqual([
+    'report_issue',
+  ])
+  expect(preferredNoticeActionForTask(task, {}, { roleNames: assignedRoles, activeRole: 'admin' })?.id).toBe('report_issue')
+  expect(shouldOpenGuestReadyTaskDetail(task, 'customer_service')).toBe(true)
+  expect(shouldOpenGuestReadyTaskDetail(task, 'admin')).toBe(false)
+})
+
+test('客人通知操作在同一服务端版本上复用幂等键', () => {
+  expect(guestReadyOperationId({ orderId: 'order-1', action: 'mark', expectedVersion: 4 }))
+    .toBe('guest-ready:mark:4:order-1')
+  expect(guestReadyOperationId({ orderId: 'order-1', action: 'mark', expectedVersion: 5 }))
+    .toBe('guest-ready:mark:5:order-1')
+  expect(guestReadyOperationId({ orderId: '', action: 'mark', expectedVersion: 4 })).toBeNull()
+})
+
+test('入住时间变化立即让旧通知缓存失效，但钥匙外挂要求继续保留', () => {
+  const earlyOnly: any = {
+    id: 'early-only',
+    guest_ready_notification: { status: 'notified' },
+    guest_ready_outside_key: { required: false },
+    turnover_display: { checkin_time: '2:30pm', is_early_checkin: true, is_late_checkin: false },
+    available_actions: [
+      { id: 'revoke_guest_ready_notified', label: '撤销', placement: 'primary', enabled: true, intent: 'manager' },
+      { id: 'register_guest_ready_outside_key', label: '登记钥匙外挂', placement: 'more', enabled: true, intent: 'manager' },
+    ],
+  }
+  expect(guestReadyCachePatchAfterCheckinTimeChange(earlyOnly, '3pm')).toEqual({
+    turnover_display: { checkin_time: '3pm', is_early_checkin: false, is_late_checkin: false },
+    guest_ready_notification: null,
+    available_actions: [
+      { id: 'register_guest_ready_outside_key', label: '登记钥匙外挂', placement: 'more', enabled: true, intent: 'manager' },
+    ],
+  })
+
+  const both: any = {
+    ...earlyOnly,
+    guest_ready_outside_key: { required: true },
+    available_actions: [
+      { id: 'revoke_guest_ready_notified', label: '撤销', placement: 'primary', enabled: true, intent: 'manager' },
+      { id: 'cancel_guest_ready_outside_key', label: '取消钥匙外挂', placement: 'more', enabled: true, intent: 'manager' },
+    ],
+  }
+  expect(guestReadyCachePatchAfterCheckinTimeChange(both, '4pm')).toEqual({
+    turnover_display: { checkin_time: '4pm', is_early_checkin: false, is_late_checkin: false },
+    guest_ready_notification: {
+      status: 'not_notified',
+      notified_at: null,
+      notified_by_user_id: null,
+      notified_by_name: null,
+      requirement_reasons: ['outside_key'],
+      automatic_early_arrival: false,
+      outside_key_required: true,
+    },
+    available_actions: [
+      { id: 'record_guest_ready_notified', label: '已通知客人', placement: 'primary', enabled: true, intent: 'manager' },
+      { id: 'cancel_guest_ready_outside_key', label: '取消钥匙外挂', placement: 'more', enabled: true, intent: 'manager' },
+    ],
+  })
+
+  expect(guestReadyCachePatchAfterCheckinTimeChange(earlyOnly, '2pm')).toEqual({
+    turnover_display: { checkin_time: '2pm', is_early_checkin: true, is_late_checkin: false },
+    guest_ready_notification: {
+      status: 'not_notified',
+      notified_at: null,
+      notified_by_user_id: null,
+      notified_by_name: null,
+      requirement_reasons: ['early_arrival'],
+      automatic_early_arrival: true,
+      outside_key_required: false,
+    },
+    available_actions: [
+      { id: 'record_guest_ready_notified', label: '已通知客人', placement: 'primary', enabled: true, intent: 'manager' },
+      { id: 'register_guest_ready_outside_key', label: '登记钥匙外挂', placement: 'more', enabled: true, intent: 'manager' },
+    ],
+  })
+})
+
 test('通知状态回执只替换对应动作，不覆盖任务原有操作', () => {
   const existing: any[] = [
     { id: 'fill_supplies', label: '补品填报' },
     { id: 'record_guest_ready_notified', label: '已通知客人' },
+    { id: 'register_guest_ready_outside_key', label: '登记钥匙外挂' },
     { id: 'report_issue', label: '问题反馈' },
   ]
-  const receipt: any[] = [{ id: 'revoke_guest_ready_notified', label: '撤销已通知客人' }]
+  const receipt: any[] = [
+    { id: 'revoke_guest_ready_notified', label: '撤销已通知客人' },
+    { id: 'cancel_guest_ready_outside_key', label: '取消钥匙外挂' },
+  ]
   expect(mergeGuestReadyNotificationActions(existing, receipt).map((action) => action.id)).toEqual([
     'fill_supplies',
     'report_issue',
     'revoke_guest_ready_notified',
+    'cancel_guest_ready_outside_key',
   ])
+})
+
+test('钥匙外挂动作从列表和通知入口统一进入任务详情', () => {
+  const task: any = { id: 'outside-key-task' }
+  for (const id of ['register_guest_ready_outside_key', 'cancel_guest_ready_outside_key'] as const) {
+    expect(navigationForWorkTaskAction(task, {
+      id,
+      label: '钥匙外挂',
+      placement: 'more',
+      enabled: true,
+      target: 'TaskDetail',
+      intent: 'manager',
+    })).toEqual({ screen: 'TaskDetail', params: { id: 'outside-key-task' } })
+  }
 })
 
 test('入住检查不会显示退房动作，旧服务端缓存动作同样会被隐藏', () => {

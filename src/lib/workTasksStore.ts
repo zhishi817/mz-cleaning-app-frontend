@@ -130,6 +130,16 @@ const EXECUTION_VISIBILITY_INPUT_FIELDS = new Set([
   'cleaner_id',
   'inspector_id',
 ])
+const GUEST_READY_AUTHORITY_FIELDS = new Set([
+  'guest_ready_notification',
+  'guest_ready_outside_key',
+  'order_id_checkin',
+  'checkin_time',
+  'end_time',
+  'is_early_checkin',
+  'is_late_checkin',
+  'turnover_display',
+])
 
 const listeners = new Set<() => void>()
 let state: StoreState = {
@@ -394,7 +404,13 @@ export function isSafePatchEvent(event: WorkTaskStreamEvent) {
   if (!(scope === 'list' || scope === 'detail')) return false
   const fields = Array.isArray(event.changed_fields) ? event.changed_fields.map((x) => String(x || '').trim()).filter(Boolean) : []
   if (!fields.length) return false
+  if (eventRequiresGuestReadyAuthorityRefresh(event)) return false
   return fields.every((field) => SAFE_PATCH_FIELDS.has(field))
+}
+
+export function eventRequiresGuestReadyAuthorityRefresh(event: WorkTaskStreamEvent) {
+  const fields = Array.isArray(event.changed_fields) ? event.changed_fields : []
+  return fields.some((field) => GUEST_READY_AUTHORITY_FIELDS.has(String(field || '').trim().split('.')[0]))
 }
 
 function getPatchValue(patch: Record<string, any>, key: string) {
@@ -732,10 +748,25 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
   updateLastReceivedEventId(String(event.event_id || '').trim() || null)
   const eventType = String(event.event_type || '').trim()
   const scope = String(event.change_scope || '').trim()
-  if (scope === 'membership' || eventType === 'TASK_CREATED' || eventType === 'TASK_REMOVED' || eventType === 'TASK_ASSIGNMENT_CHANGED') {
-    if (scope === 'membership' || eventType === 'TASK_REMOVED' || eventType === 'TASK_ASSIGNMENT_CHANGED') {
-      void invalidateCleaningMediaCache()
-    }
+  const membershipChanged = scope === 'membership'
+    || eventType === 'TASK_CREATED'
+    || eventType === 'TASK_REMOVED'
+    || eventType === 'TASK_ASSIGNMENT_CHANGED'
+  if (scope === 'membership' || eventType === 'TASK_REMOVED' || eventType === 'TASK_ASSIGNMENT_CHANGED') {
+    void invalidateCleaningMediaCache()
+  }
+  if (eventRequiresGuestReadyAuthorityRefresh(event)) {
+    // Early-arrival qualification and outside-key state are server-authoritative
+    // and coupled to role-scoped actions. Never combine a partial time/event
+    // patch with a cached projection; refetch the complete task immediately.
+    void requestActiveWorkTasksRefresh('force', 'guest_ready_authority_changed').catch(() => {
+      // Keep one bounded retry after a transient failure. The coordinator
+      // applies its normal cooldown and coalesces any additional SSE events.
+      void requestActiveWorkTasksRefresh('consistency', 'guest_ready_authority_retry').catch(() => {})
+    })
+    return
+  }
+  if (membershipChanged) {
     void requestActiveWorkTasksRefresh('consistency', eventType || 'membership')
     return
   }

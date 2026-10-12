@@ -7,6 +7,7 @@ import {
   isStayoverTaskType,
 } from './cleaningInspection'
 import type { WorkTaskItem } from './workTasksStore'
+import { isEarlyCheckinTime, isLateCheckinTime } from './taskTime'
 
 function cleanText(value: any) {
   return String(value ?? '').trim()
@@ -45,9 +46,106 @@ export function mergeGuestReadyNotificationActions(
   const current = Array.isArray(current0) ? current0 : []
   const guestReady = Array.isArray(guestReady0) ? guestReady0 : []
   return [
-    ...current.filter((action) => action.id !== 'record_guest_ready_notified' && action.id !== 'revoke_guest_ready_notified'),
+    ...current.filter((action) => !isGuestReadyNotificationAction(action)),
     ...guestReady,
   ]
+}
+
+function isGuestReadyNotificationAction(action: WorkTaskAvailableAction) {
+  return action.id === 'record_guest_ready_notified'
+    || action.id === 'revoke_guest_ready_notified'
+    || action.id === 'register_guest_ready_outside_key'
+    || action.id === 'cancel_guest_ready_outside_key'
+}
+
+function isGuestReadyNotificationStatusAction(action: WorkTaskAvailableAction) {
+  return action.id === 'record_guest_ready_notified' || action.id === 'revoke_guest_ready_notified'
+}
+
+export function guestReadyNotificationForActiveRole<T>(notification: T | null | undefined, activeRole: unknown): T | null {
+  return lower(activeRole) === 'customer_service' ? (notification ?? null) : null
+}
+
+export function guestReadyOutsideKeyForActiveRole<T>(outsideKey: T | null | undefined, activeRole: unknown): T | null {
+  return lower(activeRole) === 'customer_service' ? (outsideKey ?? null) : null
+}
+
+export function guestReadyOperationId(params: {
+  orderId: unknown
+  action: 'mark' | 'revoke' | 'register_outside_key' | 'cancel_outside_key'
+  expectedVersion: unknown
+}) {
+  const orderId = cleanText(params.orderId)
+  const expectedVersion = Number(params.expectedVersion)
+  if (!orderId || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) return null
+  return `guest-ready:${params.action}:${expectedVersion}:${orderId}`
+}
+
+export function withoutGuestReadyNotificationStatusActions(actions: WorkTaskAvailableAction[] | null | undefined) {
+  return (actions || []).filter((action) => !isGuestReadyNotificationStatusAction(action))
+}
+
+export function guestReadyCachePatchAfterCheckinTimeChange(task: WorkTaskItem, nextCheckinTime: unknown): Partial<WorkTaskItem> {
+  const previousCheckinTime = String(task.turnover_display?.checkin_time ?? (task as any).checkin_time ?? task.end_time ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+  const normalizedNextCheckinTime = String(nextCheckinTime ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+  const automaticEarlyArrival = isEarlyCheckinTime(nextCheckinTime)
+  const outsideKeyRequired = task.guest_ready_outside_key?.required === true
+    || (task.available_actions || []).some((action) => action.id === 'cancel_guest_ready_outside_key')
+  const currentTurnoverDisplay = task.turnover_display && typeof task.turnover_display === 'object'
+    ? task.turnover_display
+    : null
+  const patch: Partial<WorkTaskItem> = currentTurnoverDisplay
+    ? {
+        turnover_display: {
+          ...currentTurnoverDisplay,
+          checkin_time: String(nextCheckinTime ?? '').trim() || null,
+          is_early_checkin: automaticEarlyArrival,
+          is_late_checkin: isLateCheckinTime(nextCheckinTime),
+        },
+      }
+    : {}
+  if (previousCheckinTime === normalizedNextCheckinTime) return patch
+  if (!automaticEarlyArrival && !outsideKeyRequired) {
+    patch.guest_ready_notification = null
+    patch.available_actions = withoutGuestReadyNotificationStatusActions(task.available_actions)
+  } else if (task.guest_ready_notification) {
+    patch.guest_ready_notification = {
+      ...task.guest_ready_notification,
+      status: 'not_notified',
+      notified_at: null,
+      notified_by_user_id: null,
+      notified_by_name: null,
+      requirement_reasons: [
+        ...(automaticEarlyArrival ? ['early_arrival' as const] : []),
+        ...(outsideKeyRequired ? ['outside_key' as const] : []),
+      ],
+      automatic_early_arrival: automaticEarlyArrival,
+      outside_key_required: outsideKeyRequired,
+    }
+    patch.available_actions = (task.available_actions || []).map((action) => action.id === 'revoke_guest_ready_notified'
+      ? { ...action, id: 'record_guest_ready_notified', label: '已通知客人' }
+      : action)
+  }
+  return patch
+}
+
+function scopeGuestReadyNotificationActions(actions: WorkTaskAvailableAction[], activeRole: unknown) {
+  if (activeRole == null || lower(activeRole) === 'customer_service') return actions
+  return actions.filter((action) => !isGuestReadyNotificationAction(action))
+}
+
+export function shouldOpenGuestReadyTaskDetail(
+  task: { available_actions?: WorkTaskAvailableAction[] | null } | null | undefined,
+  activeRole: unknown,
+) {
+  if (!task || lower(activeRole) !== 'customer_service') return false
+  return ((task as any).available_actions || []).some((action: WorkTaskAvailableAction) => action && isGuestReadyNotificationAction(action))
 }
 
 function isCleaningWorkSubmitted(status0: any) {
@@ -78,11 +176,13 @@ function legacyAction(params: Omit<WorkTaskAvailableAction, 'enabled'> & { enabl
   return { enabled: params.enabled !== false, ...params } as WorkTaskAvailableAction
 }
 
-export function availableActionsForTask(task: WorkTaskItem | null | undefined, options?: { roleNames?: string[] }): WorkTaskAvailableAction[] {
+export function availableActionsForTask(task: WorkTaskItem | null | undefined, options?: { roleNames?: string[]; activeRole?: string | null }): WorkTaskAvailableAction[] {
   if (!task) return []
   const roleNames = options?.roleNames || []
   const isCleaningSource = task.source_type === 'cleaning_tasks'
-  const isCustomerService = roleNames.includes('customer_service') && !roleNames.includes('admin') && !roleNames.includes('offline_manager')
+  const isCustomerService = options?.activeRole != null
+    ? lower(options.activeRole) === 'customer_service'
+    : roleNames.includes('customer_service') && !roleNames.includes('admin') && !roleNames.includes('offline_manager')
   const isManager = roleNames.includes('admin') || roleNames.includes('offline_manager') || roleNames.includes('customer_service')
 
   // Customer service has a historical manager-only entrypoint even for older
@@ -92,10 +192,12 @@ export function availableActionsForTask(task: WorkTaskItem | null | undefined, o
     const isPasswordOnly = isPasswordOnlyInspectionTask(task as any)
     const actions: WorkTaskAvailableAction[] = []
     const serverManagerActions = hasServerActions(task)
-      ? (((task as any).available_actions || []) as WorkTaskAvailableAction[]).filter((action) => (
+      ? scopeGuestReadyNotificationActions((((task as any).available_actions || []) as WorkTaskAvailableAction[]), options?.activeRole).filter((action) => (
           action?.id === 'mark_guest_checkout'
           || action?.id === 'record_guest_ready_notified'
           || action?.id === 'revoke_guest_ready_notified'
+          || action?.id === 'register_guest_ready_outside_key'
+          || action?.id === 'cancel_guest_ready_outside_key'
         ) && canRenderServerAction(task, action))
       : []
     const serverCheckoutAction = serverManagerActions.find((action) => action.id === 'mark_guest_checkout') || null
@@ -117,7 +219,11 @@ export function availableActionsForTask(task: WorkTaskItem | null | undefined, o
   }
 
   if (hasServerActions(task)) return (((task as any).available_actions || []) as WorkTaskAvailableAction[])
-    .filter((action): action is WorkTaskAvailableAction => !!action && canRenderServerAction(task, action))
+    .filter((action): action is WorkTaskAvailableAction => (
+      !!action
+      && (options?.activeRole == null || lower(options.activeRole) === 'customer_service' || !isGuestReadyNotificationAction(action))
+      && canRenderServerAction(task, action)
+    ))
 
   if (isCleaningSource && isManager) {
     const isPasswordOnly = isPasswordOnlyInspectionTask(task as any)
@@ -192,7 +298,7 @@ export function availableActionsForTask(task: WorkTaskItem | null | undefined, o
   return actions
 }
 
-export function primaryActionsForTask(task: WorkTaskItem | null | undefined, options?: { roleNames?: string[]; limit?: number }) {
+export function primaryActionsForTask(task: WorkTaskItem | null | undefined, options?: { roleNames?: string[]; activeRole?: string | null; limit?: number }) {
   const limit = Math.max(1, options?.limit || 2)
   return availableActionsForTask(task, options)
     .filter((action) => action.placement === 'primary')
@@ -203,7 +309,10 @@ export function navigationForWorkTaskAction(task: WorkTaskItem, action: WorkTask
   const actionSourceId = cleanText((action as any)?.source_id)
   if (action.id === 'upload_key_photo') return { screen: 'TaskDetail', params: { id: task.id, action: 'upload_key' } }
   if (action.id === 'mark_guest_checkout') return { screen: 'TaskDetail', params: { id: task.id } }
-  if (action.id === 'record_guest_ready_notified' || action.id === 'revoke_guest_ready_notified') return { screen: 'TaskDetail', params: { id: task.id } }
+  if (action.id === 'record_guest_ready_notified'
+    || action.id === 'revoke_guest_ready_notified'
+    || action.id === 'register_guest_ready_outside_key'
+    || action.id === 'cancel_guest_ready_outside_key') return { screen: 'TaskDetail', params: { id: task.id } }
   if (action.id === 'fill_supplies') {
     const hasCleaningSubmissionSignal = typeof (task as any)?.cleaning_submission_ready === 'boolean'
     const readOnly = action.disabled_reason === 'task_completed'
@@ -250,7 +359,7 @@ function preferredActionIdsForNotice(data0: any): string[] {
   return []
 }
 
-export function preferredNoticeActionForTask(task: WorkTaskItem | null | undefined, data: any, options?: { roleNames?: string[] }) {
+export function preferredNoticeActionForTask(task: WorkTaskItem | null | undefined, data: any, options?: { roleNames?: string[]; activeRole?: string | null }) {
   const actions = availableActionsForTask(task, options)
   if (!actions.length) return null
   const preferredIds = preferredActionIdsForNotice(data)

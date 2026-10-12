@@ -15,6 +15,9 @@ export type PersonnelClaimDraftMedia = {
 export type PersonnelClaimDraft = {
   request_id: string
   claim_id?: string | null
+  expected_updated_at?: string | null
+  original_service_date?: string | null
+  evidence_addition_locked?: boolean
   service_date: string
   claim_type: PersonnelClaimType
   property_id: string
@@ -27,6 +30,10 @@ export type PersonnelClaimDraft = {
   media: PersonnelClaimDraftMedia[]
   updated_at: string
 }
+
+export type PersonnelClaimDraftTarget =
+  | { mode: 'create' }
+  | { mode: 'edit'; claimId: string }
 
 const KEY_PREFIX = 'personnel-claim-draft:v1:'
 
@@ -41,6 +48,33 @@ export function personnelClaimDraftKey(userId: string, scope = 'default') {
   return scoped && scoped !== 'default' ? `${KEY_PREFIX}${value}:${scoped}` : `${KEY_PREFIX}${value}`
 }
 
+export function personnelClaimCreateDraftScope() {
+  return 'create'
+}
+
+export function personnelClaimEditDraftScope(claimId: string) {
+  const value = cleanId(claimId)
+  if (!value) throw new Error('claim_id_required')
+  return `edit_${value}`
+}
+
+export function personnelClaimDraftScopeForTarget(target: PersonnelClaimDraftTarget) {
+  return target.mode === 'edit'
+    ? personnelClaimEditDraftScope(target.claimId)
+    : personnelClaimCreateDraftScope()
+}
+
+export function personnelClaimDraftMatchesTarget(draft: PersonnelClaimDraft, target: PersonnelClaimDraftTarget) {
+  const claimId = String(draft.claim_id || '').trim()
+  return target.mode === 'edit'
+    ? claimId === String(target.claimId || '').trim()
+    : !claimId
+}
+
+export function assertPersonnelClaimDraftTarget(draft: PersonnelClaimDraft, target: PersonnelClaimDraftTarget) {
+  if (!personnelClaimDraftMatchesTarget(draft, target)) throw new Error('claim_draft_scope_mismatch')
+}
+
 export function makePersonnelClaimLocalId(prefix: 'claim' | 'media') {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`
 }
@@ -49,6 +83,9 @@ export function emptyPersonnelClaimDraft(serviceDate: string): PersonnelClaimDra
   return {
     request_id: makePersonnelClaimLocalId('claim'),
     claim_id: null,
+    expected_updated_at: null,
+    original_service_date: null,
+    evidence_addition_locked: false,
     service_date: String(serviceDate || '').slice(0, 10),
     claim_type: 'subsidy_amount',
     property_id: '',
@@ -68,10 +105,46 @@ export async function loadPersonnelClaimDraft(userId: string, scope = 'default')
   if (!draft?.request_id) return null
   return {
     ...draft,
+    evidence_addition_locked: draft.evidence_addition_locked === true,
     media: (Array.isArray(draft.media) ? draft.media : []).map((item) => (
       item.state === 'uploading' ? { ...item, state: 'local_only' as const, error: '上次上传中断，请重试' } : item
     )),
   }
+}
+
+function newerPersonnelClaimDraft(left: PersonnelClaimDraft | null, right: PersonnelClaimDraft) {
+  if (!left) return right
+  const leftTime = Date.parse(String(left.updated_at || ''))
+  const rightTime = Date.parse(String(right.updated_at || ''))
+  return Number.isFinite(rightTime) && (!Number.isFinite(leftTime) || rightTime > leftTime) ? right : left
+}
+
+async function migratePersonnelClaimDraftToOwnScope(userId: string, draft: PersonnelClaimDraft) {
+  const target: PersonnelClaimDraftTarget = draft.claim_id
+    ? { mode: 'edit', claimId: String(draft.claim_id) }
+    : { mode: 'create' }
+  const scope = personnelClaimDraftScopeForTarget(target)
+  const existing = await loadPersonnelClaimDraft(userId, scope)
+  return savePersonnelClaimDraft(userId, newerPersonnelClaimDraft(existing, draft), scope)
+}
+
+export async function loadPersonnelClaimDraftForTarget(userId: string, target: PersonnelClaimDraftTarget) {
+  const scope = personnelClaimDraftScopeForTarget(target)
+  const scoped = await loadPersonnelClaimDraft(userId, scope)
+  if (scoped && personnelClaimDraftMatchesTarget(scoped, target)) return scoped
+  if (scoped) {
+    await migratePersonnelClaimDraftToOwnScope(userId, scoped)
+    // A draft found under the wrong scope is a legacy/corrupt alias. Remove only
+    // that storage alias after copying it to its own scope; its media stays intact.
+    await remove(personnelClaimDraftKey(userId, scope))
+  }
+
+  const legacy = await loadPersonnelClaimDraft(userId)
+  if (!legacy) return null
+  const migrated = await migratePersonnelClaimDraftToOwnScope(userId, legacy)
+  // Remove only the legacy key after a successful copy. Local media is not deleted.
+  await remove(personnelClaimDraftKey(userId))
+  return personnelClaimDraftMatchesTarget(migrated, target) ? migrated : null
 }
 
 export async function savePersonnelClaimDraft(userId: string, draft: PersonnelClaimDraft, scope = 'default') {
@@ -133,6 +206,7 @@ export function personnelClaimPayloadFromDraft(draft: PersonnelClaimDraft): Pers
   const duration = String(draft.duration_minutes || '').trim()
   return {
     client_request_id: draft.claim_id ? undefined : draft.request_id,
+    expected_updated_at: draft.claim_id ? draft.expected_updated_at || null : undefined,
     service_date: draft.service_date,
     claim_type: draft.claim_type,
     property_id: draft.property_id.trim() || null,

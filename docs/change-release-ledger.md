@@ -1,5 +1,555 @@
 # Change Release Ledger
 
+## CRL-20261011-002 — MZ-010 客人已通知与任务状态闭环（mobile）
+
+- **Status:** validated and independently reviewed clean Dev release candidate; not committed, pushed, merged, released, or published by OTA
+- **Repository:** `mobile`
+- **Updated:** 2026-10-12 UTC
+- **Request:** 让获授权客服从通知和任务详情安全完成“客人已通知”，并保持离线任务、经理日任务和任务列表状态一致。
+- **Outcome:** Mobile 消费 Root 的授权动作和最新任务快照，通知详情与任务详情复用幂等动作，任务列表按服务端事实刷新；未授权角色不显示写入口。
+
+### Implementation
+
+- API/store 保留客人已通知权限、动作与刷新字段，通知详情、任务详情、经理日任务和任务页使用同一动作合同。
+- RootNavigator 和通知列表维持既有导航边界；失败重试不伪造成功状态。
+
+### Files / Areas
+
+- `docs/feature-regression-registry.md`
+- `src/lib/api.ts`
+- `src/lib/workTaskActions.test.ts`
+- `src/lib/workTaskActions.ts`
+- `src/lib/workTasksStore.test.ts`
+- `src/lib/workTasksStore.ts`
+- `src/navigation/RootNavigator.tsx`
+- `src/screens/notices/NoticeDetailScreen.tsx`
+- `src/screens/tabs/NoticesScreen.tsx`
+- `src/screens/tabs/TasksScreen.test.tsx`
+- `src/screens/tabs/TasksScreen.tsx`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx`
+- `src/screens/tasks/TaskDetailScreen.tsx`
+- `docs/change-release-ledger.md`
+
+### Impact / Dependencies
+
+- Mobile JS/API consumer only; no native dependency, database, migration, deployment, OTA, or production write.
+- Paired Root behavior is `root/CRL-20261011-001`.
+
+### Validation
+
+- Mobile typecheck and targeted actions/store/task screen tests: PASS.
+- Full paired `npm run check:full`: PASS; Mobile typecheck, lint (warnings only, 0 errors), 67 suites / 420 tests, and Root backend/frontend build/contracts with 53 suites / 270 tests all passed. Independent review: GO; P0=0 / P1=0 / P2=0 after closing stable-retry-key and paired transaction-audit findings.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** no untracked files; ignored dependency path is outside the candidate.
+- `src/lib/workTaskActions.test.ts` — SHA-256: `b90c3c9ee77ce0b580cd94129575d7fb56867a36ca2ea01c45912d79783861ad`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `d34f5eebce70e4704b88b965bacf3f91e4c221ee6865fbeea54b1eea2f3b1b78`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `d94ff96548a6e9997a6913448b41498719fb2ec3e44fbf68141614dff782108e`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `e6127ccd0fc520d5d89744236e9c50da6abab4e16375434541d3c94d5fc8f62d`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `e6885f7963478dee416f667f769e22b452aefe241238ee08f466d4d57a3d9c07`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `edb55dff01c821bc54e9712280cf71cf0ee4551f21a45e82b4e6411af8ef9c68`
+- `src/lib/workTaskActions.ts` — SHA-256: `021eaf5ab1c9eb39f004e6762804513aaf9532fc6e51deaf70b49ada5b7b21fb`
+- `src/lib/workTaskActions.ts` — SHA-256: `0892ac55f888a1d6b96f6098373989c6ca50ab898da8433cac761850aa048d80`
+- `src/lib/workTaskActions.ts` — SHA-256: `2bd5cd60ffcd91abbff7333603506dbc806ddfc9c32e8b535f3cc1753d392a22`
+- `src/lib/workTaskActions.ts` — SHA-256: `5966aab2b5e6bf1a976a90eedd6fccc8ba1c03186ba6aaaebb7b247823a5ebee`
+- `src/lib/workTaskActions.ts` — SHA-256: `64190a47108d43002175b558abdf8b368e495efe3ca0954d703ff02ceb670db1`
+- `src/lib/workTaskActions.ts` — SHA-256: `7113b1f41e82e2aff881aee4d2da449bc3971172ea57f8e7951c00c4a49241b3`
+- `src/lib/workTaskActions.ts` — SHA-256: `7d4c0a213cf03812952380c447f12e303510c4d94e719c119ba6f541227d8b2e`
+- `src/lib/workTaskActions.ts` — SHA-256: `8012d6313e65cfb8608984fafc86678705fc4df5b6a4666fc85fce80547be9dc`
+- `src/lib/workTaskActions.ts` — SHA-256: `dab65e2c048811b9da578488da68737e4456547143666235238039323ff70015`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `11731c7f7d2a34a7dbbda2563f3f16f6ad17131b74f40d887904ac28c2fa00c2`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `16b3b166d1280a3df6f3e748a77a07aab258c990424a40a1a1c6293b3cb0da8c`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `4ec0f1fb393b4fb4c7aceb87d05d46eb9b2d806328e6658ac25dc514f9330047`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `79f694c5799cf4ea95136a1a41033b86dc8377ce558ba301e4e5af12defba0b9`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `8979eac87cdfbb0e0b5e93fd8ba7eddd51b4d9d805eb1f8e2ba3e255428a3c98`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `a71fb332218db2ee07262789df86d06d78e70aafd9d16096609315d269d1542e`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `cc2abdee8bbb72ba4675745a287354aa58c005ae2b8f97ceb54034c5ebdd910d`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `f6f1e85adcea51c8377dc93fffa8c18714f468ec56f55695173bb67129a6fa21`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `fb3466fb1ab45e116868c1c7d3f2e7aee322dea279b8cf0294719bd96b8379de`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `14e64a15cc7ca4b49ec485ad21fd079c908b55015acf771d13329991c24e9dcb`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `15f51fd5e32f32da292e9002c038af29a7874338c86374d972b961d6a2093779`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `42142e39bf303561c86bb024cbda022472b093bef0221650dfef3b8418cd5844`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `4ae634db74b81d62c5fabc4b6eb3dcd30a23d0efdc0e6ac004db9cc3c0354e1a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `6a3bad0982edec593fab5240acf64c3d223620c46276f553b60f8a82d0108512`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `958372332e8d923e4748c9a59da5944296a19783da5746bf5d2bc812b43cda45`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ae0be01664cdea7f34bcc54ade25fb3229f854e627d0fb8d768cc34a81ac05d2`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `d2737ee4c5fd4749c03b4601af53a4f8e127c8332cc615b88ef579a7d8b464ee`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `e5357554fb50257f8a2b726a59197a8bafcd5fb415125750ee681cfe2db0f6ef`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f701c39b6693672b4218a310751a6d55e89547bb19f6b5f11f280c301f7a4945`
+- `docs/feature-regression-registry.md` — SHA-256: `027756ed8b7bad33455e8453dd21d934802a2411e00187e0a4637ad2c747ce25`
+- `docs/feature-regression-registry.md` — SHA-256: `5e63a4fed383926fc73be16be7b53f419aa37622f0479bfe75e51f47f6f93ed3`
+- `docs/feature-regression-registry.md` — SHA-256: `627866b97a9c0b3301d8ccb4856f5cb35541077ddb3b9a47a4c49d109d91bfa9`
+- `docs/feature-regression-registry.md` — SHA-256: `87d5ebe4352fbcc0401efd880e79c3abf012601cf6fd2101c76a5ddcd7383510`
+- `docs/feature-regression-registry.md` — SHA-256: `a26f3925ac8101472239dd9157d7772d1b7f4fab7c5b4100ce0ed604d9d9e7f2`
+- `docs/feature-regression-registry.md` — SHA-256: `df323be964bae49b46679978bdffb54e2fb01a2b2c9ec5f319af317ff218456e`
+- `docs/feature-regression-registry.md` — SHA-256: `fa4bd28e273c3a7877e7a366e2a96c8b684957ae7f2e2cd7aa82bd16426a1673`
+- `src/lib/api.ts` — SHA-256: `0bef2f3c6e242551f51204be12421207fe318fd241cef6ada2f99d74e02d8c77`
+- `src/lib/api.ts` — SHA-256: `311e293905680d3278fe9478e1aa2ca2707a0e5944e144d8c3401f8494f321f8`
+- `src/lib/api.ts` — SHA-256: `312def93d8b11e999a0a873a309e0555be697216ac6705f0e4fd9c6566d47be9`
+- `src/lib/api.ts` — SHA-256: `352e62c78cba09640bf09594cb6aa64305a624c389c85aa6fcc050b16084c9ed`
+- `src/lib/api.ts` — SHA-256: `5bc955207888a2a5295f2d96db8f3611b649d28a98a636d216036859fe945442`
+- `src/lib/api.ts` — SHA-256: `629db6fb3e5106aa2ce3b0c87b70700874d7494d6b65a32327f4ba9c9b67b28e`
+- `src/lib/api.ts` — SHA-256: `8b1f3e874fb9d9c2c0372f6b4b0472173f68f2dde9d4bf2aa3f664bfe0b274c6`
+- `src/lib/api.ts` — SHA-256: `8c36e7e97630570da205cb22e5fd81a9375ae963058728e20a17f58882dbc514`
+- `src/lib/api.ts` — SHA-256: `91ba0526fd2271f217ac2f43cf8e2b80e94f4e038141c3bafb713dc3dd93ad69`
+- `src/lib/api.ts` — SHA-256: `9c1c65e2339ac1cddb840d5e78602293f7d18eef6e585863ec840542568e3383`
+- `src/lib/api.ts` — SHA-256: `9dd1ad9fac7ba77261fd3cc5f3224289d62ebacd2099b37b514edadc16b91ffc`
+- `src/lib/api.ts` — SHA-256: `c80634210d12e50e65d7c4b54bc42d877e3ad1443dc134e1c27734e52623d1a3`
+- `src/lib/api.ts` — SHA-256: `e322e533053c85cab8c2d8a551e2f755258b108e3bb3e4b4be137289d18963c4`
+- `src/lib/api.ts` — SHA-256: `ea6067ad036021dc1c94b09e9b1ce9e661d4a71b10dcb68579743fc048aa9da8`
+- `src/lib/personnelClaimDraft.test.ts` — SHA-256: `1ff8d2431a175b58dd802afa3e91321508918f8b2e0f58a5cefb15d3d77e48f4`
+- `src/lib/personnelClaimDraft.test.ts` — SHA-256: `ab722e2942b43f80581a6e965d0a2b001377226c48bf02d3efbc868859db179d`
+- `src/lib/personnelClaimDraft.test.ts` — SHA-256: `b22fd6e669b3903a0f7ee31080ef6b1ec4182f1578bf9f43a04edceff492d837`
+- `src/lib/personnelClaimDraft.test.ts` — SHA-256: `c044efbbda522c962ef9349b9be7dfe6cd9fd70095b8e2766632ba8483a66fd3`
+- `src/lib/personnelClaimDraft.test.ts` — SHA-256: `e1142a005831b8c4c2799018509557759fc5ca9c2d1ee2fc98a1128648ca4710`
+- `src/lib/personnelClaimDraft.ts` — SHA-256: `19e9afd74c2fc50b200c31cec1627a26badafa4fd3ed4c026bc2f6b1ce630ee7`
+- `src/lib/personnelClaimDraft.ts` — SHA-256: `20cb364ff8f7340d16e14379d4f8bddc7c2d1b47c06ee87fe07d9033da2747dc`
+- `src/lib/personnelClaimDraft.ts` — SHA-256: `38c5c6c8e04d87dabc761880781c16d617bfb8934a3ff454c90fe9e3b3021939`
+- `src/lib/personnelClaimDraft.ts` — SHA-256: `afd2566c7ec0541af258e39c54fd302d30256beea3edd62906b4640e9471e786`
+- `src/lib/personnelClaimDraft.ts` — SHA-256: `afe967fbddc252478b0f7cfdc48b40babbc6f703160fa169056bf671bc4dcc1a`
+- `src/lib/personnelClaimDraft.ts` — SHA-256: `d39aad57cb24ec4f05ed71f11071dbd2c800cf69ec1db7b99728698b4b0c13b9`
+- `src/lib/personnelClaimDraft.ts` — SHA-256: `edc9599f184157281aed57b6395cf157c73b17e961ad0ca1d1e5eb117298646e`
+- `src/lib/workTaskActions.ts` — SHA-256: `68a9c3c953db500e155b354581efbee81118900143cbf17ed2bbdc59fef43553`
+- `src/lib/workTaskActions.ts` — SHA-256: `be18702497139ca5626b44f9bd79fac244b3107e45c652aa8acff21f63fc1508`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `390861d202ade7fe4ceb0f59e5ff46d98de1ea23d4ac3e8fb4e3fdbafd5f5413`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `c895a4b4d7362c2aacbf9c423f877929e9e0f2842de1c94d806ecd9d1f28596d`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `d268822eea8656e4c694f3f7236c245a133e1c6ef22cf9279ef93c9756c42ade`
+- `src/lib/workTasksStore.ts` — SHA-256: `0315e97e00ac15d486c4b610eaa06c5cda878e573182a7fda10feff48f9e272b`
+- `src/lib/workTasksStore.ts` — SHA-256: `327007dcb799b944b1a49ed3570384d42b400eba1aed00611390237ebda4e90f`
+- `src/lib/workTasksStore.ts` — SHA-256: `878a0f3ed29842463617d83c23a14d49357dde865fcf54db4e9d638fc8885c36`
+- `src/lib/workTasksStore.ts` — SHA-256: `c1befbbfaadf1f18e49c3e943b5111568cb8955a2a60e93d377bf9a2228935b6`
+- `src/navigation/RootNavigator.tsx` — SHA-256: `27a7651fe41b821c8fb19c6656b8cf8b6e9da86db0ecc225dc58a41ff05cfae8`
+- `src/navigation/RootNavigator.tsx` — SHA-256: `65d474241e4438c4cb58ccc35eaa354e600df8d277f673337646edf4542f8359`
+- `src/navigation/RootNavigator.tsx` — SHA-256: `93ef973cf93744658a5e91f9b23bd8cf0eb7fe156c6b27ddb36f7e11225f698e`
+- `src/navigation/RootNavigator.tsx` — SHA-256: `9cf6ee153a5d7081ee8fa429a11e28d1a56a17029f5acfce786c5c76784b21f8`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `02d0a89965325f2363af68fabf38fe9bc27b9584da21f95cdadc00531f535a0f`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `071fb7210a8629a2745a15943878593541997490c65ba33d6cbf2f5123fb7a90`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `13ee61f377312bc5d9d1e941ea06b4a50cab5b1c5bf6cc092fd1a43f7d531d1b`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `1c7aefc7f50c09ab521a19a3c7d5308c0a7fbb90681717c427101819e01db1f5`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `1f917caac1ffd6eb19fcdfa409668173fe547f607210ce1b10ce1f4c48f080ab`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `27e2f462e696856ae9c686c77db11782627c0dafbb0b75c66324384234b646ac`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `2a36c954a1d309be3867b9b1de0ef5083e916e8eef682e615ec30159f3318539`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `2a53124c5763ced55ea984adea7a85581c992e16c97738af91144b73936e4901`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `2dc5607e32153636ead9256c65f886ff3ab7b57c534b6d6036b56e5c0ed8a739`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `33aee8dce81e60b02712b9e0a553c1f05262665991f4da41a56f739f4a895410`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `385d0f002f3c63465fe9035087561d1dac29a3f4b4ea40ff9726a1c8a1dcceac`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `4143208118bcdfee7ee55e6ead337b16a5c40201b74e6124b1d4f15fcf005a4d`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `4354e7b83dfe0f2aa82ac250282861c18b20cd27a608a29e4e391d1c32e12bb6`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `4b0fc945bc23de3abeee122167feec89fc6b8c3de338c664fb2317b49cb609c1`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `4b61439dc639aa4f9afaa2816145f4c22799010e9d1ab3cd100633f1a7f5663f`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `605eacb995ad4c76507d57131cc6ab0cd4d2839b1319f05c498d1b4df7f16f84`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `6527ac1128d0d058f3f995075d37e40d828449b3baa47973c844a1097102d805`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `6625c2ee0df1b004de946a0ca5ded48abb1b95531f94db96690980e490ebd7a7`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `6cc124e7fa0bcce05d191fc233bae661fbe31a195cec7bc7adaf5af79b702b47`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `6dcfc091b4bfc631d67379bf9e6500021e84283aa5a136560f5f67794d19089a`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `7e5201c065718637119b13704f1ecf3458fdca6fae723b0e9cb3eb330d2c1ee8`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `7ee0b635ef6cf750875c96b7055d97a1932f3419a6e5a3ffd4ad35e89297f204`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `80bc27e178045ee71f347f4d1731601ffd4c2454191efa40f3b5b6613ce17d30`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `81ac39ec66f8061ec50abc44b5f27df31f4881f67e2eea7c6c02603674fa71e2`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `85db74aca9460d4aa8241de379d06c4dc6912e88cc8248a9f6da85d9d77d8a47`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `9e705a6db4c26e1bf48706dd75f7df7d2c4abf147d21c014cd9e1218c33c5a33`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `a10428acddf9c5ddde30854bee71975541e850cd3317351456e64de60b6e24b6`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `a3aed8c3c8324d9582e8c1c93f803f1c39b84f335e7c733a951f6cd50d72482b`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `a523da685dc2fd42df19b71f5edae960880b2566599f01e9f796d20b07d10174`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `ab4c244cb193241dea81f5c7182164c56e51062b440c8d2767e9e05d474b9119`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `b57fd7dc63a676bf9095ce1bc659376cf8bbf6bfa5d663aa1e2d3f07425bb788`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `bb63b57a6bfb75cad89949521e7479c5fc15f0e43e162b36a911e44817b240c1`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `bd0164a9af9b9ec35047d4aba293d3b9b8f928e89fe3acefb7883e43b3aaa125`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `c3445fdd3b9a93803c549d8dc010f724d45f7c77a579cdbd9f21543f039fb89b`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `d10193b203a02fab8a33790111bd0a0d243bd28770097fcc9f4f2719d303bb92`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `d930819de40ad4b9cf5bb87568f53a54d9ce014f61165bed7a6e9efa6810e6c0`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `e182c8984753509b872e2ca2fc8aac04f57906e7897e39abe810faac957adc40`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `e823ceddd640c21feb913fce3423b40d5b2379dcfc5626c4eae3c068c365c6cf`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `ef65453cf5619b9f24a492123960c9ff293b4ea8cf9dde98c219eaad6c8c8c54`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `f0b562988612b5ef8c58deb0d7907eb6512535214591d91b9668ec9819089917`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `f351fb4eaf52c88f8138b00c5386930584eb1c37c82a8143c80b5b8d74a69f92`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `f92031eb75143a7ac7cee3f1eb83d00253d25a66c7161d6cbcf74f19865c1081`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `0521dedb1240944a96d92d0f2a2b7e4dcaefc181e21cc37848d0e0baeb15bc43`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `0852c86e180dd0199393d31be1a0311962c5b717fa40ddf3414738abc4cfeb15`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `0c85f50b0dd72471f5c20ece7bf1062e304d58b2f1ba0387519730ee6e18d86b`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `0d1107fef5ec4d16d10d2359968e8bf412d6f159c8e3f171ce760754f5ecef86`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `1230df9e031e2a9943b340461c7d62f578cd86b9dc2f4732fe47b17512da73e4`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `1392fbdbd31fb458b0df69a1f242af8f6396666e3874e80fce7cc22ef745bfd6`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `13ee7e1dbfbba80b63e482591f63da836062ada14f28a2965271d2e87a77f044`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `141f8eb0e75946bb4a50e946f2b6b8f9d8b95304a3c6cb7b382797bee93e45c8`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `15402c321361edb1e0a28ba0bff12c4aeb7656dc0a819c738f304237a102d9e6`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `15a63c8baf78036801828d6bdf24097f8e1784606768cfb228da0b214e462e05`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `164163cbf220e5b06417e21ca6fd1a77725e8a38f5e0a422bd9938669ec3fc66`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `175ed1b7c68fc15aa0a79c282193196192895f66c1c1a3ddb8f40662e774774b`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `1792168e1c0d6258ac2e604a41fcba663c216823e222ec57092bc0841efa5089`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `1a952f14aabad257a8e0e27a42c7fb428c9193336c60b53ca59fa6ca0546060e`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `1b9d5411cb7ab8996cb4d4d09818ef0151ed8373e71b5239a6cf8633c5524bff`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `225120216a96d698f48f993f9009da0997b33098bec0c1b1682f9e8f1101ad6c`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `22c837717b3e6806c54758bf8630651cd6af3a68fe53b5d60445b6bc60862f58`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `238ae9a4853d5692183a5cf70f99caca8817f977b2f84cc416149ba3a18d4e42`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `259e1bceb7bb0ba4438baf817fa044cff36de471bbff43d17f03f41524260e8f`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `28c804ba2282d26cf45451734be3864f62daba5669bb284783bdbe358a55ae79`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `28f74ff38e32ffb743f081463c94286a74ca918068a7897f1b36c3fdc275061d`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `2cb10ff5cdd27bff29b0868d31573063adb5b7a5beca81259aa1cecb05bc9d14`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `2fad5c0017b6953656587dd05f6d6970f1b3798b26920db31f7b7e7b334c67d8`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `2fef8cf90b88195389b90809ec2d1fd385c514b0cd07c5f02418bb7b2851571e`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `35d58bded971b3282a387f5d38f0c601dec4965738e052a8c59d3519a619e928`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `390d15043def633ba656b356d7d02746671f5ec330a7874d49e5b1463a15c4a1`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `394046220c9a18161b31daa5da2d386833d616fee196001ea85dd05dcf5d8ea0`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `3b876639435cdfac5c7b678893ac205878f00b17540f0a7024d49a23e94399a5`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `3c516da5c2efbcd32a5d834134aab9f9e3b8da6fdc983f12d7bce7fd80e9717e`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `3e4452197d321e3998df95fa6031008e924ca14f6f7f75e78190d95662aa1ac5`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `442dd50465491af51f47f474e25208d1b5899ff50825ecee0d9e772fa1c776a5`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `45f5753805700de97c6e4eab224116d3650c133e56521fdd7d4f496952298302`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `474adea0628111f45de55a1728729e3bfcf13339fca364d08b9a4be85be87c93`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `48c7e1e463917e05125b70fb75dd352ece29c4e7ba829e7a3aacd990413a5c1f`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `5286b6476c7be73a63de53261145acb755e5888d5965cf5982027bf070a7bb92`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `541bf6416b053640a0c3a00af26ed47810a776f6316acda0b023548bb46ee6b7`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `557839edd6fde1e1a0f3b8f64ebe7561617a378fbf86dfbd80ea02288a594fc7`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `583b8b44a321a1e4395c6e944f958adfaf034b80086caf8d1f0409fd2541cfea`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `596376b7fc9d40508d3f5cc8a53f8478ad33c2d6f75c7421698138f4ef7571af`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `5988b0cc2b8b9fa50c61c43e2eb3d3bf7a44e33e674337169b1b21a4be50378b`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `5a4d48f67550a58d0fd0c1dd372ee28b6d1bd607688edeb5df104dba64e48935`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `5b8983aafcf35e9b6f7c65a25dc43ac697b15ea57d112c8fd9d898fafd66a726`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `5caf94ee1d6e585d12ea57f9c8070a89669add4529ae62f7295468f6b3f74dd1`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `623edb00a186373be109eaff5d97c7d8ecb641b36735d394a06148d0d0dfbac4`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `62a4494ae1a7eaa5c19cb41549d2200936bc6deef7221a474ddf8f4da9376ec9`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `645d885abaaf4bc6ecf9d0835ac473f3b67fddc2df35ce403b0f923ed591d988`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `67a743251ea9afcfe2c9f987d41dfc812c2d9fbad9c50b01626b5cc2be130b89`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `6883aadc4fa76aef99593dab25c2369b2fe4e5cb0079caa864595a4dd304d775`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `6ce3eb47fd987554bb60f4961f8f2017d69f9eabbff75db0590547836751718d`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `755cdbd35f88ce9ed3e74b97ceaf358f92f8442407d2da74e708ccb0dfe576ae`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `75a896595d28bded11927de1fa223b1b92376296f32f6fa82b90040cbcf1ecb9`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `75b3f6e79a2cb726967e9d106a38a6a883fede9abfbbe0ec3bbbbcbd3ef9ff10`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `75eb9f792f62c723248a0393d02048597bf15a6935c3f520e48f4be904dcdff1`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `767690ab30bdff424ee6bf020571e847ba3e5c1a373253e3b05ddfec7543ea55`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `7e69f77ff890e92f870134163491da65d192212a4f2a1d5b49117729d8d0a99f`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `7ecd5c059aa051a4ea9d672a1bad628dc8dfa921899636f1dff636e64b8c4e7e`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `844eac249628ca4ba4c56beffad3e956e736595fbc0dfa20b9a39fa0968d45bd`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `852919e75c6e40dcf1f4f464d66187bdca755a15e6a3f523b9c30e27938fd99d`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `859cd8e6fe75afcf5832bbca8c09bcbb1801a653b6b79e7213da21a21da20a6c`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `8a9fcdaf443ecf5c45835bd8ff8419dedf9f732ee3fef0098ba9b5da5075cfc0`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `8e3eb11b07530ebdf3b39cfe38d52e0dbd1a12e9ec8c3a2c6e81bf30c5dc8ed2`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `923357edbcb1193c15f46407809002f4dca3782eab261d041caafea8f6b153e2`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `92d3fbe6720dbb0d7da1d46464fd88e90cd80539b0de26ca2e05db9b6aedc93f`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `92eeee4f2239965fb10ca231bd79fd2bb2af6020bc20fd10bb80ca23ea9c5521`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `93db83fcb6829a7335c5e07e737c9fba8aa4dbc1325107fcf924dfb3d2193351`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `96f42ca8e4f61b0bfaaa38a76b466deb1e9a7bc7cc0d7900b9e201a899ee4cc3`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `97cf9217e7621b1d5f527d5e07603a82f06a120dbf70fbfdb809b8821eafc771`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `989e83b8190a07c1cfd3721c218400b44ac18eb2386cd113820f1b17b256a940`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `a0c21349263a2203ba8ae2d242f0cbb92fcf2ded7b2b32b19234da57ebc3c765`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `a14d79ea41b3e67c79eb350e516c690fa8397b585801ff42ce7a0fc1ac980d46`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `a2680110117273d11a21ca436ec06082a32e58f37baf0eddffdf160f5b77b6b2`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `a3c97144a03ad9a46c1ffe6b0d8b200ca7fcfd24db5a3381df88f1eafa956771`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `a594c69ac737dbbc3796a9c838ba04ca242b2889b0dc02ace3a672c9030747ab`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `a683a3483c8b5bc91ef4daaec04ab41e1402fbced9abe15d734f4fe24ae082b5`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ab178cc71cff567fc4f6e289c10c4df8cf771810c11330be472fa148bd1bf255`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ab2198c93267b2aaef996ab164aef32161838fe017d0c6bfd0c63af45552e8b6`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ab48d7ab12f73e41eef4dc990db9a7cee74c08d380c4e68a1c78d9c6ea5bf9cb`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `afae9e69204e07c4634db37f93d70cf0881922258e132e485f78dd7479fb0c30`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `b04fc078ff82fe9ea87e869e740cc5cb529f7772f515417522b9963f1b1824cc`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `b1affb160fece4e0ff6da4a0657818b191f3264b3349a6fe1e4586f4248c37fc`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `b61e56b3ac222e5375588fe33264420826edb157c45b2c8705fe5ac2fa9ec534`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `b94871aba6ccb166295a6506be971056c084d0fe088b11f35655af7a34e1849f`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `bf830bf33aa0a1810211ad3d0a0ff147d965970cf6d883f2889de9ec8d8b5cc1`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `bf971834c8a1d47104ea95df37663723e8eece56b750f17a1925495458ba41d7`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `bfc05f3b4a9d14b76807e6efe72dcfeb1d8b6ddcdbb6d337159926f4a5bb2956`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `c0cd039323bfd73bce1a81ed341216e42fb0a3a8e1b0fb12289bb4ff356565ce`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `c1e40794bfdb9eed79a2714ca2a42b89dc71ade09f37801c227dd01289f76a7e`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `c6ec681ec16c91f9af55701c63c3171595606a4ccea3d0a40236c277c471dc08`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `cb71dd3c19e30ba80effce5b113bf69316cd834f2254dbef508623922f141056`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ccc22f9eb4b5c530f4a61e4b470078f98a7cda8f7d02cd7419f7b9404c14f018`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `cfa5f5873a575385b03590213657d89e69932d24f45d54bdb561b34ff5d12f96`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `d06b0c64b70edffa187b86bf47beebc9bea6ae6c36d5560684cb73739fa83404`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `d316ca3ddb610dcd19c06ed6cead26637c3cff52202658a41b59fe22c29af19d`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `d41f8f731ee3c2d5c9f0b884e2c5a117f34b80d2af1a943ccebbbdb2cf42552a`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `d49ea54edf02861aaa239866a60d91a5ae216873b7061747ee3eacffdf04af30`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `d6c88d493e40f91b4986358306c41bc3c3337323bdd8e3f4f232440f3ba23288`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `d779dc72e4b43bb819fa4540901df2bd46993841e853c3ab00397837e5f0d3ff`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `d892c2b78cb4f26d9414da3f10944f9a78cc08be343c0429e09e83aa36fbd38e`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `dad16e8477e73d1686f3d4a0671cb016b1c389eb0a78cc3cee81a70d6c4efe3f`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `dccd9943fe69c232774e1606cf82e9aa2ecedc030d7b78e32eef5af575a4403a`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ddea168d691639d38cdf2b7899e991e0abf39008a481ac49cae5daca53fbf18a`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `e08d54a13b53f0e00135c47cae50113dda0616245a9e0dbd68014ae948437ee0`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `e44a95968a16f44a2092c8fdde0f87c152da445a63067340dd4f600c405c11ca`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `e4cfdb7a4d00e1580cf6a9d64c32bb045548089f8eadb49e1a436ae6bb1ca84a`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `e5cb8d1d5dca5fd16eb31da9855c17268505987060c7ef2984858a0b2b6a2d5e`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ea17ff4f4f8d1c7841e41e2ad135a128ba05e39a5a1271e734197c926b9a704e`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ea33ae3ba4b37b509fcd07326aa5260db89b769e05f7ec47eb26a01629aabcee`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ec460506050889e3e4aef768e229e4b0eaf962ca04387b12a4bb6229e46713cb`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ed145ba0e19e18e882685923f2fdbc77495e1af61bb9b1c0190295cab4d2164c`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `f13d515fb9cc6d3aed94ef044e5c9d2c3fff4f88be26bd1929c3569201bb9fc8`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `f7218f3f6a3649b06107021d3fe8700680d51d4e6bf23cda93fd7278bacb1dff`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `f8c28a12e374c918b7f867b88b28a5864845d412477c2ffd382ff62d30e0c453`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `f95e8f78bad61c087b379133ba1c6935ab401b624c9ebdba1f5cf02c047b061f`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `f9a8c67208b6311e2ff5073d9c84ebe1a7fb232c491a3b652806284d381e5a0d`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `fba7695783be3178150297c2fce9b56bb4339acb2d65a3c9b0ded8274e0e8d07`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `fea6c3d4f38c0522f8ba765f269580b6cf17737f46bbbf0c69bf41dbc358297f`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ff39ce21cc1392a3adc96f1118f26f546129f0656353f0bea05cfde89cdecfeb`
+- `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `ffb47da6c39e72f06cf550b9369c22ad3f1229d164ccd717a6845b5483972ac5`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `277368a4f35b458db8195eb0cdac02e882f24e2e11698cb6e233f53413cca674`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `7a38a8873c57ecf6026c750bf5ff6b87fa433062c9a0ee8633221d39e69c61b7`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `acbc39de359b2b4379f71a2d2a76dbe3c06714b07ce97bedd940ed1a4f5cbcfd`
+- `src/screens/notices/NoticeDetailScreen.tsx` — SHA-256: `f9eeb48d44ed9c9c7f9f7979401b5895106591c6513e85cc15a30f2d46995db7`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `02b7d75f0d45a04927811daf1e31c8fe0fdd5db2350c561a96235d38964edbe1`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `5d2ad4eccdb8fff42becef784840dd3d61b6ff761b05f276f12a873d4045b12d`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `a1af412061e57d5b85af1ef2bec34d3ad0bcacdab6f805d864dd6a6ddd8e322e`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `34aabbc339a8e364e3f578dbddec9b0727d606202c15a8202391a3a863549726`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `38fb5e2ea6e78082894defa19df9a43117acb68f1a556e81b83cd8ab36ddb94d`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `dae0a5b81cbf6aa0117d3f9fa8aac2b12cbb5f0a14e348e6006e3da838d2d905`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `6dcd0ce6205d6bd2d8c729a4993f11a61b48236d7ece658cff4e4b537d2b8d6c`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `855ca044a468c2df0687e1429197c1e7a30ae295ad93e2a41167790394e4dfc3`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `9d7e0790d9bac8850381e9c474e8ef95897f4dc58665a914d124790ff1aa6489`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `c16fc8d703b91ab9c021b3b79fd2e187ba58ee9ddab09d917e934c5cd8772b12`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `dafc8a37c145d9b5915080a941a69532af133564a1c3662c6479770b610de7ae`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `15a06491d3c48170c44bef1ed05680a372c5ffac830fb969643ab5a4c4fe2c8a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b144e3c652e7c8cdc76a1fddb9b732ef549634c8845b78ba4588bb76c686934c`
+
+### Release Attempts
+
+#### RA-20261012-001
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20261011-002`, `CRL-20261011-003`, `CRL-20261011-004`, `CRL-20261011-006`, `CRL-20261012-002`, `CRL-20261012-003`.
+- Selected CRL identities: `mobile/CRL-20261011-002`, `mobile/CRL-20261011-003`, `mobile/CRL-20261011-004`, `mobile/CRL-20261011-006`, `mobile/CRL-20261012-002`, `mobile/CRL-20261012-003`.
+- Intended action: `push`.
+- Branch: `codex/mz010-mz012-mz028-mz029-mz031-release-20261012`.
+- Base: `origin/Dev@d675ad49414d1ee01d8d10f468e84f11eb027ee4`; fetched at 2026-10-12 UTC.
+- Candidate patch SHA-256: `d4c8da09076fbe208520903b6c2dceb1bacd85322a5f1243810441d171cdd689` excluding `docs/change-release-ledger.md`.
+- Commit SHA: not committed.
+- Dependencies: `none`.
+- Required validation: PASS; targeted Mobile suites and typecheck passed, and the paired full gate passed Mobile typecheck/lint/all tests plus Root backend/frontend build and tests without production credentials, integrations, migration, queue, deployment, OTA, or production writes.
+- Shared-hunk review: PASS; exact 18-file / 257-non-ledger-hunk staged union matches the six selected CRLs.
+- Generated-file review: PASS; no generated files selected.
+- Technical state: verified.
+- User authorization: approved-for-push; user explicitly selected MZ-010/MZ-012/MZ-028/MZ-029/MZ-031 together and authorized candidate commits, release-candidate pushes, and draft PRs, but not merge/deploy/OTA/migration/production writes.
+- Independent review: GO for the exact staged commit candidate; independent read-only review matched candidate fingerprint `d4c8da09076fbe208520903b6c2dceb1bacd85322a5f1243810441d171cdd689`, found P0=0 / P1=0 / P2=0, verified stable guest-ready retry keys across both Mobile entry points, and confirmed no generated, binary, secret, native, OTA, production-write, or unselected content.
+- Remote evidence: not run.
+
+### Risks / Release Notes
+
+- Real-device, EAS build, OTA, and production API acceptance are excluded from this attempt.
+- Rollback is JS/code-only; no data or native migration exists.
+- Sensitive-information review: no credentials, environment values, private media, or production records are selected.
+
+## CRL-20261011-003 — MZ-012 费用结算真机布局与补贴拆分（mobile）
+
+- **Status:** validated and independently reviewed clean Dev release candidate; not committed, pushed, merged, released, or published by OTA
+- **Repository:** `mobile`
+- **Updated:** 2026-10-12 UTC
+- **Request:** 修复费用结算新增按钮尺寸、补贴与基础工作混合展示，以及确认文案窄屏溢出。
+- **Outcome:** 新增入口复用 44pt 统一按钮；结算按基础工作、额外工作、补贴拆分并显示补贴已包含小计；确认文案可换行且勾选框不收缩。
+
+### Implementation
+
+- 每日结算汇总保留服务端权威总额，同时将补贴单独累计和展示。
+- 第一步、第二步和正式详情显示补贴已包含信息；确认区保留 flex 文案和 24×24 non-shrink 勾选框。
+
+### Files / Areas
+
+- `docs/feature-regression-registry.md`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx`
+- `src/screens/me/PersonnelSettlementScreen.tsx`
+- `docs/change-release-ledger.md`
+
+### Impact / Dependencies
+
+- Mobile settlement display only; no rate calculation, API mutation, schema, native dependency, or OTA.
+- Root read-only evidence image fix is `root/CRL-20261011-002`.
+
+### Validation
+
+- PersonnelSettlementScreen targeted tests and typecheck: PASS.
+- Full paired gate: PASS; Mobile 67 suites / 420 tests and Root backend/frontend build with 53 suites / 270 tests passed. Independent review: GO; P0=0 / P1=0 / P2=0 for the exact paired candidate.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** no CRL-specific untracked files.
+
+### Release Attempts
+
+### Risks / Release Notes
+
+- Device typography acceptance remains post-PR preview work; totals continue to come from Root.
+- Rollback is limited to the settlement screen/tests/registry.
+
+## CRL-20261011-004 — MZ-028/MZ-029 待核对反馈编辑与待计价展示（mobile）
+
+- **Status:** validated and independently reviewed clean Dev release candidate; not committed, pushed, merged, released, or published by OTA
+- **Repository:** `mobile`
+- **Updated:** 2026-10-12 UTC
+- **Request:** 允许修改待核对反馈，固定工作日期归周，并让待计价工作明确可见而不是按零元混入。
+- **Outcome:** submitted 反馈以服务端版本安全编辑并保留既有/新增证明；周预览把基础、额外、补贴和 pending-pricing 分开显示，跨月日期不会回落到今天。
+
+### Implementation
+
+- API 接入版本门禁、编辑动作、pending-pricing 和 partial 计算状态。
+- 表单加载目标化草稿、保留既有证据并处理冲突/锁周错误；周核对单列待计价项目和已计小计。
+
+### Files / Areas
+
+- `docs/feature-regression-registry.md`
+- `src/lib/api.ts`
+- `src/lib/personnelClaimDraft.test.ts`
+- `src/lib/personnelClaimDraft.ts`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx`
+- `src/screens/me/PersonnelSettlementScreen.tsx`
+- `docs/change-release-ledger.md`
+
+### Impact / Dependencies
+
+- Mobile form and settlement UI only; no local pricing authority, database, schema, native dependency, or production write.
+- Paired Root behavior is `root/CRL-20261011-003`.
+
+### Validation
+
+- Personnel settlement/draft targeted tests and typecheck: PASS.
+- Full paired gate: PASS; Mobile 67 suites / 420 tests and Root backend/frontend build with 53 suites / 270 tests passed. Independent review: GO; P0=0 / P1=0 / P2=0 for the exact paired candidate.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** no CRL-specific untracked files.
+
+### Release Attempts
+
+### Risks / Release Notes
+
+- Root remains authoritative for editable state, pricing, approval, and payment gates.
+- Rollback is code-only.
+
+## CRL-20261011-006 — MZ-012 结算证明与确认交互补强（mobile）
+
+- **Status:** validated and independently reviewed clean Dev release candidate; not committed, pushed, merged, released, or published by OTA
+- **Repository:** `mobile`
+- **Updated:** 2026-10-12 UTC
+- **Request:** 补强修改反馈时的既有证明保留、图片预览和两步确认按钮交互。
+- **Outcome:** 修改反馈会显示并保留服务端证明，只上传新增媒体；确认弹层、按钮和错误提示在慢加载与重试时保持稳定。
+
+### Implementation
+
+- API/页面区分既有证明和本地新证明，提交成功后清理精确目标草稿。
+- 结算详情与两步核对保持加载、关闭、重试和 PDF 展示合同。
+
+### Files / Areas
+
+- `docs/feature-regression-registry.md`
+- `src/lib/api.ts`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx`
+- `src/screens/me/PersonnelSettlementScreen.tsx`
+- `docs/change-release-ledger.md`
+
+### Impact / Dependencies
+
+- Mobile UI/API consumer only; no media delete, database mutation, native dependency, or OTA.
+- Complements `mobile/CRL-20261011-003` and Root read-only image behavior.
+
+### Validation
+
+- Targeted settlement screen tests and typecheck: PASS.
+- Full paired gate: PASS; Mobile 67 suites / 420 tests and Root backend/frontend build with 53 suites / 270 tests passed. Independent review: GO; P0=0 / P1=0 / P2=0 for the exact paired candidate.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** no CRL-specific untracked files.
+
+### Release Attempts
+
+### Risks / Release Notes
+
+- Actual object-storage media remains server-owned; tests use fixtures only.
+- Rollback is code-only.
+
+## CRL-20261012-002 — MZ-028 编辑草稿会话隔离（mobile）
+
+- **Status:** validated and independently reviewed clean Dev release candidate; not committed, pushed, merged, released, or published by OTA
+- **Repository:** `mobile`
+- **Updated:** 2026-10-12 UTC
+- **Request:** 防止创建反馈和不同反馈编辑会话之间串用草稿、日期或证明。
+- **Outcome:** 草稿以 create 或 edit_<claim-id> 作用域隔离，异步恢复受 generation/target 门禁保护；关闭再进入只恢复当前目标草稿。
+
+### Implementation
+
+- 草稿 helper 增加目标匹配、作用域加载和 fail-closed 断言。
+- 页面会话在切换目标、关闭、提交和慢异步返回时验证精确 target 与 generation。
+
+### Files / Areas
+
+- `src/lib/personnelClaimDraft.test.ts`
+- `src/lib/personnelClaimDraft.ts`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx`
+- `src/screens/me/PersonnelSettlementScreen.tsx`
+- `docs/change-release-ledger.md`
+
+### Impact / Dependencies
+
+- Local Mobile draft persistence only; no API schema, native dependency, production data, or OTA.
+- Extends `mobile/CRL-20261011-004`.
+
+### Validation
+
+- Draft/session and settlement screen targeted tests: PASS.
+- Full paired gate: PASS; Mobile 67 suites / 420 tests and Root backend/frontend build with 53 suites / 270 tests passed. Independent review: GO; P0=0 / P1=0 / P2=0 for the exact paired candidate.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** no CRL-specific untracked files.
+
+### Release Attempts
+
+### Risks / Release Notes
+
+- Existing malformed legacy drafts fail closed rather than being applied to another claim.
+- Rollback is code-only.
+
+## CRL-20261012-003 — MZ-031 结算房源工作清单（mobile）
+
+- **Status:** validated and independently reviewed clean Dev release candidate; not committed, pushed, merged, released, or published by OTA
+- **Repository:** `mobile`
+- **Updated:** 2026-10-12 UTC
+- **Request:** 在周结算核对真实完成房源、实际工作日、执行人、原安排日、延期检查日、证据数，并显示未完成、改期、管理关闭和历史待核实项目。
+- **Outcome:** Mobile 展示 Root 返回的不可变 work checklist 与金额来源状态；同房执行去重并合并证据，非完成项目明确标记已计入/未计费，历史冻结金额不会被客户端推测为零。
+
+### Implementation
+
+- API 类型接入执行清单和 amount_state；页面在提交预览与结算详情显示状态、原因、日期、执行人和证据数。
+- 工作清单与 MZ-012/028/029 的基础/额外/补贴拆分在同一卡片中并存，不自行判断应付资格。
+
+### Files / Areas
+
+- `src/lib/api.ts`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx`
+- `src/screens/me/PersonnelSettlementScreen.tsx`
+- `docs/change-release-ledger.md`
+
+### Impact / Dependencies
+
+- Mobile read-only settlement presentation; no database, migration, pricing algorithm, native dependency, OTA, or production write.
+- Paired Root provider is `root/CRL-20261011-007`; this CRL is intentionally numbered `CRL-20261012-003` because current Dev already owns immutable `mobile/CRL-20261011-001`.
+
+### Validation
+
+- PersonnelSettlementScreen targeted tests and typecheck: PASS.
+- Full paired gate: PASS; Mobile 67 suites / 420 tests and Root backend/frontend build with 53 suites / 270 tests passed. Independent review: GO; P0=0 / P1=0 / P2=0 for the exact paired candidate.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** no CRL-specific untracked files.
+
+### Release Attempts
+
+### Risks / Release Notes
+
+- Historical missing execution audits remain visibly unverified; Mobile never fabricates completion.
+- Rollback is code-only; sensitive-information review found no credentials or real production records.
+
 ## CRL-20261011-001 — TasksScreen Melbourne 业务日期测试固定时钟（mobile）
 
 - **Status:** isolated test-only candidate verified and independently reviewed GO；commit-ready；not committed, pushed, merged, released, or deployed

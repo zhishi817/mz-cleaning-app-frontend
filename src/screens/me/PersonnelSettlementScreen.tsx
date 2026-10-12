@@ -6,6 +6,7 @@ import {
   Alert,
   FlatList,
   Image,
+  Keyboard,
   Modal,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -47,20 +48,27 @@ import {
   type PersonnelClaimOption,
   type PersonnelClaimEstimate,
   type PersonnelClaimType,
+  type PersonnelSettlementPendingPricingItem,
   type PersonnelSettlementSubmissionPreview,
+  type PersonnelSettlementWorkItem,
   type PersonnelWeeklySettlement,
   type PersonnelWorkloadClaim,
 } from '../../lib/api'
 import {
   addPersonnelClaimDraftPhoto,
+  assertPersonnelClaimDraftTarget,
   clearPersonnelClaimDraft,
   emptyPersonnelClaimDraft,
   loadPersonnelClaimDraft,
+  loadPersonnelClaimDraftForTarget,
+  personnelClaimDraftMatchesTarget,
   personnelClaimDraftMissingMedia,
+  personnelClaimDraftScopeForTarget,
   personnelClaimPayloadFromDraft,
   removePersonnelClaimDraftPhoto,
   savePersonnelClaimDraft,
   type PersonnelClaimDraft,
+  type PersonnelClaimDraftTarget,
 } from '../../lib/personnelClaimDraft'
 import { buildPersonnelClaimEvidenceImageSource } from '../../lib/personnelClaimEvidenceMedia'
 import { hairline } from '../../lib/scale'
@@ -69,6 +77,7 @@ import { layoutTokens } from '../../lib/theme'
 type TabKey = 'claims' | 'settlements'
 type SettlementDocument = NonNullable<PersonnelWeeklySettlement['documents']>[number]
 type SettlementLine = NonNullable<PersonnelWeeklySettlement['lines']>[number]
+type SettlementWorkItem = PersonnelSettlementWorkItem
 type DateParts = { year: number; month: number; day: number }
 type DatePickerTarget = 'claim' | 'supplement'
 type ClaimTimePickerTarget = 'started_at' | 'ended_at'
@@ -78,6 +87,12 @@ type PersonnelSettlementNavigation = {
 }
 type PersonnelSettlementScreenProps = {
   navigation?: PersonnelSettlementNavigation
+}
+type ClaimFormSession = {
+  target: PersonnelClaimDraftTarget
+  scope: string
+  generation: number
+  initialDraft: PersonnelClaimDraft
 }
 
 export type PersonnelCalendarDay = {
@@ -134,10 +149,24 @@ const SETTLEMENT_COMPONENT_LABELS: Record<string, string> = {
 export type PersonnelSettlementDailySummary = {
   service_date: string
   description: string
+  base_description: string
+  base_subtotal_cents: number
+  base_gst_cents: number
+  base_total_cents: number
+  base_evidence_count: number
+  extra_work: SettlementLine[]
+  extra_subtotal_cents: number
+  extra_gst_cents: number
+  extra_total_cents: number
+  subsidies: SettlementLine[]
+  subsidy_subtotal_cents: number
+  subsidy_gst_cents: number
+  subsidy_total_cents: number
   subtotal_cents: number
   gst_cents: number
   total_cents: number
   evidence_count: number
+  work_items: SettlementWorkItem[]
 }
 
 export function selectCurrentSettlementDocuments(
@@ -161,6 +190,13 @@ function cleanText(value: unknown) {
 function isCleaningSettlementLine(line: SettlementLine) {
   return cleanText(line.component_type) === 'cleaning_task'
     || /^cleaning(?:\s|[·:-]|$)/i.test(cleanText(line.description))
+}
+
+function personnelSettlementLineCategory(line: SettlementLine): 'base' | 'extra' | 'subsidy' {
+  const componentType = cleanText(line.component_type)
+  if (componentType === 'subsidy_amount') return 'subsidy'
+  if (['cleaning_task', 'inspection_day', 'weekly_fixed'].includes(componentType) || isCleaningSettlementLine(line)) return 'base'
+  return 'extra'
 }
 
 function cleaningPropertyLabel(line: SettlementLine) {
@@ -200,33 +236,88 @@ export function summarizePersonnelSettlementLinesByDate(lines: readonly Settleme
     cleaningProperties: Map<string, number>
     unlabelledCleaningCount: number
     descriptions: Map<string, number>
+    baseDescriptions: Map<string, number>
+    base_subtotal_cents: number
+    base_gst_cents: number
+    base_total_cents: number
+    base_evidence_count: number
+    extra_work: SettlementLine[]
+    extra_subtotal_cents: number
+    extra_gst_cents: number
+    extra_total_cents: number
+    subsidies: SettlementLine[]
+    subsidy_subtotal_cents: number
+    subsidy_gst_cents: number
+    subsidy_total_cents: number
     subtotal_cents: number
     gst_cents: number
     total_cents: number
     evidence_count: number
+    workItems: Map<string, SettlementWorkItem>
   }>()
+  const seen = new Set<string>()
   for (const line of lines) {
+    const identity = cleanText(line.id)
+      || [cleanText(line.source_type), cleanText(line.source_id), cleanText(line.component_type)].join(':')
+    if (identity && seen.has(identity)) continue
+    if (identity) seen.add(identity)
     const serviceDate = cleanText(line.service_date)
     const day = days.get(serviceDate) || {
       cleaningProperties: new Map<string, number>(),
       unlabelledCleaningCount: 0,
       descriptions: new Map<string, number>(),
+      baseDescriptions: new Map<string, number>(),
+      base_subtotal_cents: 0,
+      base_gst_cents: 0,
+      base_total_cents: 0,
+      base_evidence_count: 0,
+      extra_work: [],
+      extra_subtotal_cents: 0,
+      extra_gst_cents: 0,
+      extra_total_cents: 0,
+      subsidies: [],
+      subsidy_subtotal_cents: 0,
+      subsidy_gst_cents: 0,
+      subsidy_total_cents: 0,
       subtotal_cents: 0,
       gst_cents: 0,
       total_cents: 0,
       evidence_count: 0,
+      workItems: new Map<string, SettlementWorkItem>(),
     }
+    const category = personnelSettlementLineCategory(line)
     if (isCleaningSettlementLine(line)) {
       const propertyLabel = cleaningPropertyLabel(line)
       if (propertyLabel) appendCountedDescription(day.cleaningProperties, propertyLabel)
       else day.unlabelledCleaningCount += 1
     } else {
       appendCountedDescription(day.descriptions, settlementLineDescription(line))
+      if (category === 'base') appendCountedDescription(day.baseDescriptions, settlementLineDescription(line))
+    }
+    if (category === 'base') {
+      day.base_subtotal_cents += Number(line.subtotal_cents || 0)
+      day.base_gst_cents += Number(line.gst_cents || 0)
+      day.base_total_cents += Number(line.total_cents || 0)
+      day.base_evidence_count += Number(line.evidence_count || 0)
+    } else if (category === 'extra') {
+      day.extra_work.push(line)
+      day.extra_subtotal_cents += Number(line.subtotal_cents || 0)
+      day.extra_gst_cents += Number(line.gst_cents || 0)
+      day.extra_total_cents += Number(line.total_cents || 0)
+    } else {
+      day.subsidies.push(line)
+      day.subsidy_subtotal_cents += Number(line.subtotal_cents || 0)
+      day.subsidy_gst_cents += Number(line.gst_cents || 0)
+      day.subsidy_total_cents += Number(line.total_cents || 0)
     }
     day.subtotal_cents += Number(line.subtotal_cents || 0)
     day.gst_cents += Number(line.gst_cents || 0)
     day.total_cents += Number(line.total_cents || 0)
     day.evidence_count += Number(line.evidence_count || 0)
+    for (const item of line.calculation_snapshot?.work_items || []) {
+      const workItemKey = cleanText(item.execution_key || item.audit_id || item.task_id)
+      if (workItemKey && !day.workItems.has(workItemKey)) day.workItems.set(workItemKey, item)
+    }
     days.set(serviceDate, day)
   }
   return Array.from(days.entries())
@@ -237,15 +328,163 @@ export function summarizePersonnelSettlementLinesByDate(lines: readonly Settleme
       if (properties.length) descriptions.push(`Cleaning - ${properties.join(' / ')}`)
       if (day.unlabelledCleaningCount) descriptions.push(day.unlabelledCleaningCount > 1 ? `Cleaning ×${day.unlabelledCleaningCount}` : 'Cleaning')
       descriptions.push(...countedDescriptions(day.descriptions))
+      const baseDescriptions: string[] = []
+      if (properties.length) baseDescriptions.push(`Cleaning - ${properties.join(' / ')}`)
+      if (day.unlabelledCleaningCount) baseDescriptions.push(day.unlabelledCleaningCount > 1 ? `Cleaning ×${day.unlabelledCleaningCount}` : 'Cleaning')
+      baseDescriptions.push(...countedDescriptions(day.baseDescriptions))
       return {
         service_date: serviceDate,
         description: descriptions.join('; '),
+        base_description: baseDescriptions.join('; '),
+        base_subtotal_cents: day.base_subtotal_cents,
+        base_gst_cents: day.base_gst_cents,
+        base_total_cents: day.base_total_cents,
+        base_evidence_count: day.base_evidence_count,
+        extra_work: day.extra_work,
+        extra_subtotal_cents: day.extra_subtotal_cents,
+        extra_gst_cents: day.extra_gst_cents,
+        extra_total_cents: day.extra_total_cents,
+        subsidies: day.subsidies,
+        subsidy_subtotal_cents: day.subsidy_subtotal_cents,
+        subsidy_gst_cents: day.subsidy_gst_cents,
+        subsidy_total_cents: day.subsidy_total_cents,
         subtotal_cents: day.subtotal_cents,
         gst_cents: day.gst_cents,
         total_cents: day.total_cents,
         evidence_count: day.evidence_count,
+        work_items: Array.from(day.workItems.values()),
       }
     })
+}
+
+export function personnelSettlementSubsidyTotalCents(lines: readonly SettlementLine[]) {
+  return lines.reduce(
+    (total, line) => total + (cleanText(line.component_type) === 'subsidy_amount' ? Number(line.total_cents || 0) : 0),
+    0,
+  )
+}
+
+function SettlementWorkItems({ day, testIdPrefix }: { day: PersonnelSettlementDailySummary; testIdPrefix: string }) {
+  if (!day.work_items.length) return null
+  const workItemsByProperty = new Map<string, PersonnelSettlementWorkItem>()
+  for (const item of day.work_items) {
+    const propertyKey = cleanText(item.property_id || item.property_label)
+      || cleanText(item.execution_key || item.audit_id || item.task_id)
+    const existing = workItemsByProperty.get(propertyKey)
+    if (!existing) {
+      workItemsByProperty.set(propertyKey, item)
+      continue
+    }
+    workItemsByProperty.set(propertyKey, {
+      ...existing,
+      evidence_count: Number(existing.evidence_count || 0) + Number(item.evidence_count || 0),
+    })
+  }
+  const workItems = Array.from(workItemsByProperty.values())
+  return (
+    <View style={styles.executionList}>
+      <Text style={styles.executionListTitle}>已完成房源（{workItems.length}）</Text>
+      {workItems.map((item, index) => {
+        const itemKey = cleanText(item.execution_key || item.audit_id || item.task_id) || `${day.service_date}-${index}`
+        const actualDate = cleanText(item.service_date) || day.service_date
+        const scheduledDate = cleanText(item.scheduled_service_date)
+        const inspectionDueDate = cleanText(item.inspection_due_date)
+        const performer = cleanText(item.performed_by_name)
+        return (
+          <View key={itemKey} testID={`${testIdPrefix}-work-item-${index}`} style={styles.executionRow}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.executionProperty}>{cleanText(item.property_label) || '已完成房源'}</Text>
+              <Text style={styles.executionStatus}>已完成</Text>
+            </View>
+            <Text style={styles.muted}>实际工作日 {formatPersonnelDate(actualDate)}{performer ? ` · 执行人 ${performer}` : ''}</Text>
+            {scheduledDate || inspectionDueDate ? (
+              <Text style={styles.muted}>
+                {scheduledDate ? `原安排日 ${formatPersonnelDate(scheduledDate)}` : ''}
+                {scheduledDate && inspectionDueDate ? ' · ' : ''}
+                {inspectionDueDate ? `延期检查日 ${formatPersonnelDate(inspectionDueDate)}` : ''}
+              </Text>
+            ) : null}
+            <Text style={styles.muted}>完成证据 {Number(item.evidence_count || 0)} 项</Text>
+          </View>
+        )
+      })}
+    </View>
+  )
+}
+
+const SETTLEMENT_WORK_STATUS_LABELS: Record<string, string> = {
+  completed: '已完成',
+  rescheduled: '改期/跨日',
+  incomplete: '未完成',
+  management_closed: '管理关闭',
+  legacy_completed_unverified: '历史完成待核实',
+  cancelled: '已取消',
+}
+
+export function settlementWorkReasonLabel(reason: unknown) {
+  const value = cleanText(reason)
+  if (value === 'completed_with_execution_audit') return '真实执行审计已确认'
+  if (value === 'completed_on_different_service_date') return '实际完成日在原安排日之外'
+  if (value === 'rescheduled_after_plan') return '原安排日后已改期，原任务不自动计费'
+  if (value === 'reassigned_after_plan') return '原安排后已更换执行人，原执行人不自动计费'
+  if (value === 'arrangement_changed_after_plan') return '安排已变更，需按真实执行结果结算'
+  if (value === 'inspection_plan_changed_after_plan') return '检查计划或延期日期已变更，原安排不自动计费'
+  if (value === 'executed_by_different_performer') return '任务由其他执行人完成，原执行人不计费'
+  if (value === 'deferred_replaced_by_completed_checkin') return '延期检查已由实际完成的入住检查替代，不重复计费'
+  if (value === 'management_closed_without_execution') return '仅关闭管理流程，不代表真实执行完成，不计费'
+  if (value === 'legacy_completed_status_without_execution_audit') return '历史任务为完成态，但缺少执行审计'
+  if (value === 'legacy_settlement_amount_preserved_without_execution_audit') return '保留历史结算金额，执行事实待核实'
+  if (value === 'legacy_execution_audit_without_mz031_snapshot') return '历史执行审计存在，缺少新版冻结快照'
+  if (value === 'execution_recorded_after_task_cancelled') return '任务取消后仍记录到执行，需要人工核实'
+  if (value === 'legacy_execution_task_later_cancelled') return '历史执行后任务被取消，需要人工核实'
+  if (value === 'cleaning_action_without_done_status') return '已记录清洁执行，但任务状态未完成，需要人工核实'
+  if (value === 'inspection_action_without_submission_status') return '已记录检查执行，但提交状态不完整，需要人工核实'
+  if (value === 'task_cancelled_without_payment') return '任务取消，不计入金额'
+  if (value.startsWith('task_cancelled_after:')) return '任务在原安排后取消，不计入金额'
+  if (value.startsWith('task_not_completed:')) return `任务状态 ${value.split(':')[1] || 'unknown'}，尚无完成审计`
+  return value || '状态原因待核实'
+}
+
+function SettlementWorkChecklist({ items, testIdPrefix }: {
+  items: readonly SettlementWorkItem[]
+  testIdPrefix: string
+}) {
+  if (!items.length) return null
+  return (
+    <View style={styles.checklistCard}>
+      <Text style={styles.executionListTitle}>本周房源工作清单（{items.length}）</Text>
+      <Text style={styles.muted}>未完成、改期和历史待核实房源会保留显示；“已计入金额”表示本期真实执行，或为兼容历史已冻结结算而保留的原金额。</Text>
+      {items.map((item, index) => {
+        const itemKey = cleanText(item.execution_key || item.audit_id || item.task_id) || `${testIdPrefix}-${index}`
+        const status = cleanText(item.status) || 'incomplete'
+        const scheduledDate = cleanText(item.scheduled_service_date)
+        const currentScheduledDate = cleanText(item.current_scheduled_service_date)
+        const actualDate = cleanText(item.service_date)
+        const inspectionDueDate = cleanText(item.inspection_due_date)
+        const performer = cleanText(item.performed_by_name)
+        return (
+          <View key={itemKey} testID={`${testIdPrefix}-item-${index}`} style={styles.executionRow}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.executionProperty}>{cleanText(item.property_label) || cleanText(item.task_id) || '房源任务'}</Text>
+              <Text style={status === 'completed' ? styles.executionStatus : styles.executionStatusWarning}>
+                {SETTLEMENT_WORK_STATUS_LABELS[status] || status}
+              </Text>
+            </View>
+            {scheduledDate ? <Text style={styles.muted}>原安排日 {formatPersonnelDate(scheduledDate)}</Text> : null}
+            {currentScheduledDate && currentScheduledDate !== scheduledDate ? (
+              <Text style={styles.muted}>当前安排日 {formatPersonnelDate(currentScheduledDate)}</Text>
+            ) : null}
+            {actualDate ? <Text style={styles.muted}>实际工作日 {formatPersonnelDate(actualDate)}{performer ? ` · 执行人 ${performer}` : ''}</Text> : null}
+            {inspectionDueDate ? <Text style={styles.muted}>延期检查日 {formatPersonnelDate(inspectionDueDate)}</Text> : null}
+            <Text style={styles.muted}>{settlementWorkReasonLabel(item.status_reason)}</Text>
+            <Text style={item.included_in_amount ? styles.includedAmount : styles.notIncludedAmount}>
+              {item.included_in_amount ? '已计入金额' : '未计费'} · 完成证据 {Number(item.evidence_count || 0)} 项
+            </Text>
+          </View>
+        )
+      })}
+    </View>
+  )
 }
 
 function todayYmd() {
@@ -258,6 +497,16 @@ export function previousCompletedPersonnelSettlementWeekStart() {
   const weekday = date.getDay()
   date.setDate(date.getDate() - (weekday === 0 ? 6 : weekday - 1) - 7)
   return ymdFromParts(date.getFullYear(), date.getMonth() + 1, date.getDate())
+}
+
+export function personnelSettlementWeekForDate(serviceDate: string) {
+  const parts = parseYmdParts(serviceDate)
+  const value = new Date(Date.UTC(parts.year, parts.month - 1, parts.day))
+  const daysSinceMonday = (value.getUTCDay() + 6) % 7
+  value.setUTCDate(value.getUTCDate() - daysSinceMonday)
+  const weekStart = value.toISOString().slice(0, 10)
+  value.setUTCDate(value.getUTCDate() + 6)
+  return { week_start: weekStart, week_end: value.toISOString().slice(0, 10) }
 }
 
 function pad2(value: number) {
@@ -399,6 +648,90 @@ function money(cents: number | null | undefined) {
   return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(Number(cents || 0) / 100)
 }
 
+export function personnelPricingIssueLabel(code: string) {
+  return ({
+    missing_effective_profile: '工作日期缺少有效结算资料',
+    ambiguous_effective_profile: '工作日期存在重叠结算资料',
+    gst_status_unconfirmed: 'GST 状态尚未确认',
+    missing_effective_rule: '工作日期缺少有效费用规则',
+    ambiguous_effective_rule: '工作日期存在重叠费用规则',
+    missing_rule_item: '费用规则缺少该工作类型单价',
+    ambiguous_rule_item: '该工作类型匹配到多个单价',
+    missing_cleaning_property_type_rate: '清洁房型缺少对应单价',
+    missing_or_unsupported_property_type: '房型资料缺失或暂不支持',
+    approved_quantity_or_amount_missing: '工作量或金额资料不完整',
+  } as Record<string, string>)[cleanText(code)] || '暂时无法计价，请公司核对资料'
+}
+
+export function SettlementDailySummaryCard(props: {
+  dateLabel: string
+  line: PersonnelSettlementDailySummary
+  testID: string
+}) {
+  const { dateLabel, line, testID } = props
+  const hasBase = Boolean(line.base_description)
+  const hasExtra = line.extra_work.length > 0
+  const hasSubsidy = line.subsidies.length > 0
+  return (
+    <View testID={testID} style={styles.card}>
+      <Text style={styles.cardTitle}>{dateLabel}</Text>
+      {hasBase ? (
+        <View testID={`${testID}-base`} style={styles.dailyBreakdownSection}>
+          <View style={styles.dailyBreakdownHeader}><Text style={styles.dailyBreakdownTitle}>基础工作</Text><Text style={styles.dailyTotal}>{money(line.base_total_cents)}</Text></View>
+          <Text style={styles.body}>{line.base_description}</Text>
+          <Text style={styles.muted}>税前 {money(line.base_subtotal_cents)} · GST {money(line.base_gst_cents)}{line.base_evidence_count ? ` · 证明 ${line.base_evidence_count} 张` : ''}</Text>
+        </View>
+      ) : null}
+      {hasExtra ? (
+        <View testID={`${testID}-extra`} style={styles.extraBreakdownSection}>
+          <View style={styles.dailyBreakdownHeader}><Text style={styles.extraBreakdownTitle}>额外工作</Text><Text style={styles.extraBreakdownTotal}>{money(line.extra_total_cents)}</Text></View>
+          {line.extra_work.map((item, index) => (
+            <View key={item.id || `${line.service_date}-extra-${index}`} style={styles.breakdownLine}>
+              <View style={styles.breakdownLineText}><Text style={styles.body}>{settlementLineDescription(item)}</Text><Text style={styles.muted}>税前 {money(item.subtotal_cents)} · GST {money(item.gst_cents)}{item.evidence_count ? ` · 证明 ${item.evidence_count} 张` : ''}</Text></View>
+              <Text style={styles.extraBreakdownTotal}>{money(item.total_cents)}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+      {hasSubsidy ? (
+        <View testID={`${testID}-subsidy`} style={styles.subsidyBreakdownSection}>
+          <View style={styles.dailyBreakdownHeader}><Text style={styles.subsidyBreakdownTitle}>补贴</Text><Text style={styles.subsidyBreakdownTotal}>{money(line.subsidy_total_cents)}</Text></View>
+          {line.subsidies.map((item, index) => (
+            <View key={item.id || `${line.service_date}-subsidy-${index}`} style={styles.breakdownLine}>
+              <View style={styles.breakdownLineText}><Text style={styles.body}>{settlementLineDescription(item)}</Text><Text style={styles.muted}>税前 {money(item.subtotal_cents)} · GST {money(item.gst_cents)}{item.evidence_count ? ` · 证明 ${item.evidence_count} 张` : ''}</Text></View>
+              <Text style={styles.subsidyBreakdownTotal}>{money(item.total_cents)}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+      <SettlementWorkItems day={line} testIdPrefix={testID} />
+      {[hasBase, hasExtra, hasSubsidy].filter(Boolean).length > 1 ? (
+        <View testID={`${testID}-payable-total`} style={styles.dailyPayableRow}><Text style={styles.dailyPayableLabel}>当日已计小计</Text><Text style={styles.dailyPayableValue}>{money(line.total_cents)}</Text></View>
+      ) : null}
+    </View>
+  )
+}
+
+function PendingPricingItemsCard(props: { items: PersonnelSettlementPendingPricingItem[] }) {
+  if (!props.items.length) return null
+  return (
+    <View testID="weekly-submission-pending-pricing" style={styles.pendingPricingCard}>
+      <Text style={styles.cardTitle}>待计价项目 {props.items.length} 项</Text>
+      <Text style={styles.help}>这些工作已记录在本周明细，但尚未计入已计小计；公司补齐资料或单价后会请你重新确认完整总额。</Text>
+      {props.items.map((item) => (
+        <View key={item.id} style={styles.pendingPricingLine}>
+          <View style={styles.breakdownLineText}>
+            <Text style={styles.body}>{formatPersonnelDateWithWeekday(item.service_date)} · {CLAIM_TYPE_LABELS[item.component_type as PersonnelClaimType] || SETTLEMENT_COMPONENT_LABELS[item.component_type] || item.component_type}</Text>
+            <Text style={styles.muted}>{item.description}</Text>
+            <Text style={styles.warning}>{personnelPricingIssueLabel(item.code)}</Text>
+          </View>
+          <Text style={styles.pendingPricingAmount}>待计价</Text>
+        </View>
+      ))}
+    </View>
+  )
+}
+
 type PersonnelClaimEstimateParams = Parameters<typeof getMyPersonnelClaimEstimate>[1]
 
 export function personnelClaimEstimateParams(claim: PersonnelWorkloadClaim): PersonnelClaimEstimateParams | null {
@@ -477,7 +810,6 @@ export function pendingSettlementClaims(
     isDateWithinSettlement(claim.service_date, settlement)
     && ['submitted', 'approved'].includes(claim.status)
     && !includedClaimIds.has(claim.id)
-    && claimAmountCents(claim) > 0
   ))
 }
 
@@ -486,9 +818,14 @@ export function unincludedSubmissionClaims(
   claims: PersonnelWorkloadClaim[],
 ) {
   const includedClaimIds = new Set(
-    (preview.lines || [])
-      .filter((line) => line.source_type === 'workload_claim' && line.source_id)
-      .map((line) => String(line.source_id)),
+    [
+      ...(preview.lines || [])
+        .filter((line) => line.source_type === 'workload_claim' && line.source_id)
+        .map((line) => String(line.source_id)),
+      ...(preview.pending_pricing_items || [])
+        .filter((item) => item.source_type === 'workload_claim' && item.source_id)
+        .map((item) => String(item.source_id)),
+    ],
   )
   return claims.filter((claim) => (
     claim.service_date >= preview.week_start
@@ -519,10 +856,24 @@ export function personnelSettlementStatusLabel(status: string) {
   } as Record<string, string>)[status] || status
 }
 
-function claimToDraft(claim: PersonnelWorkloadClaim): PersonnelClaimDraft {
+export function personnelClaimSaveErrorMessage(error: unknown) {
+  const code = cleanText((error as any)?.code || (error as any)?.message || error)
+  return ({
+    claim_edit_revision_required: '这条反馈缺少最新版本信息，请刷新后再修改。',
+    claim_edit_conflict: '这条反馈已在其他设备或页面更新，请刷新后核对最新内容再修改。',
+    claim_period_locked: '这条反馈所属周已进入财务核准或付款阶段，不能再修改。',
+    claim_not_editable: '这条反馈当前状态不能修改，请刷新后查看。',
+    claim_draft_scope_mismatch: '当前表单与草稿不一致，已阻止修改旧反馈。请关闭后重新打开。',
+  } as Record<string, string>)[code] || code || '提交失败'
+}
+
+export function claimToDraft(claim: PersonnelWorkloadClaim): PersonnelClaimDraft {
   return {
     request_id: claim.id,
     claim_id: claim.id,
+    expected_updated_at: claim.updated_at || null,
+    original_service_date: String(claim.service_date || '').slice(0, 10),
+    evidence_addition_locked: claim.status === 'submitted',
     service_date: String(claim.service_date || '').slice(0, 10),
     claim_type: claim.claim_type,
     property_id: String(claim.property_id || ''),
@@ -532,7 +883,15 @@ function claimToDraft(claim: PersonnelWorkloadClaim): PersonnelClaimDraft {
     requested_quantity: String(claim.requested_quantity || ''),
     requested_amount: claim.requested_amount_cents == null ? '' : String(Number(claim.requested_amount_cents) / 100),
     note: String(claim.note || ''),
-    media: [],
+    media: (claim.evidence || []).map((evidence) => ({
+      media_id: String(evidence.media_id || evidence.id),
+      local_uri: '',
+      name: String(evidence.original_file_name || '已上传证明照片'),
+      mime_type: String(evidence.mime_type || 'image/jpeg'),
+      state: 'associated' as const,
+      evidence_id: String(evidence.id),
+      error: null,
+    })),
     updated_at: new Date().toISOString(),
   }
 }
@@ -755,7 +1114,10 @@ function DatePickerSheet(props: {
   onCancel: () => void
   onConfirm: (value: string) => void
 }) {
-  const initialParts = useMemo(() => parseYmdParts(props.value), [props.value])
+  const initialValue = /^\d{4}-\d{2}-\d{2}$/.test(props.value)
+    ? props.value
+    : props.maxDate || props.minDate || todayYmd()
+  const initialParts = useMemo(() => parseYmdParts(initialValue), [initialValue])
   const [selectedYmd, setSelectedYmd] = useState(() => ymdFromParts(initialParts.year, initialParts.month, initialParts.day))
   const [visibleMonth, setVisibleMonth] = useState(() => ({ year: initialParts.year, month: initialParts.month }))
   const currentYmd = todayYmd()
@@ -901,7 +1263,11 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
   const userId = String(user?.id || '').trim()
   const [activeTab, setActiveTab] = useState<TabKey>('claims')
   const [claimFormOpen, setClaimFormOpen] = useState(false)
-  const [draft, setDraft] = useState<PersonnelClaimDraft>(() => emptyPersonnelClaimDraft(todayYmd()))
+  const [claimFormSession, setClaimFormSession] = useState<ClaimFormSession | null>(null)
+  const [claimDraftHydrated, setClaimDraftHydrated] = useState(false)
+  const [claimSubmissionReviewOpen, setClaimSubmissionReviewOpen] = useState(false)
+  const [claimFormError, setClaimFormError] = useState('')
+  const [draft, setDraft] = useState<PersonnelClaimDraft>(() => emptyPersonnelClaimDraft(''))
   const [claimOptions, setClaimOptions] = useState<PersonnelClaimOption[]>([])
   const [claimOptionsLoading, setClaimOptionsLoading] = useState(false)
   const [claimOptionsError, setClaimOptionsError] = useState('')
@@ -942,31 +1308,107 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
   const claimOptionsRequestRef = useRef(0)
   const claimEstimateRequestRef = useRef(0)
   const claimDetailEstimateRequestRef = useRef(0)
+  const claimSubmissionInFlightRef = useRef(false)
   const settlementListRefreshInFlightRef = useRef<Promise<void> | null>(null)
   const settlementListHasLoadedRef = useRef(false)
   const settlementListLastRefreshAtRef = useRef(0)
+  const claimFormGenerationRef = useRef(0)
+  const claimFormSessionRef = useRef<ClaimFormSession | null>(null)
+  const claimDraftHydratedRef = useRef(false)
+  const claimDraftRef = useRef(draft)
+
+  useEffect(() => { claimDraftRef.current = draft }, [draft])
+  useEffect(() => { claimFormSessionRef.current = claimFormSession }, [claimFormSession])
+  useEffect(() => { claimDraftHydratedRef.current = claimDraftHydrated }, [claimDraftHydrated])
+
+  const openClaimFormForTarget = useCallback(async (
+    target: PersonnelClaimDraftTarget,
+    initialDraft: PersonnelClaimDraft,
+  ) => {
+    if (!userId) return
+    const generation = claimFormGenerationRef.current + 1
+    claimFormGenerationRef.current = generation
+    const session: ClaimFormSession = {
+      target,
+      scope: personnelClaimDraftScopeForTarget(target),
+      generation,
+      initialDraft,
+    }
+    claimFormSessionRef.current = session
+    claimDraftHydratedRef.current = false
+    claimDraftRef.current = initialDraft
+    setClaimFormSession(session)
+    setClaimDraftHydrated(false)
+    setDraft(initialDraft)
+    setClaimFormError('')
+    setClaimSubmissionReviewOpen(false)
+    setDatePickerTarget(null)
+    setClaimTimePickerTarget(null)
+    setClaimFormOpen(true)
+
+    let stored: PersonnelClaimDraft | null = null
+    let restoreError = ''
+    try {
+      stored = await loadPersonnelClaimDraftForTarget(userId, target)
+    } catch (error: any) {
+      restoreError = String(error?.message || '草稿暂时无法恢复')
+    }
+    if (claimFormGenerationRef.current !== generation || claimFormSessionRef.current?.generation !== generation) return
+    const next = stored && personnelClaimDraftMatchesTarget(stored, target) ? stored : initialDraft
+    claimDraftRef.current = next
+    claimDraftHydratedRef.current = true
+    setDraft(next)
+    setClaimDraftHydrated(true)
+    if (restoreError) setClaimFormError(`草稿恢复失败：${restoreError}`)
+  }, [userId])
+
+  const openCreateClaimForm = useCallback(() => {
+    void openClaimFormForTarget({ mode: 'create' }, emptyPersonnelClaimDraft(''))
+  }, [openClaimFormForTarget])
+
+  const closeClaimForm = useCallback(async () => {
+    if (saving) return
+    const session = claimFormSessionRef.current
+    const currentDraft = claimDraftRef.current
+    if (userId && session && claimDraftHydratedRef.current && personnelClaimDraftMatchesTarget(currentDraft, session.target)) {
+      try {
+        await savePersonnelClaimDraft(userId, currentDraft, session.scope)
+      } catch (error: any) {
+        Alert.alert('草稿保存失败', String(error?.message || '请稍后重试'))
+        return
+      }
+    }
+    claimFormGenerationRef.current += 1
+    claimFormSessionRef.current = null
+    claimDraftHydratedRef.current = false
+    setClaimFormSession(null)
+    setClaimDraftHydrated(false)
+    setClaimSubmissionReviewOpen(false)
+    setDatePickerTarget(null)
+    setClaimTimePickerTarget(null)
+    setClaimFormOpen(false)
+  }, [saving, userId])
 
   useLayoutEffect(() => {
     if (!navigation?.setOptions) return
     navigation.setOptions({
       headerRight: activeTab === 'claims'
         ? () => (
-          <Pressable
+          <AppButton
             testID="personnel-claim-add"
-            accessibilityRole="button"
             accessibilityLabel="新增工作量反馈"
             hitSlop={4}
-            onPress={() => setClaimFormOpen(true)}
-            style={({ pressed }) => [styles.headerAddButton, pressed ? styles.headerAddButtonPressed : null]}
-          >
-            <Ionicons name="add" size={20} color="#2563EB" />
-            <Text style={styles.headerAddText}>新增</Text>
-          </Pressable>
+            onPress={openCreateClaimForm}
+            label="＋ 新增"
+            minHeight={layoutTokens.button.height}
+            size="compact"
+            style={styles.headerAddButton}
+          />
         )
         : undefined,
     })
     return () => navigation.setOptions?.({ headerRight: undefined })
-  }, [activeTab, navigation])
+  }, [activeTab, navigation, openCreateClaimForm])
 
   const refreshSubmissionPreview = useCallback(async () => {
     if (!token) return
@@ -1029,7 +1471,12 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
   }, [loadAll, token])
 
   const loadClaimOptions = useCallback(async (serviceDate: string) => {
-    if (!token || !/^\d{4}-\d{2}-\d{2}$/.test(serviceDate)) return
+    if (!token || !/^\d{4}-\d{2}-\d{2}$/.test(serviceDate)) {
+      setClaimOptions([])
+      setClaimOptionsError('')
+      setClaimOptionsLoading(false)
+      return
+    }
     const requestId = claimOptionsRequestRef.current + 1
     claimOptionsRequestRef.current = requestId
     setClaimOptionsLoading(true)
@@ -1059,17 +1506,6 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
     }
   }, [token])
 
-  useEffect(() => {
-    let alive = true
-    ;(async () => {
-      if (userId) {
-        const stored = await loadPersonnelClaimDraft(userId).catch(() => null)
-        if (alive && stored) setDraft(stored)
-      }
-    })()
-    return () => { alive = false }
-  }, [userId])
-
   useFocusEffect(useCallback(() => {
     let focused = true
     const refreshForLifecycle = () => {
@@ -1088,14 +1524,20 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
   }, [refreshSettlementLists]))
 
   useEffect(() => {
+    if (!claimFormOpen || !claimDraftHydrated) return
     loadClaimOptions(draft.service_date)
-  }, [draft.service_date, loadClaimOptions])
+  }, [claimDraftHydrated, claimFormOpen, draft.service_date, loadClaimOptions])
 
   useEffect(() => {
-    if (!userId) return
-    const timer = setTimeout(() => { savePersonnelClaimDraft(userId, draft).catch(() => null) }, 250)
+    const session = claimFormSession
+    if (!userId || !claimFormOpen || !claimDraftHydrated || !session) return
+    if (!personnelClaimDraftMatchesTarget(draft, session.target)) return
+    const timer = setTimeout(() => {
+      if (claimFormSessionRef.current?.generation !== session.generation) return
+      savePersonnelClaimDraft(userId, draft, session.scope).catch(() => null)
+    }, 250)
     return () => clearTimeout(timer)
-  }, [draft, userId])
+  }, [claimDraftHydrated, claimFormOpen, claimFormSession, draft, userId])
 
   useEffect(() => {
     if (!submissionReviewOpen || !submissionReviewPreview || submissionReviewPreview.status !== 'not_submitted') return
@@ -1134,19 +1576,28 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
   }, [pdfPreview, pdfSheetProgress])
 
   const setDraftField = useCallback(<K extends keyof PersonnelClaimDraft>(field: K, value: PersonnelClaimDraft[K]) => {
+    setClaimFormError('')
     setDraft((current) => ({ ...current, [field]: value }))
   }, [])
 
   const resetDraft = useCallback(async () => {
-    if (userId) await clearPersonnelClaimDraft(userId, draft)
-    const empty = emptyPersonnelClaimDraft(todayYmd())
-    const defaultOption = claimOptions.find((option) => option.claim_type === 'subsidy_amount')
-      || claimOptions.find((option) => option.claim_type !== 'custom_amount')
-    setDraft(defaultOption ? draftForClaimOption(empty, defaultOption) : empty)
-  }, [claimOptions, draft, userId])
+    const session = claimFormSessionRef.current
+    if (!userId || !session || !claimDraftHydratedRef.current) return
+    await clearPersonnelClaimDraft(userId, draft, session.scope)
+    const next = session.target.mode === 'edit' ? session.initialDraft : emptyPersonnelClaimDraft('')
+    claimDraftRef.current = next
+    setClaimFormError('')
+    setClaimSubmissionReviewOpen(false)
+    setDraft(next)
+  }, [draft, userId])
 
   const addPhoto = useCallback(async (source: 'camera' | 'library') => {
-    if (!userId || picking) return
+    const session = claimFormSessionRef.current
+    if (!userId || !session || !claimDraftHydratedRef.current || picking) return
+    if (!personnelClaimDraftMatchesTarget(draft, session.target)) return
+    if (draft.evidence_addition_locked) {
+      return Alert.alert('原证明已保留', '待核对反馈不能追加证明；如需补充照片，请联系公司退回后再修改。')
+    }
     if (draft.media.length >= 5) return Alert.alert('最多 5 张', '每次工作量反馈最多上传 5 张证明照片。')
     try {
       setPicking(true)
@@ -1163,7 +1614,8 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
         uri: String(asset.uri || ''),
         name: asset.fileName || `claim-proof-${Date.now()}.jpg`,
         mimeType: asset.mimeType || 'image/jpeg',
-      })
+      }, session.scope)
+      claimDraftRef.current = next
       setDraft(next)
     } catch (error: any) {
       Alert.alert('照片保存失败', String(error?.message || '请重新拍摄或选择照片'))
@@ -1173,9 +1625,13 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
   }, [draft, picking, userId])
 
   const removePhoto = useCallback(async (mediaId: string) => {
-    if (!userId) return
+    const session = claimFormSessionRef.current
+    if (!userId || !session || !claimDraftHydratedRef.current) return
+    if (!personnelClaimDraftMatchesTarget(draft, session.target)) return
     try {
-      setDraft(await removePersonnelClaimDraftPhoto(userId, draft, mediaId))
+      const next = await removePersonnelClaimDraftPhoto(userId, draft, mediaId, session.scope)
+      claimDraftRef.current = next
+      setDraft(next)
     } catch (error: any) {
       Alert.alert('无法删除', String(error?.message || '照片无法删除'))
     }
@@ -1267,25 +1723,64 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
     return submitted
   }, [token, userId])
 
-  const submitClaim = useCallback(async () => {
-    if (!token || !userId || saving) return
+  const requestSubmitClaim = useCallback(() => {
     try {
+      setClaimFormError('')
+      const session = claimFormSessionRef.current
+      if (!session || !claimDraftHydratedRef.current) throw new Error('草稿仍在恢复，请稍后重试')
+      assertPersonnelClaimDraftTarget(draft, session.target)
+      const option = claimOptions.find((item) => item.claim_type === draft.claim_type)
+        || (draft.claim_id && draft.claim_type === 'custom_amount' ? HISTORICAL_CUSTOM_AMOUNT_OPTION : null)
+      if (!option) throw new Error(draft.service_date ? '当前反馈类型暂不可用，请刷新后重新选择' : '请先选择工作日期')
+      if (draft.evidence_addition_locked && draft.media.some((item) => item.state !== 'associated')) {
+        throw new Error('待核对反馈不能追加证明；请删除尚未上传的照片后再核对')
+      }
+      validateClaimDraft(draft, option)
+      Keyboard.dismiss()
+      setClaimSubmissionReviewOpen(true)
+    } catch (error: any) {
+      const message = String(error?.message || '请检查工作量反馈')
+      setClaimFormError(message)
+      Alert.alert('请先核对', message)
+    }
+  }, [claimOptions, draft, validateClaimDraft])
+
+  const submitClaim = useCallback(async () => {
+    if (!token || !userId || saving || claimSubmissionInFlightRef.current) return
+    claimSubmissionInFlightRef.current = true
+    try {
+      const session = claimFormSessionRef.current
+      if (!session || !claimDraftHydratedRef.current) throw new Error('草稿仍在恢复，请稍后重试')
+      assertPersonnelClaimDraftTarget(draft, session.target)
       const option = claimOptions.find((item) => item.claim_type === draft.claim_type)
         || (draft.claim_id && draft.claim_type === 'custom_amount' ? HISTORICAL_CUSTOM_AMOUNT_OPTION : null)
       if (!option) throw new Error('当前反馈类型暂不可用，请刷新后重新选择')
       validateClaimDraft(draft, option)
       setSaving(true)
-      await persistAndSubmitClaim(draft, 'default', setDraft)
-      const empty = emptyPersonnelClaimDraft(todayYmd())
-      const defaultOption = claimOptions.find((item) => item.claim_type === 'subsidy_amount')
-        || claimOptions.find((item) => item.claim_type !== 'custom_amount')
-      setDraft(defaultOption ? draftForClaimOption(empty, defaultOption) : empty)
+      await persistAndSubmitClaim(draft, session.scope, (next) => {
+        claimDraftRef.current = next
+        setDraft(next)
+      })
+      const emptyDraft = emptyPersonnelClaimDraft('')
+      claimDraftRef.current = emptyDraft
+      claimFormGenerationRef.current += 1
+      claimFormSessionRef.current = null
+      claimDraftHydratedRef.current = false
+      setDraft(emptyDraft)
+      setClaimFormSession(null)
+      setClaimDraftHydrated(false)
+      setClaimFormError('')
       await loadAll(true)
+      setClaimSubmissionReviewOpen(false)
       setClaimFormOpen(false)
       Alert.alert('提交成功', option.evidence_required ? '工作量和证明已提交公司核对。' : '工作量已提交公司核对。')
     } catch (error: any) {
-      Alert.alert('暂未提交', `${String(error?.message || '提交失败')}\n\n草稿和照片已保留，可稍后重试。`)
+      const message = `${personnelClaimSaveErrorMessage(error)}\n\n草稿和照片已保留，可稍后重试。`
+      setClaimSubmissionReviewOpen(false)
+      setClaimFormError(message)
+      Alert.alert('暂未提交', message)
     } finally {
+      claimSubmissionInFlightRef.current = false
       setSaving(false)
     }
   }, [claimOptions, draft, loadAll, persistAndSubmitClaim, saving, token, userId, validateClaimDraft])
@@ -1337,11 +1832,10 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
       return
     }
     const next = claimToDraft(claim)
-    setDraft(await savePersonnelClaimDraft(userId, next))
     closeClaimDetail()
     setActiveTab('claims')
-    setClaimFormOpen(true)
-  }, [closeClaimDetail, userId])
+    await openClaimFormForTarget({ mode: 'edit', claimId: claim.id }, next)
+  }, [closeClaimDetail, openClaimFormForTarget, userId])
 
   const openSettlement = useCallback(async (settlement: PersonnelWeeklySettlement) => {
     if (!token || !userId) return
@@ -1363,7 +1857,7 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
       setSettlementDetail(detail)
       setSupplementDraft(storedSupplement
         ? { ...storedSupplement, claim_type: 'subsidy_amount' }
-        : emptyPersonnelClaimDraft(detail.week_end))
+        : emptyPersonnelClaimDraft(''))
     } catch (error: any) {
       if (settlementDetailRequestRef.current !== requestId) return
       setSettlementDetail(null)
@@ -1511,10 +2005,11 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
 
   const submitWeeklyWorkload = useCallback(async () => {
     if (!token || !submissionReviewPreview || saving) return
+    const unincludedClaims = unincludedSubmissionClaims(submissionReviewPreview, claims)
     if (
       !submissionAcknowledged
       || submissionReviewToken !== submissionReviewPreview.confirmation_token
-      || submissionReviewPreview.blocking_issues.length > 0
+      || unincludedClaims.length > 0
     ) return
     try {
       setSaving(true)
@@ -1529,7 +2024,12 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
       setSubmissionReviewStep(1)
       setSubmissionAcknowledged(false)
       await loadAll(true)
-      Alert.alert('提交成功', '本周工作量已提交，等待财务核对。')
+      Alert.alert(
+        '提交成功',
+        submissionReviewPreview.pending_pricing_count > 0
+          ? '本周工作量与已计小计已提交；待计价项目由公司补齐后会请你重新确认完整总额。'
+          : '本周工作量已提交，等待财务核对。',
+      )
     } catch (error: any) {
       setSubmissionReviewStep(1)
       setSubmissionAcknowledged(false)
@@ -1542,7 +2042,7 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
     } finally {
       setSaving(false)
     }
-  }, [loadAll, saving, submissionAcknowledged, submissionPreview?.week_start, submissionReviewPreview, submissionReviewToken, token])
+  }, [claims, loadAll, saving, submissionAcknowledged, submissionPreview?.week_start, submissionReviewPreview, submissionReviewToken, token])
 
   const respondSettlement = useCallback(async (action: 'confirm' | 'dispute') => {
     if (!token || !settlementDetail || saving) return
@@ -1597,14 +2097,34 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
 
   const selectedClaimOption = useMemo(
     () => claimOptions.find((item) => item.claim_type === draft.claim_type)
-      || (draft.claim_id && draft.claim_type === 'custom_amount' ? HISTORICAL_CUSTOM_AMOUNT_OPTION : null),
-    [claimOptions, draft.claim_id, draft.claim_type],
+      || (claimFormSession?.target.mode === 'edit' && draft.claim_type === 'custom_amount' ? HISTORICAL_CUSTOM_AMOUNT_OPTION : null),
+    [claimFormSession?.target.mode, claimOptions, draft.claim_type],
   )
+  const claimFormIsEdit = claimFormSession?.target.mode === 'edit'
   const selectableClaimOptions = useMemo(
     () => claimOptions.filter((item) => item.claim_type !== 'custom_amount'),
     [claimOptions],
   )
   const selectedTypeLabel = selectedClaimOption?.label || CLAIM_TYPE_LABELS[draft.claim_type] || draft.claim_type
+  const claimDraftWeek = useMemo(
+    () => /^\d{4}-\d{2}-\d{2}$/.test(draft.service_date) ? personnelSettlementWeekForDate(draft.service_date) : null,
+    [draft.service_date],
+  )
+  const claimDraftOriginalWeek = useMemo(
+    () => /^\d{4}-\d{2}-\d{2}$/.test(draft.original_service_date || '')
+      ? personnelSettlementWeekForDate(String(draft.original_service_date))
+      : null,
+    [draft.original_service_date],
+  )
+  const claimDraftCrossWeekEdit = Boolean(
+    draft.claim_id
+    && claimDraftWeek
+    && claimDraftOriginalWeek
+    && claimDraftWeek.week_start !== claimDraftOriginalWeek.week_start,
+  )
+  const claimDraftIsOutsideCurrentSubmissionWeek = Boolean(
+    claimDraftWeek && claimDraftWeek.week_start !== previousCompletedPersonnelSettlementWeekStart(),
+  )
   const claimEstimateParams = useMemo(() => {
     if (!selectedClaimOption?.rule_configured) return null
     const base = { service_date: draft.service_date, claim_type: selectedClaimOption.claim_type }
@@ -1666,8 +2186,16 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
     () => summarizePersonnelSettlementLinesByDate(settlementDetail?.lines || []),
     [settlementDetail],
   )
+  const settlementDetailSubsidyTotal = useMemo(
+    () => personnelSettlementSubsidyTotalCents(settlementDetail?.lines || []),
+    [settlementDetail],
+  )
   const submissionPreviewDailyLines = useMemo(
     () => summarizePersonnelSettlementLinesByDate(submissionReviewPreview?.lines || []),
+    [submissionReviewPreview],
+  )
+  const submissionReviewSubsidyTotal = useMemo(
+    () => personnelSettlementSubsidyTotalCents(submissionReviewPreview?.lines || []),
     [submissionReviewPreview],
   )
   const submissionPreviewUnincludedClaims = useMemo(
@@ -1676,9 +2204,14 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
   )
   const submissionPreviewIncludedPendingClaims = useMemo(() => {
     const includedIds = new Set(
-      (submissionReviewPreview?.lines || [])
-        .filter((line) => line.source_type === 'workload_claim' && line.source_id)
-        .map((line) => String(line.source_id)),
+      [
+        ...(submissionReviewPreview?.lines || [])
+          .filter((line) => line.source_type === 'workload_claim' && line.source_id)
+          .map((line) => String(line.source_id)),
+        ...(submissionReviewPreview?.pending_pricing_items || [])
+          .filter((item) => item.source_type === 'workload_claim' && item.source_id)
+          .map((item) => String(item.source_id)),
+      ],
     )
     return claims.filter((claim) => claim.status === 'submitted' && includedIds.has(claim.id))
   }, [claims, submissionReviewPreview])
@@ -1688,7 +2221,7 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
     && submissionReviewToken === submissionReviewPreview.confirmation_token,
   )
   const submissionReviewReady = submissionReviewMatchesPreview
-    && (submissionReviewPreview?.blocking_issues.length || 0) === 0
+    && submissionPreviewUnincludedClaims.length === 0
   const currentSettlementDocuments = useMemo(
     () => selectCurrentSettlementDocuments(settlementDetail),
     [settlementDetail],
@@ -1726,33 +2259,47 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
               visible={claimFormOpen}
               animationType="slide"
               onRequestClose={() => {
-                if (datePickerTarget === 'claim') setDatePickerTarget(null)
+                if (saving) return
+                if (claimSubmissionReviewOpen) setClaimSubmissionReviewOpen(false)
+                else if (datePickerTarget === 'claim') setDatePickerTarget(null)
                 else if (claimTimePickerTarget) setClaimTimePickerTarget(null)
-                else setClaimFormOpen(false)
+                else void closeClaimForm()
               }}
             >
               {claimFormOpen ? (
                 <SafeAreaView style={styles.modalPage} edges={['left', 'right', 'bottom']}>
                   <View testID="claim-form-header" style={[styles.modalHeader, { paddingTop: Math.max(insets.top, 12) }]}>
-                    <Text style={styles.modalTitle}>{draft.claim_id ? '修改工作量反馈' : '新增工作量反馈'}</Text>
+                    <Text style={styles.modalTitle}>{claimFormIsEdit ? '修改工作量反馈' : '新增工作量反馈'}</Text>
                     <AppIconButton
                       testID="claim-form-close"
                       accessibilityLabel="关闭工作量反馈表单"
+                      disabled={saving}
                       onPress={() => {
-                        setDatePickerTarget(null)
-                        setClaimTimePickerTarget(null)
-                        setClaimFormOpen(false)
+                        if (saving) return
+                        void closeClaimForm()
                       }}
                     >
                       <Ionicons name="close" size={24} color="#111827" />
                     </AppIconButton>
                   </View>
-                  <ScrollView contentContainerStyle={[styles.content, { paddingBottom: 40 + insets.bottom }]} keyboardShouldPersistTaps="handled">
+                  {!claimDraftHydrated ? (
+                    <View testID="claim-draft-loading" style={styles.loadingBar}><ActivityIndicator size="small" /><Text style={styles.muted}>正在恢复当前草稿…</Text></View>
+                  ) : null}
+                  <ScrollView pointerEvents={claimDraftHydrated ? 'auto' : 'none'} contentContainerStyle={[styles.content, { paddingBottom: 40 + insets.bottom }]} keyboardShouldPersistTaps="handled">
             <View style={styles.card}>
               <Text style={styles.help}>先选择工作日期，再反馈需要公司核对的工作或补贴。按时、按次工作采用费用规则；补贴按填写金额提交，由财务决定是否计入。</Text>
               <DateSelector testID="claim-service-date" label="工作日期" value={draft.service_date} onPress={() => setDatePickerTarget('claim')} />
+              {claimDraftWeek ? (
+                <View testID="claim-service-week" style={styles.selectionBox}>
+                  <Text style={styles.selection}>所属周：{formatPersonnelDate(claimDraftWeek.week_start)} 至 {formatPersonnelDate(claimDraftWeek.week_end)}</Text>
+                </View>
+              ) : (
+                <View style={styles.notice}><Text style={styles.warning}>请先确认工作日期；系统不会自动使用今天。</Text></View>
+              )}
               <Text style={styles.label}>工作或费用类型</Text>
-              {claimOptionsLoading ? (
+              {!draft.service_date ? (
+                <View style={styles.notice}><Text style={styles.help}>确认日期后再选择工作或费用类型。</Text></View>
+              ) : claimOptionsLoading ? (
                 <View style={styles.inlineLoading}><ActivityIndicator size="small" /><Text style={styles.muted}>正在准备可反馈类型…</Text></View>
               ) : claimOptionsError ? (
                 <View style={styles.inlineError}>
@@ -1782,7 +2329,7 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                   <Text style={styles.selection}>当前选择：{selectedTypeLabel}</Text>
                   <Text style={styles.muted}>{selectedClaimOption.calculation_label}</Text>
                 </View>
-              ) : draft.claim_id ? (
+              ) : claimFormIsEdit ? (
                 <Text style={styles.warning}>当前历史类型已不在当天可反馈范围，不能继续提交；历史内容仍可查看。</Text>
               ) : null}
               {selectedClaimOption?.property_required ? (
@@ -1863,29 +2410,45 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                 照片或截图证明{selectedClaimOption?.evidence_required === false ? '（选填）' : '（必填）'}（{draft.media.length}/5）
               </Text>
               <View style={styles.photoGrid}>
-                {draft.media.map((item) => (
-                  <View key={item.media_id} style={styles.photoWrap}>
-                    <Image source={{ uri: item.local_uri }} style={styles.photo} />
+                {draft.media.map((item) => {
+                  const source = item.state === 'associated'
+                    ? buildPersonnelClaimEvidenceImageSource(API_BASE_URL, token, draft.claim_id, item.evidence_id)
+                    : item.local_uri ? { uri: item.local_uri } : null
+                  return (
+                  <View key={item.media_id} testID={`claim-draft-photo-${item.media_id}`} style={styles.photoWrap}>
+                    {source ? (
+                      <Image testID={item.state === 'associated' ? 'claim-draft-existing-evidence' : 'claim-draft-local-evidence'} source={source} style={styles.photo} />
+                    ) : (
+                      <View style={[styles.photo, styles.photoUnavailable]}><Ionicons name="image-outline" size={24} color="#6B7280" /></View>
+                    )}
                     {item.state !== 'associated' ? (
                       <AppIconButton accessibilityLabel="删除证明照片" onPress={() => removePhoto(item.media_id)} style={styles.removePhoto} visualStyle={styles.removePhotoVisual}>
                         <Ionicons name="close" size={18} color="#FFFFFF" />
                       </AppIconButton>
                     ) : null}
                     <Text style={[styles.photoState, item.error ? styles.errorText : null]} numberOfLines={2}>
-                      {item.error || (item.state === 'associated' ? '已关联' : item.state === 'uploading' ? '上传中' : '待上传')}
+                      {item.error || (item.state === 'associated' ? '已上传，修改时保留' : item.state === 'uploading' ? '上传中' : '待上传')}
                     </Text>
                   </View>
-                ))}
+                  )
+                })}
               </View>
+              {draft.evidence_addition_locked ? (
+                <View testID="claim-evidence-locked" style={styles.notice}>
+                  <Text style={styles.help}>原证明会继续保留。待核对反馈不能追加证明；如需补充照片，请联系公司退回后再修改。</Text>
+                </View>
+              ) : (
+                <View style={styles.actionRow}>
+                  <AppButton label="拍照" tone="outline" size="compact" loading={picking} onPress={() => addPhoto('camera')} style={styles.flexButton} />
+                  <AppButton label="从相册选择" tone="outline" size="compact" loading={picking} onPress={() => addPhoto('library')} style={styles.flexButton} />
+                </View>
+              )}
               <View style={styles.actionRow}>
-                <AppButton label="拍照" tone="outline" size="compact" loading={picking} onPress={() => addPhoto('camera')} style={styles.flexButton} />
-                <AppButton label="从相册选择" tone="outline" size="compact" loading={picking} onPress={() => addPhoto('library')} style={styles.flexButton} />
-              </View>
-              <View style={styles.actionRow}>
-                <AppButton testID="claim-submit" label="提交工作量反馈" loading={saving} disabled={claimOptionsLoading || !selectedClaimOption} onPress={submitClaim} style={styles.flexButton} />
+                <AppButton testID="claim-submit" label={claimFormIsEdit ? '核对修改内容' : '核对并提交'} loading={saving} disabled={!claimDraftHydrated || claimOptionsLoading || !selectedClaimOption} onPress={requestSubmitClaim} style={styles.flexButton} />
                 <AppButton label="清空草稿" tone="secondary" disabled={saving} onPress={resetDraft} style={styles.flexButton} />
               </View>
-              <Text style={styles.help}>网络中断时不会丢失：草稿和本地照片会保留，重新打开本页即可继续上传。</Text>
+              {claimFormError ? <View testID="claim-form-error" style={styles.inlineError}><Text style={styles.errorText}>{claimFormError}</Text></View> : null}
+              <Text style={styles.help}>网络中断时不会丢失：原有证明会继续保留；草稿和新增的本地照片也会保留，重新打开本页即可继续。</Text>
                 </>
               ) : null}
             </View>
@@ -1924,6 +2487,34 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                         setClaimTimePickerTarget(null)
                       }}
                     />
+                  ) : null}
+
+                  {claimSubmissionReviewOpen ? (
+                    <View accessibilityViewIsModal style={styles.confirmOverlay}>
+                      <View testID="claim-submit-review" style={styles.confirmCard}>
+                        <Text style={styles.modalTitle}>{claimFormIsEdit ? '确认修改工作量反馈' : '确认提交工作量反馈'}</Text>
+                        <View style={styles.summaryBox}>
+                          <View style={styles.summaryRow}><Text style={styles.body}>工作日期</Text><Text testID="claim-submit-review-date" style={styles.summaryValue}>{formatPersonnelDate(draft.service_date)}</Text></View>
+                          <View style={styles.summaryRow}><Text style={styles.body}>所属周</Text><Text testID="claim-submit-review-week" style={styles.summaryValue}>{claimDraftWeek ? `${formatPersonnelDate(claimDraftWeek.week_start)}–${formatPersonnelDate(claimDraftWeek.week_end)}` : '--'}</Text></View>
+                          <View style={styles.summaryRow}><Text style={styles.body}>类型</Text><Text style={styles.summaryValue}>{selectedTypeLabel}</Text></View>
+                          {selectedClaimOption?.input_mode === 'time_range' ? <View style={styles.summaryRow}><Text style={styles.body}>时长</Text><Text style={styles.summaryValue}>{formatPersonnelDuration(personnelClaimTimeRangeMinutes(draft.started_at, draft.ended_at))}</Text></View> : null}
+                          {selectedClaimOption?.input_mode === 'quantity' ? <View style={styles.summaryRow}><Text style={styles.body}>工作量</Text><Text style={styles.summaryValue}>{draft.requested_quantity}</Text></View> : null}
+                          {selectedClaimOption?.input_mode === 'amount' ? <View style={styles.summaryRow}><Text style={styles.body}>金额</Text><Text style={styles.summaryValue}>{money(Math.round(Number(draft.requested_amount || 0) * 100))}</Text></View> : null}
+                        </View>
+                        <Text style={styles.body}>{draft.note}</Text>
+                        {claimDraftCrossWeekEdit || claimDraftIsOutsideCurrentSubmissionWeek ? (
+                          <View testID={claimDraftCrossWeekEdit ? 'claim-submit-cross-week-warning' : 'claim-submit-outside-week-warning'} style={styles.notice}>
+                            <Text style={styles.warning}>{claimDraftCrossWeekEdit && claimDraftOriginalWeek && claimDraftWeek
+                              ? `工作日期已跨周：原周 ${formatPersonnelDate(claimDraftOriginalWeek.week_start)}–${formatPersonnelDate(claimDraftOriginalWeek.week_end)}，修改后进入 ${formatPersonnelDate(claimDraftWeek.week_start)}–${formatPersonnelDate(claimDraftWeek.week_end)}。原周将不再包含该反馈。`
+                              : '该日期不属于当前“上一完整周”，会按上述所属周进入结算。'}</Text>
+                          </View>
+                        ) : null}
+                        <View style={styles.actionRow}>
+                          <AppButton testID="claim-submit-review-cancel" label="返回修改" tone="secondary" disabled={saving} onPress={() => setClaimSubmissionReviewOpen(false)} style={styles.flexButton} />
+                          <AppButton testID="claim-submit-review-confirm" label={claimFormIsEdit ? '确认修改' : '确认提交'} loading={saving} onPress={submitClaim} style={styles.flexButton} />
+                        </View>
+                      </View>
+                    </View>
                   ) : null}
                 </SafeAreaView>
               ) : null}
@@ -2001,12 +2592,16 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                   <Text style={styles.status}>{submissionPreview.settlement?.status === 'void' ? '待重新提交' : '待提交'}</Text>
                 </View>
                 <Text style={styles.total}>{money(submissionPreview.total_cents)}</Text>
-                <Text style={styles.muted}>税前 {money(submissionPreview.subtotal_cents)} · GST {money(submissionPreview.gst_cents)} · {submissionPreview.line_count} 项</Text>
+                <Text style={styles.muted}>{submissionPreview.pending_pricing_count > 0 ? '已计小计' : '总额'} · 税前 {money(submissionPreview.subtotal_cents)} · GST {money(submissionPreview.gst_cents)} · 已计价 {submissionPreview.line_count} 项</Text>
+                {submissionPreview.pending_pricing_count > 0 ? <Text testID="weekly-submission-pending-count" style={styles.claimRowReviewNote}>另有 {submissionPreview.pending_pricing_count} 项待计价；不会按 $0 计入。</Text> : null}
+                {submissionPreview.amount_state === 'historical_frozen_pending_verification' ? (
+                  <Text style={styles.claimRowReviewNote}>当前显示历史已冻结金额；执行凭证待核实，系统未将金额重算为 0。</Text>
+                ) : null}
                 {submissionPreview.settlement?.status === 'void' ? (
                   <Text style={styles.claimRowReviewNote}>原结算已作废。请重新核对本周完整工作量和总额后提交。</Text>
                 ) : null}
                 {submissionPreview.blocking_issues.length ? (
-                  <Text style={styles.claimRowReviewNote}>本周总额暂未计算完整，请先补齐费用规则、GST 或结算资料后再提交。</Text>
+                  <Text style={styles.claimRowReviewNote}>本周总额暂未计算完整；可先提交已计小计和待计价项目，公司补齐后会请你重新确认。</Text>
                 ) : null}
                 <AppButton
                   testID="weekly-submission-review"
@@ -2078,28 +2673,34 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                   <View style={styles.cardHeader}>
                     <View style={styles.submissionReviewTitleWrap}>
                       <Text style={styles.cardTitle}>{formatPersonnelDate(submissionReviewPreview.week_start)} 至 {formatPersonnelDate(submissionReviewPreview.week_end)}</Text>
-                      <Text style={styles.muted}>以下基础工作量和已提交补贴均已计入本次确认总额</Text>
+                      <Text style={styles.muted}>{submissionReviewPreview.pending_pricing_count > 0 ? '以下为已计价项目；待计价工作单独列出且未按零元合并' : '以下基础工作量、额外工作和补贴均已计入本次确认总额'}</Text>
                     </View>
                     <Text style={styles.status}>{submissionReviewPreview.line_count} 项</Text>
                   </View>
                   <View style={styles.summaryBox}>
                     <View style={styles.summaryRow}><Text style={styles.body}>税前金额</Text><Text style={styles.summaryValue}>{money(submissionReviewPreview.subtotal_cents)}</Text></View>
+                    <View testID="weekly-submission-subsidy-total" style={styles.summaryRow}><Text style={styles.body}>补贴（已包含）</Text><Text style={styles.subsidyBreakdownTotal}>{money(submissionReviewSubsidyTotal)}</Text></View>
                     <View style={styles.summaryRow}><Text style={styles.body}>GST</Text><Text style={styles.summaryValue}>{money(submissionReviewPreview.gst_cents)}</Text></View>
-                    <View style={[styles.summaryRow, styles.summaryTotalRow]}><Text style={styles.summaryTotalLabel}>预计总额</Text><Text style={styles.summaryTotalValue}>{money(submissionReviewPreview.total_cents)}</Text></View>
+                    <View style={[styles.summaryRow, styles.summaryTotalRow]}><Text style={styles.summaryTotalLabel}>{submissionReviewPreview.pending_pricing_count > 0 ? '已计小计' : '预计总额'}</Text><Text style={styles.summaryTotalValue}>{money(submissionReviewPreview.total_cents)}</Text></View>
+                    {submissionReviewPreview.pending_pricing_count > 0 ? <View style={styles.summaryRow}><Text style={styles.body}>待计价</Text><Text style={styles.summaryValue}>{submissionReviewPreview.pending_pricing_count} 项</Text></View> : null}
                   </View>
+                  {submissionReviewPreview.amount_state === 'historical_frozen_pending_verification' ? (
+                    <Text style={styles.claimRowReviewNote}>此金额来自历史冻结结算，执行凭证待核实；不会自动改为 0 或重新计费。</Text>
+                  ) : null}
                 </View>
+                <SettlementWorkChecklist
+                  items={submissionReviewPreview.work_checklist || []}
+                  testIdPrefix="weekly-submission-checklist"
+                />
                 {submissionPreviewDailyLines.length ? submissionPreviewDailyLines.map((line) => (
-                  <View key={line.service_date} testID={`weekly-submission-day-${line.service_date}`} style={styles.card}>
-                    <View style={styles.cardHeader}>
-                      <Text style={styles.cardTitle}>{formatPersonnelDateWithWeekday(line.service_date)}</Text>
-                      <Text style={styles.dailyTotal}>{money(line.total_cents)}</Text>
-                    </View>
-                    <Text style={styles.body}>{line.description}</Text>
-                    <Text style={styles.muted}>税前 {money(line.subtotal_cents)} · GST {money(line.gst_cents)}{line.evidence_count ? ` · 证明 ${line.evidence_count} 张` : ''}</Text>
-                  </View>
+                  <SettlementDailySummaryCard key={line.service_date} testID={`weekly-submission-day-${line.service_date}`} dateLabel={formatPersonnelDateWithWeekday(line.service_date)} line={line} />
                 )) : (
-                  <View style={styles.empty}><Text style={styles.emptyTitle}>本周暂无可提交项目</Text><Text style={styles.muted}>请先检查工作量和补贴反馈。</Text></View>
+                  <View style={styles.empty}>
+                    <Text style={styles.emptyTitle}>{submissionReviewPreview.pending_pricing_count > 0 ? '本周暂无已计价项目' : '本周暂无可提交项目'}</Text>
+                    <Text style={styles.muted}>{submissionReviewPreview.pending_pricing_count > 0 ? '本周工作均列在下方待计价项目中，未按 $0 计入。' : '请先检查工作量和补贴反馈。'}</Text>
+                  </View>
                 )}
+                <PendingPricingItemsCard items={submissionReviewPreview.pending_pricing_items || []} />
                 {submissionPreviewIncludedPendingClaims.length ? (
                   <View testID="weekly-submission-included-pending-claims" style={styles.notice}>
                     <Text style={styles.noticeTitle}>已包含 {submissionPreviewIncludedPendingClaims.length} 条待财务审核反馈</Text>
@@ -2129,13 +2730,13 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                 {submissionReviewPreview.blocking_issues.length ? (
                   <View style={styles.notice}>
                     <Text style={styles.noticeTitle}>本周总额暂未计算完整</Text>
-                    <Text style={styles.help}>请先补齐费用规则、GST 或结算资料；完整总额生成后才能提交。</Text>
+                    <Text style={styles.help}>你可以提交已计小计和待计价项目供公司核对；在费用规则、GST 或结算资料补齐前，本周不能作为完整最终金额确认或付款。</Text>
                   </View>
                 ) : null}
                 <AppButton
                   testID="weekly-submission-next"
                   label="我已核对，下一步"
-                  disabled={submissionReviewPreview.blocking_issues.length > 0}
+                  disabled={submissionPreviewUnincludedClaims.length > 0}
                   onPress={() => setSubmissionReviewStep(2)}
                   fullWidth
                 />
@@ -2144,12 +2745,14 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
               <>
                 <View testID="weekly-submission-confirmation" style={styles.card}>
                   <Text style={styles.cardTitle}>确认提交给财务核对</Text>
-                  <Text style={styles.help}>提交后，财务会按你确认的明细和总额核对；全部一致可直接付款，只有发生调整才会退回请你再次确认。</Text>
+                  <Text style={styles.help}>{submissionReviewPreview.pending_pricing_count > 0 ? '本次确认的是工作明细、已计小计和待计价项目；公司补齐单价或资料后必须退回请你确认完整总额。' : '提交后，财务会按你确认的明细和总额核对；全部一致可直接付款，只有发生调整才会退回请你再次确认。'}</Text>
                   <View style={styles.summaryBox}>
                     <View style={styles.summaryRow}><Text style={styles.body}>结算周期</Text><Text style={styles.summaryValue}>{formatPersonnelDate(submissionReviewPreview.week_start)} 至 {formatPersonnelDate(submissionReviewPreview.week_end)}</Text></View>
                     <View style={styles.summaryRow}><Text style={styles.body}>已计入项目</Text><Text style={styles.summaryValue}>{submissionReviewPreview.line_count} 项</Text></View>
+                    <View style={styles.summaryRow}><Text style={styles.body}>待计价项目</Text><Text style={styles.summaryValue}>{submissionReviewPreview.pending_pricing_count} 项</Text></View>
                     <View style={styles.summaryRow}><Text style={styles.body}>其中待财务审核反馈</Text><Text style={styles.summaryValue}>{submissionPreviewIncludedPendingClaims.length} 项（已包含）</Text></View>
-                    <View style={[styles.summaryRow, styles.summaryTotalRow]}><Text style={styles.summaryTotalLabel}>确认总额</Text><Text style={styles.summaryTotalValue}>{money(submissionReviewPreview.total_cents)}</Text></View>
+                    <View testID="weekly-submission-confirmation-subsidy-total" style={styles.summaryRow}><Text style={styles.body}>补贴（已包含）</Text><Text style={styles.subsidyBreakdownTotal}>{money(submissionReviewSubsidyTotal)}</Text></View>
+                    <View style={[styles.summaryRow, styles.summaryTotalRow]}><Text style={styles.summaryTotalLabel}>{submissionReviewPreview.pending_pricing_count > 0 ? '确认已计小计' : '确认总额'}</Text><Text style={styles.summaryTotalValue}>{money(submissionReviewPreview.total_cents)}</Text></View>
                   </View>
                   <Pressable
                     testID="weekly-submission-acknowledgement"
@@ -2159,10 +2762,10 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                     onPress={() => setSubmissionAcknowledged((checked) => submissionReviewReady && !checked)}
                     style={({ pressed }) => [styles.submissionAcknowledgement, pressed ? styles.claimRowPressed : null]}
                   >
-                    <View style={[styles.submissionCheckbox, submissionAcknowledged && submissionReviewReady ? styles.submissionCheckboxChecked : null]}>
+                    <View testID="weekly-submission-checkbox" style={[styles.submissionCheckbox, submissionAcknowledged && submissionReviewReady ? styles.submissionCheckboxChecked : null]}>
                       {submissionAcknowledged && submissionReviewReady ? <Ionicons name="checkmark" size={18} color="#FFFFFF" /> : null}
                     </View>
-                    <Text style={styles.body}>我已核对上述基础工作量、申报补贴和确认总额；财务只有在修改内容或金额时才需要我再次确认。</Text>
+                    <Text style={[styles.body, styles.submissionConsentCopy]}>确认：工作量及金额正确。{submissionReviewPreview.pending_pricing_count > 0 ? '我已核对基础工作、额外工作、补贴、已计小计和待计价项目；公司补齐或修改金额后必须请我重新确认。' : '我已核对上述基础工作量、额外工作、申报补贴和确认总额；财务只有在修改内容或金额时才需要我再次确认。'}</Text>
                   </Pressable>
                 </View>
                 <View style={styles.submissionActionRow}>
@@ -2239,8 +2842,8 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                     return source ? <Image key={item.id} testID="claim-evidence-image" source={source} style={styles.detailPhoto} resizeMode="cover" /> : null
                   })}
                 </View>
-                {['draft', 'returned'].includes(claimDetail.status) && !claimDetail.claim_type.startsWith('trial_') ? (
-                  <AppButton testID="claim-detail-edit" label="继续修改" onPress={() => editClaim(claimDetail)} fullWidth />
+                {(claimDetail.available_actions?.includes('edit') || ['draft', 'returned'].includes(claimDetail.status)) && !claimDetail.claim_type.startsWith('trial_') ? (
+                  <AppButton testID="claim-detail-edit" label={claimDetail.status === 'submitted' ? '修改待核对反馈' : '继续修改'} onPress={() => editClaim(claimDetail)} fullWidth />
                 ) : null}
               </View>
             ) : null}
@@ -2271,6 +2874,7 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                   <View style={styles.totalBox}>
                     <Text style={styles.total}>{money(settlementDetail.total_cents)}</Text>
                     <Text style={styles.muted}>税前 {money(settlementDetail.subtotal_cents)} + GST {money(settlementDetail.gst_cents)}</Text>
+                    <Text testID="settlement-detail-subsidy-total" style={styles.subsidyBreakdownTotal}>其中补贴 {money(settlementDetailSubsidyTotal)}（已包含）</Text>
                   </View>
                 </View>
                 {detailLoading ? (
@@ -2304,16 +2908,14 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                     ) : settlementDetail.phase5_schema_ready === false ? (
                       <View style={styles.notice}><Text style={styles.help}>PDF 功能等待阶段 5 数据库启用。</Text></View>
                     ) : null}
+                    <SettlementWorkChecklist
+                      items={settlementDetail.work_checklist || []}
+                      testIdPrefix="settlement-checklist"
+                    />
                     {dailySettlementLines.map((line) => (
-                  <View key={line.service_date} testID={`settlement-day-${line.service_date}`} style={styles.card}>
-                    <View style={styles.cardHeader}>
-                      <Text style={styles.cardTitle}>{line.service_date}</Text>
-                      <Text style={styles.dailyTotal}>{money(line.total_cents)}</Text>
-                    </View>
-                    <Text style={styles.body}>{line.description}</Text>
-                    <Text style={styles.muted}>税前 {money(line.subtotal_cents)} · GST {money(line.gst_cents)}{line.evidence_count ? ` · 证明 ${line.evidence_count} 张` : ''}</Text>
-                  </View>
+                  <SettlementDailySummaryCard key={line.service_date} testID={`settlement-day-${line.service_date}`} dateLabel={formatPersonnelDate(line.service_date)} line={line} />
                     ))}
+                    <PendingPricingItemsCard items={settlementDetail.pending_pricing_items || []} />
                     {['awaiting_confirmation', 'disputed'].includes(settlementDetail.status) ? (
                   <View testID="settlement-reconciliation-card" style={styles.card}>
                     <Text style={styles.cardTitle}>{settlementDetail.status === 'awaiting_confirmation' ? '确认本周结算' : '本周结算重新核对中'}</Text>
@@ -2401,7 +3003,7 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                                   <Text style={styles.body}>{CLAIM_TYPE_LABELS[claim.claim_type] || claim.claim_type} · {String(claim.service_date).slice(0, 10)}</Text>
                                   <Text style={styles.muted}>{claim.note}</Text>
                                 </View>
-                                <Text style={styles.summaryValue}>{money(estimatedSettlementClaimTotalCents(settlementDetail, claimAmountCents(claim)))}</Text>
+                                <Text style={styles.summaryValue}>{claimAmountCents(claim) > 0 ? money(estimatedSettlementClaimTotalCents(settlementDetail, claimAmountCents(claim))) : '待计价'}</Text>
                               </View>
                             ))}
                           </View>
@@ -2517,9 +3119,7 @@ const styles = StyleSheet.create({
   loadingBar: { minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#EFF6FF' },
   tabs: { flexDirection: 'row', gap: 8, padding: 12, backgroundColor: '#FFFFFF', borderBottomWidth: hairline(), borderBottomColor: '#E5E7EB' },
   tabButton: { flex: 1 },
-  headerAddButton: { minHeight: 44, minWidth: 68, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 2, borderRadius: 12 },
-  headerAddButtonPressed: { backgroundColor: '#EFF6FF' },
-  headerAddText: { color: '#2563EB', fontSize: 15, lineHeight: 20, fontWeight: '800' },
+  headerAddButton: { minWidth: 82, flexShrink: 0 },
   content: { padding: 14, paddingBottom: 40, gap: 12 },
   claimsContent: { paddingBottom: 40 },
   card: { backgroundColor: '#FFFFFF', borderRadius: 14, padding: 14, borderWidth: hairline(), borderColor: '#E5E7EB', gap: 10 },
@@ -2533,6 +3133,15 @@ const styles = StyleSheet.create({
   help: { color: '#6B7280', fontSize: 13, lineHeight: 20 },
   body: { color: '#374151', fontSize: 14, lineHeight: 21 },
   muted: { color: '#6B7280', fontSize: 13, lineHeight: 19 },
+  executionList: { marginTop: 10, borderTopWidth: hairline(), borderTopColor: '#E5E7EB', paddingTop: 8, gap: 8 },
+  checklistCard: { backgroundColor: '#FFFFFF', borderRadius: 14, padding: 14, gap: 8, borderWidth: hairline(), borderColor: '#D1D5DB' },
+  executionListTitle: { color: '#111827', fontSize: 13, lineHeight: 19, fontWeight: '700' },
+  executionRow: { backgroundColor: '#F9FAFB', borderRadius: 10, padding: 10, gap: 2 },
+  executionProperty: { flex: 1, color: '#111827', fontSize: 14, lineHeight: 20, fontWeight: '700' },
+  executionStatus: { color: '#047857', fontSize: 12, lineHeight: 18, fontWeight: '700' },
+  executionStatusWarning: { color: '#B45309', fontSize: 12, lineHeight: 18, fontWeight: '700' },
+  includedAmount: { color: '#047857', fontSize: 12, lineHeight: 18, fontWeight: '700' },
+  notIncludedAmount: { color: '#6B7280', fontSize: 12, lineHeight: 18, fontWeight: '700' },
   warning: { color: '#B45309', backgroundColor: '#FFFBEB', padding: 10, borderRadius: 8, lineHeight: 20 },
   errorText: { color: '#B91C1C' },
   field: { gap: 6 },
@@ -2554,6 +3163,7 @@ const styles = StyleSheet.create({
   photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   photoWrap: { width: 96, gap: 4 },
   photo: { width: 96, height: 96, borderRadius: 10, backgroundColor: '#E5E7EB' },
+  photoUnavailable: { alignItems: 'center', justifyContent: 'center' },
   detailPhoto: { width: 132, height: 132, borderRadius: 10, backgroundColor: '#E5E7EB' },
   removePhoto: { position: 'absolute', right: -7, top: -7 },
   removePhotoVisual: { borderRadius: 14, backgroundColor: '#111827' },
@@ -2592,6 +3202,23 @@ const styles = StyleSheet.create({
   summaryTotalRow: { marginTop: 2, paddingTop: 10, borderTopWidth: hairline(), borderTopColor: '#D1D5DB' },
   summaryTotalLabel: { flex: 1, color: '#1D4ED8', fontSize: 14, fontWeight: '900' },
   summaryTotalValue: { color: '#1D4ED8', fontSize: 20, fontWeight: '900' },
+  dailyBreakdownSection: { gap: 6 },
+  dailyBreakdownHeader: { minHeight: 24, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  dailyBreakdownTitle: { flex: 1, minWidth: 0, color: '#374151', fontSize: 14, lineHeight: 20, fontWeight: '900' },
+  extraBreakdownSection: { gap: 8, padding: 12, borderRadius: 12, borderWidth: hairline(), borderColor: '#C7D2FE', backgroundColor: '#EEF2FF' },
+  extraBreakdownTitle: { flex: 1, minWidth: 0, color: '#3730A3', fontSize: 15, lineHeight: 21, fontWeight: '900' },
+  extraBreakdownTotal: { flexShrink: 0, color: '#4338CA', fontSize: 14, lineHeight: 21, fontWeight: '900' },
+  subsidyBreakdownSection: { gap: 8, padding: 12, borderRadius: 12, borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF' },
+  subsidyBreakdownTitle: { flex: 1, minWidth: 0, color: '#1E40AF', fontSize: 15, lineHeight: 21, fontWeight: '900' },
+  subsidyBreakdownTotal: { flexShrink: 0, color: '#1D4ED8', fontSize: 14, lineHeight: 21, fontWeight: '900' },
+  breakdownLine: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingTop: 8, borderTopWidth: hairline(), borderTopColor: '#CBD5E1' },
+  breakdownLineText: { flex: 1, minWidth: 0, gap: 2 },
+  dailyPayableRow: { minHeight: 30, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingTop: 10, borderTopWidth: hairline(), borderTopColor: '#D1D5DB' },
+  dailyPayableLabel: { flex: 1, minWidth: 0, color: '#111827', fontSize: 14, lineHeight: 20, fontWeight: '900' },
+  dailyPayableValue: { flexShrink: 0, color: '#111827', fontSize: 16, lineHeight: 22, fontWeight: '900' },
+  pendingPricingCard: { backgroundColor: '#FFFBEB', borderRadius: 14, padding: 14, borderWidth: hairline(), borderColor: '#FCD34D', gap: 10 },
+  pendingPricingLine: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingTop: 10, borderTopWidth: hairline(), borderTopColor: '#FDE68A' },
+  pendingPricingAmount: { flexShrink: 0, color: '#B45309', fontSize: 13, lineHeight: 19, fontWeight: '900' },
   pendingList: { gap: 8 },
   pendingRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingVertical: 8, borderBottomWidth: hairline(), borderBottomColor: '#E5E7EB' },
   documentRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -2600,6 +3227,8 @@ const styles = StyleSheet.create({
   modalPage: { flex: 1, backgroundColor: '#F6F7FB' },
   modalHeader: { minHeight: 56, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFFFFF', borderBottomWidth: hairline(), borderBottomColor: '#E5E7EB' },
   modalTitle: { fontSize: 18, fontWeight: '900', color: '#111827' },
+  confirmOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 30, elevation: 30, justifyContent: 'center', padding: 20, backgroundColor: 'rgba(17, 24, 39, 0.48)' },
+  confirmCard: { width: '100%', maxWidth: 520, alignSelf: 'center', padding: 18, borderRadius: 18, backgroundColor: '#FFFFFF', gap: 14 },
   submissionReviewTitleWrap: { flex: 1, minWidth: 0, gap: 2 },
   submissionSteps: { flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingVertical: 10, backgroundColor: '#FFFFFF', borderBottomWidth: hairline(), borderBottomColor: '#E5E7EB' },
   submissionStep: { flex: 1, minHeight: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: '#F3F4F6' },
@@ -2607,7 +3236,8 @@ const styles = StyleSheet.create({
   submissionStepText: { color: '#1D4ED8', fontSize: 13, lineHeight: 18, fontWeight: '900' },
   submissionStepTextMuted: { color: '#9CA3AF' },
   submissionAcknowledgement: { minHeight: layoutTokens.button.height, flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 12, borderWidth: 1, borderColor: '#BFDBFE', borderRadius: 12, backgroundColor: '#EFF6FF' },
-  submissionCheckbox: { width: 24, height: 24, borderWidth: 2, borderColor: '#93C5FD', borderRadius: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
+  submissionConsentCopy: { flex: 1, minWidth: 0 },
+  submissionCheckbox: { width: 24, height: 24, flexShrink: 0, borderWidth: 2, borderColor: '#93C5FD', borderRadius: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
   submissionCheckboxChecked: { borderColor: '#2563EB', backgroundColor: '#2563EB' },
   submissionActionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: layoutTokens.button.rowGap },
   submissionActionButton: { flex: 1, minWidth: 132 },

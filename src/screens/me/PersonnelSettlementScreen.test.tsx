@@ -1,12 +1,13 @@
 import React from 'react'
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
-import { Alert, AppState, Share, StyleSheet } from 'react-native'
+import { Alert, AppState, Keyboard, Share, StyleSheet } from 'react-native'
 import {
   getMyPersonnelClaim,
   getMyPersonnelSettlement,
   getMyPersonnelSettlementSubmissionPreview,
   listMyPersonnelClaims,
   listMyPersonnelSettlements,
+  updateMyPersonnelClaim,
   type MyPersonnelClaimOptionsResponse,
 } from '../../lib/api'
 import PersonnelSettlementScreen, {
@@ -16,12 +17,17 @@ import PersonnelSettlementScreen, {
   formatPersonnelDateWithWeekday,
   groupPersonnelClaimsByDate,
   normalizePersonnelTimeWheelMinute,
+  personnelClaimSaveErrorMessage,
+  personnelSettlementSubsidyTotalCents,
+  personnelSettlementWeekForDate,
   personnelTimeWheelIndexFromOffset,
   rebasePersonnelServiceTime,
   selectCurrentSettlementDocuments,
+  settlementWorkReasonLabel,
   summarizePersonnelSettlementLinesByDate,
   unincludedSubmissionClaims,
 } from './PersonnelSettlementScreen'
+import { emptyPersonnelClaimDraft, personnelClaimDraftScopeForTarget } from '../../lib/personnelClaimDraft'
 
 let mockFocusCallback: (() => void | (() => void)) | null = null
 let mockFocusCleanup: (() => void) | void
@@ -41,6 +47,24 @@ function openClaimForm() {
   act(() => {
     latestOptions.headerRight().props.onPress()
   })
+}
+
+async function waitForClaimDraftReady(ui: ReturnType<typeof renderPersonnelSettlementScreen>) {
+  await waitFor(() => expect(ui.queryByTestId('claim-draft-loading')).toBeNull())
+}
+
+async function choosePreviousMonthClaimDate(ui: ReturnType<typeof renderPersonnelSettlementScreen>, day = 23) {
+  await waitForClaimDraftReady(ui)
+  fireEvent.press(ui.getByTestId('claim-service-date'))
+  await waitFor(() => expect(ui.getByTestId('claim-date-picker')).toBeTruthy())
+  const targetDate = new Date()
+  targetDate.setMonth(targetDate.getMonth() - 1, day)
+  const targetYmd = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  fireEvent.press(ui.getByTestId('claim-date-picker-previous-month'))
+  fireEvent.press(ui.getByTestId(`claim-date-picker-date-${targetYmd}`))
+  fireEvent.press(ui.getByTestId('claim-date-picker-confirm'))
+  await waitFor(() => expect(mockGetClaimOptions).toHaveBeenLastCalledWith('token-1', targetYmd))
+  return targetYmd
 }
 
 jest.mock('@react-navigation/native', () => {
@@ -148,6 +172,10 @@ const mockAddDraftPhoto = jest.fn(async (_userId: string, draft: any, _file?: an
     media_id: 'media-1', local_uri: 'file:///proof.jpg', name: 'proof.jpg', mime_type: 'image/jpeg', state: 'local_only',
   }],
 }))
+const mockLoadDraft = jest.fn(async () => null)
+const mockLoadDraftForTarget = jest.fn(async () => null)
+const mockSaveDraft = jest.fn(async (_userId: string, draft: any, _scope?: string) => draft)
+const mockClearDraft = jest.fn(async () => undefined)
 
 jest.mock('../../lib/auth', () => ({
   useAuth: () => ({ token: 'token-1', user: { id: 'cleaner-1', username: 'Cleaner One', role: 'cleaner' } }),
@@ -157,9 +185,10 @@ jest.mock('../../lib/personnelClaimDraft', () => {
   const actual = jest.requireActual('../../lib/personnelClaimDraft')
   return {
     ...actual,
-    loadPersonnelClaimDraft: jest.fn(async () => null),
-    savePersonnelClaimDraft: jest.fn(async (_userId: string, draft: any) => draft),
-    clearPersonnelClaimDraft: jest.fn(async () => undefined),
+    loadPersonnelClaimDraft: (...args: any[]) => (mockLoadDraft as any)(...args),
+    loadPersonnelClaimDraftForTarget: (...args: any[]) => (mockLoadDraftForTarget as any)(...args),
+    savePersonnelClaimDraft: (...args: any[]) => (mockSaveDraft as any)(...args),
+    clearPersonnelClaimDraft: (...args: any[]) => (mockClearDraft as any)(...args),
     addPersonnelClaimDraftPhoto: (userId: string, draft: any, file: any, scope?: string) => mockAddDraftPhoto(userId, draft, file, scope),
     personnelClaimDraftMissingMedia: jest.fn(() => []),
   }
@@ -199,6 +228,27 @@ jest.mock('../../lib/api', () => ({
     line_count: 1,
     evidence_count: 1,
     profile_snapshot: { gst_status: 'registered' },
+    work_checklist: [{
+      execution_key: 'cleaning:task-late', task_id: 'task-late', component_type: 'cleaning_task',
+      property_label: 'LATE01', scheduled_service_date: '2026-09-09', service_date: null,
+      status: 'incomplete', status_reason: 'task_not_completed:assigned', included_in_amount: false,
+      requires_manual_review: false, evidence_count: 0,
+    }, {
+      execution_key: 'cleaning:task-legacy', task_id: 'task-legacy', component_type: 'cleaning_task',
+      property_label: 'LEGACY01', scheduled_service_date: '2026-09-08', service_date: null,
+      status: 'legacy_completed_unverified', status_reason: 'legacy_settlement_amount_preserved_without_execution_audit',
+      included_in_amount: true, requires_manual_review: true, evidence_count: 0,
+    }, {
+      execution_key: 'cleaning:task-moved', task_id: 'task-moved', component_type: 'cleaning_task',
+      property_label: 'MOVED01', scheduled_service_date: '2026-09-09', current_scheduled_service_date: '2026-09-15',
+      service_date: null, status: 'rescheduled', status_reason: 'rescheduled_after_plan',
+      included_in_amount: false, requires_manual_review: false, evidence_count: 0,
+    }, {
+      execution_key: 'cleaning:task-management-closed', task_id: 'task-management-closed', component_type: 'cleaning_task',
+      property_label: 'CLOSED01', scheduled_service_date: '2026-09-10', current_scheduled_service_date: '2026-09-10',
+      service_date: null, status: 'management_closed', status_reason: 'management_closed_without_execution',
+      included_in_amount: false, requires_manual_review: false, evidence_count: 0,
+    }],
     phase5_schema_ready: true,
     documents: [{
       id: 'document-3', settlement_id: 'settlement-1', document_stage: 'awaiting_confirmation',
@@ -217,12 +267,26 @@ jest.mock('../../lib/api', () => ({
         description: 'Cleaning · FG1003 · 两房两卫', quantity_numerator: 1, quantity_denominator: 1,
         unit_rate_cents: 4000, subtotal_cents: 4000, gst_cents: 400, total_cents: 4400,
         source_type: 'cleaning_task_assignment', source_id: 'task-1', price_basis: 'exclusive_gst', evidence_count: 0,
+        calculation_snapshot: { work_items: [{
+          execution_key: 'cleaning:task-1', task_id: 'task-1', service_date: '2026-09-10',
+          performed_by_name: 'Cleaner One', property_label: 'FG1003', scheduled_service_date: '2026-09-08',
+          evidence_count: 2, status: 'completed',
+        }, {
+          execution_key: 'inspection:task-1', task_id: 'task-1-inspection', service_date: '2026-09-10',
+          performed_by_name: 'Cleaner One', property_label: 'FG1003', scheduled_service_date: '2026-09-08',
+          evidence_count: 1, status: 'completed',
+        }] },
       },
       {
         id: 'line-cleaning-2', component_type: 'cleaning_task', service_date: '2026-09-10',
         description: 'Cleaning · OP814 · 两房两卫', quantity_numerator: 1, quantity_denominator: 1,
         unit_rate_cents: 4000, subtotal_cents: 4000, gst_cents: 400, total_cents: 4400,
         source_type: 'cleaning_task_assignment', source_id: 'task-2', price_basis: 'exclusive_gst', evidence_count: 0,
+        calculation_snapshot: { work_items: [{
+          execution_key: 'cleaning:task-2', task_id: 'task-2', service_date: '2026-09-10',
+          performed_by_name: 'Cleaner One', property_label: 'OP814', scheduled_service_date: '2026-09-09',
+          inspection_due_date: '2026-09-10', evidence_count: 1, status: 'completed',
+        }] },
       },
       {
         id: 'line-1', component_type: 'subsidy_amount', service_date: '2026-09-10',
@@ -250,6 +314,10 @@ beforeEach(async () => {
   mockFocusCleanup = undefined
   mockAppStateChangeListener = null
   mockNavigationSetOptions.mockClear()
+  mockLoadDraft.mockResolvedValue(null)
+  mockLoadDraftForTarget.mockResolvedValue(null)
+  mockSaveDraft.mockImplementation(async (_userId: string, draft: any) => draft)
+  mockClearDraft.mockResolvedValue(undefined)
   jest.spyOn(AppState, 'addEventListener').mockImplementation((_type, listener: any) => {
     mockAppStateChangeListener = listener
     return {
@@ -274,7 +342,7 @@ test('周结算明细按日期合并清洁房号、其他费用和金额', () =>
   expect(calendar[0]).toEqual(expect.objectContaining({ ymd: '2026-08-31', inMonth: false }))
   expect(calendar.find((day) => day.ymd === '2026-09-11')).toEqual(expect.objectContaining({ isToday: true, isSelected: true }))
   const rows = summarizePersonnelSettlementLinesByDate([
-    { id: '1', component_type: 'cleaning_task', service_date: '2026-09-10', description: 'Cleaning · FG1003 · 两房两卫', quantity_numerator: 1, quantity_denominator: 1, unit_rate_cents: 4000, subtotal_cents: 4000, gst_cents: 400, total_cents: 4400, evidence_count: 0 },
+    { id: '1', component_type: 'cleaning_task', service_date: '2026-09-10', description: 'Cleaning · FG1003 · 两房两卫', quantity_numerator: 1, quantity_denominator: 1, unit_rate_cents: 4000, subtotal_cents: 4000, gst_cents: 400, total_cents: 4400, evidence_count: 0, calculation_snapshot: { work_items: [{ execution_key: 'cleaning:1', task_id: '1', property_label: 'FG1003', service_date: '2026-09-10', scheduled_service_date: '2026-09-08', evidence_count: 2, status: 'completed' }] } },
     { id: '2', component_type: 'cleaning_task', service_date: '2026-09-10', description: 'Cleaning · OP814 · 两房两卫', quantity_numerator: 1, quantity_denominator: 1, unit_rate_cents: 4000, subtotal_cents: 4000, gst_cents: 400, total_cents: 4400, evidence_count: 0 },
     { id: '3', component_type: 'subsidy_amount', service_date: '2026-09-10', description: 'Travel subsidy', quantity_numerator: 1, quantity_denominator: 1, unit_rate_cents: 2000, subtotal_cents: 2000, gst_cents: 200, total_cents: 2200, evidence_count: 1 },
   ])
@@ -285,7 +353,12 @@ test('周结算明细按日期合并清洁房号、其他费用和金额', () =>
     gst_cents: 1000,
     total_cents: 11000,
     evidence_count: 1,
+    work_items: [expect.objectContaining({ execution_key: 'cleaning:1', property_label: 'FG1003', scheduled_service_date: '2026-09-08' })],
   })])
+  expect(personnelSettlementSubsidyTotalCents([
+    { id: 'work', component_type: 'cleaning_task', total_cents: 8800 },
+    { id: 'subsidy', component_type: 'subsidy_amount', total_cents: 2200 },
+  ] as any)).toBe(2200)
 })
 
 test('工作时长使用小时和分钟显示且不暴露浮点小数', () => {
@@ -302,6 +375,11 @@ test('工作时长使用小时和分钟显示且不暴露浮点小数', () => {
   expect(new Date(rebasedTime).getHours()).toBe(9)
   expect(new Date(rebasedTime).getMinutes()).toBe(35)
   expect(rebasePersonnelServiceTime('', '2026-09-10')).toBe('')
+  expect(personnelClaimSaveErrorMessage(new Error('claim_edit_conflict'))).toBe('这条反馈已在其他设备或页面更新，请刷新后核对最新内容再修改。')
+  expect(personnelClaimSaveErrorMessage({ code: 'claim_period_locked' })).toBe('这条反馈所属周已进入财务核准或付款阶段，不能再修改。')
+  expect(personnelClaimSaveErrorMessage(new Error('claim_draft_scope_mismatch'))).toBe('当前表单与草稿不一致，已阻止修改旧反馈。请关闭后重新打开。')
+  expect(personnelSettlementWeekForDate('2026-09-28')).toEqual({ week_start: '2026-09-28', week_end: '2026-10-04' })
+  expect(personnelSettlementWeekForDate('2026-10-03')).toEqual({ week_start: '2026-09-28', week_end: '2026-10-04' })
   expect(groupPersonnelClaimsByDate([
     { id: 'older', service_date: '2026-09-06' },
     { id: 'latest-a', service_date: '2026-09-14' },
@@ -377,10 +455,13 @@ test('工作量反馈默认按工作日期紧凑分组且整行打开详情', as
 test('草稿或需补充资料的反馈从详情继续修改', async () => {
   const returnedClaim = {
     id: 'claim-returned', status: 'returned', service_date: '2026-09-12', claim_type: 'warehouse_hour',
+    started_at: '2026-09-12T00:00:00.000Z', ended_at: '2026-09-12T01:00:00.000Z',
     duration_minutes: 60, note: '补充工作说明', review_note: '请补充送达位置', evidence_count: 1,
+    evidence: [{ id: 'evidence-returned-1', media_id: 'media-returned-1', mime_type: 'image/jpeg' }],
   } as any
   ;(listMyPersonnelClaims as jest.Mock).mockResolvedValueOnce([returnedClaim])
   ;(getMyPersonnelClaim as jest.Mock).mockResolvedValueOnce(returnedClaim)
+  ;(updateMyPersonnelClaim as jest.Mock).mockResolvedValueOnce({ ...returnedClaim, status: 'draft' })
 
   const ui = renderPersonnelSettlementScreen()
   await waitFor(() => expect(ui.getByTestId('claim-row-claim-returned')).toBeTruthy())
@@ -388,7 +469,318 @@ test('草稿或需补充资料的反馈从详情继续修改', async () => {
   await waitFor(() => expect(ui.getByTestId('claim-detail-edit')).toBeTruthy())
   fireEvent.press(ui.getByTestId('claim-detail-edit'))
   await waitFor(() => expect(ui.getByText('修改工作量反馈')).toBeTruthy())
+  await waitForClaimDraftReady(ui)
   expect(ui.getByTestId('claim-form-header')).toBeTruthy()
+  expect(ui.queryByTestId('claim-evidence-locked')).toBeNull()
+  await waitFor(() => expect(ui.getByTestId('claim-draft-existing-evidence')).toBeTruthy())
+  expect(ui.getByTestId('claim-photo-label').props.children[3]).toBe(1)
+  fireEvent.press(ui.getByText('从相册选择'))
+  await waitFor(() => expect(ui.getByTestId('claim-draft-local-evidence')).toBeTruthy())
+  expect(ui.getByTestId('claim-photo-label').props.children[3]).toBe(2)
+  fireEvent.press(ui.getByLabelText('删除证明照片'))
+  await waitFor(() => expect(ui.queryByTestId('claim-draft-local-evidence')).toBeNull())
+  expect(ui.getByTestId('claim-photo-label').props.children[3]).toBe(1)
+  expect(ui.getByTestId('claim-draft-existing-evidence')).toBeTruthy()
+  fireEvent.press(ui.getByText('从相册选择'))
+  await waitFor(() => expect(ui.getByTestId('claim-draft-local-evidence')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-submit'))
+  await waitFor(() => expect(ui.getByTestId('claim-submit-review')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-submit-review-confirm'))
+  await waitFor(() => expect(mockUploadEvidence).toHaveBeenCalledTimes(1))
+  expect(mockSubmitClaim).toHaveBeenCalledWith('token-1', 'claim-returned')
+  expect(mockClearDraft).toHaveBeenCalledWith(
+    'cleaner-1',
+    expect.objectContaining({ claim_id: 'claim-returned' }),
+    'edit_claim-returned',
+  )
+  expect(mockClearDraft).not.toHaveBeenCalledWith('cleaner-1', expect.anything(), 'create')
+})
+
+test('待核对反馈可修改且 10 月 3 日不会漂移为今天，并携带版本防止覆盖', async () => {
+  const keyboardDismiss = jest.spyOn(Keyboard, 'dismiss').mockImplementation(() => undefined)
+  const submittedClaim = {
+    id: 'claim-submitted', status: 'submitted', service_date: '2026-10-03', claim_type: 'overtime_hour',
+    started_at: '2026-10-03T00:00:00.000Z', ended_at: '2026-10-03T02:00:00.000Z', duration_minutes: 120,
+    note: '9/28 周加班', evidence_count: 1, updated_at: '2026-10-04T01:02:03.000Z', available_actions: ['edit'],
+    evidence: [{
+      id: 'evidence-existing-1', media_id: 'media-existing-1', mime_type: 'image/jpeg',
+      original_file_name: 'original-proof.jpg',
+    }],
+  } as any
+  ;(listMyPersonnelClaims as jest.Mock).mockResolvedValueOnce([submittedClaim])
+  ;(getMyPersonnelClaim as jest.Mock).mockResolvedValueOnce(submittedClaim).mockResolvedValueOnce(submittedClaim)
+  ;(updateMyPersonnelClaim as jest.Mock).mockResolvedValueOnce({ ...submittedClaim, note: '9/28 周加班（修正）' })
+
+  const ui = renderPersonnelSettlementScreen()
+  await waitFor(() => expect(ui.getByTestId('claim-row-claim-submitted')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-row-claim-submitted'))
+  await waitFor(() => expect(ui.getByTestId('claim-detail-edit')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-detail-edit'))
+  await waitFor(() => expect(ui.getByText('修改工作量反馈')).toBeTruthy())
+  await waitForClaimDraftReady(ui)
+  await waitFor(() => expect(mockGetClaimOptions).toHaveBeenLastCalledWith('token-1', '2026-10-03'))
+
+  expect(ui.getByTestId('claim-service-date-value').props.children).toBe('03/10/2026')
+  expect(ui.getByText('已上传，修改时保留')).toBeTruthy()
+  expect(ui.getByTestId('claim-photo-label').props.children).toEqual(['照片或截图证明', '（必填）', '（', 1, '/5）'])
+  expect(ui.getByTestId('claim-draft-existing-evidence').props.source).toEqual(expect.objectContaining({
+    headers: expect.objectContaining({ Authorization: 'Bearer token-1', 'Cache-Control': 'no-store' }),
+  }))
+  expect(ui.queryByLabelText('删除证明照片')).toBeNull()
+  expect(ui.getByTestId('claim-evidence-locked')).toBeTruthy()
+  expect(ui.queryByText('从相册选择')).toBeNull()
+  expect(ui.queryByText('拍照')).toBeNull()
+
+  fireEvent.press(ui.getByTestId('claim-form-close'))
+  await waitFor(() => expect(ui.queryByText('修改工作量反馈')).toBeNull(), { timeout: 3000 })
+  fireEvent.press(ui.getByTestId('claim-row-claim-submitted'))
+  await waitFor(() => expect(ui.getByTestId('claim-detail-edit')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-detail-edit'))
+  await waitFor(() => expect(ui.getByText('已上传，修改时保留')).toBeTruthy())
+  await waitFor(() => expect(ui.getByTestId('claim-submit').props.accessibilityState.disabled).toBe(false))
+
+  fireEvent.press(ui.getByTestId('claim-submit'))
+  expect(ui.getByTestId('claim-submit-review')).toBeTruthy()
+  expect(keyboardDismiss).toHaveBeenCalled()
+  fireEvent.press(ui.getByTestId('claim-submit-review-cancel'))
+
+  fireEvent.changeText(ui.getByTestId('claim-note'), '9/28 周加班（修正）')
+  fireEvent.press(ui.getByTestId('claim-submit'))
+  expect(ui.getByTestId('claim-submit-review-date').props.children).toBe('03/10/2026')
+  expect(ui.getByTestId('claim-submit-review-week').props.children).toBe('28/09/2026–04/10/2026')
+  expect(ui.queryByTestId('claim-submit-cross-week-warning')).toBeNull()
+  fireEvent.press(ui.getByTestId('claim-submit-review-cancel'))
+  expect(ui.getByTestId('claim-note').props.value).toBe('9/28 周加班（修正）')
+
+  fireEvent.press(ui.getByTestId('claim-service-date'))
+  fireEvent.press(ui.getByTestId('claim-date-picker-previous-month'))
+  fireEvent.press(ui.getByTestId('claim-date-picker-date-2026-09-27'))
+  fireEvent.press(ui.getByTestId('claim-date-picker-confirm'))
+  await waitFor(() => expect(mockGetClaimOptions).toHaveBeenLastCalledWith('token-1', '2026-09-27'))
+  await waitFor(() => {
+    expect(ui.queryByTestId('claim-date-picker')).toBeNull()
+    expect(ui.getByTestId('claim-submit').props.accessibilityState.disabled).toBe(false)
+  })
+  fireEvent.press(ui.getByTestId('claim-submit'))
+  await waitFor(() => expect(ui.getByTestId('claim-submit-cross-week-warning')).toBeTruthy())
+  expect(ui.getByTestId('claim-submit-review-week').props.children).toBe('21/09/2026–27/09/2026')
+  expect(ui.getByText('工作日期已跨周：原周 28/09/2026–04/10/2026，修改后进入 21/09/2026–27/09/2026。原周将不再包含该反馈。')).toBeTruthy()
+  fireEvent.press(ui.getByTestId('claim-submit-review-cancel'))
+
+  fireEvent.press(ui.getByTestId('claim-service-date'))
+  fireEvent.press(ui.getByTestId('claim-date-picker-next-month'))
+  fireEvent.press(ui.getByTestId('claim-date-picker-date-2026-10-03'))
+  fireEvent.press(ui.getByTestId('claim-date-picker-confirm'))
+  await waitFor(() => expect(mockGetClaimOptions).toHaveBeenLastCalledWith('token-1', '2026-10-03'))
+  await waitFor(() => {
+    expect(ui.queryByTestId('claim-date-picker')).toBeNull()
+    expect(ui.getByTestId('claim-submit').props.accessibilityState.disabled).toBe(false)
+  })
+  fireEvent.press(ui.getByTestId('claim-submit'))
+  fireEvent.press(ui.getByTestId('claim-submit-review-confirm'))
+  fireEvent.press(ui.getByTestId('claim-submit-review-confirm'))
+
+  await waitFor(() => expect(updateMyPersonnelClaim).toHaveBeenCalledWith(
+    'token-1',
+    'claim-submitted',
+    expect.objectContaining({
+      service_date: '2026-10-03',
+      claim_type: 'overtime_hour',
+      expected_updated_at: '2026-10-04T01:02:03.000Z',
+      note: '9/28 周加班（修正）',
+    }),
+  ))
+  expect(updateMyPersonnelClaim).toHaveBeenCalledTimes(1)
+  expect(mockSubmitClaim).not.toHaveBeenCalled()
+})
+
+test('修改待核对反馈失败后关闭核对层并在原表单持续显示错误', async () => {
+  const submittedClaim = {
+    id: 'claim-submit-failure', status: 'submitted', service_date: '2026-10-03', claim_type: 'overtime_hour',
+    started_at: '2026-10-03T00:00:00.000Z', ended_at: '2026-10-03T01:00:00.000Z', duration_minutes: 60,
+    note: '原说明', evidence_count: 1, updated_at: '2026-10-04T01:02:03.000Z', available_actions: ['edit'],
+    evidence: [{ id: 'evidence-existing-1', media_id: 'media-existing-1', mime_type: 'image/jpeg' }],
+  } as any
+  ;(listMyPersonnelClaims as jest.Mock).mockResolvedValueOnce([submittedClaim])
+  ;(getMyPersonnelClaim as jest.Mock).mockResolvedValueOnce(submittedClaim)
+  ;(updateMyPersonnelClaim as jest.Mock).mockRejectedValueOnce(new Error('offline'))
+
+  const ui = renderPersonnelSettlementScreen()
+  await waitFor(() => expect(ui.getByTestId('claim-row-claim-submit-failure')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-row-claim-submit-failure'))
+  await waitFor(() => expect(ui.getByTestId('claim-detail-edit')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-detail-edit'))
+  await waitFor(() => expect(ui.getByText('修改工作量反馈')).toBeTruthy())
+  await waitForClaimDraftReady(ui)
+  await waitFor(() => expect(ui.getByTestId('claim-note')).toBeTruthy())
+  fireEvent.changeText(ui.getByTestId('claim-note'), '修改后的说明')
+  await waitFor(() => expect(ui.getByTestId('claim-submit').props.accessibilityState.disabled).toBe(false))
+  fireEvent.press(ui.getByTestId('claim-submit'))
+  await waitFor(() => expect(ui.getByTestId('claim-submit-review')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-submit-review-confirm'))
+
+  await waitFor(() => expect(ui.queryByTestId('claim-submit-review')).toBeNull())
+  expect(ui.getByTestId('claim-form-header')).toBeTruthy()
+  expect(ui.getByTestId('claim-form-error')).toBeTruthy()
+  expect(ui.getByText(/offline/)).toBeTruthy()
+
+  fireEvent.press(ui.getByTestId('claim-form-close'))
+  await waitFor(() => expect(ui.queryByText('修改工作量反馈')).toBeNull(), { timeout: 3000 })
+  openClaimForm()
+  await waitForClaimDraftReady(ui)
+  expect(ui.getByText('新增工作量反馈')).toBeTruthy()
+  expect(ui.getByTestId('claim-service-date-value').props.children).toBe('--')
+  expect(ui.queryByDisplayValue('修改后的说明')).toBeNull()
+  expect(updateMyPersonnelClaim).toHaveBeenCalledTimes(1)
+})
+
+test('迟到的修改草稿和重复新增点击都不能覆盖最新新增会话', async () => {
+  const submittedClaim = {
+    id: 'claim-slow-edit', status: 'submitted', service_date: '2026-10-03', claim_type: 'overtime_hour',
+    started_at: '2026-10-03T00:00:00.000Z', ended_at: '2026-10-03T01:00:00.000Z', duration_minutes: 60,
+    note: '服务端原说明', evidence_count: 1, updated_at: '2026-10-04T01:02:03.000Z', available_actions: ['edit'],
+    evidence: [{ id: 'evidence-slow-edit', media_id: 'media-slow-edit', mime_type: 'image/jpeg' }],
+  } as any
+  const staleEditDraft = {
+    ...emptyPersonnelClaimDraft('2026-10-03'),
+    claim_id: 'claim-slow-edit',
+    claim_type: 'overtime_hour' as const,
+    note: '迟到的旧修改草稿',
+  }
+  const staleCreateDraft = {
+    ...emptyPersonnelClaimDraft('2026-09-11'),
+    note: '第一次新增的迟到草稿',
+  }
+  const latestCreateDraft = {
+    ...emptyPersonnelClaimDraft('2026-09-12'),
+    note: '第二次新增草稿',
+  }
+  let resolveEditDraft: (draft: any) => void = () => undefined
+  let resolveFirstCreateDraft: (draft: any) => void = () => undefined
+  const editLoad = new Promise((resolve) => { resolveEditDraft = resolve })
+  const firstCreateLoad = new Promise((resolve) => { resolveFirstCreateDraft = resolve })
+  let createLoadCount = 0
+  ;(mockLoadDraftForTarget as any).mockImplementation(async (_userId: string, target: any) => {
+    if (target.mode === 'edit') return editLoad
+    createLoadCount += 1
+    return createLoadCount === 1 ? firstCreateLoad : latestCreateDraft
+  })
+  ;(listMyPersonnelClaims as jest.Mock).mockResolvedValueOnce([submittedClaim])
+  ;(getMyPersonnelClaim as jest.Mock).mockResolvedValueOnce(submittedClaim)
+
+  const ui = renderPersonnelSettlementScreen()
+  await waitFor(() => expect(ui.getByTestId('claim-row-claim-slow-edit')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-row-claim-slow-edit'))
+  await waitFor(() => expect(ui.getByTestId('claim-detail-edit')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-detail-edit'))
+  await waitFor(() => expect(ui.getByTestId('claim-draft-loading')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-form-close'))
+  await waitFor(() => expect(ui.queryByText('修改工作量反馈')).toBeNull(), { timeout: 3000 })
+  expect(mockSaveDraft).not.toHaveBeenCalled()
+
+  openClaimForm()
+  openClaimForm()
+  await waitForClaimDraftReady(ui)
+  await waitFor(() => expect(ui.getByTestId('claim-note')).toBeTruthy())
+  expect(ui.getByText('新增工作量反馈')).toBeTruthy()
+  expect(ui.getByTestId('claim-service-date-value').props.children).toBe('12/09/2026')
+  expect(ui.getByTestId('claim-note').props.value).toBe('第二次新增草稿')
+
+  await act(async () => {
+    resolveEditDraft(staleEditDraft)
+    resolveFirstCreateDraft(staleCreateDraft)
+    await Promise.resolve()
+  })
+  expect(ui.getByText('新增工作量反馈')).toBeTruthy()
+  expect(ui.getByTestId('claim-service-date-value').props.children).toBe('12/09/2026')
+  expect(ui.getByTestId('claim-note').props.value).toBe('第二次新增草稿')
+  expect(updateMyPersonnelClaim).not.toHaveBeenCalled()
+})
+
+test('逐条修改草稿跨关闭和页面重进仍隔离恢复', async () => {
+  const claimA = {
+    id: 'claim-scope-a', status: 'returned', service_date: '2026-09-12', claim_type: 'warehouse_hour',
+    started_at: '2026-09-12T00:00:00.000Z', ended_at: '2026-09-12T01:00:00.000Z', duration_minutes: 60,
+    note: 'A 原说明', evidence_count: 0, available_actions: ['edit'],
+  } as any
+  const claimB = {
+    ...claimA,
+    id: 'claim-scope-b',
+    note: 'B 原说明',
+  }
+  const storedByScope = new Map<string, any>()
+  ;(mockLoadDraftForTarget as any).mockImplementation(async (_userId: string, target: any) => (
+    storedByScope.get(personnelClaimDraftScopeForTarget(target)) || null
+  ))
+  mockSaveDraft.mockImplementation(async (_userId: string, draft: any, scope?: string) => {
+    const saved = { ...draft, updated_at: new Date().toISOString() }
+    storedByScope.set(String(scope || 'default'), saved)
+    return saved
+  })
+  ;(listMyPersonnelClaims as jest.Mock)
+    .mockResolvedValueOnce([claimA, claimB])
+    .mockResolvedValueOnce([claimA, claimB])
+  ;(getMyPersonnelClaim as jest.Mock)
+    .mockResolvedValueOnce(claimA)
+    .mockResolvedValueOnce(claimB)
+    .mockResolvedValueOnce(claimA)
+
+  const ui = renderPersonnelSettlementScreen()
+  await waitFor(() => expect(ui.getByTestId('claim-row-claim-scope-a')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-row-claim-scope-a'))
+  await waitFor(() => expect(ui.getByTestId('claim-detail-edit')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-detail-edit'))
+  await waitForClaimDraftReady(ui)
+  await waitFor(() => expect(ui.getByTestId('claim-note')).toBeTruthy())
+  fireEvent.changeText(ui.getByTestId('claim-note'), 'A 独立草稿')
+  fireEvent.press(ui.getByTestId('claim-form-close'))
+  await waitFor(() => expect(ui.queryByText('修改工作量反馈')).toBeNull(), { timeout: 3000 })
+
+  fireEvent.press(ui.getByTestId('claim-row-claim-scope-b'))
+  await waitFor(() => expect(ui.getByTestId('claim-detail-edit')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('claim-detail-edit'))
+  await waitForClaimDraftReady(ui)
+  await waitFor(() => expect(ui.getByTestId('claim-note')).toBeTruthy())
+  expect(ui.getByTestId('claim-note').props.value).toBe('B 原说明')
+  fireEvent.changeText(ui.getByTestId('claim-note'), 'B 独立草稿')
+  fireEvent.press(ui.getByTestId('claim-form-close'))
+  await waitFor(() => expect(ui.queryByText('修改工作量反馈')).toBeNull(), { timeout: 3000 })
+  ui.unmount()
+
+  const reentered = renderPersonnelSettlementScreen()
+  await waitFor(() => expect(reentered.getByTestId('claim-row-claim-scope-a')).toBeTruthy())
+  fireEvent.press(reentered.getByTestId('claim-row-claim-scope-a'))
+  await waitFor(() => expect(reentered.getByTestId('claim-detail-edit')).toBeTruthy())
+  fireEvent.press(reentered.getByTestId('claim-detail-edit'))
+  await waitForClaimDraftReady(reentered)
+  await waitFor(() => expect(reentered.getByTestId('claim-note')).toBeTruthy())
+  expect(reentered.getByTestId('claim-note').props.value).toBe('A 独立草稿')
+  expect(storedByScope.get('edit_claim-scope-b')).toEqual(expect.objectContaining({ note: 'B 独立草稿' }))
+})
+
+test('新增入口使用不会超出导航栏的紧凑统一按钮', async () => {
+  renderPersonnelSettlementScreen()
+  await waitFor(() => expect(mockNavigationSetOptions).toHaveBeenCalled())
+  const latestOptions = [...mockNavigationSetOptions.mock.calls]
+    .reverse()
+    .map(([options]) => options)
+    .find((options) => typeof options?.headerRight === 'function')
+  const headerButton = latestOptions.headerRight()
+  expect(headerButton.props.label).toBe('＋ 新增')
+  expect(headerButton.props.size).toBe('compact')
+  expect(headerButton.props.minHeight).toBe(44)
+  expect(StyleSheet.flatten(headerButton.props.style)).toEqual(expect.objectContaining({ minWidth: 82, flexShrink: 0 }))
+})
+
+test('核对前校验错误会在表单内持续显示', async () => {
+  const ui = renderPersonnelSettlementScreen()
+  await waitFor(() => expect(mockNavigationSetOptions).toHaveBeenCalled())
+  openClaimForm()
+  await choosePreviousMonthClaimDate(ui)
+  fireEvent.press(ui.getByTestId('claim-submit'))
+  expect(ui.getByTestId('claim-form-error')).toBeTruthy()
+  expect(ui.getByText('请填写补贴内容')).toBeTruthy()
+  expect(ui.queryByTestId('claim-submit-review')).toBeNull()
 })
 
 test('历史其他费用仍可修改但不会重新出现在新建类型中', async () => {
@@ -413,8 +805,9 @@ test('历史其他费用仍可修改但不会重新出现在新建类型中', as
   await waitFor(() => expect(ui.getByTestId('claim-detail-edit')).toBeTruthy())
   fireEvent.press(ui.getByTestId('claim-detail-edit'))
   await waitFor(() => expect(ui.getByText('修改工作量反馈')).toBeTruthy())
+  await waitForClaimDraftReady(ui)
 
-  expect(ui.getByText('当前选择：其他费用（历史）')).toBeTruthy()
+  await waitFor(() => expect(ui.getByText('当前选择：其他费用（历史）')).toBeTruthy(), { timeout: 3000 })
   expect(ui.queryByTestId('claim-type-custom')).toBeNull()
   expect(ui.getByTestId('claim-amount').props.value).toBe('13.68')
   expect(ui.getByTestId('claim-note').props.value).toBe('历史停车补贴')
@@ -556,23 +949,14 @@ test('移动端显示费用反馈入口并以工作量及金额正确作为确�
   expect(ui.queryByTestId('claim-service-date')).toBeNull()
   openClaimForm()
   await waitFor(() => expect(ui.getByText('新增工作量反馈')).toBeTruthy())
+  await waitForClaimDraftReady(ui)
+  expect(ui.getByTestId('claim-service-date-value').props.children).toBe('--')
+  expect(ui.getByText('请先确认工作日期；系统不会自动使用今天。')).toBeTruthy()
+  expect(ui.queryByText('上新房')).toBeNull()
+  const targetYmd = await choosePreviousMonthClaimDate(ui)
   await waitFor(() => expect(ui.getByText('上新房')).toBeTruthy())
   expect(ui.queryByText(/试工/)).toBeNull()
   expect(ui.getByText(/网络中断时不会丢失/)).toBeTruthy()
-  fireEvent.press(ui.getByTestId('claim-service-date'))
-  await waitFor(() => expect(ui.getByTestId('claim-date-picker')).toBeTruthy())
-  const now = new Date()
-  const targetDate = new Date(now.getFullYear(), now.getMonth() - 1, 23)
-  const targetYmd = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-23`
-  fireEvent.press(ui.getByTestId('claim-date-picker-previous-month'))
-  expect(ui.getByTestId('claim-date-picker-month-label').props.children).toEqual([
-    targetDate.getFullYear(),
-    '年',
-    targetDate.getMonth() + 1,
-    '月',
-  ])
-  fireEvent.press(ui.getByTestId(`claim-date-picker-date-${targetYmd}`))
-  fireEvent.press(ui.getByTestId('claim-date-picker-confirm'))
   expect(ui.getByTestId('claim-service-date-value').props.children).toBe(formatPersonnelDate(targetYmd))
   expect(ui.queryByTestId('claim-date-picker')).toBeNull()
 
@@ -595,7 +979,30 @@ test('移动端显示费用反馈入口并以工作量及金额正确作为确�
   await waitFor(() => expect(ui.getByTestId('settlement-confirm')).toBeTruthy())
   expect(ui.getByText('确认并重新提交')).toBeTruthy()
   expect(ui.queryByText('提交异议给财务')).toBeNull()
-  expect(ui.getByText('Cleaning - FG1003 / OP814; Subsidy - Travel subsidy')).toBeTruthy()
+  expect(ui.getByTestId('settlement-day-2026-09-10-base')).toBeTruthy()
+  expect(ui.getByText('Cleaning - FG1003 / OP814')).toBeTruthy()
+  expect(ui.getByTestId('settlement-day-2026-09-10-subsidy')).toBeTruthy()
+  expect(ui.getByText('Subsidy - Travel subsidy')).toBeTruthy()
+  expect(ui.getByTestId('settlement-detail-subsidy-total').props.children.join('')).toBe('其中补贴 $22.00（已包含）')
+  expect(ui.getByText('已完成房源（2）')).toBeTruthy()
+  expect(ui.getByText('本周房源工作清单（4）')).toBeTruthy()
+  expect(ui.getByText('LATE01')).toBeTruthy()
+  expect(ui.getByText('未完成')).toBeTruthy()
+  expect(ui.getByText('LEGACY01')).toBeTruthy()
+  expect(ui.getByText('历史完成待核实')).toBeTruthy()
+  expect(ui.getByText('保留历史结算金额，执行事实待核实')).toBeTruthy()
+  expect(ui.getByText('MOVED01')).toBeTruthy()
+  expect(ui.getByText('改期/跨日')).toBeTruthy()
+  expect(ui.getByText('当前安排日 15/09/2026')).toBeTruthy()
+  expect(ui.getByText('原安排日后已改期，原任务不自动计费')).toBeTruthy()
+  expect(ui.getByText('CLOSED01')).toBeTruthy()
+  expect(ui.getByText('管理关闭')).toBeTruthy()
+  expect(ui.getByText('仅关闭管理流程，不代表真实执行完成，不计费')).toBeTruthy()
+  expect(ui.getAllByText('实际工作日 10/09/2026 · 执行人 Cleaner One')).toHaveLength(2)
+  expect(ui.getAllByText('原安排日 08/09/2026')).toHaveLength(2)
+  expect(ui.getByText('原安排日 09/09/2026 · 延期检查日 10/09/2026')).toBeTruthy()
+  expect(ui.getByText('完成证据 3 项')).toBeTruthy()
+  expect(ui.getByTestId('settlement-day-2026-09-10-work-item-0')).toBeTruthy()
   expect(ui.getByText('费用结算草稿 · v3')).toBeTruthy()
   expect(ui.queryByText('费用结算草稿 · v2')).toBeNull()
   expect(ui.getByTestId('settlement-day-2026-09-10')).toBeTruthy()
@@ -638,6 +1045,12 @@ test('上一完整周必须先核对明细并二次确认才提交给财务', as
     subtotal_cents: 4091, gst_cents: 409, total_cents: 4500, line_count: 2,
     confirmation_token: 'a'.repeat(64),
     blocking_issues: [],
+    work_checklist: [{
+      execution_key: 'cleaning:task-delayed', task_id: 'task-delayed', component_type: 'cleaning_task',
+      property_label: 'DELAY01', scheduled_service_date: '2026-09-10', service_date: null,
+      status: 'incomplete', status_reason: 'task_not_completed:assigned', included_in_amount: false,
+      requires_manual_review: false, evidence_count: 0,
+    }],
     lines: [{
       id: 'cleaning_task_assignment:task-1:cleaning_task', component_type: 'cleaning_task',
       service_date: '2026-09-10', source_type: 'cleaning_task_assignment', source_id: 'task-1',
@@ -665,12 +1078,19 @@ test('上一完整周必须先核对明细并二次确认才提交给财务', as
   expect(ui.getByTestId('weekly-submission-included-pending-claims')).toBeTruthy()
   expect(ui.getByText('已包含 1 条待财务审核反馈')).toBeTruthy()
   expect(ui.queryByTestId('weekly-submission-unincluded-claims')).toBeNull()
-  expect(ui.getByText('以下基础工作量和已提交补贴均已计入本次确认总额')).toBeTruthy()
+  expect(ui.getByText('以下基础工作量、额外工作和补贴均已计入本次确认总额')).toBeTruthy()
+  expect(ui.getByTestId('weekly-submission-subsidy-total')).toBeTruthy()
+  expect(ui.getByText('本周房源工作清单（1）')).toBeTruthy()
+  expect(ui.getByText('DELAY01')).toBeTruthy()
+  expect(ui.getByText('任务状态 assigned，尚无完成审计')).toBeTruthy()
+  expect(ui.getByText('未计费 · 完成证据 0 项')).toBeTruthy()
   expect(mockSubmitSettlementWeek).not.toHaveBeenCalled()
 
   fireEvent.press(ui.getByTestId('weekly-submission-next'))
   expect(ui.getByTestId('weekly-submission-submit').props.accessibilityState.disabled).toBe(true)
   expect(ui.getByText('1 项（已包含）')).toBeTruthy()
+  expect(ui.getByTestId('weekly-submission-confirmation-subsidy-total')).toBeTruthy()
+  expect(StyleSheet.flatten(ui.getByTestId('weekly-submission-checkbox').props.style)).toEqual(expect.objectContaining({ width: 24, height: 24, flexShrink: 0 }))
   expect(ui.getAllByText('$45.00')).toHaveLength(2)
   fireEvent.press(ui.getByTestId('weekly-submission-acknowledgement'))
   fireEvent.press(ui.getByTestId('weekly-submission-submit'))
@@ -678,24 +1098,39 @@ test('上一完整周必须先核对明细并二次确认才提交给财务', as
   ui.unmount()
 })
 
-test('周总额未计算完整时明确阻止提交', async () => {
+test('待计价项目单列且允许先提交已计小计，随后必须重新确认', async () => {
   ;(listMyPersonnelSettlements as jest.Mock).mockResolvedValueOnce([])
   ;(getMyPersonnelSettlementSubmissionPreview as jest.Mock).mockResolvedValueOnce({
     week_start: '2026-09-07', week_end: '2026-09-13', status: 'not_submitted', settlement: null,
     subtotal_cents: 0, gst_cents: 0, total_cents: 0, line_count: 0,
     confirmation_token: 'f'.repeat(64),
-    blocking_issues: [{ source_type: 'cleaning_task_assignment', source_id: 'task-1', code: 'missing_rule' }],
+    calculation_status: 'partial', pending_pricing_count: 1,
+    pending_pricing_items: [{
+      id: 'workload_claim:claim-overtime:overtime_hour', source_type: 'workload_claim', source_id: 'claim-overtime',
+      service_date: '2026-09-28', component_type: 'overtime_hour', description: '加班 2 小时', code: 'missing_rule_item',
+    }],
+    blocking_issues: [{ source_type: 'workload_claim', source_id: 'claim-overtime', code: 'missing_rule_item' }],
     lines: [],
   })
 
   const ui = renderPersonnelSettlementScreen()
   fireEvent.press(ui.getByTestId('personnel-settlements-tab'))
   await waitFor(() => expect(ui.getByTestId('weekly-submission-preview')).toBeTruthy())
-  expect(ui.getByText('本周总额暂未计算完整，请先补齐费用规则、GST 或结算资料后再提交。')).toBeTruthy()
+  expect(ui.getByText('本周总额暂未计算完整；可先提交已计小计和待计价项目，公司补齐后会请你重新确认。')).toBeTruthy()
   fireEvent.press(ui.getByTestId('weekly-submission-review'))
-  expect(ui.getByText('本周总额暂未计算完整')).toBeTruthy()
-  expect(ui.getByTestId('weekly-submission-next').props.accessibilityState.disabled).toBe(true)
-  expect(mockSubmitSettlementWeek).not.toHaveBeenCalled()
+  expect(ui.getByText('本周暂无已计价项目')).toBeTruthy()
+  expect(ui.getByText('本周工作均列在下方待计价项目中，未按 $0 计入。')).toBeTruthy()
+  expect(ui.queryByText('本周暂无可提交项目')).toBeNull()
+  expect(ui.getByTestId('weekly-submission-pending-pricing')).toBeTruthy()
+  expect(ui.getByText('待计价项目 1 项')).toBeTruthy()
+  expect(ui.getByText('28/09/2026  周一 · 加班')).toBeTruthy()
+  expect(ui.getByText('加班 2 小时')).toBeTruthy()
+  expect(ui.getByText('费用规则缺少该工作类型单价')).toBeTruthy()
+  expect(ui.getByTestId('weekly-submission-next').props.accessibilityState.disabled).toBe(false)
+  fireEvent.press(ui.getByTestId('weekly-submission-next'))
+  fireEvent.press(ui.getByTestId('weekly-submission-acknowledgement'))
+  fireEvent.press(ui.getByTestId('weekly-submission-submit'))
+  await waitFor(() => expect(mockSubmitSettlementWeek).toHaveBeenCalledWith('token-1', '2026-09-07', 'f'.repeat(64)))
   ui.unmount()
 })
 
@@ -762,10 +1197,15 @@ test('历史已作废周从列表按自身周次重新加载核对入口', async
 
 test('补贴使用单一通用入口且不提示具体类别，上新房按时间且无需照片即可提交', async () => {
   const ui = renderPersonnelSettlementScreen()
-  await waitFor(() => expect(mockGetClaimOptions).toHaveBeenCalled())
   openClaimForm()
+  const targetYmd = await choosePreviousMonthClaimDate(ui)
 
   expect(ui.getByText(/补贴按填写金额提交，由财务决定是否计入/)).toBeTruthy()
+  expect(ui.getByTestId('claim-type-warehouse')).toBeTruthy()
+  expect(ui.getByTestId('claim-type-overtime')).toBeTruthy()
+  expect(ui.getByTestId('claim-type-subsidy')).toBeTruthy()
+  expect(ui.getByTestId('claim-type-new_property')).toBeTruthy()
+  expect(ui.getByTestId('claim-type-external')).toBeTruthy()
   expect(ui.getByText('按填写金额提交，公司核对后决定是否计入')).toBeTruthy()
   expect(ui.queryByText('其他费用')).toBeNull()
   expect(ui.getByText('补贴金额 AUD')).toBeTruthy()
@@ -808,16 +1248,6 @@ test('补贴使用单一通用入口且不提示具体类别，上新房按时�
   fireEvent.changeText(ui.getByTestId('claim-property'), 'FG1003')
   fireEvent.changeText(ui.getByTestId('claim-note'), '上新房布置')
 
-  fireEvent.press(ui.getByTestId('claim-service-date'))
-  await waitFor(() => expect(ui.getByTestId('claim-date-picker')).toBeTruthy())
-  const targetDate = new Date()
-  targetDate.setMonth(targetDate.getMonth() - 1, 23)
-  const targetYmd = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-23`
-  fireEvent.press(ui.getByTestId('claim-date-picker-previous-month'))
-  fireEvent.press(ui.getByTestId(`claim-date-picker-date-${targetYmd}`))
-  fireEvent.press(ui.getByTestId('claim-date-picker-confirm'))
-  await waitFor(() => expect(mockGetClaimOptions).toHaveBeenLastCalledWith('token-1', targetYmd))
-  expect(ui.getByTestId('claim-service-date-value').props.children).toBe(formatPersonnelDate(targetYmd))
   expect(ui.getByTestId('claim-property').props.value).toBe('FG1003')
   expect(ui.getByTestId('claim-note').props.value).toBe('上新房布置')
   expect(ui.getByTestId('claim-start-time-value').props.children).toBe('10:05')
@@ -825,6 +1255,8 @@ test('补贴使用单一通用入口且不提示具体类别，上新房按时�
   expect(ui.getByTestId('claim-duration-summary').props.children).toEqual(['工作时长：', '6 小时 10 分钟'])
   await waitFor(() => expect(ui.getByTestId('claim-submit').props.accessibilityState.disabled).toBe(false))
   fireEvent.press(ui.getByTestId('claim-submit'))
+  expect(ui.getByTestId('claim-submit-review')).toBeTruthy()
+  fireEvent.press(ui.getByTestId('claim-submit-review-confirm'))
 
   await waitFor(() => expect(mockCreateClaim).toHaveBeenCalledWith(
     'token-1',
@@ -840,6 +1272,12 @@ test('补贴使用单一通用入口且不提示具体类别，上新房按时�
   ))
   await waitFor(() => expect(mockSubmitClaim).toHaveBeenCalled())
   expect(mockUploadEvidence).not.toHaveBeenCalled()
+  expect(mockClearDraft).toHaveBeenCalledWith(
+    'cleaner-1',
+    expect.objectContaining({ claim_id: expect.any(String) }),
+    'create',
+  )
+  expect((mockClearDraft.mock.calls as any[][]).map((call) => call[2])).toEqual(['create'])
 })
 
 test('已配置的上新房规则按小时显示并请求权威预计金额', async () => {
@@ -861,6 +1299,7 @@ test('已配置的上新房规则按小时显示并请求权威预计金额', as
 
   const ui = renderPersonnelSettlementScreen()
   openClaimForm()
+  await choosePreviousMonthClaimDate(ui)
   await waitFor(() => expect(ui.getByTestId('claim-type-new_property')).toBeTruthy())
   fireEvent.press(ui.getByTestId('claim-type-new_property'))
 
@@ -942,7 +1381,7 @@ test('周结算详情从统一入口提交带截图的通用补贴并原子进�
   expect(ui.getByTestId('settlement-supplement-note').props.placeholder).toBe('请填写具体补贴内容')
 
   expect(ui.getByTestId('settlement-projected-total').props.children).toBe('$110.00')
-  expect(ui.getByTestId('settlement-supplement-date-value').props.children).toBe('13/09/2026')
+  expect(ui.getByTestId('settlement-supplement-date-value').props.children).toBe('--')
   fireEvent.press(ui.getByTestId('settlement-supplement-date'))
   expect(ui.getByTestId('settlement-detail-header')).toBeTruthy()
   expect(ui.getByTestId('settlement-supplement-date-picker')).toBeTruthy()
@@ -1000,4 +1439,17 @@ test('现有结算金额问题从统一入口发送给财务核对', async () =>
     '10/09/2026 的 FG1003 金额需要核对',
   ))
   expect(mockSubmitForReconciliation).not.toHaveBeenCalled()
+})
+
+test('结算清单不会向用户裸露后端状态原因代码', () => {
+  for (const [code, label] of [
+    ['executed_by_different_performer', '任务由其他执行人完成，原执行人不计费'],
+    ['deferred_replaced_by_completed_checkin', '延期检查已由实际完成的入住检查替代，不重复计费'],
+    ['execution_recorded_after_task_cancelled', '任务取消后仍记录到执行，需要人工核实'],
+    ['legacy_execution_task_later_cancelled', '历史执行后任务被取消，需要人工核实'],
+    ['cleaning_action_without_done_status', '已记录清洁执行，但任务状态未完成，需要人工核实'],
+    ['inspection_action_without_submission_status', '已记录检查执行，但提交状态不完整，需要人工核实'],
+  ]) {
+    expect(settlementWorkReasonLabel(code)).toBe(label)
+  }
 })

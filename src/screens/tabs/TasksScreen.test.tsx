@@ -847,6 +847,64 @@ test('customer service cleaning task is collapsed by default and opens the origi
   mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
 })
 
+test('customer service can reach TaskDetail to register an outside-key requirement', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'cs-outside-key', username: 'customer-service', role: 'customer_service', roles: ['customer_service'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  snapshot.items[0] = {
+    ...snapshot.items[0],
+    task_kind: 'cleaning',
+    task_type: 'turnover',
+    source_type: 'cleaning_tasks',
+    guest_ready_outside_key: {
+      order_id: 'checkin-order',
+      required: false,
+      registered_at: null,
+      registered_by_user_id: null,
+      registered_by_name: null,
+      version: 0,
+    },
+    available_actions: [
+      {
+        id: 'register_guest_ready_outside_key',
+        label: '登记钥匙外挂',
+        placement: 'more',
+        enabled: true,
+        target: 'TaskDetail',
+        intent: 'manager',
+        source_id: 'checkin-order',
+      },
+    ],
+  }
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={navigation as any}
+        route={{ key: 'tasks-customer-service-outside-key', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByLabelText('task-card-w1')).toBeTruthy())
+  fireEvent.press(ui.getByLabelText('task-card-w1'))
+
+  expect(navigation.navigate).toHaveBeenCalledWith('TaskDetail', { id: 'w1' })
+  expect(navigation.navigate).not.toHaveBeenCalledWith('ManagerDailyTask', { taskId: 'w1' })
+
+  snapshot.items[0] = previousTask
+  mockAuthState.user = previousUser
+  mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+  mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+})
+
 test('marking guest checkout changes the action to a gray checked-out state', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
