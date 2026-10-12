@@ -594,21 +594,21 @@
 #### RA-20261012-002
 
 - Repository: `mobile`.
-- Selected CRLs: `CRL-20261012-004`.
-- Selected CRL identities: `mobile/CRL-20261012-004`.
+- Selected CRLs: `CRL-20261011-002`, `CRL-20261011-003`, `CRL-20261011-004`, `CRL-20261011-006`, `CRL-20261012-002`, `CRL-20261012-003`, `CRL-20261012-004`.
+- Selected CRL identities: `mobile/CRL-20261011-002`, `mobile/CRL-20261011-003`, `mobile/CRL-20261011-004`, `mobile/CRL-20261011-006`, `mobile/CRL-20261012-002`, `mobile/CRL-20261012-003`, `mobile/CRL-20261012-004`.
 - Intended action: `push`.
 - Branch: `codex/mz010-mz012-mz028-mz029-mz031-release-20261012`.
-- Base: `7bb6caa514456166c460981f6c08d30d3fe8d804` (`origin/codex/mz010-mz012-mz028-mz029-mz031-release-20261012` at the same commit); verified after the initial normal push at 2026-10-12 UTC.
-- Candidate patch SHA-256: `2a3a1475811d23dd2e2fd2b06842080af4342cdce10b356c8826c1eee31f3ab2` excluding `docs/change-release-ledger.md`.
+- Base: `origin/Dev@d675ad49414d1ee01d8d10f468e84f11eb027ee4`; fetched at 2026-10-12 UTC and unchanged before the initial candidate push.
+- Candidate patch SHA-256: `2af79e5863a59bf810d79564cda9a1e7b52ebfdf0506470bdd73f3280411d02d` excluding `docs/change-release-ledger.md`.
 - Commit SHA: `2dd323d982c46ff062a6e5bef94c67e4fe1b77bd`.
 - Dependencies: `none`.
-- Required validation: PASS; the no-cache settlement suite passed 27/27 and Mobile `check:full` passed typecheck, lint with 0 errors, button/ledger gates, 67 suites and 420 tests.
-- Shared-hunk review: PASS; exact one-file / three-hunk staged CI follow-up, with no runtime source change.
+- Required validation: PASS; the original paired full gate passed Mobile typecheck/lint/all 420 tests plus Root backend/frontend build and 270 tests, and the post-fix no-cache settlement suite passed 27/27 while Mobile `check:full` again passed typecheck, lint with 0 errors, button/ledger gates, 67 suites and 420 tests.
+- Shared-hunk review: PASS; the original exact 18-file / 257-non-ledger-hunk candidate and the isolated one-file / three-hunk CI follow-up were independently fingerprinted; the follow-up changes no runtime source.
 - Generated-file review: PASS; no generated, cache, dependency, binary, environment, or native file is selected.
 - Technical state: committed locally; receipt commit and exact post-commit release report pending.
 - User authorization: approved-for-push; the user authorized in-scope CI fixes and normal release-candidate branch updates for the selected five items, while merge, deployment, OTA, migration, queue work, and production writes remain excluded.
-- Independent review: GO for local commit; P0=0 / P1=0 / P2=0. Reviewer independently matched the candidate patch and all three hunk fingerprints, confirmed only test time budgets changed, and found no removed/weakened assertions, sleep, runtime-source change, or sensitive/generated content.
-- Remote evidence: base head `7bb6caa514456166c460981f6c08d30d3fe8d804` is already on the authorized remote branch and Draft PR #49; content commit `2dd323d982c46ff062a6e5bef94c67e4fe1b77bd` is local only and not yet pushed.
+- Independent review: GO; P0=0 / P1=0 / P2=0 for both the original exact candidate and the isolated follow-up. Reviewers independently matched the original and follow-up fingerprints, confirmed stable retry keys and unchanged test assertions/runtime behavior, and found no unselected, generated, binary, native, OTA, secret, or production-write content.
+- Remote evidence: prior candidate head `7bb6caa514456166c460981f6c08d30d3fe8d804` is already on the authorized remote branch and Draft PR #49; content commit `2dd323d982c46ff062a6e5bef94c67e4fe1b77bd` is local only and not yet pushed.
 - Action conclusion: local content commit created; normal push remains pending the receipt-only gate, exact post-commit range audit, and independent push review.
 
 ### Risks / Release Notes
