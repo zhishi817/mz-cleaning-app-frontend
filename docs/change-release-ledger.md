@@ -53,15 +53,15 @@
 - Branch: `codex/personnel-settlement-timeout-fix-20261012`.
 - Base: `origin/Dev@69d70e6cc3fb8262283fa87162b718cb75b812e4`; fetched at `2026-10-12 12:53 UTC`.
 - Candidate patch SHA-256: `9a50775f111845b0ea850500e333a7e6a3d482c584e216b99aa725978b5263c3`, excluding `docs/change-release-ledger.md`.
-- Commit SHA: `not committed`; audit head is emitted by the report command.
-- Dependencies: paired verification against Root `origin/Dev@9570a7c3066d5f3b08026fa3a391d23d19b97505`; no same-repository CRL dependency.
+- Commit SHA: content commit `e4970a65c52cb958a18216a701ba649a1d785b78`; audit head is emitted by the report command.
+- Dependencies: `none`.
 - Required validation: PASS; evidence: targeted 6/6, Mobile `check:ci`, and exact Root+Mobile `check:full` all passed.
 - Shared-hunk review: PASS; `PersonnelSettlementScreen.test.tsx` is shared historically, but the selected delta is one isolated closing-line timeout argument after the previously merged CRLs.
 - Generated-file review: not applicable; only TypeScript test source and Markdown ledger are selected.
-- Technical state: `verified`.
+- Technical state: `committed`.
 - User authorization: `approved-for-push`; evidence: user explicitly approved the scoped test repair, commit, push, validation, and separately approved creation of a Draft PR targeting Mobile `Dev`.
 - Independent review: `GO` for commit only; evidence: independent reviewer found P0=0 / P1=0 / P2=0, reproduced the exact staged fingerprint, confirmed the one-line test-only scope, reran the target 1/1 PASS, and found no untracked, generated, secret, production-write, or unrelated content.
-- Action conclusion: `GO` for commit; blockers: none. Push and Draft PR remain separate authorized actions that require the exact committed-range audit and remote verification.
+- Action conclusion: local content commit created after the exact pre-commit gate returned `GO`; push is `NOT VERIFIED` until this receipt is committed and the exact `base...head` release report returns `GO`. Draft PR remains authorized after a verified push; merge remains excluded.
 
 ### Risks / Release Notes
 
