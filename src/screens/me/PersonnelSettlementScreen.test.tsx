@@ -50,7 +50,7 @@ function openClaimForm() {
 }
 
 async function waitForClaimDraftReady(ui: ReturnType<typeof renderPersonnelSettlementScreen>) {
-  await waitFor(() => expect(ui.queryByTestId('claim-draft-loading')).toBeNull())
+  await waitFor(() => expect(ui.queryByTestId('claim-draft-loading')).toBeNull(), { timeout: 5000 })
 }
 
 async function choosePreviousMonthClaimDate(ui: ReturnType<typeof renderPersonnelSettlementScreen>, day = 23) {
@@ -619,7 +619,7 @@ test('修改待核对反馈失败后关闭核对层并在原表单持续显示�
   await waitFor(() => expect(ui.getByTestId('claim-submit-review')).toBeTruthy())
   fireEvent.press(ui.getByTestId('claim-submit-review-confirm'))
 
-  await waitFor(() => expect(ui.queryByTestId('claim-submit-review')).toBeNull())
+  await waitFor(() => expect(ui.queryByTestId('claim-submit-review')).toBeNull(), { timeout: 5000 })
   expect(ui.getByTestId('claim-form-header')).toBeTruthy()
   expect(ui.getByTestId('claim-form-error')).toBeTruthy()
   expect(ui.getByText(/offline/)).toBeTruthy()
@@ -756,7 +756,7 @@ test('逐条修改草稿跨关闭和页面重进仍隔离恢复', async () => {
   await waitFor(() => expect(reentered.getByTestId('claim-note')).toBeTruthy())
   expect(reentered.getByTestId('claim-note').props.value).toBe('A 独立草稿')
   expect(storedByScope.get('edit_claim-scope-b')).toEqual(expect.objectContaining({ note: 'B 独立草稿' }))
-})
+}, 15000)
 
 test('新增入口使用不会超出导航栏的紧凑统一按钮', async () => {
   renderPersonnelSettlementScreen()

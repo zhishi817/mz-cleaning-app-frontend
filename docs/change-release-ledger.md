@@ -551,6 +551,72 @@
 - Historical missing execution audits remain visibly unverified; Mobile never fabricates completion.
 - Rollback is code-only; sensitive-information review found no credentials or real production records.
 
+## CRL-20261012-004 — MZ 结算异步测试 CI 时间预算（mobile）
+
+- **Status:** validated staged CI follow-up candidate; independently reviewed GO for local commit (P0/P1/P2=0); not committed, pushed, merged, released, or published by OTA
+- **Repository:** `mobile`
+- **Updated:** 2026-10-12 UTC
+- **Request:** 修复 Draft PR #49 在较慢 GitHub runner 上出现的三条结算草稿异步测试超时，不改变业务实现。
+- **Outcome:** 只放宽已有等待断言和单条测试的时间预算；断言内容、运行时代码、API、数据、权限和结算语义均不变。
+
+### Implementation
+
+- 草稿恢复等待和失败提交弹层关闭等待从默认 1 秒提高到 5 秒。
+- 多会话草稿隔离用例的 Jest 总预算从默认 5 秒提高到 15 秒。
+- 不添加 sleep，不删除或弱化断言，不修改产品源码。
+
+### Files / Areas
+
+- `src/screens/me/PersonnelSettlementScreen.test.tsx`
+- `docs/change-release-ledger.md`
+
+### Impact / Dependencies
+
+- 仅测试可靠性；依赖已推送的 Mobile 候选头 `7bb6caa514456166c460981f6c08d30d3fe8d804`。
+- 不涉及 Root、原生依赖、业务数据、数据库、迁移、队列、部署或 OTA。
+
+### Validation
+
+- 无缓存 PersonnelSettlementScreen：27/27 PASS。
+- Mobile `check:full`：typecheck PASS；lint 0 errors / 600 warnings；按钮/台账门禁 PASS；67 suites / 420 tests PASS。
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** no untracked files.
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `72e90f4e79fab3117fd617ef50afd2d878630a96fbb968a780eda9b7908e80ba`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `a89631552512b6ffec1ebe340f6b73acf11851a568ffaa451ebefb4c383ba9c1`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `fa32a7070c164fcfef871d0ac13b2cb2e383e90591b5d1f1735b98b18e5f9a42`
+
+### Release Attempts
+
+#### RA-20261012-002
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20261012-004`.
+- Selected CRL identities: `mobile/CRL-20261012-004`.
+- Intended action: `push`.
+- Branch: `codex/mz010-mz012-mz028-mz029-mz031-release-20261012`.
+- Base: `origin/codex/mz010-mz012-mz028-mz029-mz031-release-20261012@7bb6caa514456166c460981f6c08d30d3fe8d804`; verified after the initial normal push at 2026-10-12 UTC.
+- Candidate patch SHA-256: `2a3a1475811d23dd2e2fd2b06842080af4342cdce10b356c8826c1eee31f3ab2` excluding `docs/change-release-ledger.md`.
+- Commit SHA: not committed.
+- Dependencies: `none`.
+- Required validation: PASS; the no-cache settlement suite passed 27/27 and Mobile `check:full` passed typecheck, lint with 0 errors, button/ledger gates, 67 suites and 420 tests.
+- Shared-hunk review: PASS; exact one-file / three-hunk staged CI follow-up, with no runtime source change.
+- Generated-file review: PASS; no generated, cache, dependency, binary, environment, or native file is selected.
+- Technical state: verified.
+- User authorization: approved-for-push; the user authorized in-scope CI fixes and normal release-candidate branch updates for the selected five items, while merge, deployment, OTA, migration, queue work, and production writes remain excluded.
+- Independent review: GO for local commit; P0=0 / P1=0 / P2=0. Reviewer independently matched the candidate patch and all three hunk fingerprints, confirmed only test time budgets changed, and found no removed/weakened assertions, sleep, runtime-source change, or sensitive/generated content.
+- Remote evidence: base head `7bb6caa514456166c460981f6c08d30d3fe8d804` is already on the authorized remote branch and Draft PR #49; this follow-up is not yet committed or pushed.
+- Action conclusion: GO for the local content commit; normal push remains pending the exact post-commit range audit and independent push review.
+
+### Risks / Release Notes
+
+- The larger timeout budget can lengthen a genuinely failing test, but assertions remain unchanged and still fail closed.
+- Rollback is test-only; no runtime state or user data requires rollback.
+- Sensitive-information review: no secrets, credentials, private media, logs, or production data are selected.
+
 ## CRL-20261011-001 — TasksScreen Melbourne 业务日期测试固定时钟（mobile）
 
 - **Status:** isolated test-only candidate verified and independently reviewed GO；commit-ready；not committed, pushed, merged, released, or deployed
