@@ -144,10 +144,10 @@
 - `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `6527ac1128d0d058f3f995075d37e40d828449b3baa47973c844a1097102d805`
 - `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `6625c2ee0df1b004de946a0ca5ded48abb1b95531f94db96690980e490ebd7a7`
 - `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `6cc124e7fa0bcce05d191fc233bae661fbe31a195cec7bc7adaf5af79b702b47`
-- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `6dcfc091b4bfc631d67379bf9e6500021e84283aa5a136560f5f67794d19089a`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `7d90b0f5012a12b5c5d7da3aeaae42ca32c4aecd323828baeb97a17688c14ebb`
 - `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `7e5201c065718637119b13704f1ecf3458fdca6fae723b0e9cb3eb330d2c1ee8`
 - `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `7ee0b635ef6cf750875c96b7055d97a1932f3419a6e5a3ffd4ad35e89297f204`
-- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `80bc27e178045ee71f347f4d1731601ffd4c2454191efa40f3b5b6613ce17d30`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `babfae4b2416074f7b463f0f72f1b0dcc4250b98d592d6faec9cceafd5ffb9d5`
 - `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `81ac39ec66f8061ec50abc44b5f27df31f4881f67e2eea7c6c02603674fa71e2`
 - `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `85db74aca9460d4aa8241de379d06c4dc6912e88cc8248a9f6da85d9d77d8a47`
 - `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `9e705a6db4c26e1bf48706dd75f7df7d2c4abf147d21c014cd9e1218c33c5a33`
@@ -164,7 +164,7 @@
 - `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `e182c8984753509b872e2ca2fc8aac04f57906e7897e39abe810faac957adc40`
 - `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `e823ceddd640c21feb913fce3423b40d5b2379dcfc5626c4eae3c068c365c6cf`
 - `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `ef65453cf5619b9f24a492123960c9ff293b4ea8cf9dde98c219eaad6c8c8c54`
-- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `f0b562988612b5ef8c58deb0d7907eb6512535214591d91b9668ec9819089917`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `9d611ac2be56298c849c4b9ad935c1501adb3d07f6055b16d85975118f61754a`
 - `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `f351fb4eaf52c88f8138b00c5386930584eb1c37c82a8143c80b5b8d74a69f92`
 - `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `f92031eb75143a7ac7cee3f1eb83d00253d25a66c7161d6cbcf74f19865c1081`
 - `src/screens/me/PersonnelSettlementScreen.tsx` — SHA-256: `0521dedb1240944a96d92d0f2a2b7e4dcaefc181e21cc37848d0e0baeb15bc43`
@@ -585,9 +585,9 @@
 - **Repository:** `mobile`
 - **Status:** prepared
 - **Untracked review:** no untracked files.
-- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `72e90f4e79fab3117fd617ef50afd2d878630a96fbb968a780eda9b7908e80ba`
-- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `a89631552512b6ffec1ebe340f6b73acf11851a568ffaa451ebefb4c383ba9c1`
-- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `fa32a7070c164fcfef871d0ac13b2cb2e383e90591b5d1f1735b98b18e5f9a42`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `7d90b0f5012a12b5c5d7da3aeaae42ca32c4aecd323828baeb97a17688c14ebb`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `9d611ac2be56298c849c4b9ad935c1501adb3d07f6055b16d85975118f61754a`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `babfae4b2416074f7b463f0f72f1b0dcc4250b98d592d6faec9cceafd5ffb9d5`
 
 ### Release Attempts
 
@@ -604,10 +604,11 @@
 - Dependencies: `none`.
 - Required validation: PASS; the original paired full gate passed Mobile typecheck/lint/all 420 tests plus Root backend/frontend build and 270 tests, and the post-fix no-cache settlement suite passed 27/27 while Mobile `check:full` again passed typecheck, lint with 0 errors, button/ledger gates, 67 suites and 420 tests.
 - Shared-hunk review: PASS; the original exact 18-file / 257-non-ledger-hunk candidate and the isolated one-file / three-hunk CI follow-up were independently fingerprinted; the follow-up changes no runtime source.
+- Hunk reconciliation: `src/screens/me/PersonnelSettlementScreen.test.tsx#f0b562988612b5ef8c58deb0d7907eb6512535214591d91b9668ec9819089917 -> 9d611ac2be56298c849c4b9ad935c1501adb3d07f6055b16d85975118f61754a`; evidence: the helper timeout changes one line inside the original helper-addition hunk. | `src/screens/me/PersonnelSettlementScreen.test.tsx#a89631552512b6ffec1ebe340f6b73acf11851a568ffaa451ebefb4c383ba9c1 -> 9d611ac2be56298c849c4b9ad935c1501adb3d07f6055b16d85975118f61754a`; evidence: the isolated helper-timeout hunk folds into that same base-relative helper-addition hunk. | `src/screens/me/PersonnelSettlementScreen.test.tsx#80bc27e178045ee71f347f4d1731601ffd4c2454191efa40f3b5b6613ce17d30 -> babfae4b2416074f7b463f0f72f1b0dcc4250b98d592d6faec9cceafd5ffb9d5`; evidence: the original one-line draft-ready insertion joins the first half of the adjacent base-relative test-addition hunk. | `src/screens/me/PersonnelSettlementScreen.test.tsx#fa32a7070c164fcfef871d0ac13b2cb2e383e90591b5d1f1735b98b18e5f9a42 -> babfae4b2416074f7b463f0f72f1b0dcc4250b98d592d6faec9cceafd5ffb9d5`; evidence: the modal-close timeout is the boundary edit captured in that first combined hunk. | `src/screens/me/PersonnelSettlementScreen.test.tsx#6dcfc091b4bfc631d67379bf9e6500021e84283aa5a136560f5f67794d19089a -> 7d90b0f5012a12b5c5d7da3aeaae42ca32c4aecd323828baeb97a17688c14ebb`; evidence: the remainder of the original adjacent test additions becomes the second final base-relative hunk. | `src/screens/me/PersonnelSettlementScreen.test.tsx#72e90f4e79fab3117fd617ef50afd2d878630a96fbb968a780eda9b7908e80ba -> 7d90b0f5012a12b5c5d7da3aeaae42ca32c4aecd323828baeb97a17688c14ebb`; evidence: the isolated Jest timeout folds into that second final base-relative hunk.
 - Generated-file review: PASS; no generated, cache, dependency, binary, environment, or native file is selected.
 - Technical state: committed locally; receipt commit and exact post-commit release report pending.
 - User authorization: approved-for-push; the user authorized in-scope CI fixes and normal release-candidate branch updates for the selected five items, while merge, deployment, OTA, migration, queue work, and production writes remain excluded.
-- Independent review: GO; P0=0 / P1=0 / P2=0 for both the original exact candidate and the isolated follow-up. Reviewers independently matched the original and follow-up fingerprints, confirmed stable retry keys and unchanged test assertions/runtime behavior, and found no unselected, generated, binary, native, OTA, secret, or production-write content.
+- Independent review: GO; P0=0 / P1=0 / P2=0 for the original exact candidate, isolated follow-up, and ledger-only reconciliation. Reviewers independently matched the original/follow-up fingerprints and all six old-to-three-new mappings, confirmed unchanged test assertions/runtime behavior, and found no unselected, generated, binary, native, OTA, secret, or production-write content.
 - Remote evidence: prior candidate head `7bb6caa514456166c460981f6c08d30d3fe8d804` is already on the authorized remote branch and Draft PR #49; content commit `2dd323d982c46ff062a6e5bef94c67e4fe1b77bd` is local only and not yet pushed.
 - Action conclusion: local content commit created; normal push remains pending the receipt-only gate, exact post-commit range audit, and independent push review.
 
