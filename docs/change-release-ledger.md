@@ -103,7 +103,7 @@
 - Base: `origin/Dev@7ba1d4329b07024ed653d6bcc60e0d172098bee8`; fetched at `2026-10-14 02:14 Australia/Melbourne`
 - Candidate patch SHA-256: `b2340d322079bc0edf66d866b3f432bacbc79b62841dd36d2387c6d69925767d` excluding `docs/change-release-ledger.md`
 - Commit SHA: `501d455f99fea5e3cf668a541a73a45ba82e0c3a`; audit head is emitted by the release report
-- Dependencies: paired `root/CRL-20261013-001`, `root/CRL-20261013-003`, `root/CRL-20261013-005`
+- Dependencies: `root/CRL-20261013-001@58eabe03a721fe1b3dc85da604ea60bd710d2ecd`; `root/CRL-20261013-003@58eabe03a721fe1b3dc85da604ea60bd710d2ecd`; `root/CRL-20261013-005@58eabe03a721fe1b3dc85da604ea60bd710d2ecd`
 - Required validation: `PASS`; evidence: final integrated `npm run check:ci` passed ledger range 44/44, coverage 16/16, typecheck, lint with 0 errors, button audit, fast 8 suites/58 tests and full 67 suites/434 tests
 - Shared-hunk review: `PASS`; evidence: MZ033 paths are byte-identical to the frozen candidate; MZ032/MZ034 files retain the exact reviewed Mobile fingerprint `9c28027ff491e5bd80603377e7216ff2cc001895bbe7a0170cda50f59190b05d`
 - Generated-file review: `PASS`; evidence: no generated, native, cache, dependency-link, environment or secret file is staged
