@@ -144,6 +144,7 @@ const SETTLEMENT_COMPONENT_LABELS: Record<string, string> = {
   new_property_task: 'New property setup',
   custom_amount: 'Other',
   finance_adjustment: 'Adjustment',
+  post_payment_adjustment: '上周付款后调整',
 }
 
 export type PersonnelSettlementDailySummary = {
@@ -162,11 +163,23 @@ export type PersonnelSettlementDailySummary = {
   subsidy_subtotal_cents: number
   subsidy_gst_cents: number
   subsidy_total_cents: number
+  adjustments: SettlementLine[]
+  adjustment_total_cents: number
   subtotal_cents: number
   gst_cents: number
   total_cents: number
   evidence_count: number
   work_items: SettlementWorkItem[]
+  inspection_lines: SettlementLine[]
+  inspection_total_cents: number
+  inspection_work_items: SettlementWorkItem[]
+  cleaning_lines: SettlementLine[]
+  cleaning_total_cents: number
+  cleaning_work_items: SettlementWorkItem[]
+  other_work: SettlementLine[]
+  other_total_cents: number
+  history_items: SettlementWorkItem[]
+  pending_pricing_items: PersonnelSettlementPendingPricingItem[]
 }
 
 export function selectCurrentSettlementDocuments(
@@ -192,8 +205,9 @@ function isCleaningSettlementLine(line: SettlementLine) {
     || /^cleaning(?:\s|[·:-]|$)/i.test(cleanText(line.description))
 }
 
-function personnelSettlementLineCategory(line: SettlementLine): 'base' | 'extra' | 'subsidy' {
+function personnelSettlementLineCategory(line: SettlementLine): 'base' | 'extra' | 'subsidy' | 'adjustment' {
   const componentType = cleanText(line.component_type)
+  if (componentType === 'post_payment_adjustment') return 'adjustment'
   if (componentType === 'subsidy_amount') return 'subsidy'
   if (['cleaning_task', 'inspection_day', 'weekly_fixed'].includes(componentType) || isCleaningSettlementLine(line)) return 'base'
   return 'extra'
@@ -249,11 +263,19 @@ export function summarizePersonnelSettlementLinesByDate(lines: readonly Settleme
     subsidy_subtotal_cents: number
     subsidy_gst_cents: number
     subsidy_total_cents: number
+    adjustments: SettlementLine[]
+    adjustmentTotalCents: number
     subtotal_cents: number
     gst_cents: number
     total_cents: number
     evidence_count: number
     workItems: Map<string, SettlementWorkItem>
+    inspectionLines: SettlementLine[]
+    inspectionTotalCents: number
+    cleaningLines: SettlementLine[]
+    cleaningTotalCents: number
+    otherWork: SettlementLine[]
+    otherTotalCents: number
   }>()
   const seen = new Set<string>()
   for (const line of lines) {
@@ -279,13 +301,32 @@ export function summarizePersonnelSettlementLinesByDate(lines: readonly Settleme
       subsidy_subtotal_cents: 0,
       subsidy_gst_cents: 0,
       subsidy_total_cents: 0,
+      adjustments: [],
+      adjustmentTotalCents: 0,
       subtotal_cents: 0,
       gst_cents: 0,
       total_cents: 0,
       evidence_count: 0,
       workItems: new Map<string, SettlementWorkItem>(),
+      inspectionLines: [],
+      inspectionTotalCents: 0,
+      cleaningLines: [],
+      cleaningTotalCents: 0,
+      otherWork: [],
+      otherTotalCents: 0,
     }
     const category = personnelSettlementLineCategory(line)
+    const componentType = cleanText(line.component_type)
+    if (componentType === 'inspection_day') {
+      day.inspectionLines.push(line)
+      day.inspectionTotalCents += Number(line.total_cents || 0)
+    } else if (isCleaningSettlementLine(line)) {
+      day.cleaningLines.push(line)
+      day.cleaningTotalCents += Number(line.total_cents || 0)
+    } else if (componentType !== 'subsidy_amount' && componentType !== 'post_payment_adjustment') {
+      day.otherWork.push(line)
+      day.otherTotalCents += Number(line.total_cents || 0)
+    }
     if (isCleaningSettlementLine(line)) {
       const propertyLabel = cleaningPropertyLabel(line)
       if (propertyLabel) appendCountedDescription(day.cleaningProperties, propertyLabel)
@@ -304,11 +345,14 @@ export function summarizePersonnelSettlementLinesByDate(lines: readonly Settleme
       day.extra_subtotal_cents += Number(line.subtotal_cents || 0)
       day.extra_gst_cents += Number(line.gst_cents || 0)
       day.extra_total_cents += Number(line.total_cents || 0)
-    } else {
+    } else if (category === 'subsidy') {
       day.subsidies.push(line)
       day.subsidy_subtotal_cents += Number(line.subtotal_cents || 0)
       day.subsidy_gst_cents += Number(line.gst_cents || 0)
       day.subsidy_total_cents += Number(line.total_cents || 0)
+    } else {
+      day.adjustments.push(line)
+      day.adjustmentTotalCents += Number(line.total_cents || 0)
     }
     day.subtotal_cents += Number(line.subtotal_cents || 0)
     day.gst_cents += Number(line.gst_cents || 0)
@@ -316,7 +360,10 @@ export function summarizePersonnelSettlementLinesByDate(lines: readonly Settleme
     day.evidence_count += Number(line.evidence_count || 0)
     for (const item of line.calculation_snapshot?.work_items || []) {
       const workItemKey = cleanText(item.execution_key || item.audit_id || item.task_id)
-      if (workItemKey && !day.workItems.has(workItemKey)) day.workItems.set(workItemKey, item)
+      const inferredComponentType = cleanText(item.component_type) || cleanText(line.component_type)
+      if (workItemKey && !day.workItems.has(workItemKey)) {
+        day.workItems.set(workItemKey, { ...item, component_type: inferredComponentType })
+      }
     }
     days.set(serviceDate, day)
   }
@@ -348,13 +395,113 @@ export function summarizePersonnelSettlementLinesByDate(lines: readonly Settleme
         subsidy_subtotal_cents: day.subsidy_subtotal_cents,
         subsidy_gst_cents: day.subsidy_gst_cents,
         subsidy_total_cents: day.subsidy_total_cents,
+        adjustments: day.adjustments,
+        adjustment_total_cents: day.adjustmentTotalCents,
         subtotal_cents: day.subtotal_cents,
         gst_cents: day.gst_cents,
         total_cents: day.total_cents,
         evidence_count: day.evidence_count,
         work_items: Array.from(day.workItems.values()),
+        inspection_lines: day.inspectionLines,
+        inspection_total_cents: day.inspectionTotalCents,
+        inspection_work_items: Array.from(day.workItems.values()).filter((item) => cleanText(item.component_type) === 'inspection_day'),
+        cleaning_lines: day.cleaningLines,
+        cleaning_total_cents: day.cleaningTotalCents,
+        cleaning_work_items: Array.from(day.workItems.values()).filter((item) => cleanText(item.component_type) === 'cleaning_task'),
+        other_work: day.otherWork,
+        other_total_cents: day.otherTotalCents,
+        history_items: [],
+        pending_pricing_items: [],
       }
     })
+}
+
+function shiftPersonnelDate(date: string, days: number) {
+  const parts = parseYmdParts(date)
+  const value = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days))
+  return value.toISOString().slice(0, 10)
+}
+
+function emptyPersonnelSettlementDay(serviceDate: string): PersonnelSettlementDailySummary {
+  return {
+    service_date: serviceDate,
+    description: '', base_description: '',
+    base_subtotal_cents: 0, base_gst_cents: 0, base_total_cents: 0, base_evidence_count: 0,
+    extra_work: [], extra_subtotal_cents: 0, extra_gst_cents: 0, extra_total_cents: 0,
+    subsidies: [], subsidy_subtotal_cents: 0, subsidy_gst_cents: 0, subsidy_total_cents: 0,
+    adjustments: [], adjustment_total_cents: 0,
+    subtotal_cents: 0, gst_cents: 0, total_cents: 0, evidence_count: 0, work_items: [],
+    inspection_lines: [], inspection_total_cents: 0, inspection_work_items: [],
+    cleaning_lines: [], cleaning_total_cents: 0, cleaning_work_items: [],
+    other_work: [], other_total_cents: 0, history_items: [], pending_pricing_items: [],
+  }
+}
+
+export function buildPersonnelSettlementWeekDailySummaries(input: {
+  week_start: string
+  week_end: string
+  lines: readonly SettlementLine[]
+  work_checklist?: readonly SettlementWorkItem[]
+  pending_pricing_items?: readonly PersonnelSettlementPendingPricingItem[]
+}) {
+  const summarized = new Map(summarizePersonnelSettlementLinesByDate(input.lines).map((day) => [day.service_date, day]))
+  const result = Array.from({ length: 7 }, (_, index) => {
+    const serviceDate = shiftPersonnelDate(input.week_start, index)
+    return summarized.get(serviceDate) || emptyPersonnelSettlementDay(serviceDate)
+  }).filter((day) => day.service_date <= input.week_end)
+  const byDate = new Map(result.map((day) => [day.service_date, day]))
+  const seenByDay = new Map<string, Set<string>>()
+  for (const day of result) {
+    seenByDay.set(day.service_date, new Set(day.work_items.map((item) => cleanText(item.execution_key || item.audit_id || item.task_id))))
+  }
+  for (const item of input.work_checklist || []) {
+    const status = cleanText(item.status)
+    const isHistory = ['incomplete', 'rescheduled', 'cancelled', 'management_closed', 'legacy_completed_unverified'].includes(status)
+      || item.requires_manual_review === true
+    const serviceDate = cleanText(
+      isHistory
+        ? item.scheduled_service_date || item.current_scheduled_service_date || item.service_date
+        : item.service_date || item.current_scheduled_service_date || item.scheduled_service_date,
+    ).slice(0, 10)
+    const day = byDate.get(serviceDate)
+    if (!day) continue
+    const key = cleanText(item.execution_key || item.audit_id || item.task_id)
+    if (key && seenByDay.get(serviceDate)?.has(key)) continue
+    if (key) seenByDay.get(serviceDate)?.add(key)
+    day.work_items.push(item)
+    // A payable-looking checklist row can still be blocked by missing price,
+    // GST, or ownership data.  Its pending item below is the sole UI source;
+    // do not present it as a $0 inspection/cleaning charge.
+    const isPendingOnly = item.included_in_amount === false && status !== 'expected'
+    if (isHistory) day.history_items.push(item)
+    else if (!isPendingOnly && cleanText(item.component_type) === 'inspection_day') day.inspection_work_items.push(item)
+    else if (!isPendingOnly && cleanText(item.component_type) === 'cleaning_task') day.cleaning_work_items.push(item)
+  }
+  for (const item of input.pending_pricing_items || []) {
+    const day = byDate.get(cleanText(item.service_date).slice(0, 10))
+    if (day) day.pending_pricing_items.push(item)
+  }
+  return result
+}
+
+export function personnelSettlementCategoryTotals(lines: readonly SettlementLine[]) {
+  return lines.reduce((totals, line) => {
+    const amount = Number(line.total_cents || 0)
+    const componentType = cleanText(line.component_type)
+    if (componentType === 'inspection_day') totals.inspection_cents += amount
+    else if (isCleaningSettlementLine(line)) totals.cleaning_cents += amount
+    else if (componentType === 'subsidy_amount') totals.subsidy_cents += amount
+    else if (componentType === 'post_payment_adjustment') totals.adjustment_cents += amount
+    else totals.other_cents += amount
+    return totals
+  }, { inspection_cents: 0, cleaning_cents: 0, other_cents: 0, subsidy_cents: 0, adjustment_cents: 0 })
+}
+
+export function personnelSettlementPendingPropertyLabels(item: PersonnelSettlementPendingPricingItem) {
+  return Array.from(new Set([
+    cleanText(item.property_label),
+    ...(item.work_items || []).map((workItem) => cleanText(workItem.property_label || workItem.property_id)),
+  ].filter(Boolean)))
 }
 
 export function personnelSettlementSubsidyTotalCents(lines: readonly SettlementLine[]) {
@@ -414,6 +561,8 @@ function SettlementWorkItems({ day, testIdPrefix }: { day: PersonnelSettlementDa
 
 const SETTLEMENT_WORK_STATUS_LABELS: Record<string, string> = {
   completed: '已完成',
+  payable: '已计薪',
+  expected: '待日终',
   rescheduled: '改期/跨日',
   incomplete: '未完成',
   management_closed: '管理关闭',
@@ -423,6 +572,10 @@ const SETTLEMENT_WORK_STATUS_LABELS: Record<string, string> = {
 
 export function settlementWorkReasonLabel(reason: unknown) {
   const value = cleanText(reason)
+  if (value === 'effective_inspection_assignment_after_day_end') return '经理有效安排已过当日日终，按检查日薪计费'
+  if (value === 'effective_inspection_assignment_expected') return '经理有效安排已登记，当日日终后自动进入应付'
+  if (value === 'inspection_assignment_conflict_for_property_date') return '同一房源同一检查日期存在不同检查人员，请经理修正安排'
+  if (value === 'inspection_assignment_superseded') return '原检查安排已被新的有效安排替代'
   if (value === 'completed_with_execution_audit') return '真实执行审计已确认'
   if (value === 'completed_on_different_service_date') return '实际完成日在原安排日之外'
   if (value === 'rescheduled_after_plan') return '原安排日后已改期，原任务不自动计费'
@@ -660,6 +813,10 @@ export function personnelPricingIssueLabel(code: string) {
     missing_cleaning_property_type_rate: '清洁房型缺少对应单价',
     missing_or_unsupported_property_type: '房型资料缺失或暂不支持',
     approved_quantity_or_amount_missing: '工作量或金额资料不完整',
+    inspection_assignment_conflict_for_property_date: '同一房源同一检查日期存在不同检查人员',
+    inspection_property_missing: '检查安排缺少房源，请公司补齐',
+    historical_property_snapshot_missing: '历史安排缺少可核实房源，请公司核对',
+    post_payment_adjustment_tax_treatment_requires_decision: '上周付款后差额与本周 GST 身份不一致，请公司财务／税务负责人核对',
   } as Record<string, string>)[cleanText(code)] || '暂时无法计价，请公司核对资料'
 }
 
@@ -669,25 +826,51 @@ export function SettlementDailySummaryCard(props: {
   testID: string
 }) {
   const { dateLabel, line, testID } = props
-  const hasBase = Boolean(line.base_description)
-  const hasExtra = line.extra_work.length > 0
+  const [historyExpanded, setHistoryExpanded] = useState(false)
+  const hasInspection = line.inspection_lines.length > 0 || line.inspection_work_items.length > 0
+  const hasCleaning = line.cleaning_lines.length > 0 || line.cleaning_work_items.length > 0
+  const hasExtra = line.other_work.length > 0
   const hasSubsidy = line.subsidies.length > 0
+  const hasAdjustment = line.adjustments.length > 0
+  const hasPending = line.pending_pricing_items.length > 0
+  const inspectionProperties = Array.from(new Set(line.inspection_work_items
+    .map((item) => cleanText(item.property_label || item.property_id))
+    .filter(Boolean)))
+  const cleaningProperties = Array.from(new Set([
+    ...line.cleaning_work_items.map((item) => cleanText(item.property_label || item.property_id)),
+    ...line.cleaning_lines.map(cleaningPropertyLabel),
+  ].filter(Boolean)))
+  const expectedInspectionCount = line.inspection_work_items.filter((item) => cleanText(item.status) === 'expected').length
+  const hasAnyContent = hasInspection || hasCleaning || hasExtra || hasSubsidy || hasAdjustment || hasPending || line.history_items.length > 0
   return (
     <View testID={testID} style={styles.card}>
-      <Text style={styles.cardTitle}>{dateLabel}</Text>
-      {hasBase ? (
-        <View testID={`${testID}-base`} style={styles.dailyBreakdownSection}>
-          <View style={styles.dailyBreakdownHeader}><Text style={styles.dailyBreakdownTitle}>基础工作</Text><Text style={styles.dailyTotal}>{money(line.base_total_cents)}</Text></View>
-          <Text style={styles.body}>{line.base_description}</Text>
-          <Text style={styles.muted}>税前 {money(line.base_subtotal_cents)} · GST {money(line.base_gst_cents)}{line.base_evidence_count ? ` · 证明 ${line.base_evidence_count} 张` : ''}</Text>
+      <View style={styles.cardHeader}>
+        <Text style={styles.cardTitle}>{dateLabel}</Text>
+        <Text style={styles.dailyTotal}>{money(line.total_cents)}</Text>
+      </View>
+      {hasInspection ? (
+        <View testID={`${testID}-inspection`} style={styles.dailyBreakdownSection}>
+          <View style={styles.dailyBreakdownHeader}><Text style={styles.dailyBreakdownTitle}>检查</Text><Text style={styles.dailyTotal}>{money(line.inspection_total_cents)}</Text></View>
+          <Text style={styles.body}>{inspectionProperties.length} 房 · {line.inspection_work_items.length} 个检查任务</Text>
+          {inspectionProperties.length ? <Text style={styles.muted}>{inspectionProperties.join(' / ')}</Text> : null}
+          <Text style={expectedInspectionCount ? styles.warning : styles.includedAmount}>
+            {expectedInspectionCount ? `${expectedInspectionCount} 项待当日日终；无需等待上传` : '按经理有效安排计薪；上传不影响本日归属'}
+          </Text>
+        </View>
+      ) : null}
+      {hasCleaning ? (
+        <View testID={`${testID}-cleaning`} style={styles.cleaningBreakdownSection}>
+          <View style={styles.dailyBreakdownHeader}><Text style={styles.cleaningBreakdownTitle}>清洁</Text><Text style={styles.cleaningBreakdownTotal}>{money(line.cleaning_total_cents)}</Text></View>
+          <Text style={styles.body}>{cleaningProperties.length ? `${cleaningProperties.length} 房` : `${line.cleaning_lines.length} 项`}</Text>
+          {cleaningProperties.length ? <Text style={styles.muted}>{cleaningProperties.join(' / ')}</Text> : null}
         </View>
       ) : null}
       {hasExtra ? (
         <View testID={`${testID}-extra`} style={styles.extraBreakdownSection}>
-          <View style={styles.dailyBreakdownHeader}><Text style={styles.extraBreakdownTitle}>额外工作</Text><Text style={styles.extraBreakdownTotal}>{money(line.extra_total_cents)}</Text></View>
-          {line.extra_work.map((item, index) => (
+          <View style={styles.dailyBreakdownHeader}><Text style={styles.extraBreakdownTitle}>其他工作</Text><Text style={styles.extraBreakdownTotal}>{money(line.other_total_cents)}</Text></View>
+          {line.other_work.map((item, index) => (
             <View key={item.id || `${line.service_date}-extra-${index}`} style={styles.breakdownLine}>
-              <View style={styles.breakdownLineText}><Text style={styles.body}>{settlementLineDescription(item)}</Text><Text style={styles.muted}>税前 {money(item.subtotal_cents)} · GST {money(item.gst_cents)}{item.evidence_count ? ` · 证明 ${item.evidence_count} 张` : ''}</Text></View>
+              <View style={styles.breakdownLineText}><Text style={styles.body}>{settlementLineDescription(item)}</Text>{item.evidence_count ? <Text style={styles.muted}>证明 {item.evidence_count} 张</Text> : null}</View>
               <Text style={styles.extraBreakdownTotal}>{money(item.total_cents)}</Text>
             </View>
           ))}
@@ -698,16 +881,64 @@ export function SettlementDailySummaryCard(props: {
           <View style={styles.dailyBreakdownHeader}><Text style={styles.subsidyBreakdownTitle}>补贴</Text><Text style={styles.subsidyBreakdownTotal}>{money(line.subsidy_total_cents)}</Text></View>
           {line.subsidies.map((item, index) => (
             <View key={item.id || `${line.service_date}-subsidy-${index}`} style={styles.breakdownLine}>
-              <View style={styles.breakdownLineText}><Text style={styles.body}>{settlementLineDescription(item)}</Text><Text style={styles.muted}>税前 {money(item.subtotal_cents)} · GST {money(item.gst_cents)}{item.evidence_count ? ` · 证明 ${item.evidence_count} 张` : ''}</Text></View>
+              <View style={styles.breakdownLineText}><Text style={styles.body}>{settlementLineDescription(item)}</Text>{item.evidence_count ? <Text style={styles.muted}>证明 {item.evidence_count} 张</Text> : null}</View>
               <Text style={styles.subsidyBreakdownTotal}>{money(item.total_cents)}</Text>
             </View>
           ))}
         </View>
       ) : null}
-      <SettlementWorkItems day={line} testIdPrefix={testID} />
-      {[hasBase, hasExtra, hasSubsidy].filter(Boolean).length > 1 ? (
-        <View testID={`${testID}-payable-total`} style={styles.dailyPayableRow}><Text style={styles.dailyPayableLabel}>当日已计小计</Text><Text style={styles.dailyPayableValue}>{money(line.total_cents)}</Text></View>
+      {hasAdjustment ? (
+        <View testID={`${testID}-adjustment`} style={styles.adjustmentBreakdownSection}>
+          <View style={styles.dailyBreakdownHeader}><Text style={styles.adjustmentBreakdownTitle}>上周补发／抵扣</Text><Text style={styles.adjustmentBreakdownTotal}>{money(line.adjustment_total_cents)}</Text></View>
+          {line.adjustments.map((item, index) => {
+            const carry = item.calculation_snapshot?.carry_adjustment
+            return (
+              <View key={item.id || `${line.service_date}-adjustment-${index}`} style={styles.breakdownLine}>
+                <View style={styles.breakdownLineText}>
+                  <Text style={styles.body}>{carry?.source_week_start && carry?.source_week_end
+                    ? `原账单 ${carry.source_week_start} 至 ${carry.source_week_end}`
+                    : settlementLineDescription(item)}</Text>
+                  <Text style={styles.muted}>原已付金额保持不变 · 税前 {money(item.subtotal_cents)} · GST {money(item.gst_cents)}</Text>
+                </View>
+                <Text style={styles.adjustmentBreakdownTotal}>{money(item.total_cents)}</Text>
+              </View>
+            )
+          })}
+        </View>
       ) : null}
+      {hasPending ? (
+        <View testID={`${testID}-pending`} style={styles.pendingDailySection}>
+          <Text style={styles.warningTitle}>待处理 {line.pending_pricing_items.length} 项</Text>
+          {line.pending_pricing_items.map((item) => {
+            const propertyLabels = personnelSettlementPendingPropertyLabels(item)
+            return (
+              <View key={item.id} style={styles.pendingPricingLine}>
+                <View style={styles.breakdownLineText}>
+                  <Text style={styles.body}>{propertyLabels.join(' / ') || item.description}</Text>
+                  {propertyLabels.length && item.description ? <Text style={styles.muted}>{item.description}</Text> : null}
+                  <Text style={styles.muted}>{personnelPricingIssueLabel(item.code)}</Text>
+                </View>
+                <Text style={styles.pendingPricingAmount}>待计价</Text>
+              </View>
+            )
+          })}
+        </View>
+      ) : null}
+      {line.history_items.length ? (
+        <View style={styles.historyFold}>
+          <Pressable testID={`${testID}-history-toggle`} onPress={() => setHistoryExpanded((value) => !value)} style={styles.historyFoldHeader}>
+            <Text style={styles.muted}>历史/改期/取消 {line.history_items.length} 项</Text>
+            <Ionicons name={historyExpanded ? 'chevron-up' : 'chevron-down'} size={16} color="#6B7280" />
+          </Pressable>
+          {historyExpanded ? line.history_items.map((item, index) => (
+            <View key={cleanText(item.execution_key || item.task_id) || `${line.service_date}-history-${index}`} style={styles.historyRow}>
+              <Text style={styles.body}>{cleanText(item.property_label || item.task_id) || '房源任务'} · {SETTLEMENT_WORK_STATUS_LABELS[cleanText(item.status)] || cleanText(item.status)}</Text>
+              <Text style={styles.muted}>{settlementWorkReasonLabel(item.status_reason)}</Text>
+            </View>
+          )) : null}
+        </View>
+      ) : null}
+      {!hasAnyContent ? <Text style={styles.muted}>本日无检查、清洁、其他工作或补贴</Text> : null}
     </View>
   )
 }
@@ -2183,7 +2414,17 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
     )
   }, [settlementDetail, supplementDraft])
   const dailySettlementLines = useMemo(
-    () => summarizePersonnelSettlementLinesByDate(settlementDetail?.lines || []),
+    () => settlementDetail ? buildPersonnelSettlementWeekDailySummaries({
+      week_start: settlementDetail.week_start,
+      week_end: settlementDetail.week_end,
+      lines: settlementDetail.lines || [],
+      work_checklist: settlementDetail.work_checklist || [],
+      pending_pricing_items: settlementDetail.pending_pricing_items || [],
+    }) : [],
+    [settlementDetail],
+  )
+  const settlementDetailCategoryTotals = useMemo(
+    () => personnelSettlementCategoryTotals(settlementDetail?.lines || []),
     [settlementDetail],
   )
   const settlementDetailSubsidyTotal = useMemo(
@@ -2191,7 +2432,17 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
     [settlementDetail],
   )
   const submissionPreviewDailyLines = useMemo(
-    () => summarizePersonnelSettlementLinesByDate(submissionReviewPreview?.lines || []),
+    () => submissionReviewPreview ? buildPersonnelSettlementWeekDailySummaries({
+      week_start: submissionReviewPreview.week_start,
+      week_end: submissionReviewPreview.week_end,
+      lines: submissionReviewPreview.lines || [],
+      work_checklist: submissionReviewPreview.work_checklist || [],
+      pending_pricing_items: submissionReviewPreview.pending_pricing_items || [],
+    }) : [],
+    [submissionReviewPreview],
+  )
+  const submissionReviewCategoryTotals = useMemo(
+    () => personnelSettlementCategoryTotals(submissionReviewPreview?.lines || []),
     [submissionReviewPreview],
   )
   const submissionReviewSubsidyTotal = useMemo(
@@ -2673,13 +2924,17 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                   <View style={styles.cardHeader}>
                     <View style={styles.submissionReviewTitleWrap}>
                       <Text style={styles.cardTitle}>{formatPersonnelDate(submissionReviewPreview.week_start)} 至 {formatPersonnelDate(submissionReviewPreview.week_end)}</Text>
-                      <Text style={styles.muted}>{submissionReviewPreview.pending_pricing_count > 0 ? '以下为已计价项目；待计价工作单独列出且未按零元合并' : '以下基础工作量、额外工作和补贴均已计入本次确认总额'}</Text>
+                      <Text style={styles.muted}>{submissionReviewPreview.pending_pricing_count > 0 ? '以下为已计价项目；待计价工作单独列出且未按零元合并' : '以下基础工作量、额外工作、补贴和上周补发／抵扣均已计入本次确认总额'}</Text>
                     </View>
                     <Text style={styles.status}>{submissionReviewPreview.line_count} 项</Text>
                   </View>
                   <View style={styles.summaryBox}>
                     <View style={styles.summaryRow}><Text style={styles.body}>税前金额</Text><Text style={styles.summaryValue}>{money(submissionReviewPreview.subtotal_cents)}</Text></View>
+                    <View testID="weekly-submission-inspection-total" style={styles.summaryRow}><Text style={styles.body}>检查</Text><Text style={styles.summaryValue}>{money(submissionReviewCategoryTotals.inspection_cents)}</Text></View>
+                    <View testID="weekly-submission-cleaning-total" style={styles.summaryRow}><Text style={styles.body}>清洁</Text><Text style={styles.summaryValue}>{money(submissionReviewCategoryTotals.cleaning_cents)}</Text></View>
+                    <View testID="weekly-submission-other-total" style={styles.summaryRow}><Text style={styles.body}>其他工作</Text><Text style={styles.summaryValue}>{money(submissionReviewCategoryTotals.other_cents)}</Text></View>
                     <View testID="weekly-submission-subsidy-total" style={styles.summaryRow}><Text style={styles.body}>补贴（已包含）</Text><Text style={styles.subsidyBreakdownTotal}>{money(submissionReviewSubsidyTotal)}</Text></View>
+                    <View testID="weekly-submission-adjustment-total" style={styles.summaryRow}><Text style={styles.body}>上周补发／抵扣（已拆分 GST）</Text><Text style={styles.adjustmentBreakdownTotal}>{money(submissionReviewCategoryTotals.adjustment_cents)}</Text></View>
                     <View style={styles.summaryRow}><Text style={styles.body}>GST</Text><Text style={styles.summaryValue}>{money(submissionReviewPreview.gst_cents)}</Text></View>
                     <View style={[styles.summaryRow, styles.summaryTotalRow]}><Text style={styles.summaryTotalLabel}>{submissionReviewPreview.pending_pricing_count > 0 ? '已计小计' : '预计总额'}</Text><Text style={styles.summaryTotalValue}>{money(submissionReviewPreview.total_cents)}</Text></View>
                     {submissionReviewPreview.pending_pricing_count > 0 ? <View style={styles.summaryRow}><Text style={styles.body}>待计价</Text><Text style={styles.summaryValue}>{submissionReviewPreview.pending_pricing_count} 项</Text></View> : null}
@@ -2688,19 +2943,9 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                     <Text style={styles.claimRowReviewNote}>此金额来自历史冻结结算，执行凭证待核实；不会自动改为 0 或重新计费。</Text>
                   ) : null}
                 </View>
-                <SettlementWorkChecklist
-                  items={submissionReviewPreview.work_checklist || []}
-                  testIdPrefix="weekly-submission-checklist"
-                />
-                {submissionPreviewDailyLines.length ? submissionPreviewDailyLines.map((line) => (
+                {submissionPreviewDailyLines.map((line) => (
                   <SettlementDailySummaryCard key={line.service_date} testID={`weekly-submission-day-${line.service_date}`} dateLabel={formatPersonnelDateWithWeekday(line.service_date)} line={line} />
-                )) : (
-                  <View style={styles.empty}>
-                    <Text style={styles.emptyTitle}>{submissionReviewPreview.pending_pricing_count > 0 ? '本周暂无已计价项目' : '本周暂无可提交项目'}</Text>
-                    <Text style={styles.muted}>{submissionReviewPreview.pending_pricing_count > 0 ? '本周工作均列在下方待计价项目中，未按 $0 计入。' : '请先检查工作量和补贴反馈。'}</Text>
-                  </View>
-                )}
-                <PendingPricingItemsCard items={submissionReviewPreview.pending_pricing_items || []} />
+                ))}
                 {submissionPreviewIncludedPendingClaims.length ? (
                   <View testID="weekly-submission-included-pending-claims" style={styles.notice}>
                     <Text style={styles.noticeTitle}>已包含 {submissionPreviewIncludedPendingClaims.length} 条待财务审核反馈</Text>
@@ -2752,6 +2997,7 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                     <View style={styles.summaryRow}><Text style={styles.body}>待计价项目</Text><Text style={styles.summaryValue}>{submissionReviewPreview.pending_pricing_count} 项</Text></View>
                     <View style={styles.summaryRow}><Text style={styles.body}>其中待财务审核反馈</Text><Text style={styles.summaryValue}>{submissionPreviewIncludedPendingClaims.length} 项（已包含）</Text></View>
                     <View testID="weekly-submission-confirmation-subsidy-total" style={styles.summaryRow}><Text style={styles.body}>补贴（已包含）</Text><Text style={styles.subsidyBreakdownTotal}>{money(submissionReviewSubsidyTotal)}</Text></View>
+                    <View testID="weekly-submission-confirmation-adjustment-total" style={styles.summaryRow}><Text style={styles.body}>上周补发／抵扣（已拆分 GST）</Text><Text style={styles.adjustmentBreakdownTotal}>{money(submissionReviewCategoryTotals.adjustment_cents)}</Text></View>
                     <View style={[styles.summaryRow, styles.summaryTotalRow]}><Text style={styles.summaryTotalLabel}>{submissionReviewPreview.pending_pricing_count > 0 ? '确认已计小计' : '确认总额'}</Text><Text style={styles.summaryTotalValue}>{money(submissionReviewPreview.total_cents)}</Text></View>
                   </View>
                   <Pressable
@@ -2874,7 +3120,9 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                   <View style={styles.totalBox}>
                     <Text style={styles.total}>{money(settlementDetail.total_cents)}</Text>
                     <Text style={styles.muted}>税前 {money(settlementDetail.subtotal_cents)} + GST {money(settlementDetail.gst_cents)}</Text>
+                    <Text style={styles.muted}>检查 {money(settlementDetailCategoryTotals.inspection_cents)} · 清洁 {money(settlementDetailCategoryTotals.cleaning_cents)} · 其他 {money(settlementDetailCategoryTotals.other_cents)}</Text>
                     <Text testID="settlement-detail-subsidy-total" style={styles.subsidyBreakdownTotal}>其中补贴 {money(settlementDetailSubsidyTotal)}（已包含）</Text>
+                    <Text testID="settlement-detail-adjustment-total" style={styles.adjustmentBreakdownTotal}>上周补发／抵扣 {money(settlementDetailCategoryTotals.adjustment_cents)}（GST 已计入上方）</Text>
                   </View>
                 </View>
                 {detailLoading ? (
@@ -2908,14 +3156,9 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
                     ) : settlementDetail.phase5_schema_ready === false ? (
                       <View style={styles.notice}><Text style={styles.help}>PDF 功能等待阶段 5 数据库启用。</Text></View>
                     ) : null}
-                    <SettlementWorkChecklist
-                      items={settlementDetail.work_checklist || []}
-                      testIdPrefix="settlement-checklist"
-                    />
                     {dailySettlementLines.map((line) => (
-                  <SettlementDailySummaryCard key={line.service_date} testID={`settlement-day-${line.service_date}`} dateLabel={formatPersonnelDate(line.service_date)} line={line} />
+                  <SettlementDailySummaryCard key={line.service_date} testID={`settlement-day-${line.service_date}`} dateLabel={formatPersonnelDateWithWeekday(line.service_date)} line={line} />
                     ))}
-                    <PendingPricingItemsCard items={settlementDetail.pending_pricing_items || []} />
                     {['awaiting_confirmation', 'disputed'].includes(settlementDetail.status) ? (
                   <View testID="settlement-reconciliation-card" style={styles.card}>
                     <Text style={styles.cardTitle}>{settlementDetail.status === 'awaiting_confirmation' ? '确认本周结算' : '本周结算重新核对中'}</Text>
@@ -3205,12 +3448,18 @@ const styles = StyleSheet.create({
   dailyBreakdownSection: { gap: 6 },
   dailyBreakdownHeader: { minHeight: 24, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
   dailyBreakdownTitle: { flex: 1, minWidth: 0, color: '#374151', fontSize: 14, lineHeight: 20, fontWeight: '900' },
+  cleaningBreakdownSection: { gap: 6, padding: 12, borderRadius: 12, borderWidth: hairline(), borderColor: '#A7F3D0', backgroundColor: '#ECFDF5' },
+  cleaningBreakdownTitle: { flex: 1, minWidth: 0, color: '#065F46', fontSize: 15, lineHeight: 21, fontWeight: '900' },
+  cleaningBreakdownTotal: { flexShrink: 0, color: '#047857', fontSize: 14, lineHeight: 21, fontWeight: '900' },
   extraBreakdownSection: { gap: 8, padding: 12, borderRadius: 12, borderWidth: hairline(), borderColor: '#C7D2FE', backgroundColor: '#EEF2FF' },
   extraBreakdownTitle: { flex: 1, minWidth: 0, color: '#3730A3', fontSize: 15, lineHeight: 21, fontWeight: '900' },
   extraBreakdownTotal: { flexShrink: 0, color: '#4338CA', fontSize: 14, lineHeight: 21, fontWeight: '900' },
   subsidyBreakdownSection: { gap: 8, padding: 12, borderRadius: 12, borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF' },
   subsidyBreakdownTitle: { flex: 1, minWidth: 0, color: '#1E40AF', fontSize: 15, lineHeight: 21, fontWeight: '900' },
   subsidyBreakdownTotal: { flexShrink: 0, color: '#1D4ED8', fontSize: 14, lineHeight: 21, fontWeight: '900' },
+  adjustmentBreakdownSection: { gap: 8, padding: 12, borderRadius: 12, borderWidth: hairline(), borderColor: '#FDBA74', backgroundColor: '#FFF7ED' },
+  adjustmentBreakdownTitle: { flex: 1, minWidth: 0, color: '#9A3412', fontSize: 15, lineHeight: 21, fontWeight: '900' },
+  adjustmentBreakdownTotal: { flexShrink: 0, color: '#C2410C', fontSize: 14, lineHeight: 21, fontWeight: '900' },
   breakdownLine: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingTop: 8, borderTopWidth: hairline(), borderTopColor: '#CBD5E1' },
   breakdownLineText: { flex: 1, minWidth: 0, gap: 2 },
   dailyPayableRow: { minHeight: 30, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingTop: 10, borderTopWidth: hairline(), borderTopColor: '#D1D5DB' },
@@ -3219,6 +3468,11 @@ const styles = StyleSheet.create({
   pendingPricingCard: { backgroundColor: '#FFFBEB', borderRadius: 14, padding: 14, borderWidth: hairline(), borderColor: '#FCD34D', gap: 10 },
   pendingPricingLine: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingTop: 10, borderTopWidth: hairline(), borderTopColor: '#FDE68A' },
   pendingPricingAmount: { flexShrink: 0, color: '#B45309', fontSize: 13, lineHeight: 19, fontWeight: '900' },
+  pendingDailySection: { gap: 6, padding: 12, borderRadius: 12, borderWidth: hairline(), borderColor: '#FCD34D', backgroundColor: '#FFFBEB' },
+  warningTitle: { color: '#92400E', fontSize: 14, lineHeight: 20, fontWeight: '900' },
+  historyFold: { gap: 6, paddingTop: 8, borderTopWidth: hairline(), borderTopColor: '#E5E7EB' },
+  historyFoldHeader: { minHeight: 32, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  historyRow: { gap: 2, padding: 9, borderRadius: 9, backgroundColor: '#F9FAFB' },
   pendingList: { gap: 8 },
   pendingRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingVertical: 8, borderBottomWidth: hairline(), borderBottomColor: '#E5E7EB' },
   documentRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },

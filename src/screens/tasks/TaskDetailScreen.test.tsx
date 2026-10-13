@@ -431,6 +431,42 @@ test('key recorded and supplies actions use compact equal-width buttons', async 
   }
 })
 
+test('inspection lockbox completion keeps unfinished cleaning supplies action active', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() }
+  snapshot.items[0] = {
+    ...previousTask,
+    status: 'keys_hung',
+    cleaning_status: 'assigned',
+    cleaning_submission_ready: false,
+    lockbox_video_url: 'https://example.com/lockbox.mp4',
+    available_actions: [
+      { id: 'fill_supplies', label: '补品填报', placement: 'primary', enabled: true, target: 'SuppliesForm', intent: 'cleaning' },
+    ],
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={navigation as any} route={{ key: 'k-unfinished-cleaning', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByText('补品填报')).toBeTruthy()
+      expect(ui.queryByText('补品已记录')).toBeNull()
+    })
+    expect(ui.getByTestId('task-detail-action-w1-fill_supplies').props.disabled).not.toBe(true)
+    fireEvent.press(ui.getByTestId('task-detail-action-w1-fill_supplies'))
+    expect(navigation.navigate).toHaveBeenCalledWith('SuppliesForm', { taskId: 'w1' })
+  } finally {
+    snapshot.items[0] = previousTask
+  }
+})
+
 test('ordinary cleaner cannot see lockbox video in task detail', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()

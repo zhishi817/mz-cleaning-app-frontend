@@ -4,7 +4,7 @@ import { listWorkTasks, type WorkTask } from './api'
 import EventSource from 'react-native-sse'
 import { notifyAuthInvalidated } from './authEvents'
 import { invalidateCleaningMediaCache } from './cleaningMediaCache'
-import { isDailyTaskExecutionVisible } from './dailyTaskExecutionVisibility'
+import { isDailyTaskExecutionVisible, type DailyTaskExecutionVisibilityOptions } from './dailyTaskExecutionVisibility'
 
 export type WorkTaskItem = WorkTask & {
   date: string
@@ -32,6 +32,7 @@ type ActiveRealtimeParams = {
   date_from: string
   date_to: string
   view: WorkTasksView
+  includeManagerUnassignedOffline?: boolean
 }
 
 type StreamIdentity = {
@@ -244,7 +245,12 @@ function buildStateFromSaved(saved: Partial<StoreState> | null | undefined, buck
 
 function sameRealtimeParams(a: ActiveRealtimeParams | null, b: ActiveRealtimeParams | null) {
   if (!a || !b) return false
-  return a.token === b.token && a.userId === b.userId && a.date_from === b.date_from && a.date_to === b.date_to && a.view === b.view
+  return a.token === b.token
+    && a.userId === b.userId
+    && a.date_from === b.date_from
+    && a.date_to === b.date_to
+    && a.view === b.view
+    && a.includeManagerUnassignedOffline === b.includeManagerUnassignedOffline
 }
 
 function sameStreamIdentity(a: StreamIdentity | null, b: StreamIdentity | null) {
@@ -424,7 +430,11 @@ function getPatchValue(patch: Record<string, any>, key: string) {
   return cursor
 }
 
-export function reconcileExecutionListVisibilityAfterPatch(task: WorkTaskItem, changedFields: string[]) {
+export function reconcileExecutionListVisibilityAfterPatch(
+  task: WorkTaskItem,
+  changedFields: string[],
+  options: DailyTaskExecutionVisibilityOptions = {},
+) {
   const touchesVisibility = changedFields.some((field) => {
     const root = String(field || '').trim().split('.')[0]
     return EXECUTION_VISIBILITY_INPUT_FIELDS.has(root)
@@ -447,11 +457,15 @@ export function reconcileExecutionListVisibilityAfterPatch(task: WorkTaskItem, c
   const { execution_list_visible: _staleProjection, ...candidate } = next
   return {
     ...next,
-    execution_list_visible: isDailyTaskExecutionVisible(candidate),
+    execution_list_visible: isDailyTaskExecutionVisible(candidate, options),
   }
 }
 
-export function mergePatchIntoTask(task: WorkTaskItem, event: WorkTaskStreamEvent) {
+export function mergePatchIntoTask(
+  task: WorkTaskItem,
+  event: WorkTaskStreamEvent,
+  options: DailyTaskExecutionVisibilityOptions = {},
+) {
   const payload = event.payload && typeof event.payload === 'object' ? event.payload : {}
   const patch = payload.patch && typeof payload.patch === 'object' ? payload.patch : {}
   const changedFields = Array.isArray(event.changed_fields) ? event.changed_fields.map((x) => String(x || '').trim()).filter(Boolean) : []
@@ -492,7 +506,7 @@ export function mergePatchIntoTask(task: WorkTaskItem, event: WorkTaskStreamEven
   }
   const date = String(next.scheduled_date || '').slice(0, 10)
   next.date = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : task.date
-  return reconcileExecutionListVisibilityAfterPatch(next, changedFields)
+  return reconcileExecutionListVisibilityAfterPatch(next, changedFields, options)
 }
 
 export function projectCleaningStatusForTask(task: WorkTaskItem, value: any) {
@@ -785,7 +799,9 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
     const prev = items[index]
     if (!prev) continue
     if (shouldIgnoreByVersion(prev, event)) continue
-    items[index] = mergePatchIntoTask(prev, event)
+    items[index] = mergePatchIntoTask(prev, event, {
+      includeManagerUnassignedOffline: activeRealtimeParams?.includeManagerUnassignedOffline === true,
+    })
     changed = true
   }
   if (!changed) return
@@ -929,6 +945,7 @@ export async function activateWorkTasksRealtime(params: ActiveRealtimeParams) {
     date_from: String(params.date_from || '').trim(),
     date_to: String(params.date_to || '').trim(),
     view: params.view === 'all' ? 'all' : 'mine',
+    includeManagerUnassignedOffline: params.includeManagerUnassignedOffline === true,
   }
   if (!next.token || !next.userId || !next.date_from || !next.date_to) return false
   const sessionEpoch = workTasksSessionEpoch
@@ -970,6 +987,7 @@ export async function patchWorkTaskItem(id0: string, patch: Partial<WorkTaskItem
   const next = reconcileExecutionListVisibilityAfterPatch(
     { ...prev, ...patch },
     Object.keys(patch),
+    { includeManagerUnassignedOffline: activeRealtimeParams?.includeManagerUnassignedOffline === true },
   )
   const items = state.items.slice()
   items[idx] = next
@@ -994,6 +1012,7 @@ export async function patchWorkTaskItems(patches0: Array<{ id: string; patch: Pa
     const next = reconcileExecutionListVisibilityAfterPatch(
       { ...task, ...patch },
       Object.keys(patch),
+      { includeManagerUnassignedOffline: activeRealtimeParams?.includeManagerUnassignedOffline === true },
     )
     recordLocalTaskPatch(state.bucketKey, next.id)
     return next

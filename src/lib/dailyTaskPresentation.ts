@@ -1,14 +1,17 @@
 import type { WorkTask } from './api'
-import { isDailyTaskExecutionVisible } from './dailyTaskExecutionVisibility'
+import { isDailyTaskExecutionVisible, type DailyTaskExecutionVisibilityOptions } from './dailyTaskExecutionVisibility'
 
 /** Count only the server-authorized execution set and dedupe merged turnover
  * cards with the stable keys supplied by Root. Search text never participates
  * in this calculation. */
-export function dailyTaskGroupCounts(tasks: WorkTask[]) {
+export function dailyTaskGroupCounts(
+  tasks: WorkTask[],
+  options: DailyTaskExecutionVisibilityOptions = {},
+) {
   const turnover = new Set<string>()
   const offline = new Set<string>()
   for (const task of Array.isArray(tasks) ? tasks : []) {
-    if (!isDailyTaskExecutionVisible(task)) continue
+    if (!isDailyTaskExecutionVisible(task, options)) continue
     const group = task.daily_stats_group
     const key = String(task.daily_stats_key || '').trim()
     if (!key) continue

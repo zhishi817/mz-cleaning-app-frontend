@@ -33,8 +33,10 @@ jest.mock('./cleaningMediaCache', () => ({ invalidateCleaningMediaCache: jest.fn
 
 beforeEach(() => {
   jest.useRealTimers()
+  const EventSource = require('react-native-sse')
   const storage = require('./storage')
   const api = require('./api')
+  EventSource.mockClear()
   storage.getJson.mockReset()
   storage.getJson.mockResolvedValue(null)
   storage.setJson.mockClear()
@@ -116,9 +118,27 @@ test('recomputes a cached visible projection when local or SSE visibility inputs
     ['assignee_id'],
   ).execution_list_visible).toBe(false)
   expect(reconcileExecutionListVisibilityAfterPatch(
+    { ...offline, assignee_id: null },
+    ['assignee_id'],
+    { includeManagerUnassignedOffline: true },
+  ).execution_list_visible).toBe(true)
+  expect(reconcileExecutionListVisibilityAfterPatch(
     { ...offline, scheduled_date: null },
     ['scheduled_date'],
   ).execution_list_visible).toBe(false)
+
+  const statusPatch = {
+    event_type: 'TASK_UPDATED',
+    change_scope: 'list',
+    changed_fields: ['status'],
+    payload: { patch: { status: 'in_progress' } },
+  }
+  expect(mergePatchIntoTask(
+    { ...offline, assignee_id: null },
+    statusPatch,
+    { includeManagerUnassignedOffline: true },
+  ).execution_list_visible).toBe(true)
+  expect(mergePatchIntoTask({ ...offline, assignee_id: null }, statusPatch).execution_list_visible).toBe(false)
 })
 
 test('keeps a local checkout marker when the refreshed cleaning payload omits the field', () => {
@@ -208,6 +228,73 @@ function refreshParams(overrides: Partial<{ token: string; userId: string; date_
     ...overrides,
   }
 }
+
+test('keeps an authorized manager-all unassigned offline card visible after a local status patch', async () => {
+  const api = require('./api')
+  const params = refreshParams({ userId: 'manager-patch-user', view: 'all' })
+  const task = makeTask({
+    id: 'offline-manager-patch',
+    source_type: 'cleaning_offline_tasks',
+    task_kind: 'offline',
+    source_id: 'offline-manager-patch',
+    scheduled_date: params.date_from,
+    date: params.date_from,
+    status: 'todo',
+    assignee_id: null,
+    execution_list_visible: true,
+  } as any)
+  api.listWorkTasks.mockResolvedValue([task])
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'manager_patch_initial' })
+  await activateWorkTasksRealtime({ ...params, includeManagerUnassignedOffline: true })
+  await patchWorkTaskItem(task.id, { status: 'in_progress' })
+
+  expect(getWorkTasksSnapshot().items).toHaveLength(1)
+  expect(getWorkTasksSnapshot().items[0]).toMatchObject({
+    id: task.id,
+    status: 'in_progress',
+    execution_list_visible: true,
+  })
+})
+
+test('replaces one date bucket on repeated full refreshes without appending duplicate task cards', async () => {
+  const api = require('./api')
+  const params = refreshParams({ userId: 'dedupe-user', view: 'all' })
+  const task = makeTask({
+    id: 'offline-1',
+    source_type: 'cleaning_offline_tasks',
+    task_kind: 'offline',
+    source_id: 'offline-1',
+    scheduled_date: params.date_from,
+    date: params.date_from,
+    assignee_id: null,
+    execution_list_visible: true,
+  } as any)
+  api.listWorkTasks.mockResolvedValue([task])
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'initial_load' })
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'manual_refresh' })
+
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
+  expect(getWorkTasksSnapshot().items.map((item) => item.id)).toEqual(['offline-1'])
+})
+
+test('switches selected date buckets without retaining tasks from the previous window', async () => {
+  const api = require('./api')
+  const past = refreshParams({ userId: 'date-window-user', date_from: '2026-08-29', date_to: '2026-08-29', view: 'all' })
+  const future = refreshParams({ userId: 'date-window-user', date_from: '2026-08-31', date_to: '2026-08-31', view: 'all' })
+  api.listWorkTasks
+    .mockResolvedValueOnce([makeTask({ id: 'past-task', scheduled_date: past.date_from, date: past.date_from })])
+    .mockResolvedValueOnce([makeTask({ id: 'future-task', scheduled_date: future.date_from, date: future.date_from })])
+  establishWorkTasksSession({ token: past.token, userId: past.userId })
+
+  await requestWorkTasksRefresh({ ...past, mode: 'force', reason: 'past_selected' })
+  await requestWorkTasksRefresh({ ...future, mode: 'force', reason: 'future_selected' })
+
+  expect(getWorkTasksSnapshot().items.map((item) => item.id)).toEqual(['future-task'])
+})
 
 test('keeps the 60 second passive cooldown scoped to one user and date window', async () => {
   const api = require('./api')

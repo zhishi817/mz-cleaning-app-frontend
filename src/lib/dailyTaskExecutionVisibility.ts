@@ -14,10 +14,15 @@ export type DailyTaskExecutionCandidate = {
   inspector_id?: unknown
 }
 
+export type DailyTaskExecutionVisibilityOptions = {
+  includeManagerUnassignedOffline?: boolean
+}
+
 const REVIEW_ONLY_STATUSES = new Set(['pending_review', 'review_pending', 'awaiting_review'])
 const TERMINAL_STATUSES = new Set(['cancelled', 'canceled', 'closed'])
-const PROPERTY_FOLLOWUP_SOURCES = new Set([
+const ASSIGNMENT_FIRST_SOURCES = new Set([
   'property_maintenance',
+  'external_maintenance_orders',
   'property_deep_cleaning',
   'property_daily_necessities',
 ])
@@ -58,22 +63,34 @@ function hasExecutor(task: DailyTaskExecutionCandidate) {
   return hasValue(task.assignee_id) || hasValue(task.cleaner_id) || hasValue(task.inspector_id)
 }
 
-export function isDailyTaskExecutionVisible(task: DailyTaskExecutionCandidate) {
+export function isOrdinaryOfflineDailyTask(task: DailyTaskExecutionCandidate) {
+  return normalized(task.task_kind) === 'offline'
+    && !ASSIGNMENT_FIRST_SOURCES.has(normalized(task.source_type))
+}
+
+export function isDailyTaskExecutionVisible(
+  task: DailyTaskExecutionCandidate,
+  options: DailyTaskExecutionVisibilityOptions = {},
+) {
   if (task.execution_list_visible === false) return false
 
   const source = normalized(task.source_type)
   const workflowStatus = normalized(task.source_workflow_status || task.maintenance_workflow?.status || task.status)
   if (REVIEW_ONLY_STATUSES.has(workflowStatus) || TERMINAL_STATUSES.has(workflowStatus)) return false
   if (REVIEW_COMPLETION_ALIAS_SOURCES.has(source) && MAINTENANCE_REVIEW_ALIASES.has(workflowStatus)) return false
-  if (PROPERTY_FOLLOWUP_SOURCES.has(source) && workflowStatus === 'pending_assignment') return false
+  if (ASSIGNMENT_FIRST_SOURCES.has(source) && workflowStatus === 'pending_assignment') return false
   if (task.execution_list_visible === true) {
     if (Object.prototype.hasOwnProperty.call(task, 'scheduled_date') && !scheduledDate(task)) return false
     const hasExecutorProjection = ['assignee_id', 'cleaner_id', 'inspector_id']
       .some((field) => Object.prototype.hasOwnProperty.call(task, field))
-    if (source && hasExecutorProjection && !isTurnoverTask(task) && !hasExecutor(task)) return false
+    if (source && hasExecutorProjection && !isTurnoverTask(task) && !hasExecutor(task)) {
+      return options.includeManagerUnassignedOffline === true && isOrdinaryOfflineDailyTask(task)
+    }
     return true
   }
   if (!scheduledDate(task)) return false
-  if (!isTurnoverTask(task) && !hasExecutor(task)) return false
+  if (!isTurnoverTask(task) && !hasExecutor(task)) {
+    return options.includeManagerUnassignedOffline === true && isOrdinaryOfflineDailyTask(task)
+  }
   return true
 }

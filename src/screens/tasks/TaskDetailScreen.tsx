@@ -1381,7 +1381,10 @@ export default function TaskDetailScreen(props: Props) {
   const isPendingInspectionDecision = isCleaningTask && !isStayoverTask && inspectionMode === 'pending_decision'
   const showInspectionPlanTag = (isCleaningTask || isInspectionTask) && !isStayoverTask && !isPasswordOnlyInspection
   const canDeleteKeyPhoto = (roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector')) && isCleaningTask && !!keyPhotoUrl
-  const isCleaningSubmitted = isCleaningTask && isCleaningWorkSubmitted(task.status)
+  const hasCleaningSubmissionSignal = typeof (task as any)?.cleaning_submission_ready === 'boolean'
+  const isCleaningSubmitted = isCleaningTask && (hasCleaningSubmissionSignal
+    ? (task as any).cleaning_submission_ready === true
+    : isCleaningWorkSubmitted((task as any).cleaning_status || task.status))
   const restockItems = Array.isArray((task as any)?.restock_items) ? ((task as any).restock_items as any[]) : []
   const restockSummary = restockItems
     .map((item) => {

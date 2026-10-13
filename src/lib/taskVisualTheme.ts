@@ -55,6 +55,20 @@ export function getEffectiveTaskStatus(task: Partial<WorkTaskItem> | null | unde
   const status = String(status0 ?? task?.status ?? '').trim().toLowerCase()
   const source = String(task?.source_type || '').trim().toLowerCase()
   const kind = String(task?.task_kind || '').trim().toLowerCase()
+  if (source === 'cleaning_tasks' && kind === 'cleaning' && (task as any)?.cleaning_submission_ready === false) {
+    const cleaningStatus = String((task as any)?.cleaning_status || '').trim().toLowerCase()
+    if (status === 'cancelled' || status === 'canceled') return status
+    if (cleaningStatus && !isDoneLikeStatus(cleaningStatus)) return cleaningStatus
+    if (status === 'in_progress' || status === 'cleaning' || String((task as any)?.key_photo_url || '').trim()) {
+      return 'in_progress'
+    }
+    const hasCleaner = !!(
+      String((task as any)?.cleaner_id || '').trim()
+      || String((task as any)?.cleaner_name || '').trim()
+      || String((task as any)?.assignee_id || '').trim()
+    )
+    return hasCleaner ? 'assigned' : 'todo'
+  }
   if (source === 'cleaning_tasks' && kind === 'inspection') {
     const cleaningStatus = String((task as any)?.cleaning_status || '').trim().toLowerCase()
     const inspectionStatus = String((task as any)?.inspection_status || '').trim().toLowerCase()
