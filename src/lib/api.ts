@@ -2712,7 +2712,7 @@ export type PersonnelSettlementWorkItem = {
   inspection_due_date?: string | null
   inspection_mode?: string | null
   evidence_count?: number
-  status?: 'completed' | 'rescheduled' | 'incomplete' | 'management_closed' | 'legacy_completed_unverified' | 'cancelled' | string
+  status?: 'completed' | 'payable' | 'expected' | 'rescheduled' | 'incomplete' | 'management_closed' | 'legacy_completed_unverified' | 'cancelled' | string
   status_reason?: string
   included_in_amount?: boolean
   requires_manual_review?: boolean
@@ -2737,6 +2737,23 @@ export type PersonnelSettlementLine = {
     executed_property_count?: number
     executed_task_count?: number
     work_items?: PersonnelSettlementWorkItem[]
+    carry_adjustment?: {
+      source_settlement_id?: string
+      source_adjustment_id?: string
+      source_week_start?: string
+      source_week_end?: string
+      recorded_subtotal_difference_cents?: number
+      recorded_gst_difference_cents?: number
+      recorded_total_difference_cents?: number
+      previously_applied_subtotal_cents?: number
+      previously_applied_gst_cents?: number
+      previously_applied_total_cents?: number
+      applied_subtotal_cents?: number
+      applied_gst_cents?: number
+      applied_total_cents?: number
+      applied_by?: string
+      applied_at?: string
+    }
   } | null
 }
 
@@ -2748,6 +2765,10 @@ export type PersonnelSettlementPendingPricingItem = {
   service_date: string
   description: string
   code: string
+  task_id?: string | null
+  property_id?: string | null
+  property_label?: string | null
+  work_items?: PersonnelSettlementWorkItem[]
 }
 
 export type PersonnelSettlementDocument = {
@@ -2805,7 +2826,7 @@ export type PersonnelSettlementSubmissionPreview = {
   work_checklist?: PersonnelSettlementWorkItem[]
   blocking_issues: { source_type?: string; source_id?: string; code: string }[]
   confirmation_token: string
-  amount_state?: 'current_calculation' | 'frozen_awaiting_confirmation' | 'historical_frozen_pending_verification'
+  amount_state?: 'current_calculation' | 'frozen_awaiting_confirmation' | 'historical_frozen_pending_verification' | 'frozen_existing_settlement'
 }
 
 export async function getMyProfile(token: string) {

@@ -80,6 +80,49 @@ test('merged inspection task shows pending inspection after cleaning is complete
   expect(meta).toEqual({ text: '待检查', tone: 'pending' })
 })
 
+test('inspector lockbox video does not mark unfinished cleaning complete', () => {
+  const meta = getTaskStatusMeta(
+    makeTask({
+      task_kind: 'cleaning',
+      status: 'keys_hung',
+      cleaner_id: 'cleaner-1',
+      cleaner_name: '清洁A',
+      key_photo_url: 'private://key-photo',
+      cleaning_submission_ready: false,
+    }),
+    ['cleaner'],
+  )
+  expect(meta).toEqual({ text: '进行中', tone: 'normal' })
+})
+
+test('unfinished cleaning without progress remains assigned after inspection completion', () => {
+  const meta = getTaskStatusMeta(
+    makeTask({
+      task_kind: 'cleaning',
+      status: 'keys_hung',
+      cleaner_id: 'cleaner-1',
+      cleaner_name: '清洁A',
+      cleaning_submission_ready: false,
+    }),
+    ['cleaner'],
+  )
+  expect(meta).toEqual({ text: '已分配', tone: 'normal' })
+})
+
+test('submitted cleaning may still display complete after keys are hung', () => {
+  const meta = getTaskStatusMeta(
+    makeTask({
+      task_kind: 'cleaning',
+      status: 'keys_hung',
+      cleaner_id: 'cleaner-1',
+      cleaner_name: '清洁A',
+      cleaning_submission_ready: true,
+    }),
+    ['cleaner'],
+  )
+  expect(meta).toEqual({ text: '已完成', tone: 'success' })
+})
+
 test('maintenance executor sees completed after submitting while management sees pending review', () => {
   const task = makeTask({
     task_kind: 'maintenance',

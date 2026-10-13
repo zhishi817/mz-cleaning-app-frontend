@@ -32,4 +32,19 @@ describe('dailyTaskPresentation', () => {
       { ...base, id: 'review', source_type: 'property_maintenance', assignee_id: 'worker-1', status: 'pending_review', execution_list_visible: false, daily_stats_group: null, daily_stats_key: null },
     ])).toEqual({ turnover: 1, offline: 1 })
   })
+
+  it('counts the same unassigned ordinary offline card shown in manager all view', () => {
+    const unassigned = {
+      ...base,
+      id: 'offline-unassigned',
+      source_type: 'cleaning_offline_tasks',
+      task_kind: 'offline',
+      assignee_id: null,
+      execution_list_visible: true,
+      daily_stats_group: 'offline' as const,
+      daily_stats_key: 'offline:2026-10-04:cleaning_offline_tasks:offline-unassigned',
+    }
+    expect(dailyTaskGroupCounts([unassigned], { includeManagerUnassignedOffline: true })).toEqual({ turnover: 0, offline: 1 })
+    expect(dailyTaskGroupCounts([unassigned])).toEqual({ turnover: 0, offline: 0 })
+  })
 })

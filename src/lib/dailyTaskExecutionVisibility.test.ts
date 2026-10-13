@@ -1,4 +1,4 @@
-import { isDailyTaskExecutionVisible } from './dailyTaskExecutionVisibility'
+import { isDailyTaskExecutionVisible, isOrdinaryOfflineDailyTask } from './dailyTaskExecutionVisibility'
 
 const scheduled = '2026-10-09'
 const cases = [
@@ -8,6 +8,8 @@ const cases = [
   { id: 'maintenance-review-pending-alias', source_type: 'property_maintenance', status: 'review_pending', scheduled_date: scheduled, assignee_id: 'staff-1' },
   { id: 'maintenance-closed-mapped-done', source_type: 'property_maintenance', status: 'done', source_workflow_status: 'closed', scheduled_date: scheduled, assignee_id: 'staff-1' },
   { id: 'external-maintenance-assigned', source_type: 'external_maintenance_orders', status: 'assigned', scheduled_date: scheduled, assignee_id: 'staff-1' },
+  { id: 'external-maintenance-unassigned', source_type: 'external_maintenance_orders', task_kind: 'maintenance', status: 'todo', scheduled_date: scheduled, assignee_id: null },
+  { id: 'external-maintenance-unassigned-mislabeled', source_type: 'external_maintenance_orders', task_kind: 'offline', status: 'todo', scheduled_date: scheduled, assignee_id: null },
   { id: 'external-maintenance-closed-mapped-done', source_type: 'external_maintenance_orders', status: 'done', scheduled_date: scheduled, assignee_id: 'staff-1' },
   { id: 'deep-cleaning-review', source_type: 'property_deep_cleaning', status: 'pending_review', scheduled_date: scheduled, assignee_id: 'staff-2' },
   { id: 'deep-cleaning-awaiting-review-alias', source_type: 'property_deep_cleaning', status: 'awaiting_review', scheduled_date: scheduled, assignee_id: 'staff-2' },
@@ -18,6 +20,7 @@ const cases = [
   { id: 'offline-ready', source_type: 'cleaning_offline_tasks', task_kind: 'offline', status: 'ready', scheduled_date: scheduled, assignee_id: 'staff-3' },
   { id: 'offline-assigned', source_type: 'cleaning_offline_tasks', task_kind: 'offline', status: 'assigned', scheduled_date: scheduled, assignee_id: 'staff-3' },
   { id: 'offline-progress', source_type: 'cleaning_offline_tasks', task_kind: 'offline', status: 'in_progress', scheduled_date: scheduled, assignee_id: 'staff-3' },
+  { id: 'offline-unassigned', source_type: 'cleaning_offline_tasks', task_kind: 'offline', task_type: 'company', status: 'todo', scheduled_date: scheduled, assignee_id: null },
   { id: 'offline-cancelled', source_type: 'cleaning_offline_tasks', task_kind: 'offline', status: 'cancelled', scheduled_date: scheduled, assignee_id: 'staff-3' },
   { id: 'offline-canceled-alias', source_type: 'cleaning_offline_tasks', task_kind: 'offline', status: 'canceled', scheduled_date: scheduled, assignee_id: 'staff-3' },
   { id: 'offline-unscheduled', source_type: 'cleaning_offline_tasks', task_kind: 'offline', status: 'assigned', scheduled_date: null, task_date: scheduled, date: scheduled, assignee_id: 'staff-3' },
@@ -43,7 +46,31 @@ const expectedVisible = [
 
 describe('daily task execution visibility', () => {
   it.each(['admin', 'offline_manager', 'customer_service'])('keeps the same execution matrix for %s', () => {
-    expect(cases.filter(isDailyTaskExecutionVisible).map((task) => task.id)).toEqual(expectedVisible)
+    expect(cases.filter((task) => isDailyTaskExecutionVisible(task, { includeManagerUnassignedOffline: true })).map((task) => task.id)).toEqual([
+      ...expectedVisible.slice(0, 8),
+      'offline-unassigned',
+      ...expectedVisible.slice(8),
+    ])
+  })
+
+  it('keeps partner/self projection assignment-scoped and management categories assignment-first', () => {
+    const unassignedOffline = cases.find((task) => task.id === 'offline-unassigned')!
+    const unassignedNecessities = cases.find((task) => task.id === 'daily-necessities-unassigned')!
+    expect(isOrdinaryOfflineDailyTask(unassignedOffline)).toBe(true)
+    expect(isDailyTaskExecutionVisible(unassignedOffline)).toBe(false)
+    expect(isDailyTaskExecutionVisible(unassignedNecessities, { includeManagerUnassignedOffline: true })).toBe(false)
+    expect(isDailyTaskExecutionVisible(cases.find((task) => task.id === 'external-maintenance-unassigned')!, { includeManagerUnassignedOffline: true })).toBe(false)
+    expect(isDailyTaskExecutionVisible(cases.find((task) => task.id === 'external-maintenance-unassigned-mislabeled')!, { includeManagerUnassignedOffline: true })).toBe(false)
+  })
+
+  it('keeps every ordinary offline assignment state across past, current and future selected dates', () => {
+    const matrix = ['2026-10-08', '2026-10-09', '2026-10-10'].flatMap((date) => ([
+      { source_type: 'cleaning_offline_tasks', task_kind: 'offline', status: 'todo', scheduled_date: date, assignee_id: null },
+      { source_type: 'cleaning_offline_tasks', task_kind: 'offline', status: 'assigned', scheduled_date: date, assignee_id: 'staff-1' },
+      { source_type: 'cleaning_offline_tasks', task_kind: 'offline', status: 'in_progress', scheduled_date: date, assignee_id: 'staff-1' },
+      { source_type: 'cleaning_offline_tasks', task_kind: 'offline', status: 'done', scheduled_date: date, assignee_id: 'staff-1' },
+    ]))
+    expect(matrix.filter((task) => isDailyTaskExecutionVisible(task, { includeManagerUnassignedOffline: true }))).toHaveLength(12)
   })
 
   it('uses the server projection as authority and fails closed on explicit hidden items', () => {
@@ -69,5 +96,13 @@ describe('daily task execution visibility', () => {
       scheduled_date: scheduled,
       assignee_id: null,
     })).toBe(false)
+    expect(isDailyTaskExecutionVisible({
+      execution_list_visible: true,
+      source_type: 'cleaning_offline_tasks',
+      task_kind: 'offline',
+      status: 'assigned',
+      scheduled_date: scheduled,
+      assignee_id: null,
+    }, { includeManagerUnassignedOffline: true })).toBe(true)
   })
 })

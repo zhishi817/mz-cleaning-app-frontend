@@ -963,6 +963,7 @@ export default function TasksScreen(props: Props) {
   const effectiveView = useMemo<WorkTasksView>(() => {
     return canManagerMode && mode === 'manager' ? view : 'mine'
   }, [canManagerMode, mode, view])
+  const includeManagerUnassignedOffline = canTaskManagerView && mode === 'manager' && view === 'all'
 
   const refreshTasksData = useCallback(async (opts?: { silent?: boolean; preserveError?: boolean; mode?: 'passive' | 'force'; reason?: string }) => {
     if (status !== 'signedIn' || !user?.id || !token) return
@@ -984,7 +985,14 @@ export default function TasksScreen(props: Props) {
         mode: opts?.mode || 'force',
         reason: opts?.reason || 'tasks_screen_refresh',
       })
-      const realtimeActive = await activateWorkTasksRealtime({ token, userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
+      const realtimeActive = await activateWorkTasksRealtime({
+        token,
+        userId: user.id,
+        date_from: range.date_from,
+        date_to: range.date_to,
+        view: effectiveView,
+        includeManagerUnassignedOffline,
+      })
       if (!realtimeActive) return
       await maybeFetchSlaAlerts()
       seedTaskNoticeBaseline(getWorkTasksSnapshot().items || [])
@@ -998,7 +1006,7 @@ export default function TasksScreen(props: Props) {
     } finally {
       if (!silent) setRefreshing(false)
     }
-  }, [effectiveView, handleTaskRefreshFailure, range.date_from, range.date_to, status, token, user?.id])
+  }, [effectiveView, handleTaskRefreshFailure, includeManagerUnassignedOffline, range.date_from, range.date_to, status, token, user?.id])
 
   useEffect(() => {
     if (status === 'signedIn' && token && user?.id) return
@@ -1302,8 +1310,8 @@ export default function TasksScreen(props: Props) {
 
   const selectedTasks = useMemo(() => {
     const list = (tasksByDate.get(selectedDate) || []).filter((task) => {
-      if (!isDailyTaskExecutionVisible(task)) return false
-      if (!(canManagerMode && mode === 'manager' && view === 'all')) return hasMobileExecutor(task)
+      if (!isDailyTaskExecutionVisible(task, { includeManagerUnassignedOffline })) return false
+      if (!includeManagerUnassignedOffline) return hasMobileExecutor(task)
       if (isCleaningExecutionTask(task) || isInspectionExecutionTask(task) || isKeyHandoverExecutionTask(task)) return true
       if (isPropertyFollowupTask(task)) return hasMobileExecutor(task)
       return true
@@ -1337,9 +1345,11 @@ export default function TasksScreen(props: Props) {
       return String(a.title || '').localeCompare(String(b.title || ''))
     })
     return list
-  }, [canManagerMode, mode, period, selectedDate, tasksByDate, view])
+  }, [canManagerMode, includeManagerUnassignedOffline, mode, period, selectedDate, tasksByDate])
 
-  const dailyGroupStats = useMemo(() => dailyTaskGroupCounts(selectedTasks), [selectedTasks])
+  const dailyGroupStats = useMemo(() => dailyTaskGroupCounts(selectedTasks, {
+    includeManagerUnassignedOffline,
+  }), [includeManagerUnassignedOffline, selectedTasks])
 
   const canReorder = useMemo(() => {
     if (roleNames.includes('cleaner') || roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')) return true

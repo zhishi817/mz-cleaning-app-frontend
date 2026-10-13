@@ -11,6 +11,7 @@ import {
   type MyPersonnelClaimOptionsResponse,
 } from '../../lib/api'
 import PersonnelSettlementScreen, {
+  buildPersonnelSettlementWeekDailySummaries,
   buildPersonnelCalendarMonth,
   formatPersonnelDuration,
   formatPersonnelDate,
@@ -18,6 +19,9 @@ import PersonnelSettlementScreen, {
   groupPersonnelClaimsByDate,
   normalizePersonnelTimeWheelMinute,
   personnelClaimSaveErrorMessage,
+  personnelPricingIssueLabel,
+  personnelSettlementCategoryTotals,
+  personnelSettlementPendingPropertyLabels,
   personnelSettlementSubsidyTotalCents,
   personnelSettlementWeekForDate,
   personnelTimeWheelIndexFromOffset,
@@ -37,6 +41,11 @@ const mockNavigationSetOptions = jest.fn()
 function renderPersonnelSettlementScreen() {
   return render(<PersonnelSettlementScreen navigation={{ setOptions: mockNavigationSetOptions }} />)
 }
+
+test('付款后差额税务口径冲突使用明确待处理文案', () => {
+  expect(personnelPricingIssueLabel('post_payment_adjustment_tax_treatment_requires_decision'))
+    .toBe('上周付款后差额与本周 GST 身份不一致，请公司财务／税务负责人核对')
+})
 
 function openClaimForm() {
   const latestOptions = [...mockNavigationSetOptions.mock.calls]
@@ -359,6 +368,100 @@ test('周结算明细按日期合并清洁房号、其他费用和金额', () =>
     { id: 'work', component_type: 'cleaning_task', total_cents: 8800 },
     { id: 'subsidy', component_type: 'subsidy_amount', total_cents: 2200 },
   ] as any)).toBe(2200)
+})
+
+test('检查周明细固定显示周一到周日并把计薪、清洁、补贴、待处理和历史按日归位', () => {
+  const lines = [{
+    id: 'inspection-day:2026-10-05', component_type: 'inspection_day', service_date: '2026-10-05',
+    description: 'Inspection day · 2 properties', subtotal_cents: 13636, gst_cents: 1364, total_cents: 15000,
+    calculation_snapshot: { work_items: [
+      { execution_key: 'inspection:task-1', task_id: 'task-1', component_type: 'inspection_day', property_label: 'A101', service_date: '2026-10-05', status: 'payable' },
+      { execution_key: 'inspection:task-2', task_id: 'task-2', component_type: 'inspection_day', property_label: 'B202', service_date: '2026-10-05', status: 'payable' },
+    ] },
+  }, {
+    id: 'cleaning:task-3', component_type: 'cleaning_task', service_date: '2026-10-08',
+    description: 'Cleaning · FO1602', subtotal_cents: 3182, gst_cents: 318, total_cents: 3500,
+  }, {
+    id: 'subsidy:travel', component_type: 'subsidy_amount', service_date: '2026-10-08',
+    description: 'Travel subsidy', subtotal_cents: 909, gst_cents: 91, total_cents: 1000,
+  }] as any
+  const days = buildPersonnelSettlementWeekDailySummaries({
+    week_start: '2026-10-05', week_end: '2026-10-11', lines,
+    work_checklist: [{
+      execution_key: 'inspection:expected', task_id: 'expected', component_type: 'inspection_day',
+      property_label: 'C303', service_date: '2026-10-11', status: 'expected', included_in_amount: false,
+    }, {
+      execution_key: 'inspection:cancelled', task_id: 'cancelled', component_type: 'inspection_day',
+      property_label: 'D404', scheduled_service_date: '2026-10-06', status: 'cancelled', included_in_amount: false,
+    }, {
+      execution_key: 'inspection:pending', task_id: 'pending', component_type: 'inspection_day',
+      property_label: 'E505', service_date: '2026-10-07', status: 'payable', included_in_amount: false,
+    }] as any,
+    pending_pricing_items: [{
+      id: 'inspection:pending', source_type: 'inspection_task_assignment', source_id: 'pending',
+      service_date: '2026-10-07', component_type: 'inspection_day', description: 'Inspection · E505',
+      property_label: 'E505', code: 'missing_effective_rule',
+      work_items: [
+        { execution_key: 'inspection:pending', task_id: 'pending', property_label: 'E505' },
+        { execution_key: 'inspection:pending-2', task_id: 'pending-2', property_label: 'F606' },
+      ],
+    }] as any,
+  })
+
+  expect(days.map((day) => day.service_date)).toEqual([
+    '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11',
+  ])
+  expect(days[0]).toEqual(expect.objectContaining({
+    inspection_total_cents: 15000,
+    inspection_work_items: [expect.objectContaining({ property_label: 'A101' }), expect.objectContaining({ property_label: 'B202' })],
+  }))
+  expect(days[1].history_items).toEqual([expect.objectContaining({ property_label: 'D404', status: 'cancelled' })])
+  expect(days[2].pending_pricing_items).toEqual([expect.objectContaining({ property_label: 'E505' })])
+  expect(days[2].inspection_work_items).toEqual([])
+  expect(personnelSettlementPendingPropertyLabels(days[2].pending_pricing_items[0])).toEqual(['E505', 'F606'])
+  expect(days[3]).toEqual(expect.objectContaining({ cleaning_total_cents: 3500, subsidy_total_cents: 1000 }))
+  expect(days[6].inspection_work_items).toEqual([expect.objectContaining({ property_label: 'C303', status: 'expected' })])
+  expect(personnelSettlementCategoryTotals(lines)).toEqual({
+    inspection_cents: 15000, cleaning_cents: 3500, other_cents: 0, subsidy_cents: 1000, adjustment_cents: 0,
+  })
+})
+
+test('下一周把已付差额显示为独立补发明细并保留税前和 GST 拆分', async () => {
+  ;(listMyPersonnelSettlements as jest.Mock).mockResolvedValueOnce([])
+  ;(getMyPersonnelSettlementSubmissionPreview as jest.Mock).mockResolvedValueOnce({
+    week_start: '2026-09-07', week_end: '2026-09-13', status: 'not_submitted', settlement: null,
+    subtotal_cents: 2000, gst_cents: 200, total_cents: 2200, line_count: 1,
+    confirmation_token: 'c'.repeat(64), calculation_status: 'complete', pending_pricing_count: 0,
+    pending_pricing_items: [], blocking_issues: [], work_checklist: [],
+    lines: [{
+      id: 'carry-1', component_type: 'post_payment_adjustment', service_date: '2026-09-07',
+      source_type: 'post_payment_adjustment', source_id: 'carry-1',
+      description: 'Paid settlement supplement · 2026-08-31 to 2026-09-06',
+      quantity_numerator: 1, quantity_denominator: 1, unit_rate_cents: 2200,
+      subtotal_cents: 2000, gst_cents: 200, total_cents: 2200,
+      price_basis: 'inclusive_gst', evidence_count: 0,
+      calculation_snapshot: { carry_adjustment: {
+        source_settlement_id: 'paid-week', source_adjustment_id: 'adjustment-1',
+        source_week_start: '2026-08-31', source_week_end: '2026-09-06',
+        recorded_subtotal_difference_cents: 2000, recorded_gst_difference_cents: 200,
+        recorded_total_difference_cents: 2200,
+        previously_applied_subtotal_cents: 0, previously_applied_gst_cents: 0,
+        previously_applied_total_cents: 0,
+        applied_subtotal_cents: 2000, applied_gst_cents: 200, applied_total_cents: 2200,
+      } },
+    }],
+  })
+  const ui = renderPersonnelSettlementScreen()
+  fireEvent.press(ui.getByTestId('personnel-settlements-tab'))
+  await waitFor(() => expect(ui.getByTestId('weekly-submission-preview')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('weekly-submission-review'))
+  expect(ui.getByTestId('weekly-submission-day-2026-09-07-adjustment')).toBeTruthy()
+  expect(ui.getByText('上周补发／抵扣')).toBeTruthy()
+  expect(ui.getByText('原账单 2026-08-31 至 2026-09-06')).toBeTruthy()
+  expect(ui.getByText('原已付金额保持不变 · 税前 $20.00 · GST $2.00')).toBeTruthy()
+  expect(ui.getByTestId('weekly-submission-adjustment-total')).toBeTruthy()
+  expect(personnelSettlementCategoryTotals((await (getMyPersonnelSettlementSubmissionPreview as jest.Mock).mock.results[0].value).lines)).toEqual(expect.objectContaining({ adjustment_cents: 2200 }))
+  ui.unmount()
 })
 
 test('工作时长使用小时和分钟显示且不暴露浮点小数', () => {
@@ -979,30 +1082,25 @@ test('移动端显示费用反馈入口并以工作量及金额正确作为确�
   await waitFor(() => expect(ui.getByTestId('settlement-confirm')).toBeTruthy())
   expect(ui.getByText('确认并重新提交')).toBeTruthy()
   expect(ui.queryByText('提交异议给财务')).toBeNull()
-  expect(ui.getByTestId('settlement-day-2026-09-10-base')).toBeTruthy()
-  expect(ui.getByText('Cleaning - FG1003 / OP814')).toBeTruthy()
+  expect(ui.getByTestId('settlement-day-2026-09-07')).toBeTruthy()
+  expect(ui.getByTestId('settlement-day-2026-09-13')).toBeTruthy()
+  expect(ui.getByTestId('settlement-day-2026-09-10-cleaning')).toBeTruthy()
+  expect(ui.getByText('FG1003 / OP814')).toBeTruthy()
   expect(ui.getByTestId('settlement-day-2026-09-10-subsidy')).toBeTruthy()
   expect(ui.getByText('Subsidy - Travel subsidy')).toBeTruthy()
   expect(ui.getByTestId('settlement-detail-subsidy-total').props.children.join('')).toBe('其中补贴 $22.00（已包含）')
-  expect(ui.getByText('已完成房源（2）')).toBeTruthy()
-  expect(ui.getByText('本周房源工作清单（4）')).toBeTruthy()
-  expect(ui.getByText('LATE01')).toBeTruthy()
-  expect(ui.getByText('未完成')).toBeTruthy()
-  expect(ui.getByText('LEGACY01')).toBeTruthy()
-  expect(ui.getByText('历史完成待核实')).toBeTruthy()
+  expect(ui.queryByText('本周房源工作清单（4）')).toBeNull()
+  fireEvent.press(ui.getByTestId('settlement-day-2026-09-08-history-toggle'))
+  expect(ui.getByText('LEGACY01 · 历史完成待核实')).toBeTruthy()
   expect(ui.getByText('保留历史结算金额，执行事实待核实')).toBeTruthy()
-  expect(ui.getByText('MOVED01')).toBeTruthy()
-  expect(ui.getByText('改期/跨日')).toBeTruthy()
-  expect(ui.getByText('当前安排日 15/09/2026')).toBeTruthy()
+  fireEvent.press(ui.getByTestId('settlement-day-2026-09-09-history-toggle'))
+  expect(ui.getByText('LATE01 · 未完成')).toBeTruthy()
+  expect(ui.getByText('任务状态 assigned，尚无完成审计')).toBeTruthy()
+  expect(ui.getByText('MOVED01 · 改期/跨日')).toBeTruthy()
   expect(ui.getByText('原安排日后已改期，原任务不自动计费')).toBeTruthy()
-  expect(ui.getByText('CLOSED01')).toBeTruthy()
-  expect(ui.getByText('管理关闭')).toBeTruthy()
+  fireEvent.press(ui.getByTestId('settlement-day-2026-09-10-history-toggle'))
+  expect(ui.getByText('CLOSED01 · 管理关闭')).toBeTruthy()
   expect(ui.getByText('仅关闭管理流程，不代表真实执行完成，不计费')).toBeTruthy()
-  expect(ui.getAllByText('实际工作日 10/09/2026 · 执行人 Cleaner One')).toHaveLength(2)
-  expect(ui.getAllByText('原安排日 08/09/2026')).toHaveLength(2)
-  expect(ui.getByText('原安排日 09/09/2026 · 延期检查日 10/09/2026')).toBeTruthy()
-  expect(ui.getByText('完成证据 3 项')).toBeTruthy()
-  expect(ui.getByTestId('settlement-day-2026-09-10-work-item-0')).toBeTruthy()
   expect(ui.getByText('费用结算草稿 · v3')).toBeTruthy()
   expect(ui.queryByText('费用结算草稿 · v2')).toBeNull()
   expect(ui.getByTestId('settlement-day-2026-09-10')).toBeTruthy()
@@ -1074,16 +1172,17 @@ test('上一完整周必须先核对明细并二次确认才提交给财务', as
 
   fireEvent.press(ui.getByTestId('weekly-submission-review'))
   expect(ui.getByTestId('weekly-submission-review-detail')).toBeTruthy()
-  expect(ui.getByText('Cleaning - FG1003')).toBeTruthy()
+  expect(ui.getByTestId('weekly-submission-day-2026-09-10-cleaning')).toBeTruthy()
+  expect(ui.getByText('FG1003')).toBeTruthy()
   expect(ui.getByTestId('weekly-submission-included-pending-claims')).toBeTruthy()
   expect(ui.getByText('已包含 1 条待财务审核反馈')).toBeTruthy()
   expect(ui.queryByTestId('weekly-submission-unincluded-claims')).toBeNull()
-  expect(ui.getByText('以下基础工作量、额外工作和补贴均已计入本次确认总额')).toBeTruthy()
+  expect(ui.getByText('以下基础工作量、额外工作、补贴和上周补发／抵扣均已计入本次确认总额')).toBeTruthy()
   expect(ui.getByTestId('weekly-submission-subsidy-total')).toBeTruthy()
-  expect(ui.getByText('本周房源工作清单（1）')).toBeTruthy()
-  expect(ui.getByText('DELAY01')).toBeTruthy()
+  expect(ui.queryByText('本周房源工作清单（1）')).toBeNull()
+  fireEvent.press(ui.getByTestId('weekly-submission-day-2026-09-10-history-toggle'))
+  expect(ui.getByText('DELAY01 · 未完成')).toBeTruthy()
   expect(ui.getByText('任务状态 assigned，尚无完成审计')).toBeTruthy()
-  expect(ui.getByText('未计费 · 完成证据 0 项')).toBeTruthy()
   expect(mockSubmitSettlementWeek).not.toHaveBeenCalled()
 
   fireEvent.press(ui.getByTestId('weekly-submission-next'))
@@ -1107,7 +1206,11 @@ test('待计价项目单列且允许先提交已计小计，随后必须重新�
     calculation_status: 'partial', pending_pricing_count: 1,
     pending_pricing_items: [{
       id: 'workload_claim:claim-overtime:overtime_hour', source_type: 'workload_claim', source_id: 'claim-overtime',
-      service_date: '2026-09-28', component_type: 'overtime_hour', description: '加班 2 小时', code: 'missing_rule_item',
+      service_date: '2026-09-08', component_type: 'overtime_hour', description: '加班 2 小时', code: 'missing_rule_item',
+      work_items: [
+        { execution_key: 'inspection:A101', task_id: 'A101', property_label: 'A101' },
+        { execution_key: 'inspection:B202', task_id: 'B202', property_label: 'B202' },
+      ],
     }],
     blocking_issues: [{ source_type: 'workload_claim', source_id: 'claim-overtime', code: 'missing_rule_item' }],
     lines: [],
@@ -1118,12 +1221,13 @@ test('待计价项目单列且允许先提交已计小计，随后必须重新�
   await waitFor(() => expect(ui.getByTestId('weekly-submission-preview')).toBeTruthy())
   expect(ui.getByText('本周总额暂未计算完整；可先提交已计小计和待计价项目，公司补齐后会请你重新确认。')).toBeTruthy()
   fireEvent.press(ui.getByTestId('weekly-submission-review'))
-  expect(ui.getByText('本周暂无已计价项目')).toBeTruthy()
-  expect(ui.getByText('本周工作均列在下方待计价项目中，未按 $0 计入。')).toBeTruthy()
+  expect(ui.getByText('以下为已计价项目；待计价工作单独列出且未按零元合并')).toBeTruthy()
   expect(ui.queryByText('本周暂无可提交项目')).toBeNull()
-  expect(ui.getByTestId('weekly-submission-pending-pricing')).toBeTruthy()
-  expect(ui.getByText('待计价项目 1 项')).toBeTruthy()
-  expect(ui.getByText('28/09/2026  周一 · 加班')).toBeTruthy()
+  expect(ui.getByTestId('weekly-submission-day-2026-09-07')).toBeTruthy()
+  expect(ui.getByTestId('weekly-submission-day-2026-09-13')).toBeTruthy()
+  expect(ui.getByTestId('weekly-submission-day-2026-09-08-pending')).toBeTruthy()
+  expect(ui.getByText('A101 / B202')).toBeTruthy()
+  expect(ui.getByText('08/09/2026  周二')).toBeTruthy()
   expect(ui.getByText('加班 2 小时')).toBeTruthy()
   expect(ui.getByText('费用规则缺少该工作类型单价')).toBeTruthy()
   expect(ui.getByTestId('weekly-submission-next').props.accessibilityState.disabled).toBe(false)
