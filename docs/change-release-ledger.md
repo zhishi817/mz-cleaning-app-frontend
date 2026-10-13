@@ -91,11 +91,11 @@
 - Required validation: `PASS`; the published source fingerprint, full Mobile CI, production export, EAS remote receipt, post-publication backend health, clean worktree, fresh `origin/Dev`, exact local ancestry and absent remote target branch are verified.
 - Shared-hunk review: `PASS`; the 7 metadata hunks remain the exact fingerprinted Build 28 compatibility patch and this attempt adds only a ledger Release Attempt.
 - Generated-file review: `PASS`; no generated, dependency, export, cache, native, environment or secret path is selected.
-- Technical state: `committed`; source and publication receipts are committed locally and the target remote branch is absent before the authorized push.
+- Technical state: `pushed`; source and publication receipts were uploaded by one normal non-force branch creation, with this ledger-only outcome receipt pending a normal fast-forward.
 - User authorization: `approved-for-push`; the parent instruction explicitly requests the exact source/receipt commits be preserved on the dedicated branch with no force, no repeat OTA, no Mobile main merge and no deployment.
 - Independent review: `GO`; prior complete business review returned P0/P1/P2=0, the exact source tree passed Mobile CI and fingerprint/export verification, the publication receipt was remotely read back, and the current clean range contains only the reviewed compatibility metadata plus selected ledger receipts.
-- Remote evidence: pre-push `git ls-remote --heads origin refs/heads/codex/build28-ota-mz032-034-20261014` returned no ref after a fresh fetch; final remote SHA remains mandatory after the normal push.
-- Action conclusion: `GO` for one normal non-force push of the exact audited head to the dedicated branch only; deployment, OTA publication, native build, Mobile `main` merge and production writes remain excluded.
+- Remote evidence: initial normal non-force branch creation succeeded and read-back matched local/tracking/remote SHA `6ec881dc4afa493f7eeaedbcb3e13845e6530ba7` at `refs/heads/codex/build28-ota-mz032-034-20261014`; the exact outcome-receipt head will be emitted by the final release report and verified after a normal fast-forward.
+- Action conclusion: `GO / PUSHED`; the exact audited source and existing receipt history are preserved on the dedicated remote branch. Only the ledger-only outcome receipt remains to be fast-forwarded; deployment, OTA publication, native build, Mobile `main` merge and production writes remain excluded.
 
 ### Risks / Release Notes
 
