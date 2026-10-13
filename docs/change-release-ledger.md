@@ -102,15 +102,15 @@
 - Branch: `codex/mz032-034-release-20261014`
 - Base: `origin/Dev@7ba1d4329b07024ed653d6bcc60e0d172098bee8`; fetched at `2026-10-14 02:14 Australia/Melbourne`
 - Candidate patch SHA-256: `b2340d322079bc0edf66d866b3f432bacbc79b62841dd36d2387c6d69925767d` excluding `docs/change-release-ledger.md`
-- Commit SHA: not committed; audit head will be emitted by the release report
+- Commit SHA: `501d455f99fea5e3cf668a541a73a45ba82e0c3a`; audit head is emitted by the release report
 - Dependencies: paired `root/CRL-20261013-001`, `root/CRL-20261013-003`, `root/CRL-20261013-005`
 - Required validation: `PASS`; evidence: final integrated `npm run check:ci` passed ledger range 44/44, coverage 16/16, typecheck, lint with 0 errors, button audit, fast 8 suites/58 tests and full 67 suites/434 tests
 - Shared-hunk review: `PASS`; evidence: MZ033 paths are byte-identical to the frozen candidate; MZ032/MZ034 files retain the exact reviewed Mobile fingerprint `9c28027ff491e5bd80603377e7216ff2cc001895bbe7a0170cda50f59190b05d`
 - Generated-file review: `PASS`; evidence: no generated, native, cache, dependency-link, environment or secret file is staged
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `approved-for-push`; evidence: user authorized the exact MZ032/033/034 joint scope and parent freeze explicitly limited the current action to safe commit, feature push and Draft PR
 - Independent review: `GO`; evidence: MZ034 exact paired review at `2026-10-13T15:09:03Z` returned P0/P1/P2=0; MZ032 and MZ033 independent reviews were GO, and frozen subset fingerprints remained exact after integration
-- Action conclusion: `GO` for content commit; push remains contingent on the exact committed-range report. Merge, production deployment, native build and OTA remain `BLOCKED`.
+- Action conclusion: content commit `GO`; push remains contingent on the exact committed-range report. Merge, production deployment, native build and OTA remain `BLOCKED`.
 
 ### Risks / Release Notes
 
