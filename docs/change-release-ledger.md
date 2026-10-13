@@ -76,6 +76,27 @@
 - Independent review: `GO`; inherited business-code review P0/P1/P2=0 plus exact tree equality, official fingerprint parity, exact-main CI/deploy health and remotely verified single-platform publication boundary; no unresolved publication blocker remains.
 - Action conclusion: `GO / PUBLISHED`; one iOS-only EAS Update was published to the active `testflight` channel/branch in `production` environment and verified remotely as group `fec51f03-6f9b-4c14-90f1-67bd2cdf34f2`. Android, `production` channel, native build, Mobile Git push/merge and unrelated changes remain excluded.
 
+#### RA-20261014-004
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20261014-001`.
+- Selected CRL identities: `mobile/CRL-20261014-001`.
+- Intended action: push the exact already-published Build 28 OTA source commit and its local receipt commits once to the dedicated remote branch `codex/build28-ota-mz032-034-20261014` using a normal non-force push solely for traceability; do not merge Mobile `main`, deploy, publish another OTA, create a native build, or write production data.
+- Branch: `codex/build28-ota-mz032-034-20261014`.
+- Base: `origin/Dev@97744ce6a14e5d2a55453e185118f9c2bc8f6f0f`; fetched at `2026-10-14 04:55:52 Australia/Melbourne` and reconfirmed unchanged at `2026-10-13T18:42:08Z`.
+- Candidate patch SHA-256: `7e8c11afe34d28e6aea948eac7ee0fb264dc3e633ad45f0282bd7d7da976df9c`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: exact local content commit `e83382770273d09d08c441aef56fde23461c5d0a`; existing publication receipt commits `3c9c5411c6f550a1aaaf4c2ae5cf2869b60a0b88` and `aba7a541bba7adfcf96a5c8775b4fd7402cd3b81` remain descendants in the push range.
+- Dependencies: `none`.
+- Release provenance: the OTA runtime release dependency recorded under `RA-20261014-003` was already satisfied before publication by Root main `eeaf4bb5433ab4833f98e64de6aea8da9dcd92be`, exact-main CI, Render/Vercel deployment and production health; this new attempt performs only archival Git transport and cannot alter that release.
+- Required validation: `PASS`; the published source fingerprint, full Mobile CI, production export, EAS remote receipt, post-publication backend health, clean worktree, fresh `origin/Dev`, exact local ancestry and absent remote target branch are verified.
+- Shared-hunk review: `PASS`; the 7 metadata hunks remain the exact fingerprinted Build 28 compatibility patch and this attempt adds only a ledger Release Attempt.
+- Generated-file review: `PASS`; no generated, dependency, export, cache, native, environment or secret path is selected.
+- Technical state: `committed`; source and publication receipts are committed locally and the target remote branch is absent before the authorized push.
+- User authorization: `approved-for-push`; the parent instruction explicitly requests the exact source/receipt commits be preserved on the dedicated branch with no force, no repeat OTA, no Mobile main merge and no deployment.
+- Independent review: `GO`; prior complete business review returned P0/P1/P2=0, the exact source tree passed Mobile CI and fingerprint/export verification, the publication receipt was remotely read back, and the current clean range contains only the reviewed compatibility metadata plus selected ledger receipts.
+- Remote evidence: pre-push `git ls-remote --heads origin refs/heads/codex/build28-ota-mz032-034-20261014` returned no ref after a fresh fetch; final remote SHA remains mandatory after the normal push.
+- Action conclusion: `GO` for one normal non-force push of the exact audited head to the dedicated branch only; deployment, OTA publication, native build, Mobile `main` merge and production writes remain excluded.
+
 ### Risks / Release Notes
 
 - `test:fast` three-file definition is compatibility metadata only; full `check:ci` remains mandatory and this branch must not be merged back into `Dev`.
