@@ -62,15 +62,18 @@
 - Branch: `codex/build28-ota-mz032-034-20261014`.
 - Base: `origin/Dev@97744ce6a14e5d2a55453e185118f9c2bc8f6f0f`.
 - Candidate patch SHA-256: `7e8c11afe34d28e6aea948eac7ee0fb264dc3e633ad45f0282bd7d7da976df9c`, excluding `docs/change-release-ledger.md`.
-- Commit SHA: pending exact local content commit; no Git push is intended.
-- Dependencies: paired Root production health after `root/CRL-20261014-004`; current TestFlight group `cf51792d-a298-4dbc-a0ec-e59f22de7a8d` / source `e8bccc663473435c4db72a4ca8c8badbed5a5a0e` is the pre-publication reference.
-- Required validation: official fingerprint compare, full Mobile CI, production iOS export and the staged ledger audit are PASS; Root production health and final publication verification remain mandatory.
+- Commit SHA: exact local content commit `e83382770273d09d08c441aef56fde23461c5d0a`; no Git push is intended.
+- Dependencies: paired Root production health after `root/CRL-20261014-004` passed at deployed main SHA `eeaf4bb5433ab4833f98e64de6aea8da9dcd92be`; previous TestFlight group `cf51792d-a298-4dbc-a0ec-e59f22de7a8d` / source `e8bccc663473435c4db72a4ca8c8badbed5a5a0e` was retained only as the pre-publication reference.
+- Required validation: `PASS`; official fingerprint compare, full Mobile CI, production iOS export, clean content commit, exact Root main CI/deploy/health, and remote EAS publication verification all passed.
 - Shared-hunk review: PASS；the 7 metadata hunks are byte-identical to the prior Build 28 compatibility patch and do not alter the merged MZ business tree.
 - Generated-file review: PASS；no dependency, cache, export, source map or native artifact is selected.
-- Technical state: `locally validated`; exact local content commit pending.
+- Root production evidence: PASS；PR #394 merged to `main` at `eeaf4bb5433ab4833f98e64de6aea8da9dcd92be`; exact-main CI run `38446669289` completed success, Render reported the same SHA Live, Vercel status was success, and read-only health checks returned HTTP 200 with the exact build, PostgreSQL/schema/warmup ready and production environment roles.
+- Publication receipt: PASS at `2026-10-13T18:34:16.445Z`; active channel/branch `testflight`, platform `ios`, environment `production`, group `fec51f03-6f9b-4c14-90f1-67bd2cdf34f2`, update `01a1368b-39fd-793f-9afc-7e7e74d89c1a`, source `e83382770273d09d08c441aef56fde23461c5d0a`, runtime/fingerprint `ecbe7eb9e9ab01ec12ae1ac77c261e758a23cfbf`, clean working tree, manifest `https://u.expo.dev/update/01a1368b-39fd-793f-9afc-7e7e74d89c1a`; remote `update:list` and `channel:view` both returned this group as the newest iOS TestFlight update.
+- Publication boundary: PASS；no Android or `production` channel update, no native build, no extra migration, no production business-data write, and no Mobile Git push/merge occurred.
+- Technical state: `committed`; exact local content commit is published and remotely verified as the iOS TestFlight OTA above, with this ledger-only receipt pending local commit.
 - User authorization: `approved` for the MZ-032/033/034 joint commit/push/release and one iOS TestFlight OTA after safe migration/backend deployment; Android, production channel, native build and unrelated changes remain excluded.
-- Independent review: inherited business-code review P0/P1/P2=0 plus exact tree equality and official fingerprint parity; final publication boundary review remains required after CI/export/backend health.
-- Action conclusion: `GO` only for completing validation and the exact local content commit; publication remains gated by backend production health and all pending checks.
+- Independent review: `GO`; inherited business-code review P0/P1/P2=0 plus exact tree equality, official fingerprint parity, exact-main CI/deploy health and remotely verified single-platform publication boundary; no unresolved publication blocker remains.
+- Action conclusion: `GO / PUBLISHED`; one iOS-only EAS Update was published to the active `testflight` channel/branch in `production` environment and verified remotely as group `fec51f03-6f9b-4c14-90f1-67bd2cdf34f2`. Android, `production` channel, native build, Mobile Git push/merge and unrelated changes remain excluded.
 
 ### Risks / Release Notes
 
