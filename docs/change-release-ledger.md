@@ -1,5 +1,84 @@
 # Change Release Ledger
 
+## CRL-20261014-001 — MZ-032/033/034 TestFlight Build 28 iOS OTA 候选（mobile）
+
+- **Status:** locally validated and fingerprint-compatible; backend production health and final publication receipt remain mandatory
+- **Repository:** `mobile`
+- **Updated:** 2026-10-14 05:13 Australia/Melbourne
+- **Request:** 将已合入 Mobile `Dev` 的 MZ-032/033/034 精确候选发布给现有 TestFlight App `1.0.28` / iOS build `28`；仅允许 iOS `testflight` channel/branch、`production` environment OTA，不发布 Android/`production` channel、不创建原生 build、不写业务数据。
+- **Outcome:** 在 `origin/Dev@97744ce6a14e5d2a55453e185118f9c2bc8f6f0f` 的精确业务 tree 上，仅复用已验证 Build 28 的三文件兼容元数据；没有业务源码、原生依赖、config plugin、权限、API、schema 或 migration 变化。
+
+### Implementation
+
+- `app.json` 对齐 App `1.0.28`、iOS build `28` 和 Android versionCode `28`；Android 字段仅是 Build 28 fingerprint 输入，不构成 Android 发布授权。
+- `package.json` / `package-lock.json` 根版本对齐 `1.0.28`；`test:fast` 恢复 Build 28 的三文件定义以保持 fingerprint，`check:ci` 仍通过 `check:full` 运行无筛选全量 Jest。
+- Runtime 继续使用 `fingerprint` policy，不显式 pin；发布目标只允许 EAS `testflight` channel/branch、iOS、`production` environment。
+
+### Files / Areas
+
+- `app.json` — Build 28 App/iOS/Android 版本输入。
+- `package.json` — Build 28 根版本与兼容测试脚本输入。
+- `package-lock.json` — Build 28 根版本输入。
+- `docs/change-release-ledger.md` — 本 OTA 候选、验证、授权与发布边界。
+
+### Impact / Dependencies
+
+- Source base: `origin/Dev@97744ce6a14e5d2a55453e185118f9c2bc8f6f0f`；其 tree `ca68e43ed478bc1a5100ed4e3d6e71781d9accb5` 与已审查候选 `2ce35e6e59e7faac92ca08758078274883e00e57` 完全一致。
+- Intended recipient: existing TestFlight App `1.0.28` / iOS build `28`，build ID `3e830cb4-96d6-4bb8-827f-09e991f37ca3`，runtime/fingerprint `ecbe7eb9e9ab01ec12ae1ac77c261e758a23cfbf`。
+- Dependencies: `mobile/CRL-20261013-002`、`mobile/CRL-20261013-004`、`mobile/CRL-20261013-006`；paired Root production deployment/health for the reviewed MZ-032/033/034 contract must succeed before publication.
+- Production database migrations were executed separately under the user's explicit authorization; this Mobile candidate performs no database read/write or migration.
+
+### Validation
+
+- Dev merge CI: PASS at `97744ce6a14e5d2a55453e185118f9c2bc8f6f0f`; non-interactive quality gate completed successfully.
+- Exact paired Root/Mobile run `38439965636`: PASS for Root full, Mobile full and Phase 5 contract at Root `703584c2009a6dc4ce3e6106e5a3af23022d2f9d` / Mobile `2ce35e6e59e7faac92ca08758078274883e00e57`.
+- Exact three-file non-ledger diff: PASS；7 text hunks，patch SHA-256 `7e8c11afe34d28e6aea948eac7ee0fb264dc3e633ad45f0282bd7d7da976df9c`，identical to the previously verified Build 28 compatibility patch.
+- Official `eas fingerprint:compare --build-id 3e830cb4-96d6-4bb8-827f-09e991f37ca3 --environment production`: PASS；build and local candidate both resolve to `ecbe7eb9e9ab01ec12ae1ac77c261e758a23cfbf`.
+- Final `npm run check:ci`: PASS；ledger auditor 44/44, changed-file coverage 4/4, TypeScript, button audit, lint 0 errors / 609 existing warnings, fast 3 suites / 42 tests, and full 67 suites / 434 tests.
+- Production-env iOS export: PASS with `EXPO_PUBLIC_APP_ENV=prod` and `EXPO_PUBLIC_API_BASE_URL_PROD=https://mz-property-system-v3-docker.onrender.com`; exported Hermes bundle SHA-256 `96d9e0788d11193efaefb1b934185fbccb090a15b244df21810416262e6f7a36`, contains the production URL and contains no `localhost` / `127.0.0.1` HTTP endpoint. `src/config/env.ts` selects `apiBaseProd` for the supplied `prod` environment.
+- Pending before publication: Root main deploy/health and final committed clean-working-tree/fingerprint review.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** no untracked candidate files; ignored `node_modules/` is an APFS clone used only for validation and is not selected.
+- `app.json` — SHA-256: `167828e663812b5a00076d4f1aa7bab936bf961a3071ddf42649a514a3dbb229`
+- `app.json` — SHA-256: `488fd8628b8c5610676a9142d4a316ab70ca04e67f867bc50c11a7b1b7bbcd4c`
+- `app.json` — SHA-256: `53940c62e44b19505d096322d461d65de9945c7ddf303441e471eb5e929f29b1`
+- `package.json` — SHA-256: `0c59c140e7cd560ca244e38e5441556188b83613f21282d586faaece0e54c199`
+- `package.json` — SHA-256: `0e5450145e7f868e3a37d17559083908f0012d8e98a776dc780ab4d7e44f7fb3`
+- `package-lock.json` — SHA-256: `827fe61a11f1c8010b34b66d3db0f53671ee2b3edd6a76f6b367c29893d6f4c5`
+- `package-lock.json` — SHA-256: `883063ec26331f2cc63d76c1ad90a3822b4589e64628e11cdd80f0c681707da6`
+
+### Release Attempts
+
+#### RA-20261014-003
+
+- Repository: `mobile`.
+- Selected CRLs: `CRL-20261014-001`.
+- Selected CRL identities: `mobile/CRL-20261014-001`.
+- Intended action: commit the exact validated Build 28 compatibility candidate locally, then after Root production health publish one iOS-only EAS Update to channel/branch `testflight` with environment `production`, verify the remote receipt, and commit the local receipt; no Git push/merge、Android/`production` channel publication、native build、extra migration or production business-data write.
+- Branch: `codex/build28-ota-mz032-034-20261014`.
+- Base: `origin/Dev@97744ce6a14e5d2a55453e185118f9c2bc8f6f0f`.
+- Candidate patch SHA-256: `7e8c11afe34d28e6aea948eac7ee0fb264dc3e633ad45f0282bd7d7da976df9c`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: pending exact local content commit; no Git push is intended.
+- Dependencies: paired Root production health after `root/CRL-20261014-004`; current TestFlight group `cf51792d-a298-4dbc-a0ec-e59f22de7a8d` / source `e8bccc663473435c4db72a4ca8c8badbed5a5a0e` is the pre-publication reference.
+- Required validation: official fingerprint compare, full Mobile CI, production iOS export and the staged ledger audit are PASS; Root production health and final publication verification remain mandatory.
+- Shared-hunk review: PASS；the 7 metadata hunks are byte-identical to the prior Build 28 compatibility patch and do not alter the merged MZ business tree.
+- Generated-file review: PASS；no dependency, cache, export, source map or native artifact is selected.
+- Technical state: `locally validated`; exact local content commit pending.
+- User authorization: `approved` for the MZ-032/033/034 joint commit/push/release and one iOS TestFlight OTA after safe migration/backend deployment; Android, production channel, native build and unrelated changes remain excluded.
+- Independent review: inherited business-code review P0/P1/P2=0 plus exact tree equality and official fingerprint parity; final publication boundary review remains required after CI/export/backend health.
+- Action conclusion: `GO` only for completing validation and the exact local content commit; publication remains gated by backend production health and all pending checks.
+
+### Risks / Release Notes
+
+- `test:fast` three-file definition is compatibility metadata only; full `check:ci` remains mandatory and this branch must not be merged back into `Dev`.
+- Android versionCode alignment is not Android publication authorization.
+- Real-device TestFlight installation/acceptance is not proven by Jest, export, fingerprint or remote receipt.
+- No secret, credential, `.env`, production payload, private media or signed URL is recorded.
+
 ## CRL-20261013-006 — MZ-033 管理视图线下任务与日期刷新一致性（mobile）
 
 - **Status:** selected in the frozen MZ-032/033/034 joint Dev candidate; final-SHA Mobile CI and release receipt pending; production merge/deploy/OTA remain blocked
