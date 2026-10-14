@@ -47,6 +47,11 @@ test('付款后差额税务口径冲突使用明确待处理文案', () => {
     .toBe('上周付款后差额与本周 GST 身份不一致，请公司财务／税务负责人核对')
 })
 
+test('检查执行方式异常使用明确待处理文案', () => {
+  expect(personnelPricingIssueLabel('inspection_scope_invalid_for_task'))
+    .toBe('检查执行方式异常，请公司核对')
+})
+
 function openClaimForm() {
   const latestOptions = [...mockNavigationSetOptions.mock.calls]
     .reverse()
@@ -1553,6 +1558,7 @@ test('结算清单不会向用户裸露后端状态原因代码', () => {
     ['legacy_execution_task_later_cancelled', '历史执行后任务被取消，需要人工核实'],
     ['cleaning_action_without_done_status', '已记录清洁执行，但任务状态未完成，需要人工核实'],
     ['inspection_action_without_submission_status', '已记录检查执行，但提交状态不完整，需要人工核实'],
+    ['inspection_scope_invalid_for_task', '检查执行方式异常，请公司核对'],
   ]) {
     expect(settlementWorkReasonLabel(code)).toBe(label)
   }
