@@ -113,11 +113,11 @@
 - Required validation: `PASS`; evidence: ledger auditor 44/44, changed-file coverage 30/30, TypeScript, lint with 0 errors / 613 existing warnings, button contract, fast 8 suites / 59 tests, full 73 suites / 469 tests, focused correction set 5 suites / 47 tests and staged whitespace check all passed.
 - Shared-hunk review: `PASS`; evidence: the exact pre-commit gate matched all 82 non-ledger hunk fingerprints to the three selected CRLs with no untracked, unselected, unexpected or missing file/hunk.
 - Generated-file review: `PASS`; evidence: `app.json`, `package.json`, `package-lock.json` and `eas.json` have no diff; no build output, cache, dependency directory, generated artifact, credential, private media or production payload is selected.
-- Remote branch / Draft PR / CI evidence: not created yet; pending this receipt's exact audit and the authorized normal non-force push.
-- Technical state: `committed`.
+- Remote branch / Draft PR / CI evidence: normal non-force push verified `origin/codex/mz036-037-043-integration-20261016@76722f868fab8bd6681a25f0b16ebf833ad8f427`; Draft PR not created and waiting for separate action-time approval. GitHub read-only checks for this SHA returned 0 workflow runs, 0 check runs and 0 status contexts; `.github/workflows/quality.yml` only triggers push on `Dev`/`main`, so feature-branch push CI is `NOT RUN`, not passed.
+- Technical state: `pushed`.
 - User authorization: `approved-for-push`; evidence: after being shown the scope and exclusions, the user explicitly instructed this task to continue with pre-commit review, commit, feature-branch push, Dev-target Draft PR, CI tracking, release report and board/ledger update; merge, OTA/build/deploy and production writes remain excluded.
 - Independent review: `GO`; evidence: final read-only reviewer matched base `97744ce6a14e5d2a55453e185118f9c2bc8f6f0f`, 30 files, 82 hunks, final validation and Build 28/sensitive/production boundaries, with no remaining P0/P1/P2/P3 finding.
-- Action conclusion: `GO` for the named normal non-force feature-branch push and Draft PR only; the branch is still local and unpushed at this receipt.
+- Action conclusion: `GO`; the named normal non-force feature branch was pushed and its remote SHA verified. Draft PR creation is pending separate approval; no merge, OTA, build, deployment or production write occurred.
 
 ### Risks / Release Notes
 
