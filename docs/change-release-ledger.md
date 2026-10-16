@@ -99,7 +99,25 @@
 
 ### Release Attempts
 
-- None. Local implementation and tests only; no commit, push, merge, build, OTA or deployment authorization.
+#### RA-20261016-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261015-001`, `CRL-20261015-002`, `CRL-20261016-001`
+- Selected CRL identities: `mobile/CRL-20261015-001`, `mobile/CRL-20261015-002`, `mobile/CRL-20261016-001`
+- Intended action: `push` the exact feature branch and open a Draft PR to `Dev`; merge, OTA, build and deployment are excluded.
+- Branch: `codex/mz036-037-043-integration-20261016`
+- Base: `origin/Dev@97744ce6a14e5d2a55453e185118f9c2bc8f6f0f`; fetched at `2026-10-16T04:22:58Z`.
+- Candidate patch SHA-256: `08379ff5b1d3b68455d8c72c8d0ca834f535b10bcaa93e875c4f7ec7a47cd045`, excluding `docs/change-release-ledger.md`.
+- Commit SHA: `17f5ca6c71d5a6ae77ca493c83adb60ba167d5b3`; candidate content commit.
+- Dependencies: none.
+- Required validation: `PASS`; evidence: ledger auditor 44/44, changed-file coverage 30/30, TypeScript, lint with 0 errors / 613 existing warnings, button contract, fast 8 suites / 59 tests, full 73 suites / 469 tests, focused correction set 5 suites / 47 tests and staged whitespace check all passed.
+- Shared-hunk review: `PASS`; evidence: the exact pre-commit gate matched all 82 non-ledger hunk fingerprints to the three selected CRLs with no untracked, unselected, unexpected or missing file/hunk.
+- Generated-file review: `PASS`; evidence: `app.json`, `package.json`, `package-lock.json` and `eas.json` have no diff; no build output, cache, dependency directory, generated artifact, credential, private media or production payload is selected.
+- Remote branch / Draft PR / CI evidence: not created yet; pending this receipt's exact audit and the authorized normal non-force push.
+- Technical state: `committed`.
+- User authorization: `approved-for-push`; evidence: after being shown the scope and exclusions, the user explicitly instructed this task to continue with pre-commit review, commit, feature-branch push, Dev-target Draft PR, CI tracking, release report and board/ledger update; merge, OTA/build/deploy and production writes remain excluded.
+- Independent review: `GO`; evidence: final read-only reviewer matched base `97744ce6a14e5d2a55453e185118f9c2bc8f6f0f`, 30 files, 82 hunks, final validation and Build 28/sensitive/production boundaries, with no remaining P0/P1/P2/P3 finding.
+- Action conclusion: `GO` for the named normal non-force feature-branch push and Draft PR only; the branch is still local and unpushed at this receipt.
 
 ### Risks / Release Notes
 
