@@ -575,6 +575,7 @@ export function settlementWorkReasonLabel(reason: unknown) {
   if (value === 'effective_inspection_assignment_after_day_end') return '经理有效安排已过当日日终，按检查日薪计费'
   if (value === 'effective_inspection_assignment_expected') return '经理有效安排已登记，当日日终后自动进入应付'
   if (value === 'inspection_assignment_conflict_for_property_date') return '同一房源同一检查日期存在不同检查人员，请经理修正安排'
+  if (value === 'inspection_scope_invalid_for_task') return '检查执行方式异常，请公司核对'
   if (value === 'inspection_assignment_superseded') return '原检查安排已被新的有效安排替代'
   if (value === 'completed_with_execution_audit') return '真实执行审计已确认'
   if (value === 'completed_on_different_service_date') return '实际完成日在原安排日之外'
@@ -814,6 +815,7 @@ export function personnelPricingIssueLabel(code: string) {
     missing_or_unsupported_property_type: '房型资料缺失或暂不支持',
     approved_quantity_or_amount_missing: '工作量或金额资料不完整',
     inspection_assignment_conflict_for_property_date: '同一房源同一检查日期存在不同检查人员',
+    inspection_scope_invalid_for_task: '检查执行方式异常，请公司核对',
     inspection_property_missing: '检查安排缺少房源，请公司补齐',
     historical_property_snapshot_missing: '历史安排缺少可核实房源，请公司核对',
     post_payment_adjustment_tax_treatment_requires_decision: '上周付款后差额与本周 GST 身份不一致，请公司财务／税务负责人核对',
