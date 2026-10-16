@@ -12170,3 +12170,53 @@
 - Rollback: revert this CRL as a single Mobile unit to restore direct callers and 500ms SSE scheduling.
 - Sensitive-information review: no secrets, credentials, `.env` values, private media bytes, production logs, database URLs or production data are included.
 - Git state: isolated worktree at `origin/Dev@fbe44c3b08f50c7a31104ad6e3e89e78cbbc2151`; uncommitted, not pushed, no PR, no merge, no deployment/OTA, no device or production verification.
+
+## CRL-20261014-002 — MZ-035 完善检查类型异常防护与仅执行任务计费边界
+
+- Status: implemented; selected for isolated CI test PR, not selected for merge or release
+- Repository: `mobile`
+- Board item: `MZ-035` (id `35`, revision `1`)
+- Updated: 2026-10-14 UTC
+
+### Request
+
+- Show a clear Mobile settlement explanation when Root classifies a stored non-empty inspection-scope value as unknown/invalid and holds it for manual review.
+- Preserve released MZ-034 weekly detail behavior, legal NULL compatibility, and existing task-option wording.
+- User authorization permits local commit, paired test-branch push, draft PR to `Dev`, and CI repair/retry within this CRL. It does not authorize production writes, merge, deployment, or OTA publication.
+
+### Implementation
+
+- Previous behavior: Mobile displayed generic fallback text for an inspection-scope warning code it did not recognize.
+- New behavior: an explicit label explains an invalid task scope while Mobile continues to trust server-provided totals and eligibility. NULL/blank remains Root's released `inspect_and_hang` compatibility default and emits no scope warning by itself.
+- Mobile does not duplicate settlement classification or infer billability; Root remains the source of truth. Existing option names are unchanged.
+
+### Files / Areas
+
+- `src/screens/me/PersonnelSettlementScreen.tsx`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx`
+- `docs/change-release-ledger.md`
+
+### Impact / Dependencies
+
+- User-visible behavior: an affected pending/manual-review item explains that its stored non-empty scope is invalid; legal NULL defaults retain existing wording and totals.
+- API/schema: no Mobile API or database schema change.
+- Dependency: paired `root/CRL-20261014-005` on the same branch name.
+- Related released predecessor: MZ-034 Mobile release remains unchanged.
+
+### Validation
+
+- PASS — focused settlement screen: 1 Jest suite / 31 tests.
+- PASS — TypeScript `npm run typecheck`.
+- PASS — earlier candidate `npm run check:ci`: ledger tests/audit, typecheck, lint with 0 errors, button audit, fast tests, and full 67-suite / 435-test Jest run; the final NULL compatibility correction was rechecked by the focused suite and typecheck.
+- PASS — change-ledger coverage audit: 3 changed paths / 3 recorded paths.
+
+### Selected Commit / Push Scope
+
+- Exact scope: the three paths listed above, rebuilt from fresh `origin/Dev@97744ce6a14e5d2a55453e185118f9c2bc8f6f0f` on branch `codex/mz035-inspection-scope-guard-ci`.
+- Authorization: user replied “允许” to the explicit request for paired Mobile/Root test branches, draft PRs to `Dev`, and isolated CI.
+- Excluded: merge, deployment, release, OTA, and production writes.
+
+### Risks / Release Notes
+
+- Correct totals and eligibility depend on coordinated `root/CRL-20261014-005`; this Mobile CRL changes explanations only.
+- No credentials, production data, environment files, dependency/version changes, private media, or generated artifacts are included.
