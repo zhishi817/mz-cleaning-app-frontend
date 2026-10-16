@@ -18,7 +18,7 @@ import { syncInboxNotifications } from '../../lib/notificationInbox'
 import { isTaskInspectorUser, isTaskManagerUser, roleNamesOf } from '../../lib/roles'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { getWorkTasksSnapshot, subscribeWorkTasks } from '../../lib/workTasksStore'
-import { navigationForWorkTaskAction, preferredNoticeActionForTask, shouldOpenGuestReadyTaskDetail } from '../../lib/workTaskActions'
+import { navigationForWorkTaskEntry } from '../../lib/workTaskActions'
 import {
   listCompanyAnnouncementsForApp,
   listCompanyDocsForApp,
@@ -705,34 +705,17 @@ export default function NoticesScreen(props: Props) {
 
   function openSearchResult(item: SearchResult) {
     if (item.kind === 'task' && item.taskId) {
-      const isCleaningTask = String(item.taskSourceType || '').trim() === 'cleaning_tasks'
-      const isInspection = isCleaningTask && String(item.taskKind || '').trim() === 'inspection'
       const task = historyTasks.find((it) => String(it.id || '').trim() === item.taskId) || null
       const activeRole = String((user as any)?.role || '').trim().toLowerCase()
-      if (isTaskManagerUser(user) && isCleaningTask && !shouldOpenGuestReadyTaskDetail(task, activeRole)) {
-        props.navigation.navigate('ManagerDailyTask', { taskId: item.taskId })
-        return
-      }
-      if (task && Array.isArray((task as any).available_actions)) {
-        const action = preferredNoticeActionForTask(task as any, {}, {
-          roleNames: roleNamesOf(user),
-          activeRole,
-        })
-        const route = action?.enabled ? navigationForWorkTaskAction(task as any, action) : null
-        if (route) {
-          props.navigation.navigate(route.screen as any, route.params as any)
-          return
-        }
-        props.navigation.navigate('TaskDetail', { id: item.taskId })
-        return
-      }
-      const isInspector = isTaskInspectorUser(user)
-      if (isInspector && isInspection) {
-        const sourceId = String((task as any)?.source_id || '').trim()
-        props.navigation.navigate('InspectionPanel', { taskId: item.taskId, ...(sourceId ? { sourceId } : {}) })
-        return
-      }
-      props.navigation.navigate('TaskDetail', { id: item.taskId })
+      const route = navigationForWorkTaskEntry({
+        task: task as any,
+        fallbackTaskId: item.taskId,
+        roleNames: roleNamesOf(user),
+        activeRole,
+        isTaskManager: isTaskManagerUser(user),
+        isTaskInspector: isTaskInspectorUser(user),
+      }) || { screen: 'TaskDetail' as const, params: { id: item.taskId } }
+      props.navigation.navigate(route.screen as any, route.params as any)
       return
     }
     props.navigation.navigate('InfoCenterDetail', {

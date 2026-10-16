@@ -330,6 +330,60 @@ test('keeps one upload owner after waiter timeouts and persists the late success
   jest.useRealTimers()
 })
 
+test('keeps the late upload continuation when persisting the timeout status hits SQLITE_FULL', async () => {
+  jest.useFakeTimers()
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const api = require('./api') as {
+    uploadCleaningVideo: jest.Mock
+    uploadLockboxVideo: jest.Mock
+  }
+  const upload = deferred<{ url: string }>()
+  api.uploadCleaningVideo.mockReturnValue(upload.promise)
+  api.uploadLockboxVideo.mockResolvedValue({ ok: true })
+  const storage = getAsyncStorage() as any
+  const originalSetItem = storage.setItem.getMockImplementation()
+  let setCalls = 0
+  storage.setItem.mockImplementation((key: string, value: string) => {
+    setCalls += 1
+    if (setCalls === 3) return Promise.reject(new Error('database or disk is full (code 13 SQLITE_FULL)'))
+    return originalSetItem(key, value)
+  })
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const queueMod = require('./inspectionMediaQueue') as typeof import('./inspectionMediaQueue')
+    await queueMod.enqueueInspectionMediaItem({
+      task_id: 'cleaning-task-timeout-storage-full',
+      kind: 'lockbox_video',
+      source_uri: 'file:///camera/lock-1.mov',
+      name: 'lock-1.mov',
+      mime_type: 'video/quicktime',
+    })
+
+    const processing = queueMod.processInspectionMediaQueue('token-timeout-storage-full')
+    await jest.advanceTimersByTimeAsync(75_100)
+    await expect(processing).resolves.toEqual({ processed: 0, remaining: 1 })
+    expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
+
+    upload.resolve({ url: 'https://cdn.example.com/late-after-storage-full.mov' })
+    await jest.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
+    expect(api.uploadLockboxVideo).toHaveBeenCalledTimes(1)
+    const [queued] = await queueMod.listInspectionMediaQueueItemsForTask('cleaning-task-timeout-storage-full', ['lockbox_video'])
+    expect(queued).toMatchObject({
+      uploaded_url: 'https://cdn.example.com/late-after-storage-full.mov',
+      business_saved: true,
+      last_error: null,
+    })
+  } finally {
+    storage.setItem.mockImplementation(originalSetItem)
+    jest.useRealTimers()
+  }
+})
+
 test('keeps one business-save owner after timeout and accepts its late success', async () => {
   jest.useFakeTimers()
   const api = require('./api') as {

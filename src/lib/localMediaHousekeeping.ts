@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Directory, File, Paths } from 'expo-file-system'
 import { pruneInspectionThumbnailCache } from './inspectionThumbnailCache'
+import { listInspectionPanelDraftRecoverySnapshots } from './inspectionPanelDraftRecovery'
 import { tryWithLocalMediaLock } from './localMediaLocks'
 
 const LOCAL_MEDIA_DIR_NAMES = [
@@ -69,7 +70,7 @@ function parseStoredValue(raw: string | null) {
   try {
     return JSON.parse(raw)
   } catch {
-    return raw
+    throw new Error('LOCAL_MEDIA_REFERENCE_CORRUPT')
   }
 }
 
@@ -79,9 +80,11 @@ export async function collectProtectedLocalMediaUris() {
   const keys = typeof getAllKeys === 'function' ? await getAllKeys() : REFERENCE_STORAGE_KEYS
   const relevantKeys = (Array.isArray(keys) ? keys : []).filter(isLocalMediaReferenceStorageKey)
   for (const key of relevantKeys) {
-    try {
-      collectLocalFileUris(parseStoredValue(await AsyncStorage.getItem(key)), protectedUris)
-    } catch {}
+    collectLocalFileUris(parseStoredValue(await AsyncStorage.getItem(key)), protectedUris)
+  }
+  const recoverySnapshots = await listInspectionPanelDraftRecoverySnapshots()
+  for (const snapshot of recoverySnapshots) {
+    collectLocalFileUris(snapshot.draft, protectedUris)
   }
   return protectedUris
 }

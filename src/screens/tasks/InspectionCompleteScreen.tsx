@@ -27,6 +27,7 @@ import {
   type InspectionMediaQueueItem,
 } from '../../lib/inspectionMediaQueue'
 import { inspectionScopeLabel, isPasswordOnlyInspectionTask } from '../../lib/cleaningInspection'
+import { inspectionLockboxUiStatus } from '../../lib/inspectionLockboxStatus'
 import { hairline, isCompactWidth, moderateScale } from '../../lib/scale'
 import { isEarlyCheckinTime } from '../../lib/taskTime'
 import { getInspectionScopeTone, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
@@ -388,6 +389,7 @@ export default function InspectionCompleteScreen(props: Props) {
     && !lockboxSaved
   const inspectionPhotosPending = !isPasswordOnlyInspection && panelBatchStatus !== 'synced'
   const lockboxUploadStale = staleQueueUpload(lockboxItem)
+  const lockboxUiStatus = inspectionLockboxUiStatus(lockboxItem, { serverUrl: lockboxFromTask, stale: lockboxUploadStale })
   const canRetryLockboxUpload = !!lockboxItem && !lockboxSaved && !submitting && !deleting && (lockboxUploadStale || lockboxItem.upload_status === 'failed_retryable')
   const videoCaptureDisabled = uploading
     || deleting
@@ -395,20 +397,7 @@ export default function InspectionCompleteScreen(props: Props) {
     || !!accessVideoDeniedReason
     || !validationReady
     || (!isPasswordOnlyInspection && !panelVideoReadiness.ready)
-  const uploadHint = (() => {
-    if (!lockboxItem && lockboxSaved) return '挂钥匙视频已同步完成。'
-    if (!lockboxItem) return ''
-    if (lockboxSaved) return '挂钥匙视频已同步完成。'
-    if (lockboxUploadStale) return '视频上传可能已卡住，视频仍保存在本机，可点击重试上传。'
-    if (lockboxItem.upload_status === 'pending' || lockboxItem.upload_status === 'uploading') return '视频已保存到本机，正在自动上传。'
-    if (lockboxItem.uploaded_url && !lockboxItem.business_saved && lockboxItem.last_error) {
-      return `视频文件已上传，但任务记录保存失败：${lockboxItem.last_error}。请点击“点击完成”重试。`
-    }
-    if (lockboxItem.last_error) return String(lockboxItem.last_error)
-    if (lockboxItem.uploaded_url && !lockboxItem.business_saved) return '视频文件已上传，但任务记录尚未保存。请点击“点击完成”完成保存；系统也会自动重试。'
-    if (lockboxItem.local_file_deleted_at && !lockboxItem.uploaded_url) return '本地视频已过期清理，请重新拍摄。'
-    return ''
-  })()
+  const uploadHint = lockboxUiStatus.hint
 
   if (!task) {
     return (
@@ -495,8 +484,13 @@ export default function InspectionCompleteScreen(props: Props) {
             />
           </View>
         ) : null}
+        {lockboxUiStatus.phase !== 'none' ? (
+          <Text style={lockboxUiStatus.tone === 'warn' ? styles.warn : lockboxUiStatus.tone === 'ok' ? styles.ok : styles.pending}>
+            视频状态：{lockboxUiStatus.label}
+          </Text>
+        ) : null}
         {uploadHint ? (
-          <Text style={lockboxItem?.last_error ? styles.warn : lockboxItem?.uploaded_url ? styles.ok : styles.pending}>{uploadHint}</Text>
+          <Text style={lockboxUiStatus.tone === 'warn' ? styles.warn : lockboxUiStatus.tone === 'ok' ? styles.ok : styles.pending}>{uploadHint}</Text>
         ) : null}
         {canRetryLockboxUpload ? (
           <Pressable
@@ -515,7 +509,7 @@ export default function InspectionCompleteScreen(props: Props) {
             style={({ pressed }) => [styles.deleteBtn, pressed ? styles.pressed : null, deleting || uploading || submitting ? styles.disabled : null]}
           >
             <Ionicons name="trash-outline" size={moderateScale(15)} color="#B91C1C" />
-            <Text style={styles.deleteText}>{deleting ? t('common_loading') : '删除已上传视频'}</Text>
+            <Text style={styles.deleteText}>{deleting ? t('common_loading') : lockboxUiStatus.deleteLabel}</Text>
           </Pressable>
         ) : null}
       </View>

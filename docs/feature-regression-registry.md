@@ -1,5 +1,61 @@
 # Feature Regression Registry
 
+## FR-P1-MED-08 — 可重下缓存预算与未同步媒体保护
+
+- **Status:** active; MZ-036 isolated local candidate, not released.
+- **Maintenance scope:** `mobile` task cache、inspection draft recovery、local media housekeeping、lockbox queue/status UI.
+- **Last reviewed:** 2026-10-15 UTC
+- **Business outcome:** App 本地存储压力只允许淘汰明确可从服务端重新下载的任务列表缓存，不得删除检查草稿、提交队列、上传队列或未同步媒体。照片已复制但草稿数据库写入失败时必须保留可恢复的文件引用；媒体引用扫描任一失败必须停止孤儿清理。同一挂钥匙视频继续只有一个真实上传/业务保存所有者，页面必须区分本地待上传、上传中、失败、已上传待保存与已同步，删除文字不得把本地预览误报为上传成功。
+- **Related CRLs:** `mobile/CRL-20261015-001`; preserves `mobile/CRL-20261003-002` and `mobile/CRL-20261009-001`.
+
+### Test-to-invariant mapping
+
+- `src/lib/downloadableCacheMaintenance.test.ts`, `src/lib/storage.test.ts` — 只清理 allowlist 任务缓存，按过期/数量/字节预算回收；`SQLITE_FULL` 单次回收重试不触及草稿或队列。
+- `src/lib/inspectionPanelDraft.test.ts`, `src/lib/localMediaHousekeeping.test.ts` — 数据库写失败时恢复快照保留 URI；任一引用读取/解析失败时不删除媒体。
+- `src/lib/inspectionMediaQueue.test.ts` — 并发、等待超时和迟到成功继续复用单一 Promise，持久化临时错误失败也不得启动第二上传所有者。
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — 本地、待上传、上传中、失败、已上传待保存和已同步状态/删除文案与实际队列字段一致。
+
+### Delivery boundary
+
+- 不清空 App 数据、缓存或真实设备媒体；不改变 Root API、鉴权、任务状态、数据库、原生配置或依赖。专项 Jest 不能证明 Android 真实 6 MB 限额、物理磁盘耗尽、弱网或旧安装包 runtime；真机与 OTA/native build 需单独授权。
+
+## FR-P2-TSK-04 — 任务页 Wi-Fi 名称自适应显示
+
+- **Status:** active; local MZ-037 candidate, not released.
+- **Maintenance scope:** `mobile` task list presentation only.
+- **Last reviewed:** 2026-10-16 UTC
+- **Business outcome:** 任务卡片必须完整显示 Wi-Fi 名称；普通宽度允许名称在自身列内多行，窗口宽度不大于 390 或字体比例不小于 1.2 时名称与密码纵向排列。复制控件必须留在 Wi-Fi 标题行，不能覆盖名称、密码或标签；点击卡片仍复制密码。
+- **Related CRLs:** `mobile/CRL-20261015-002`.
+
+### Test-to-invariant mapping
+
+- `src/screens/tabs/TasksScreen.test.tsx` — 锁定 390px/1.2 阈值、320px + fontScale 1.4 的虚构长名称无单行限制、纵向详情样式，以及原密码复制调用。
+- iOS Simulator localhost-only fake-data preview — 正常字号确认长名称多行完整，辅助功能字号确认纵向详情与复制控件无重叠。
+
+### Delivery boundary
+
+- 不改变 Wi-Fi 数据来源、密码内容、复制目标、API、数据库、任务权限、原生依赖或发布配置。
+- Android、横屏、物理设备与生产数据未验证；Web 预览受基线 `expo-file-system` 运行时错误阻塞。
+
+## FR-P1-TSK-05 — 客服清洁任务原编辑页与授权动作共存
+
+- **Status:** active; local MZ-036/MZ-037/MZ-043 integrated candidate, not released.
+- **Maintenance scope:** `mobile` customer-service cleaning-task routing, original `ManagerDailyTask` editor, and guest-ready action controls.
+- **Last reviewed:** 2026-10-16 UTC
+- **Business outcome:** 客服从任务列表、通知/深链、通知详情和历史搜索进入清洁任务时必须继续打开原 `ManagerDailyTask` 编辑页，保留退房/入住时间、新旧密码、钥匙套数、客需、保存、临时通知、钥匙照片/视频及全部清洁/检查/补货媒体区域。只有当前角色为 `customer_service` 且服务端 `available_actions` 明确给出既有入住通知或钥匙外挂动作时，才在原编辑页显示对应按钮；不得由客户端自由文本、任务类型或旧缓存自行推断权限。
+- **Related CRLs:** `mobile/CRL-20261016-001`; preserves the server-authoritative action contract covered by `mobile/CRL-20261011-002`.
+
+### Test-to-invariant mapping
+
+- `src/lib/workTaskActions.test.ts` — 固化既有 guest-ready action 分类、当前角色与服务端动作过滤。
+- `src/screens/tabs/TasksScreen.test.tsx` — 即使存在钥匙外挂动作，客服任务卡仍进入原 `ManagerDailyTask` 编辑页，并与 MZ-037 Wi-Fi 呈现回归共存。
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — 同时验证可编辑时间/密码、两个动作按钮、临时通知位置、钥匙照片/视频和全部照片分区标题及顺序。
+- `src/screens/tasks/ManagerDailyTaskScreen.test.ts` — 保留原编辑页数据加载、保存与既有行为边界。
+
+### Delivery boundary
+
+- 不改变 Root API、服务端 `available_actions`、角色、版本校验、幂等键、保存 payload、缓存更新语义、数据库、原生依赖或发布配置。测试和预览只使用隔离虚构 fixture；不得触发生产登录、保存、按钮动作或数据写入。物理设备、Android、EAS/native build、OTA 与生产动作需单独授权。
+
 ## FR-P1-DEV-01 — Mobile 固定开发 Preview 活动心跳
 
 - **Status:** active; local integrated candidate, not released.

@@ -51,7 +51,7 @@ export function mergeGuestReadyNotificationActions(
   ]
 }
 
-function isGuestReadyNotificationAction(action: WorkTaskAvailableAction) {
+export function isGuestReadyNotificationAction(action: WorkTaskAvailableAction) {
   return action.id === 'record_guest_ready_notified'
     || action.id === 'revoke_guest_ready_notified'
     || action.id === 'register_guest_ready_outside_key'
@@ -138,14 +138,6 @@ export function guestReadyCachePatchAfterCheckinTimeChange(task: WorkTaskItem, n
 function scopeGuestReadyNotificationActions(actions: WorkTaskAvailableAction[], activeRole: unknown) {
   if (activeRole == null || lower(activeRole) === 'customer_service') return actions
   return actions.filter((action) => !isGuestReadyNotificationAction(action))
-}
-
-export function shouldOpenGuestReadyTaskDetail(
-  task: { available_actions?: WorkTaskAvailableAction[] | null } | null | undefined,
-  activeRole: unknown,
-) {
-  if (!task || lower(activeRole) !== 'customer_service') return false
-  return ((task as any).available_actions || []).some((action: WorkTaskAvailableAction) => action && isGuestReadyNotificationAction(action))
 }
 
 function isCleaningWorkSubmitted(status0: any) {
@@ -368,4 +360,35 @@ export function preferredNoticeActionForTask(task: WorkTaskItem | null | undefin
     if (match) return match
   }
   return actions.find((action) => action.placement === 'primary' && action.enabled) || actions.find((action) => action.enabled) || actions[0] || null
+}
+
+export type WorkTaskEntryRoute = WorkTaskActionRoute | { screen: 'ManagerDailyTask'; params: { taskId: string } }
+
+export function navigationForWorkTaskEntry(params: {
+  task: WorkTaskItem | null | undefined
+  fallbackTaskId: unknown
+  noticeData?: any
+  roleNames?: string[]
+  activeRole?: string | null
+  isTaskManager?: boolean
+  isTaskInspector?: boolean
+}): WorkTaskEntryRoute | null {
+  const taskId = cleanText(params.task?.id || params.fallbackTaskId)
+  if (!taskId) return null
+  const isCleaningTask = lower(params.task?.source_type) === 'cleaning_tasks'
+  if (params.isTaskManager && isCleaningTask) return { screen: 'ManagerDailyTask', params: { taskId } }
+  if (params.task && Array.isArray((params.task as any).available_actions)) {
+    const action = preferredNoticeActionForTask(params.task, params.noticeData || {}, {
+      roleNames: params.roleNames,
+      activeRole: params.activeRole,
+    })
+    const route = action?.enabled ? navigationForWorkTaskAction(params.task, action) : null
+    return route || { screen: 'TaskDetail', params: { id: taskId } }
+  }
+  const isInspection = isCleaningTask && lower(params.task?.task_kind) === 'inspection'
+  if (params.task && params.isTaskInspector && isInspection) {
+    const sourceId = cleanText(params.task.source_id)
+    return { screen: 'InspectionPanel', params: { taskId, ...(sourceId ? { sourceId } : {}) } }
+  }
+  return { screen: 'TaskDetail', params: { id: taskId } }
 }

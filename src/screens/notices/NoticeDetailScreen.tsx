@@ -15,7 +15,7 @@ import { getAuthToken, getStoredUser } from '../../lib/authStorage'
 import { markInboxNotificationsRead } from '../../lib/api'
 import { isTaskManagerUser, roleNamesOf } from '../../lib/roles'
 import { findWorkTaskItemByAnyId, requestWorkTasksRefresh } from '../../lib/workTasksStore'
-import { actionDisabledReasonText, navigationForWorkTaskAction, preferredNoticeActionForTask, shouldOpenGuestReadyTaskDetail } from '../../lib/workTaskActions'
+import { actionDisabledReasonText, navigationForWorkTaskEntry, preferredNoticeActionForTask } from '../../lib/workTaskActions'
 import AppButton from '../../components/ui/AppButton'
 
 type Props = NativeStackScreenProps<NoticesStackParamList, 'NoticeDetail'>
@@ -224,25 +224,23 @@ export default function NoticeDetailScreen(props: Props) {
         props.navigation.navigate('TaskDetail', { id: taskRouteId })
         return
       }
-      if (isTaskManagerUser(storedUser) && String(task.source_type || '').trim() === 'cleaning_tasks' && !shouldOpenGuestReadyTaskDetail(task, activeRole)) {
-        props.navigation.navigate('ManagerDailyTask', { taskId: task.id })
-        return
-      }
+      const roleNames = roleNamesOf(storedUser)
       const preferredAction = preferredNoticeActionForTask(task, noticeData, {
-        roleNames: roleNamesOf(storedUser),
+        roleNames,
         activeRole,
       })
-      if (preferredAction && !preferredAction.enabled) {
+      const route = navigationForWorkTaskEntry({
+        task,
+        fallbackTaskId: taskRouteId,
+        noticeData,
+        roleNames,
+        activeRole,
+        isTaskManager: isTaskManagerUser(storedUser),
+      }) || { screen: 'TaskDetail' as const, params: { id: task.id } }
+      if (route.screen === 'TaskDetail' && preferredAction && !preferredAction.enabled) {
         Alert.alert('暂不可操作', actionDisabledReasonText(preferredAction.disabled_reason || '任务已不可执行'))
-        props.navigation.navigate('TaskDetail', { id: task.id })
-        return
       }
-      const route = preferredAction ? navigationForWorkTaskAction(task, preferredAction) : null
-      if (route && route.screen !== 'TaskDetail') {
-        props.navigation.navigate(route.screen as any, route.params as any)
-        return
-      }
-      props.navigation.navigate('TaskDetail', route?.params || { id: task.id })
+      props.navigation.navigate(route.screen as any, route.params as any)
     } catch (e: any) {
       Alert.alert('刷新失败', String(e?.message || '无法刷新任务，请稍后再试'))
     } finally {

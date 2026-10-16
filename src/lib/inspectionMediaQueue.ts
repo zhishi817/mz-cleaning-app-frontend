@@ -499,8 +499,12 @@ export async function processInspectionMediaQueue(token: string) {
         processed++
       } catch (error) {
         if (isOperationTimeout(error)) {
-          await recordWaitTimeout(item.id, 'upload', String((error as Error).message))
           if (item.kind === 'lockbox_video') continueLateLockboxUpload(token, item, uploadAttempt)
+          try {
+            await recordWaitTimeout(item.id, 'upload', String((error as Error).message))
+          } catch {
+            // The real upload still owns this item. A full local database must not detach its late-result continuation.
+          }
         }
         continue
       }
@@ -519,7 +523,11 @@ export async function processInspectionMediaQueue(token: string) {
         )
       } catch (error) {
         if (isOperationTimeout(error)) {
-          await recordWaitTimeout(item.id, 'business_save', String((error as Error).message))
+          try {
+            await recordWaitTimeout(item.id, 'business_save', String((error as Error).message))
+          } catch {
+            // The single-flight business save remains active and will persist its final result when capacity recovers.
+          }
         }
       }
     }

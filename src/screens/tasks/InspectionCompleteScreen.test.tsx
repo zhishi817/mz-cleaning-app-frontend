@@ -521,6 +521,9 @@ test('non-password inspection can leave with a locally queued video while offlin
 
   await waitFor(() => {
     expect(ui.getByText(/视频已保存到本机/)).toBeTruthy()
+    expect(ui.getByText('视频状态：已保存本机 · 待上传')).toBeTruthy()
+    expect(ui.getByText('删除本机待上传视频')).toBeTruthy()
+    expect(ui.queryByText('删除已上传视频')).toBeNull()
     expect(ui.getByText('提交视频（任务待完成）')).toBeTruthy()
   })
 

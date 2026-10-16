@@ -21,6 +21,12 @@ jest.mock('./localMediaDrafts', () => ({
   persistDraftMedia: jest.fn(({ sourceUri }: { sourceUri: string }) => sourceUri),
 }))
 
+jest.mock('./inspectionPanelDraftRecovery', () => ({
+  clearInspectionPanelDraftRecovery: jest.fn(async () => undefined),
+  readInspectionPanelDraftRecovery: jest.fn(async () => null),
+  writeInspectionPanelDraftRecovery: jest.fn(async () => 'file:///documents/recovery.json'),
+}))
+
 function getAsyncStorage() {
   return require('@react-native-async-storage/async-storage') as {
     clear: () => Promise<void>

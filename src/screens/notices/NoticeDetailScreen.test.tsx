@@ -539,3 +539,63 @@ test('notice task entry uses the manager detail for admin cleaning tasks', async
 
   mockWorkTask = null
 })
+
+test('guest-ready notice detail returns customer service to the original manager editor', async () => {
+  const previousRole = mockStoredUser.role
+  const previousRoles = mockStoredUser.roles
+  mockStoredUser.role = 'customer_service'
+  mockStoredUser.roles = ['customer_service']
+  mockWorkTask = {
+    id: 'w-guest-ready',
+    task_kind: 'cleaning',
+    source_type: 'cleaning_tasks',
+    source_id: 'ct-guest-ready',
+    title: 'UT701 清洁',
+    scheduled_date: '2026-10-16',
+    task_type: 'turnover',
+    status: 'ready',
+    available_actions: [
+      {
+        id: 'record_guest_ready_notified',
+        label: '已通知客人',
+        placement: 'primary',
+        enabled: true,
+        target: 'TaskDetail',
+        intent: 'manager',
+      },
+    ],
+    property: { id: 'p-ready', code: 'UT701' },
+  }
+  await initNoticesStore()
+  await upsertNotices([{
+    id: 'guest-ready-notice-1',
+    type: 'update',
+    title: 'UT701 · 可入住',
+    summary: '请通知客人',
+    content: '房源：UT701',
+    createdAt: '2026-10-16T00:00:00.000Z',
+    unread: true,
+    data: { kind: 'guest_ready', task_id: 'w-guest-ready', date: '2026-10-16' },
+  }], { replace: true })
+  const navigation = { setOptions: jest.fn(), canGoBack: () => true, goBack: jest.fn(), navigate: jest.fn() }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <NoticeDetailScreen
+          navigation={navigation as any}
+          route={{ key: 'notice-guest-ready', name: 'NoticeDetail', params: { id: 'guest-ready-notice-1' } } as any}
+        />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(ui.getByText('查看任务')).toBeTruthy())
+    fireEvent.press(ui.getByText('查看任务'))
+    await waitFor(() => expect(navigation.navigate).toHaveBeenCalledWith('ManagerDailyTask', { taskId: 'w-guest-ready' }))
+    expect(navigation.navigate).not.toHaveBeenCalledWith('TaskDetail', { id: 'w-guest-ready' })
+  } finally {
+    mockWorkTask = null
+    mockStoredUser.role = previousRole
+    mockStoredUser.roles = previousRoles
+  }
+})
