@@ -1,4 +1,4 @@
-import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyNotificationForActiveRole, guestReadyOperationId, guestReadyOutsideKeyForActiveRole, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, preferredNoticeActionForTask, shouldOpenGuestReadyTaskDetail } from './workTaskActions'
+import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyNotificationForActiveRole, guestReadyOperationId, guestReadyOutsideKeyForActiveRole, isGuestReadyNotificationAction, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, navigationForWorkTaskEntry, preferredNoticeActionForTask } from './workTaskActions'
 
 test('清洁未提交时，即使共享任务状态已进入 inspected，补品入口仍可编辑', () => {
   const task: any = {
@@ -97,6 +97,44 @@ test('客服保留服务端独立授权的客人已通知动作，不从旧角�
   ])
 })
 
+test('客服从通知、深链和历史搜索进入清洁任务时回到原客服编辑页', () => {
+  const task: any = {
+    id: 'ready-checkin',
+    source_type: 'cleaning_tasks',
+    source_id: 'checkin-source',
+    task_kind: 'cleaning',
+    task_type: 'turnover',
+    status: 'ready',
+    available_actions: [
+      { id: 'record_guest_ready_notified', label: '已通知客人', placement: 'primary', enabled: true, target: 'TaskDetail', intent: 'manager' },
+    ],
+  }
+  const entry = {
+    task,
+    fallbackTaskId: task.id,
+    roleNames: ['customer_service'],
+    activeRole: 'customer_service',
+    isTaskManager: true,
+  }
+
+  expect(navigationForWorkTaskEntry({ ...entry, noticeData: { kind: 'guest_ready' } })).toEqual({
+    screen: 'ManagerDailyTask',
+    params: { taskId: 'ready-checkin' },
+  })
+  expect(navigationForWorkTaskEntry({ ...entry, noticeData: {} })).toEqual({
+    screen: 'ManagerDailyTask',
+    params: { taskId: 'ready-checkin' },
+  })
+  expect(navigationForWorkTaskEntry({ ...entry, noticeData: undefined })).toEqual({
+    screen: 'ManagerDailyTask',
+    params: { taskId: 'ready-checkin' },
+  })
+  expect(navigationForWorkTaskEntry({ ...entry, isTaskManager: false })).toEqual({
+    screen: 'TaskDetail',
+    params: { id: 'ready-checkin' },
+  })
+})
+
 test('客人通知标签和服务端缓存动作只跟随当前生效的客服角色', () => {
   const notification = { status: 'not_notified' }
   const outsideKey = { required: true }
@@ -128,8 +166,10 @@ test('客人通知标签和服务端缓存动作只跟随当前生效的客服�
     'report_issue',
   ])
   expect(preferredNoticeActionForTask(task, {}, { roleNames: assignedRoles, activeRole: 'admin' })?.id).toBe('report_issue')
-  expect(shouldOpenGuestReadyTaskDetail(task, 'customer_service')).toBe(true)
-  expect(shouldOpenGuestReadyTaskDetail(task, 'admin')).toBe(false)
+  expect(availableActionsForTask(task, { roleNames: assignedRoles, activeRole: 'customer_service' }).filter(isGuestReadyNotificationAction).map((action) => action.id)).toEqual([
+    'record_guest_ready_notified',
+    'cancel_guest_ready_outside_key',
+  ])
 })
 
 test('客人通知操作在同一服务端版本上复用幂等键', () => {

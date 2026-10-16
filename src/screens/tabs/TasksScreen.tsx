@@ -57,7 +57,7 @@ import {
   turnoverDisplayOf,
 } from '../../lib/turnoverDisplay'
 import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
-import { guestReadyNotificationForActiveRole, guestReadyOperationId, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, primaryActionsForTask, shouldOpenGuestReadyTaskDetail } from '../../lib/workTaskActions'
+import { guestReadyNotificationForActiveRole, guestReadyOperationId, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, primaryActionsForTask } from '../../lib/workTaskActions'
 import { dailyTaskGroupCounts } from '../../lib/dailyTaskPresentation'
 import { millisecondsUntilNextTaskBusinessDate, shouldFollowTaskBusinessDate, taskBusinessDateKey } from '../../lib/taskBusinessDate'
 import {
@@ -147,6 +147,10 @@ function startOfWeekMonday(d: Date) {
 export function shouldScrollWeekRowToEnd(date: Date) {
   const day = date.getDay()
   return day === 0 || day >= 5
+}
+
+export function shouldStackWifiDetails(windowWidth: number, fontScale: number) {
+  return windowWidth <= 390 || fontScale >= 1.2
 }
 
 export function taskWeekDateKeys(selectedDate: string) {
@@ -613,6 +617,7 @@ export default function TasksScreen(props: Props) {
   const { width: windowWidth, fontScale } = useWindowDimensions()
   const prefersWrappedSegments = windowWidth < 360 || fontScale >= 1.25
   const prefersCompactTaskHeader = windowWidth <= 390 || fontScale >= 1.1
+  const prefersStackedWifiDetails = shouldStackWifiDetails(windowWidth, fontScale)
   const roleNames = useMemo(() => {
     const arr = Array.isArray((user as any)?.roles) ? ((user as any).roles as any[]) : []
     const ids = arr.map((x) => String(x || '').trim()).filter(Boolean)
@@ -3153,7 +3158,7 @@ function showBanner(title: string, message: string) {
                       return
                     }
                     const isCleaningTask0 = isCleaningExecutionTask(task) || isInspectionExecutionTask(task) || isKeyHandoverExecutionTask(task)
-                    if (view === 'all' && canTaskManagerView && isCleaningTask0 && !shouldOpenGuestReadyTaskDetail(task, activeRole)) {
+                    if (view === 'all' && canTaskManagerView && isCleaningTask0) {
                       props.navigation.navigate('ManagerDailyTask', { taskId: task.id })
                       return
                     }
@@ -3393,22 +3398,27 @@ function showBanner(title: string, message: string) {
                               <Ionicons name="wifi-outline" size={moderateScale(18)} color="#0F766E" />
                             </View>
                             <View style={styles.detailRowContent}>
-                              <Text style={styles.detailRowLabelTeal}>Wi-Fi</Text>
-                              <View style={styles.detailSplitRow}>
-                                <View style={styles.detailSplitCell}>
-                                  <Text style={styles.wifiLabel}>名称</Text>
-                                  <Text style={styles.wifiValue} numberOfLines={1}>{wifiSsid || '-'}</Text>
+                              <View style={styles.wifiHeaderRow}>
+                                <Text style={styles.detailRowLabelTeal}>Wi-Fi</Text>
+                                <View style={[styles.copyAffordance, wifiCopied ? styles.copyAffordanceDone : null]}>
+                                  <Ionicons name={wifiCopied ? 'checkmark-circle' : 'copy-outline'} size={moderateScale(18)} color={wifiCopied ? '#047857' : '#9CA3AF'} />
+                                  {wifiCopied ? <Text style={styles.copyAffordanceText}>已复制</Text> : null}
                                 </View>
-                                <View style={[styles.detailSplitDivider, styles.detailSplitDividerTeal]} />
-                                <View style={styles.detailSplitCell}>
+                              </View>
+                              <View
+                                testID={`wifi-details-${task.id}`}
+                                style={[styles.detailSplitRow, prefersStackedWifiDetails ? styles.wifiDetailsStacked : null]}
+                              >
+                                <View style={[styles.detailSplitCell, prefersStackedWifiDetails ? styles.wifiDetailCellStacked : null]}>
+                                  <Text style={styles.wifiLabel}>名称</Text>
+                                  <Text testID={`wifi-name-${task.id}`} style={styles.wifiValue}>{wifiSsid || '-'}</Text>
+                                </View>
+                                <View style={[styles.detailSplitDivider, styles.detailSplitDividerTeal, prefersStackedWifiDetails ? styles.wifiDividerStacked : null]} />
+                                <View style={[styles.detailSplitCell, prefersStackedWifiDetails ? styles.wifiDetailCellStacked : null]}>
                                   <Text style={styles.wifiLabel}>密码</Text>
                                   <Text style={styles.wifiValue} numberOfLines={1}>{wifiPassword || '-'}</Text>
                                 </View>
                               </View>
-                            </View>
-                            <View style={[styles.copyAffordance, wifiCopied ? styles.copyAffordanceDone : null]}>
-                              <Ionicons name={wifiCopied ? 'checkmark-circle' : 'copy-outline'} size={moderateScale(18)} color={wifiCopied ? '#047857' : '#9CA3AF'} />
-                              {wifiCopied ? <Text style={styles.copyAffordanceText}>已复制</Text> : null}
                             </View>
                           </Pressable>
                         ) : (
@@ -3418,13 +3428,16 @@ function showBanner(title: string, message: string) {
                             </View>
                             <View style={styles.detailRowContent}>
                               <Text style={styles.detailRowLabelTeal}>Wi-Fi</Text>
-                              <View style={styles.detailSplitRow}>
-                                <View style={styles.detailSplitCell}>
+                              <View
+                                testID={`wifi-details-${task.id}`}
+                                style={[styles.detailSplitRow, prefersStackedWifiDetails ? styles.wifiDetailsStacked : null]}
+                              >
+                                <View style={[styles.detailSplitCell, prefersStackedWifiDetails ? styles.wifiDetailCellStacked : null]}>
                                   <Text style={styles.wifiLabel}>名称</Text>
-                                  <Text style={styles.wifiValue} numberOfLines={1}>{wifiSsid || '-'}</Text>
+                                  <Text testID={`wifi-name-${task.id}`} style={styles.wifiValue}>{wifiSsid || '-'}</Text>
                                 </View>
-                                <View style={[styles.detailSplitDivider, styles.detailSplitDividerTeal]} />
-                                <View style={styles.detailSplitCell}>
+                                <View style={[styles.detailSplitDivider, styles.detailSplitDividerTeal, prefersStackedWifiDetails ? styles.wifiDividerStacked : null]} />
+                                <View style={[styles.detailSplitCell, prefersStackedWifiDetails ? styles.wifiDetailCellStacked : null]}>
                                   <Text style={styles.wifiLabel}>密码</Text>
                                   <Text style={styles.wifiValue} numberOfLines={1}>-</Text>
                                 </View>
@@ -4057,8 +4070,12 @@ const styles = StyleSheet.create({
   copyAffordance: { minHeight: layoutTokens.button.height, paddingHorizontal: 12, paddingVertical: 0, borderRadius: 999, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, flexShrink: 0 },
   copyAffordanceDone: { borderColor: '#A7F3D0', backgroundColor: '#ECFDF5' },
   copyAffordanceText: { color: '#047857', fontSize: moderateScale(11), fontWeight: '900' },
+  wifiHeaderRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, minWidth: 0 },
+  wifiDetailsStacked: { flexDirection: 'column', gap: 8 },
+  wifiDetailCellStacked: { flexGrow: 0, flexBasis: 'auto', width: '100%' },
+  wifiDividerStacked: { width: '100%', height: hairline() },
   wifiLabel: { color: '#0F766E', fontWeight: '700', fontSize: moderateScale(12) },
-  wifiValue: { marginTop: 2, color: '#111827', fontWeight: '600', fontSize: moderateScale(13) },
+  wifiValue: { marginTop: 2, minWidth: 0, flexShrink: 1, color: '#111827', fontWeight: '600', fontSize: moderateScale(13), lineHeight: moderateScale(19) },
   timeLabel: { color: '#9CA3AF', fontWeight: '600', fontSize: moderateScale(12) },
   timeValue: { marginTop: 2, color: '#111827', fontWeight: '600', fontSize: moderateScale(13) },
   pwLabel: { color: '#9CA3AF', fontWeight: '600', fontSize: moderateScale(12) },

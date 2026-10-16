@@ -1,5 +1,10 @@
 import { getJson, remove, setJson } from './storage'
 import { normalizeCleaningObjectKey } from './cleaningMedia'
+import {
+  clearInspectionPanelDraftRecovery,
+  readInspectionPanelDraftRecovery,
+  writeInspectionPanelDraftRecovery,
+} from './inspectionPanelDraftRecovery'
 import type {
   InspectionPanelBatchMedia,
   InspectionPanelBatchRestockItem,
@@ -103,7 +108,26 @@ function normalizeDraft(taskId: string, raw: any): InspectionPanelDraft | null {
 export async function getInspectionPanelDraft(taskId: string) {
   const key = cleanText(taskId)
   if (!key) return null
-  return normalizeDraft(key, await getJson<InspectionPanelDraft>(draftKey(key)))
+  let stored: InspectionPanelDraft | null = null
+  let storedError: unknown = null
+  try {
+    stored = normalizeDraft(key, await getJson<InspectionPanelDraft>(draftKey(key)))
+  } catch (error) {
+    storedError = error
+  }
+  let recovered: InspectionPanelDraft | null = null
+  try {
+    const snapshot = await readInspectionPanelDraftRecovery<InspectionPanelDraft>(key)
+    recovered = normalizeDraft(key, snapshot?.draft)
+  } catch (error) {
+    if (!stored) throw storedError || error
+  }
+  if (!stored && !recovered && storedError) throw storedError
+  if (!stored) return recovered
+  if (!recovered) return stored
+  const storedAt = new Date(stored.updated_at).getTime()
+  const recoveredAt = new Date(recovered.updated_at).getTime()
+  return Number.isFinite(recoveredAt) && (!Number.isFinite(storedAt) || recoveredAt > storedAt) ? recovered : stored
 }
 
 export async function setInspectionPanelDraft(taskId: string, draft: Omit<InspectionPanelDraft, 'task_id' | 'updated_at'>) {
@@ -115,11 +139,27 @@ export async function setInspectionPanelDraft(taskId: string, draft: Omit<Inspec
     updated_at: nowIso(),
   })
   if (!payload) return
-  await setJson(draftKey(key), payload)
+  try {
+    await setJson(draftKey(key), payload)
+    await clearInspectionPanelDraftRecovery(key)
+  } catch (storageError) {
+    let recoverySaved = false
+    try {
+      await writeInspectionPanelDraftRecovery(key, payload)
+      recoverySaved = true
+    } catch {}
+    const error = new Error(recoverySaved
+      ? '本机数据库空间不足，照片和草稿已保存在本机恢复区。请勿卸载或清除 App 数据。'
+      : '本机存储空间不足，照片草稿索引保存失败。请停留在当前页面并联系支持，勿卸载或清除 App 数据。')
+    ;(error as any).code = recoverySaved ? 'INSPECTION_DRAFT_RECOVERED' : 'INSPECTION_DRAFT_RECOVERY_FAILED'
+    ;(error as any).cause = storageError
+    throw error
+  }
 }
 
 export async function clearInspectionPanelDraft(taskId: string) {
   const key = cleanText(taskId)
   if (!key) return
   await remove(draftKey(key))
+  await clearInspectionPanelDraftRecovery(key)
 }

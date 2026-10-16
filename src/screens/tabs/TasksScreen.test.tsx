@@ -209,6 +209,63 @@ test('tasks screen defaults tasks collapsed, shows guest request, and expands de
   ui.unmount()
 }, 20_000)
 
+test.each([
+  [391, 1, false],
+  [390, 1, true],
+  [430, 1.19, false],
+  [430, 1.2, true],
+])('Wi-Fi details stacking responds to width %s and font scale %s', (width, fontScale, expected) => {
+  const { shouldStackWifiDetails } = require('./TasksScreen') as typeof import('./TasksScreen')
+  expect(shouldStackWifiDetails(width, fontScale)).toBe(expected)
+})
+
+test('long Wi-Fi name wraps fully on a narrow screen with large text and password copy remains unchanged', async () => {
+  const reactNative = require('react-native') as typeof import('react-native')
+  const dimensionsSpy = jest.spyOn(reactNative, 'useWindowDimensions').mockReturnValue({
+    width: 320,
+    height: 640,
+    scale: 2,
+    fontScale: 1.4,
+  })
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousProperty = snapshot.items[0].property
+  const longWifiName = 'MZStay_Guest_WiFi_Level_27_North_Wing'
+  const testPassword = 'test-password-9876'
+  snapshot.items[0].property = {
+    ...previousProperty,
+    wifi_ssid: longWifiName,
+    wifi_password: testPassword,
+  }
+  ;(Clipboard.setStringAsync as jest.Mock).mockClear()
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-wifi-responsive', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByLabelText('task-collapse-w1')).toBeTruthy())
+    expandTask(ui, 'w1')
+
+    await waitFor(() => expect(ui.getByText(longWifiName)).toBeTruthy())
+    expect(ui.getByTestId('wifi-name-w1').props.numberOfLines).toBeUndefined()
+    expect(flattenTestStyle(ui.getByTestId('wifi-details-w1').props.style)).toMatchObject({ flexDirection: 'column' })
+
+    fireEvent.press(ui.getByLabelText('wifi-copy-w1'))
+    await waitFor(() => expect(Clipboard.setStringAsync).toHaveBeenCalledWith(testPassword))
+  } finally {
+    ui.unmount()
+    snapshot.items[0].property = previousProperty
+    dimensionsSpy.mockRestore()
+  }
+}, 20_000)
+
 test('tasks screen routes initial, focus and foreground reads through the shared refresh coordinator', async () => {
   const store = require('../../lib/workTasksStore')
   const refreshMock = store.requestWorkTasksRefresh as jest.Mock
@@ -847,7 +904,7 @@ test('customer service cleaning task is collapsed by default and opens the origi
   mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
 })
 
-test('customer service can reach TaskDetail to register an outside-key requirement', async () => {
+test('customer service keeps the original manager editor when an outside-key action is available', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
   const previousTask = { ...snapshot.items[0] }
@@ -896,8 +953,8 @@ test('customer service can reach TaskDetail to register an outside-key requireme
   await waitFor(() => expect(ui.getByLabelText('task-card-w1')).toBeTruthy())
   fireEvent.press(ui.getByLabelText('task-card-w1'))
 
-  expect(navigation.navigate).toHaveBeenCalledWith('TaskDetail', { id: 'w1' })
-  expect(navigation.navigate).not.toHaveBeenCalledWith('ManagerDailyTask', { taskId: 'w1' })
+  expect(navigation.navigate).toHaveBeenCalledWith('ManagerDailyTask', { taskId: 'w1' })
+  expect(navigation.navigate).not.toHaveBeenCalledWith('TaskDetail', { id: 'w1' })
 
   snapshot.items[0] = previousTask
   mockAuthState.user = previousUser

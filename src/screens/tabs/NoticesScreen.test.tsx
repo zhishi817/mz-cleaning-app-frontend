@@ -4,6 +4,8 @@ import { I18nProvider } from '../../lib/i18n'
 
 const mockNavigate = jest.fn()
 let mockNoticeItems: any[] = []
+let mockAuthUser: any = { id: 'u1', username: 'tester', role: 'cleaner', roles: ['cleaner'] }
+const mockListWorkTasks = jest.fn(async () => [] as any[])
 
 jest.mock('@react-navigation/native', () => ({
   useIsFocused: () => true,
@@ -13,7 +15,7 @@ jest.mock('../../lib/auth', () => ({
   useAuth: () => ({
     status: 'signedIn',
     token: 'local:test',
-    user: { id: 'u1', username: 'tester', role: 'cleaner', roles: ['cleaner'] },
+    user: mockAuthUser,
   }),
 }))
 
@@ -38,7 +40,7 @@ jest.mock('../../lib/api', () => ({
   listCompanyDocsForApp: jest.fn(async () => []),
   listCustomerServiceManualsForApp: jest.fn(async () => []),
   listWarehouseGuidesForApp: jest.fn(async () => []),
-  listWorkTasks: jest.fn(async () => []),
+  listWorkTasks: mockListWorkTasks,
   markInboxNotificationsRead: jest.fn(async () => ({})),
 }))
 
@@ -71,8 +73,8 @@ jest.mock('../../components/CleaningMediaImage', () => {
 })
 
 jest.mock('../../lib/roles', () => ({
-  isTaskInspectorUser: () => false,
-  isTaskManagerUser: () => false,
+  isTaskInspectorUser: (user: any) => Array.isArray(user?.roles) && user.roles.some((role: string) => role === 'cleaning_inspector' || role === 'cleaner_inspector'),
+  isTaskManagerUser: (user: any) => Array.isArray(user?.roles) && user.roles.some((role: string) => role === 'customer_service' || role === 'admin' || role === 'offline_manager'),
   roleNamesOf: (user: any) => Array.isArray(user?.roles) ? user.roles : [user?.role].filter(Boolean),
 }))
 
@@ -133,6 +135,40 @@ test('information center search shows offline passwords without copy action', as
     secretId: 'secret-1',
   }))
 }, 10000)
+
+test('guest-ready history search returns customer service to the original manager editor', async () => {
+  const previousUser = mockAuthUser
+  mockAuthUser = { id: 'cs-1', username: 'customer-service', role: 'customer_service', roles: ['customer_service'] }
+  mockListWorkTasks.mockResolvedValueOnce([{
+    id: 'history-guest-ready',
+    task_kind: 'cleaning',
+    source_type: 'cleaning_tasks',
+    source_id: 'cleaning-history-ready',
+    task_type: 'turnover',
+    status: 'ready',
+    scheduled_date: '2026-10-16',
+    property: { id: 'p-history-ready', code: 'UT701', address: '虚构地址' },
+    available_actions: [
+      { id: 'record_guest_ready_notified', label: '已通知客人', placement: 'primary', enabled: true, target: 'TaskDetail', intent: 'manager' },
+    ],
+  }])
+  mockNavigate.mockClear()
+
+  const ui = renderScreen()
+  try {
+    fireEvent.changeText(
+      ui.getByPlaceholderText('输入关键词搜索房源、线下密码、历史任务、公司文档、仓库指南、公告...'),
+      'UT701',
+    )
+    await waitFor(() => expect(ui.getByText('任务：UT701')).toBeTruthy())
+    fireEvent.press(ui.getByText('任务：UT701'))
+    expect(mockNavigate).toHaveBeenCalledWith('ManagerDailyTask', { taskId: 'history-guest-ready' })
+    expect(mockNavigate).not.toHaveBeenCalledWith('TaskDetail', { id: 'history-guest-ready' })
+  } finally {
+    ui.unmount()
+    mockAuthUser = previousUser
+  }
+})
 
 test('temporary-notice thumbnails keep the saved notice id for authenticated media reads', async () => {
   mockNoticeItems = [{

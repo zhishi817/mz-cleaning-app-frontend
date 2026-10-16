@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { API_BASE_URL } from '../../config/env'
 import { effectiveInspectionMode, inspectionModeLabel, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
 import {
+  changeGuestReadyNotification,
   deleteGuestLuggageNotice,
   getCleaningConsumables,
   getCompletionPhotos,
@@ -18,15 +19,16 @@ import {
   saveGuestLuggageNotice,
   updateCleaningTaskManagerFields,
   uploadMzappMedia,
+  type WorkTaskAvailableAction,
 } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
 import { prependNotice } from '../../lib/noticesStore'
-import { hasAnyRole } from '../../lib/roles'
+import { hasAnyRole, roleNamesOf } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getEffectiveTaskStatus, isTaskWorkflowProgressStatus } from '../../lib/taskVisualTheme'
-import { findWorkTaskItemByAnyId, patchWorkTaskItem, requestWorkTasksRefresh, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
-import { guestReadyCachePatchAfterCheckinTimeChange } from '../../lib/workTaskActions'
+import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, patchWorkTaskItems, requestWorkTasksRefresh, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
+import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyOperationId, isGuestReadyNotificationAction, mergeGuestReadyNotificationActions } from '../../lib/workTaskActions'
 import {
   completionPhotoTaskIdsFromTask,
   inspectionPhotoTaskIdsFromTask,
@@ -276,6 +278,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const [storeVersion, setStoreVersion] = useState(0)
   const [saving, setSaving] = useState(false)
   const [marking, setMarking] = useState(false)
+  const [guestReadyPending, setGuestReadyPending] = useState(false)
   const [resolvingRemote, setResolvingRemote] = useState(false)
 
   useEffect(() => {
@@ -286,6 +289,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
   }, [])
 
   const task = useMemo(() => findWorkTaskItemByAnyId(props.route.params.taskId), [props.route.params.taskId, storeVersion])
+  const roleNames = useMemo(() => roleNamesOf(user), [user])
+  const activeRole = String((user as any)?.role || '').trim().toLowerCase()
   const canEditManagerFields = hasAnyRole(user, ['customer_service', 'admin', 'offline_manager'])
   const canSeeUnclean = hasAnyRole(user, ['admin', 'offline_manager'])
 
@@ -741,6 +746,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     luggageLocalPreviewByUrl,
     (task as any)?.guest_luggage?.id,
   )
+  const guestReadyActions = availableActionsForTask(task, { roleNames, activeRole }).filter(isGuestReadyNotificationAction)
 
   const uncleanPhotos = inspectionItems.filter((x) => x.area === 'unclean')
   const roomPhotoAreas = ['living', 'sofa', 'bedroom', 'kitchen'] as const
@@ -828,6 +834,65 @@ export default function ManagerDailyTaskScreen(props: Props) {
       Alert.alert(t('common_error'), String(e?.message || '操作失败'))
     } finally {
       setMarking(false)
+    }
+  }
+
+  async function onToggleGuestReady(action: WorkTaskAvailableAction) {
+    if (activeRole !== 'customer_service' || !task || !token || guestReadyPending || !action.enabled) {
+      const disabledReason = actionDisabledReasonText(action.disabled_reason || '')
+      if (disabledReason) Alert.alert('暂不可操作', disabledReason)
+      return
+    }
+    const notification = task.guest_ready_notification
+    const outsideKey = task.guest_ready_outside_key
+    const orderId = String(notification?.order_id || outsideKey?.order_id || action.source_id || task.order_id_checkin || '').trim()
+    const expectedVersion = notification?.version ?? outsideKey?.version
+    if (!orderId || expectedVersion == null) {
+      Alert.alert(t('common_error'), '入住订单已变化，请刷新后重试')
+      return
+    }
+    const mutationAction = action.id === 'revoke_guest_ready_notified'
+      ? 'revoke'
+      : action.id === 'register_guest_ready_outside_key'
+        ? 'register_outside_key'
+        : action.id === 'cancel_guest_ready_outside_key'
+          ? 'cancel_outside_key'
+          : 'mark'
+    const operationId = guestReadyOperationId({ orderId, action: mutationAction, expectedVersion })
+    if (!operationId) {
+      Alert.alert(t('common_error'), '入住订单已变化，请刷新后重试')
+      return
+    }
+    setGuestReadyPending(true)
+    try {
+      const receipt = await changeGuestReadyNotification(token, {
+        order_id: orderId,
+        action: mutationAction,
+        operation_id: operationId,
+        expected_version: expectedVersion,
+      })
+      const patches = (getWorkTasksSnapshot().items || [])
+        .filter((item) => String(item.order_id_checkin || '') === orderId)
+        .map((item) => ({
+          id: item.id,
+          patch: {
+            guest_ready_notification: receipt.guest_ready_notification,
+            guest_ready_outside_key: receipt.guest_ready_outside_key,
+            available_actions: mergeGuestReadyNotificationActions(item.available_actions, receipt.available_actions),
+          } as Partial<WorkTaskItem>,
+        }))
+      if (patches.length) await patchWorkTaskItems(patches)
+      Alert.alert(t('common_ok'), action.id === 'revoke_guest_ready_notified'
+        ? '已撤销“已通知客人”记录'
+        : action.id === 'register_guest_ready_outside_key'
+          ? '已登记“钥匙外挂”'
+          : action.id === 'cancel_guest_ready_outside_key'
+            ? '已取消“钥匙外挂”'
+            : '已记录“已通知客人”')
+    } catch (error: any) {
+      Alert.alert(t('common_error'), String(error?.message || '保存失败；当前状态未改变'))
+    } finally {
+      setGuestReadyPending(false)
     }
   }
 
@@ -952,6 +1017,23 @@ export default function ManagerDailyTaskScreen(props: Props) {
           >
             <Text style={styles.primaryText}>{saving ? t('common_loading') : '保存修改'}</Text>
           </Pressable>
+          {guestReadyActions.map((action) => (
+            <Pressable
+              key={action.id}
+              testID={`manager-guest-ready-action-${action.id}`}
+              accessibilityRole="button"
+              accessibilityLabel={action.label}
+              onPress={() => void onToggleGuestReady(action)}
+              disabled={guestReadyPending || (!action.enabled && !action.disabled_reason)}
+              style={({ pressed }) => [
+                styles.grayBtnFull,
+                guestReadyPending || !action.enabled ? styles.guestReadyBtnDisabled : null,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Text style={styles.grayText}>{guestReadyPending ? '保存中...' : action.label}</Text>
+            </Pressable>
+          ))}
           <Pressable
             onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
             style={({ pressed }) => [styles.grayBtnFull, pressed ? styles.pressed : null]}
@@ -1354,6 +1436,7 @@ const styles = StyleSheet.create({
   checkoutText: { color: '#0369A1', fontWeight: '900' },
 
   grayBtnFull: { marginTop: 10, minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  guestReadyBtnDisabled: { opacity: 0.55 },
   grayText: { color: '#111827', fontWeight: '900', textAlign: 'center' },
   primaryBtnFull: { marginTop: 12, minHeight: 44, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
   primaryBtnDisabled: { backgroundColor: '#93C5FD' },

@@ -13,8 +13,8 @@ import { getNoticesSnapshot, initNoticesStore, subscribeNotices } from '../lib/n
 import { registerExpoPushToken } from '../lib/api'
 import { syncInboxNotifications } from '../lib/notificationInbox'
 import { getPushDeviceId, setRegisteredExpoPushToken } from '../lib/pushTokenStorage'
-import { isTaskManagerUser, roleNamesOf } from '../lib/roles'
-import { navigationForWorkTaskAction, preferredNoticeActionForTask, shouldOpenGuestReadyTaskDetail } from '../lib/workTaskActions'
+import { isTaskInspectorUser, isTaskManagerUser, roleNamesOf } from '../lib/roles'
+import { navigationForWorkTaskEntry } from '../lib/workTaskActions'
 import { isPersonnelSettlementNoticeData } from '../lib/noticePresentation'
 import type { CompanyContentCategory, CompanyGuideRole } from '../lib/api'
 import LoginScreen from '../screens/LoginScreen'
@@ -178,26 +178,15 @@ function resolveTaskNoticeNavigation(params: { taskRouteId: string; user: any; n
   const roleNames = roleNamesOf(params.user)
   const activeRole = String(params.user?.role || '').trim().toLowerCase()
   const task = findWorkTaskItemByAnyId(params.taskRouteId)
-  const isCleaningTask = String(task?.source_type || '').trim() === 'cleaning_tasks'
-  if (isTaskManagerUser(params.user) && isCleaningTask && !shouldOpenGuestReadyTaskDetail(task, activeRole)) return { screen: 'ManagerDailyTask', params: { taskId: params.taskRouteId } }
-  if (task && Array.isArray((task as any).available_actions)) {
-    const preferredAction = preferredNoticeActionForTask(task, params.noticeData || {}, {
-      roleNames,
-      activeRole,
-    })
-    if (preferredAction?.enabled) {
-      const route = navigationForWorkTaskAction(task, preferredAction)
-      if (route) return route
-    }
-    return { screen: 'TaskDetail', params: { id: task.id } }
-  }
-  const isInspection = isCleaningTask && String(task?.task_kind || '').trim() === 'inspection'
-  const isInspector = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
-  if (isInspector && isInspection) {
-    const sourceId = String(task?.source_id || '').trim()
-    return { screen: 'InspectionPanel', params: { taskId: params.taskRouteId, ...(sourceId ? { sourceId } : {}) } }
-  }
-  return { screen: 'TaskDetail', params: { id: params.taskRouteId } }
+  return navigationForWorkTaskEntry({
+    task,
+    fallbackTaskId: params.taskRouteId,
+    noticeData: params.noticeData,
+    roleNames,
+    activeRole,
+    isTaskManager: isTaskManagerUser(params.user),
+    isTaskInspector: isTaskInspectorUser(params.user),
+  }) || { screen: 'TaskDetail', params: { id: params.taskRouteId } }
 }
 
 function BootScreen() {
