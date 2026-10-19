@@ -1,5 +1,185 @@
 # Change Release Ledger
 
+## CRL-20261019-002 — MZ048 厨房收纳拍照模板与历史照片兼容（mobile）
+
+- **Status:** implementation, regressions and second independent code review complete; frozen candidate for separate authorized Git handoff; not committed / pushed / released by this task
+- **Repository:** `mobile`
+- **Updated:** 2026-10-19 UTC
+- **Request:** 将清洁补品页中独立必拍的咖啡机、烧水壶、面包机三项，依次改为刀叉勺抽屉、厨房用品抽屉、杯子、碗碟柜；其他拍照项、页面布局、按钮、上传与提交流程不变；历史家电照片保留原名称与关联，不做进行中任务或离线队列的大范围迁移。
+- **Outcome:** 无旧模板证据的任务按确认顺序要求三个新收纳照片；新照片使用三个全新 `v2` key。已有本地草稿/离线队列、服务端或本地缓存的旧家电 key 仍返回旧模板并可离线继续；完全没有有效草稿/缓存的首次进入必须成功读取线上记录，才恢复“房号正确，继续”。管理员历史详情同时识别新旧 key 并各自显示原始含义，不把旧咖啡机照片改标为抽屉。真正进入后端 replace-all 提交前，队列会重新读取服务端记录，并且只携带本地 payload 不含的六个 MZ048 新旧厨房兼容 key；无关 consumable/scene 行不 carry。读取失败或响应格式异常则保留队列重试且不发 POST，避免远端未知时静默删除旧厨房照片。
+
+### Implementation
+
+- Previous behavior: `coffee_machine_photo` / `kettle_photo` / `toaster_photo` 同时充当当前必拍清单和历史展示标签。如果直接复用这三个 key 改文案，旧照片会被错误重标；若仅切换界面数组，旧无版本草稿也可能在自动保存时丢失隐藏照片 key。
+- New behavior: 当前模板 `kitchen_storage_v2` 依次使用 `cutlery_drawer_photo_v2`、`kitchen_utensils_drawer_photo_v2`、`cups_dishes_cabinet_photo_v2`；历史模板 `kitchen_appliances_v1` 保留三个旧 key 及旧名称。
+- Compatibility boundary: 新草稿在既有 `mzstay.cleaning_consumables_draft.v2:*` 存储中写入可选判别字段 `scene_photo_template_version`，不提升存储 key、不删除/改写旧草稿。旧客户端创建且没有判别字段的任何草稿保守归入 v1；服务端/缓存记录有任一已有行但没有新 key 时也保守归入 v1，仅有新 key 的记录归入 v2；新旧 key 混合时旧证据优先，完全没有草稿或记录才使用 v2。
+- Media safety: 水合时保留草稿中所有 `extra_photo_urls`，只从新旧已知 key 中选择当前模板的必拍项；隐藏的兼容 key 仍随草稿保存，不重命名、搬迁或删除照片。离线队列仍使用已有稳定 `media_id` / `submit_id` 上传提交链路。
+- Hydration safety: 先完成本地草稿判定；存在本地草稿时不拉取远端覆盖它并直接允许离线继续，草稿读取异常则 fail closed（不请求远端、不自动保存、不允许进入，并提示返回重试）。有效缓存必须是非数组对象，`items` 必须为数组，且每行必须是带非空字符串 `item_id` 的对象；空数组是有效空记录，损坏缓存不算进入证据。已有有效缓存允许离线进入，后台远端旧记录稍后返回时与期间已拍照片合并，旧/新 key 均保留并按远端证据切换模板。完全没有草稿或有效缓存时，房号确认保持锁定，只有结构有效的线上 GET 成功（包括明确返回空 `items`）才显示“房号正确，继续”；失败或格式异常时原按钮变为“重新联网确认”，重试成功前不进入表单。任务/token 切换会忽略旧请求的迟到成功或失败，实际 `cleaningTaskId` 变化也重新显示门禁。
+- Write ordering: 屏幕内同一任务的自动保存与提交快照写入通过 promise chain 串行执行；迟到旧记录触发的 v1 合并写一定排在先前 v2 快照之后，避免 AsyncStorage 的 read-build-write 交错让旧快照最后覆盖。受控 deferred 回归验证第一笔写未完成时第二笔不会启动，释放后最终调用包含 v1 判别及旧/新两个 key。
+- Replace-all guard: Root 的既有 `POST /cleaning-app/tasks/:id/consumables` 会在事务内删除该任务全部 `cleaning_consumable_usages` 和对应照片媒体后重建。Mobile 队列现在在实际 POST 前强制执行一次只读 GET，只把服务端存在、本地 payload 缺少且属于六个 MZ048 新旧厨房照片 key 的兼容行以原 key 与照片 URL 带入同一 payload；同 key仍以当前本地编辑值为准，无关补品、下水口、遥控器等远端行不由本 CRL 新增 carry-forward 语义。GET 失败或 `items` 结构异常时沿用既有重试/退避状态并明确不调用 replace-all POST；已上传的本地媒体引用保留在草稿，后续重试不重复上传。
+- UI boundary: 厨房检查组仅替换三条标签与必拍 key；不改组标题、布局、拍照/重拍按钮、预览、删除、验证定位、上传、业务保存或提交顺序。唯一额外交互是用户已批准的首次无缓存在线门：房号弹窗中的原确认按钮在读取中显示“正在确认线上清单…”，失败后显示“重新联网确认”，成功后恢复原“房号正确，继续”。
+
+### Files / Areas
+
+- `src/lib/cleaningScenePhotoTemplate.ts` — added: 新旧厨房拍照模板、新旧 key/标签及保守选版规则。
+- `src/lib/cleaningScenePhotoTemplate.test.ts` — added: 新顺序/key、无版本草稿、显式 v2 和服务端 key 识别回归。
+- `src/lib/cleaningConsumablesDraft.ts` — modified: 草稿可选模板判别字段的规范化与继承。
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — modified: replace-all 提交前只读服务端记录并只合并远端独有的 MZ048 新旧厨房兼容行；读取失败或格式异常时不跨越写入边界。
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — modified: 判别字段持久化、旧草稿无迁移、新 key 原样提交、远端旧厨房行携带、无关行不 carry，以及远端读取失败/格式异常不 POST 回归。
+- `src/screens/tasks/SuppliesFormScreen.tsx` — modified: 按草稿/缓存/远端历史证据选择模板，展示和验证三个新项，保留非当前模板的历史照片 key，并实现首次无本地证据的在线门与原按钮内重试。
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — modified: 新任务文案、首个拍照 key、旧只读记录、本地草稿/有效缓存离线优先、无本地证据在线成功后才可确认、损坏缓存/远端响应 fail closed、任务切换迟到失败隔离、真实任务 key 更新后重新门禁、远端旧记录迟到合并及草稿读取失败 fail-closed 回归。
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — modified: 历史图库同时识别新旧 key，各自使用原始标签。
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — modified: 同一历史详情中旧咖啡机与三个新收纳 key 的独立标签回归。
+- `docs/change-release-ledger.md` — modified: 本独立 MZ048 变更单元。
+
+### Impact / Dependencies
+
+- API: 不改 endpoint 或 payload 结构；提交队列在既有 POST 前新增一次既有只读 GET。`POST /cleaning-app/tasks/:id/consumables` 对 `item_id` 仅要求非空字符串并执行 replace-all，`GET /mzapp/cleaning-tasks/:id/consumables` 原样返回 `item_id`；本变更仅对六个 MZ048 厨房兼容 key 做远端独有行携带。
+- Backend / Root: no source change required. Read-only contract worktree is based on Root `origin/Dev@80763db22c340c6f3df9e5e10924824e0ec7979b` fetched at 2026-10-18 23:09 UTC and remains clean.
+- Database / migration / production data: none. 不改 schema、不搬迁或更新历史行、不调用生产 API。
+- Local storage: 在既有 v2 草稿 JSON 内增加可选判别字段；对旧客户端草稿向后兼容，不改 AsyncStorage key 或队列 key。
+- Dependencies / config / auth / permissions / navigation: none.
+- Base: Mobile `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d` fetched at 2026-10-18 23:08 UTC; branch `codex/mz048-cleaning-photo-template` in the dedicated worktree.
+- Related units / concurrent work: standalone `mobile/CRL-20261019-002`; MZ047 thread/worktree and the user-protected MZ049 `prod-source` / `prod-mobile` worktrees are untouched. Preview dirty files are untouched.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/lib/cleaningScenePhotoTemplate.test.ts src/lib/cleaningConsumablesSubmitQueue.test.ts src/screens/tasks/SuppliesFormScreen.test.tsx src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — PASS: 4 suites / 43 tests.
+- Replace-all guard focused rerun — PASS: `src/lib/cleaningConsumablesSubmitQueue.test.ts`, 1 suite / 24 tests；覆盖远端旧咖啡机/面包机行随新抽屉 key 一并提交，以及 GET 503 时草稿进入 `waiting_sync` 且 POST 为 0 次。
+- Approved first-entry gate focused rerun — PASS: `src/screens/tasks/SuppliesFormScreen.test.tsx`, 1 suite / 14 tests；覆盖本地草稿离线直入、缓存直入并合并迟到旧记录、无本地证据在线失败时只允许原位重试、成功后才恢复房号确认。Final MZ048 focused set PASS: 4 suites / 46 tests.
+- Mobile TypeScript after the replace-all guard — PASS.
+- `npm test -- --runInBand --no-cache` — PASS: 74 suites / 483 tests.
+- Focused ESLint over the MZ048 helper, draft, queue and supplies source/tests — PASS: 0 errors / 0 warnings.
+- Changed-file ESLint including `ManagerDailyTaskScreen.tsx` — PASS for errors: 0 errors; 14 warnings are in unchanged pre-existing lines of that screen, and the MZ048 import/label map introduces no warning.
+- Mobile `npm run typecheck` — PASS after restoring the lockfile-declared official dependency `react-native-webview@13.15.0` into this ignored worktree-local `node_modules` with `npm ci --ignore-scripts`; `package.json` and `package-lock.json` remain unchanged.
+- Full `npm run lint` — PASS for errors: 0 errors / 629 existing warnings. The focused changed-file lint above has no MZ048 error or warning.
+- Root `test_idempotency_submit_id_contract.ts` on latest Root Dev — PASS; the existing consumables/idempotency contract remains valid.
+- Isolated static Root contract assertion — PASS: consumable `item_id` remains arbitrary non-empty `z.string()` rather than an enum and is persisted as `String(it.item_id)`.
+- `python3 scripts/audit_change_release_ledger.py` — PASS: 9 changed paths / 9 recorded paths.
+- `npm run test:ledger-range-audit` — PASS: 44 tests.
+- `npm run check:buttons` — PASS: no suspicious new hard-coded button dimension.
+- `git diff --check` — PASS.
+- Independent read-only review — initial hydration/write-order races and remote-unknown product boundary were found; the user explicitly approved the first-entry online gate. The second review then found malformed-cache bypass, stale rejected-request contamination, actual task-key gate reset, over-broad preflight carry-forward and audit-scope wording issues; all were corrected. Final independent verdict on the frozen code is GO with no P0/P1/P2/P3 functional finding.
+- Dependency verification — `npm ls react-native-webview --depth=0` reports exactly `react-native-webview@13.15.0`; install used the existing official npm lockfile, did not run dependency scripts, and produced no manifest/lock diff.
+- Full Mobile `npm run check:ci` — PASS after the worktree-local lockfile install: ledger range 44/44, changed-path ledger coverage 9/9, TypeScript, lint with 0 errors / 629 existing warnings, button contract, fast 8 suites / 59 tests, and full 74 suites / 483 tests.
+- Final Mobile `npm run check:ci` after the replace-all guard — PASS: ledger range 44/44, changed-path ledger coverage 10/10, TypeScript, lint with 0 errors / 635 warnings, button contract, fast 8 suites / 59 tests, and full 74 suites / 485 tests. The warning increase is confined to the queue test file's existing dynamic-require test pattern; the changed queue source has no new lint error or warning.
+- Final Mobile `npm run check:ci` after the approved first-entry gate — PASS: ledger range 44/44, changed-path ledger coverage 10/10, TypeScript, lint with 0 errors / 637 warnings, button contract, fast 8 suites / 59 tests, and full 74 suites / 486 tests. The two additional warnings are the same existing dynamic-require test pattern in the new gate fixtures; changed production source adds no lint error.
+- Second-review correction focused run — PASS: `src/screens/tasks/SuppliesFormScreen.test.tsx` and `src/lib/cleaningConsumablesSubmitQueue.test.ts`, 2 suites / 44 tests；覆盖损坏 cache/GET 不解门、旧请求迟到失败隔离、真实任务 key 更新重置门、只保留六个 MZ048 kitchen key、无关低库存/scene 行不 carry，以及异常 preflight 不 POST。
+- Second-review correction TypeScript and `git diff --check` — PASS.
+- Final independent reviewer run — PASS: exact MZ048 set 4 suites / 52 tests；full Mobile 74 suites / 492 tests；`npm run check:ci` ledger-range 44/44、changed-path 10/10、TypeScript、lint 0 errors / 651 warnings、button audit、fast 8 suites / 59 tests、full 492/492；`git diff --check` PASS. Reviewer verdict: GO, P0=0 / P1=0 / P2=0 / P3=0.
+- iOS simulator, Android emulator, physical iOS/Android, EAS/native build, real weak network, production API/data, OTA/deployment: not run and not authorized.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared` in the separately assigned isolated Git worktree.
+- **Untracked review:** none; the two intentional new template source/test files are staged, all nine non-ledger source paths are byte-identical to the reviewed handoff, and no dependency link, cache, build output, environment file or generated artifact remains.
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `362b207aeaa853ff91efbeee83424d436945ff59ab1f5d7497c2c3e3abf730bb`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `6a7943af1d662fd02b08330725ee1c7ac0882b923966f604eafa0f59a8373ce3`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `8fe392f3d40b39278acdadf554167eba7327c023085407635855959de67dc395`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `96ece29231302c3915bdd8aca640ae9ddc40572b9c710895d6b245106b8d6ed1`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `b8528266b8a56da960ba7a0bcbb289c5cc4b746cf9945f627c0c76ed2458f489`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `f710ef9331837425de669737e3c5c22611134e785d960013704eadec90cae4f8`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `23bba9dbfc12095760b1dccfc728a96406991391c6734fd67fd1218f52cc070a`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `8dbb8309279ac2a061053a8f0c1a0e965bfd0715267f47d7cd37f6e6e1153e11`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `08badaa1315b0ff20c00091fd0b10231c27266f86a73cb77271c793b6ea66f98`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `12f5282f362c4279d701d3407f577aa4b5c95bbb14b02200ad656d70be002e7d`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `15470bc86165aa05bedc5f8469ffd3a836f4dc8c10f731aee82d3dd389d3ef00`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `9d8d260e8f49815d3656ddd0d3824d7c057d53a13649d3d71d7830a8dc178f71`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `d84766ac0f577b52e59be587f1484fc54ce2c0c1926ce361dc5e597233641f82`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `da73d8e79f2dc2a628c52129ce647155a368bb9f73093b80268b85700f8f6fd5`
+- `src/lib/cleaningScenePhotoTemplate.test.ts` — SHA-256: `c25875fa27be885310a3c5e7a3186940bfbab447413fe10fda17122bce6237f3`
+- `src/lib/cleaningScenePhotoTemplate.ts` — SHA-256: `43088c98397dab067bb1082a743141e6f86fcf03054ccd788144c0ba5db54c55`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `36d114ac6cc3b58e2391c335d9232f78272d04e7bddea039f9f9314bc3e5b659`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `3ae67ea2e8d815fe0cfc1b005c5e462a2479dca8abb957e9b6e85562d74b979a`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `c1cc4ccd4b5a033f20d3ad98a010c0447065acaf8999592af3368260d3c0aee7`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `e373bca0253ba185b98a451caadf54aaabf31a6d50464419c7a74880e72cb88b`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `6d806f1f8990c324aabe350e7f95416607d192d7219333fbaeeec4cc1957509f`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `b8fb8bd0211e714bcd39edfd7f4e7f905d3632cbc62227d7821f54b804a8b129`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `099c6c234caf377e78784b1809a17b8c415ac861c7fec614e58d440c1e9d971f`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `11e40e6ed869cdb47cd819087153a2fa9f219755293579b052f200b5bc0cc16b`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `2d4b2f62c174c720a15915c9c5d6b6d49f3723b050995e8382432971f65a7603`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `58ae4f850ec738dbc291d5891859dc0a5a0d5493dd39f9465d220c2da9f61750`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `5f1db651d4caaadd3f1180c30875b3557a20db1c85c0928d0a1554cf3dcd2f65`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `6fda57090f803c9d4551414968a6aa52b3058cc1851fad681aaa8cff125577c7`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `87b68beb301c4cce410cca5f9d7f5c5a78f7c45b2d7114e99f1fbe6460e0df65`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `957584d9e9dc61013a45cd0c497b2295e8030595bffcde433ca0c46517a33f48`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `a2614df13cca4d0ab22a9b99ff40f84403315821f4455d8a1c20ec78c2c7b6eb`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `cf932b14e2e33649b9ebaadbc8e0d4fc2e8c0b6a10ce1ee8609b45311229d7b9`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `ef6c5750cd2ce78478caf74154a95c2e3068249be2d0c53e9800f7d0fe466fe6`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `f143c435578c1fd57cf70cf4e352133b19cdfa9b91a0fc8300f7ad1e80f9ee59`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `f262b895ae2b4b5085269ffe0749cc3749002299fae6f3e618d6f49414ebba34`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `f82503f4e30a4fc8ecee267004861223b26e292bf60cd1037958b67500a782bc`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `0402bf14d1445b04619da0d0a4886e7010629d56e13423cb9f5d5133a09a25bd`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `0f988401b536872bcef792cff5a580ac21b1fe881716e30e4f54edb50d131279`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `107207c94698f0a7f02e7c24067ce082b2b1df6749f0a119d3bb1b6373e3dace`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `13a11330b9ccf9d555c0f57f00c5f510b65b5cd54282e5b1ddf7dca21a169d90`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `185a78875cac95c25ce0fc54cdbc8113d238304ebbfcb2fa83d00a868eebfd83`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `1a64e317ac3c0faa8e77b0399890581d34aea3522a27d104f402bd3bdbde404c`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `2cbe60ebeec0f5067a73ea528d8145f8e10bb9d72bfcd71100f18b2751bc1536`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `31a1e43f50265c199b7c3bf2c6f0c5ea844521fd65a8d020027abc8a3e53d460`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `33c85b1ae86130bbe13c8fb013aa01bd8a397397efa135fdfbb80f2bfa322a1a`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `347d2e9ff7c3876078b1f8181268cf630bbee95f35cfaf9bfed51b9383d92233`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `3749026182c34eb9e0af53e44a43d52d4ae13d046094f0dc3f293f0f6915e6c8`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `41870138a3addccd086b27a47e15845a0a4bb280998744c87d3ff09ded025b23`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `47d2404a522e720277e0dbad55d81bd7c6131657869e57f6b7617040871ccf95`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `4a29911d73f758eaeb83d3f0929daff3260df3fd078b7ceda20a7574f755f72c`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `4d15ddcc2b3d0159efcaa872f0961d68f7c5afd3819b699b63223347a7e9d46b`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `4da113257fed9b3165c286811f9d26f662df8eb720168abd9c870469b8eafe1f`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `58790de5119b43c8881ed2f185338feafeccfc99960ebc2118918c90fd07a9fb`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `5b9187d9dc86f165b00448bae437ec07f3f78f13289334b5376b94efb6299150`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `5ffaa319d672c018bd59fdfef802624bde010d8018c8c0516712532b3ec11041`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `671063a50a11ccd32066d070217f41876cc8e462418765f48d10c4f968f2533c`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `77221db9881a66c6abd70b911be1d8c99869a681ed307e07d54f73ded723f9c1`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `8a509421345ad6b35051b3adee845890a82b0db35fd9cdd410799f2995b9f9f6`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `8d32ee2f9f4ba03ef8a8034a6c0585e3cfa8a7d7c740f027555ad0ea77f84853`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `a120592c90fe0b05d255be32c210dbfe812aa032e5db0dcfa42aed3a3266f74b`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `b33d03e545a23c07af003beffd70c94c3dec33eee31a449eeb1771f505b6cfe7`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `c1cf76260c6dff69464c3fc59afd4a49b575ae6a7ef0623e558e5058070f838e`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `c921cbce76879242dec5014b43ce65bd130bb53ea5a5ce55c86eee2ec7e00c19`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `d1ac852dbc8ba5c72751f13e416c77a3e5892110ae24910cd49caed980b567c1`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `d1ae73b929b1f5823e4cd1b735b197ce6eb82a70fed4c6f6f3a8e0ee4f47cbce`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `d8f66035a5d63be7360dacff3616dbe2283f3245ca0df61f6b3cb685355ca2d4`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `e1976ee8e964b7b388f0d3b4cda1f466eff676cf440fd3868650bedcb387337f`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `e535b1d5a9b618f7fe6b0ae998d0e6c514fe10e7a6e409c424659de5cc8160b8`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `f185d2571f4037d40288c00534ea8870bf8fae47914c27bf371490bf152393eb`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `f271071d6456d4a1440c163541e699a1179bff5f5489701fa367006551379f44`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `f4c320f7b753d6caf9fdb48048c43d3482ac78e81824d435a6d5ac4399a1be91`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `f5b5b8d05246517c9d7d79f79fbe9512140b41feaa5eb0a0a370e39f6e51e853`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `f8bb07cf8771b389a3f7b75c1520dd70297fa6e464d48be7b583ce87336dd952`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `ff5d72946cb2c300f0898af2d3a574020f5e2627a2dd41ba3dcbbaa88cb5a4fb`
+
+### Release Attempts
+
+#### RA-20261019-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261019-002`
+- Selected CRL identities: `mobile/CRL-20261019-002`
+- Intended action: `commit`
+- Branch: `codex/mz048-cleaning-photo-template`
+- Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; fetched at `2026-10-19 UTC`
+- Candidate patch SHA-256: `3a199ddbcb67397385c53b31bcadb63b5e6601e774886f0169ce9aed1983db99` over the exact nine non-ledger paths; frozen handoff aggregate content fingerprint `55cda5cc` prefix is preserved separately because it used a different aggregation method.
+- Commit SHA: `not committed`
+- Dependencies: none; no backend or migration change.
+- Required validation: `PASS for source commit`; evidence: frozen final review passed 4 focused suites / 52 tests, full 74 suites / 492 tests, ledger range 44/44, changed paths 10/10, TypeScript, lint with zero errors, button audit and diff check. Physical device, weak-network and native build remain pending.
+- Shared-hunk review: `PASS`; evidence: exact byte comparison matched all nine non-ledger frozen handoff files; the ledger contains only this staged-scope/attempt bookkeeping update, and no MZ-047/MZ-049 change is present.
+- Generated-file review: `PASS`; evidence: no dependency link, cache, build output, environment file or generated artifact remains.
+- Technical state: `verified`
+- User authorization: `selected-for-commit`; evidence: the current direct instruction selects the frozen MZ-048 handoff for isolated task-branch commit/push.
+- Independent review: `GO for source commit`; evidence: fresh staged-scope confirmation matched the fingerprint, 10 paths / 74 non-ledger hunks, nine byte-identical frozen non-ledger files and branch/base with P0/P1/P2/P3 = 0.
+- Action conclusion: `GO` for the source commit; blockers: none for commit. Physical-device/weak-network/native-build acceptance and the recorded GET→POST residual race remain release considerations; no OTA, deployment, backend change or production interaction is part of this action.
+
+### Risks / Release Notes
+
+- Conservative boundary: any unversioned local draft is treated as legacy v1 even if no appliance photo has yet been taken. This intentionally avoids silently changing an already-started/offline task; changing those in-progress tasks to v2 later requires an explicit business decision and a separate migration plan.
+- A task with no local draft and no stored record uses v2. Any non-empty existing server/cache record without a new key conservatively remains v1; new-key rows are v2. This intentionally favors not changing an already-started task, while Manager history can display both sets without relabeling.
+- Weak-network boundary: existing local drafts and valid cache records remain usable offline. A task with neither cannot be started for the first time until one successful server read establishes v1/v2; the room-confirm button exposes retry without dismissing the task. The user explicitly approved this tradeoff after being told that a completely offline first entry would be unavailable.
+- Replace-all boundary: a failed or malformed safety GET leaves the offline queue waiting and never calls POST; a successful GET carries only remote-only MZ048 new/legacy kitchen compatibility rows into the replace-all payload. Unrelated remote rows retain pre-existing endpoint behavior and are not newly carried by this CRL. The GET→POST pair has no server revision/conditional-write token, so a second client changing the same task in that narrow interval remains a residual concurrency risk; fully eliminating that race would require backend cooperation, but no backend change or migration is required for this scoped candidate.
+- Rollback: revert only this CRL's Mobile source/test/ledger paths. No data rollback or migration is needed because stored photo keys are additive and immutable in meaning.
+- Sensitive-information review: test fixtures use local/example paths only; no token, credential, `.env` value, database URL, private media, real task payload or production log is included.
+- Git state: exact ten-path candidate staged on `codex/mz048-cleaning-photo-template`; not committed, not pushed, no PR, no merge, no deployment/OTA, no device or production verification.
+
 ## CRL-20261015-001 — MZ-036 App 缓存容量、媒体草稿保护与上传状态收敛（mobile）
 
 - **Status:** integrated on latest remote Dev and fully validated locally with MZ-037/MZ-043; not committed / pushed / released

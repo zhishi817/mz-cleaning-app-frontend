@@ -26,6 +26,13 @@ import { getJson, setJson } from '../../lib/storage'
 import { findWorkTaskItemByAnyId, subscribeWorkTasks } from '../../lib/workTasksStore'
 import { getCleaningConsumables, type ChecklistItem } from '../../lib/api'
 import { consumableRestockStandard } from '../../lib/consumableRestockStandards'
+import {
+  ALL_KITCHEN_SCENE_PHOTOS,
+  CURRENT_KITCHEN_PHOTO_TEMPLATE_VERSION,
+  kitchenRequiredPhotosForTemplate,
+  resolveCleaningKitchenPhotoTemplate,
+  type CleaningKitchenPhotoTemplateVersion,
+} from '../../lib/cleaningScenePhotoTemplate'
 import { ensureSuppliesCatalogLoaded, retrySuppliesCatalog, useSuppliesCatalogStore } from '../../lib/useSuppliesCatalogStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import AppButton from '../../components/ui/AppButton'
@@ -50,7 +57,7 @@ type ItemState = {
 
 type CachedConsumablesRecord = {
   living_room_photo_url?: string | null
-  items?: { item_id: string; qty?: number | null; note?: string | null; status?: string | null; photo_url?: string | null; photo_urls?: string[] }[]
+  items: { item_id: string; qty?: number | null; note?: string | null; status?: string | null; photo_url?: string | null; photo_urls?: string[] }[]
 }
 
 type SuppliesValidationIssue = {
@@ -60,20 +67,22 @@ type SuppliesValidationIssue = {
   photoGroup?: 'living_room' | 'bathroom' | 'kitchen' | 'vacuum' | 'remote_tv'
 }
 
+type SuppliesEntryGateState = 'checking' | 'resolved' | 'remote_failed' | 'local_failed'
+
 const SHOWER_DRAIN_PHOTOS = [
   { id: 'shower_drain_photo_1', label: '淋浴房下水口 1' },
   { id: 'shower_drain_photo_2', label: '淋浴房下水口 2' },
   { id: 'shower_drain_photo_3', label: '淋浴房下水口 3' },
 ] as const
 
-const KITCHEN_REQUIRED_PHOTOS = [
-  { id: 'coffee_machine_photo', label: '咖啡机' },
-  { id: 'kettle_photo', label: '烧水壶' },
-  { id: 'toaster_photo', label: '面包机' },
-] as const
-
 const ADDITIONAL_REQUIRED_PHOTOS = [
   { id: 'vacuum_used_photo', label: '吸尘器使用后' },
+] as const
+
+const ALL_KNOWN_REQUIRED_SCENE_PHOTOS = [
+  ...SHOWER_DRAIN_PHOTOS,
+  ...ALL_KITCHEN_SCENE_PHOTOS,
+  ...ADDITIONAL_REQUIRED_PHOTOS,
 ] as const
 
 function buildBaseItems(list: ChecklistItem[]) {
@@ -117,6 +126,26 @@ function suppliesRecordCacheKey(taskId: string) {
   return `supplies_record_${String(taskId || '').trim()}`
 }
 
+function asConsumablesRecord(raw: unknown): CachedConsumablesRecord | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  if (!Array.isArray((raw as CachedConsumablesRecord).items)) return null
+  if (!(raw as CachedConsumablesRecord).items.every((item) => (
+    !!item
+    && typeof item === 'object'
+    && !Array.isArray(item)
+    && typeof item.item_id === 'string'
+    && !!item.item_id.trim()
+  ))) return null
+  return raw as CachedConsumablesRecord
+}
+
+function invalidRemoteConsumablesRecordError() {
+  const error: any = new Error('线上补品记录格式异常，请联网后重试')
+  error.code = 'REMOTE_CONSUMABLES_RECORD_INVALID'
+  error.status = 503
+  return error
+}
+
 function normalizeDraftItems(list: ItemState[]): CleaningConsumablesDraftItem[] {
   return list.map((item) => ({
     item_id: item.id,
@@ -128,13 +157,35 @@ function normalizeDraftItems(list: ItemState[]): CleaningConsumablesDraftItem[] 
   }))
 }
 
+function scenePhotoUrlsFrom(rawExtraPhotoUrls: any, sourceItems: any[]) {
+  const next: Record<string, string | null> = {}
+  if (rawExtraPhotoUrls && typeof rawExtraPhotoUrls === 'object') {
+    for (const [photoId, rawUrl] of Object.entries(rawExtraPhotoUrls)) {
+      const id = String(photoId || '').trim()
+      if (!id) continue
+      next[id] = String(rawUrl || '').trim() || null
+    }
+  }
+  const byId = new Map((sourceItems || []).map((item: any) => [String(item?.item_id || '').trim(), item]))
+  for (const item of ALL_KNOWN_REQUIRED_SCENE_PHOTOS) {
+    const existingUrl = String(next[item.id] || '').trim()
+    const record = byId.get(item.id) as any
+    const recordUrl = String(record?.photo_url || '').trim()
+    const recordUrls = Array.isArray(record?.photo_urls) ? record.photo_urls : []
+    const firstRecordUrl = recordUrls.map((url: any) => String(url || '').trim()).find(Boolean) || ''
+    const url = existingUrl || recordUrl || firstRecordUrl
+    if (url) next[item.id] = url
+  }
+  return next
+}
+
 export default function SuppliesFormScreen(props: Props) {
   const { t } = useI18n()
   const { token, user } = useAuth()
   const insets = useSafeAreaInsets()
   const readOnly = props.route.params.readOnly === true
   const [submitting, setSubmitting] = useState(false)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [items, setItems] = useState<ItemState[]>([])
   const [photoUploadingIdx, setPhotoUploadingIdx] = useState<number | null>(null)
   const [viewerOpen, setViewerOpen] = useState(false)
@@ -147,8 +198,12 @@ export default function SuppliesFormScreen(props: Props) {
   const [hasExistingRecord, setHasExistingRecord] = useState(false)
   const [initialRecordItems, setInitialRecordItems] = useState<CachedConsumablesRecord['items']>([])
   const [recordHydrated, setRecordHydrated] = useState(false)
+  const [initialRecordLoadError, setInitialRecordLoadError] = useState<string | null>(null)
+  const [entryGateState, setEntryGateState] = useState<SuppliesEntryGateState>('checking')
+  const [entryGateAttempt, setEntryGateAttempt] = useState(0)
   const [draftPhotoMeta, setDraftPhotoMeta] = useState<CleaningConsumablesPhotoMetaMap>({})
   const [draftSubmitStatus, setDraftSubmitStatus] = useState<CleaningConsumablesSubmitStatus>('draft')
+  const [scenePhotoTemplateVersion, setScenePhotoTemplateVersion] = useState<CleaningKitchenPhotoTemplateVersion>(CURRENT_KITCHEN_PHOTO_TEMPLATE_VERSION)
   const [showValidationIssue, setShowValidationIssue] = useState(false)
   const [heroExpanded, setHeroExpanded] = useState(true)
   const [roomConfirmed, setRoomConfirmed] = useState(false)
@@ -156,6 +211,7 @@ export default function SuppliesFormScreen(props: Props) {
   const suppliesCatalog = useSuppliesCatalogStore()
   const formDirtyRef = useRef(false)
   const draftHydratedRef = useRef(false)
+  const draftWriteChainRef = useRef<Promise<unknown>>(Promise.resolve())
   const scrollRef = useRef<ScrollView | null>(null)
   const sectionOffsetsRef = useRef<Record<'checklist' | 'photos', number>>({ checklist: 0, photos: 0 })
   const pendingSubmit = draftSubmitStatus !== 'draft' && draftSubmitStatus !== 'synced'
@@ -177,15 +233,16 @@ export default function SuppliesFormScreen(props: Props) {
 
   useEffect(() => {
     setRoomConfirmed(false)
-  }, [props.route.params.taskId, readOnly])
+  }, [cleaningTaskId, readOnly])
 
+  const kitchenRequiredPhotos = kitchenRequiredPhotosForTemplate(scenePhotoTemplateVersion)
   const allRequiredScenePhotos = useMemo(
     () => [
       ...SHOWER_DRAIN_PHOTOS,
-      ...KITCHEN_REQUIRED_PHOTOS,
+      ...kitchenRequiredPhotos,
       ...ADDITIONAL_REQUIRED_PHOTOS,
     ],
-    [],
+    [kitchenRequiredPhotos],
   )
   const remainingNightsRaw = (task as any)?.remaining_nights
   const remainingNights0 = remainingNightsRaw == null ? null : Number(remainingNightsRaw)
@@ -240,6 +297,14 @@ export default function SuppliesFormScreen(props: Props) {
 
   function markFormDirty() {
     formDirtyRef.current = true
+  }
+
+  function enqueueDraftWrite(taskId: string, patch: Parameters<typeof setCleaningConsumablesDraft>[1]) {
+    const next = draftWriteChainRef.current
+      .catch(() => null)
+      .then(() => setCleaningConsumablesDraft(taskId, patch))
+    draftWriteChainRef.current = next.catch(() => null)
+    return next
   }
 
   function rememberDraftPhoto(uri: string, meta: { name: string; mimeType: string; capturedAt: string; watermarkText: string }) {
@@ -303,35 +368,103 @@ export default function SuppliesFormScreen(props: Props) {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
+      let hydrationSucceeded = false
       try {
-        const [localDraft, nextCachedRecord] = await Promise.all([
-          cleaningTaskId ? getCleaningConsumablesDraft(cleaningTaskId) : Promise.resolve(null),
-          cleaningTaskId ? getJson<CachedConsumablesRecord>(suppliesRecordCacheKey(cleaningTaskId)) : Promise.resolve(null),
-        ])
+        setLoading(true)
+        setRecordHydrated(false)
+        setInitialRecordLoadError(null)
+        setEntryGateState('checking')
+        draftHydratedRef.current = false
+        // A failed draft read is not evidence that no draft exists. Resolve it
+        // before consulting remote/cache data so offline photos cannot be
+        // overwritten by a fresh-template form after a transient storage error.
+        const localDraft = cleaningTaskId ? await getCleaningConsumablesDraft(cleaningTaskId) : null
+        const nextCachedRecord = cleaningTaskId
+          ? asConsumablesRecord(await getJson<unknown>(suppliesRecordCacheKey(cleaningTaskId)).catch(() => null))
+          : null
         if (cancelled) return
-        draftHydratedRef.current = true
+        const hasLocalEntryEvidence = !!localDraft || nextCachedRecord !== null
+        if (hasLocalEntryEvidence) setEntryGateState('resolved')
         formDirtyRef.current = !!localDraft
         setDraftSubmitStatus(localDraft?.submit_status || (localDraft?.pending_submit ? 'waiting_sync' : 'draft'))
         setInitialRecordItems(Array.isArray(localDraft?.items) ? localDraft.items : Array.isArray(nextCachedRecord?.items) ? nextCachedRecord.items : [])
         setDraftPhotoMeta(localDraft?.photo_meta || {})
-        setRecordHydrated(true)
         const draftItems = Array.isArray(localDraft?.items) ? localDraft.items : []
         const sourceItems = draftItems.length ? draftItems : Array.isArray(nextCachedRecord?.items) ? nextCachedRecord.items : []
         const byId = new Map(sourceItems.map((x: any) => [String(x.item_id || ''), x]))
-        const nextExtraPhotos = Object.fromEntries(
-          allRequiredScenePhotos.map((item) => [item.id, String(localDraft?.extra_photo_urls?.[item.id] || byId.get(item.id)?.photo_url || '').trim() || null]),
-        ) as Record<string, string | null>
+        const templateEvidence = localDraft || (sourceItems.length ? { items: sourceItems } : null)
+        const nextTemplateVersion = resolveCleaningKitchenPhotoTemplate(templateEvidence, sourceItems)
+        const nextExtraPhotos = scenePhotoUrlsFrom(localDraft?.extra_photo_urls, sourceItems)
+        setScenePhotoTemplateVersion(nextTemplateVersion)
         setRemoteAcPhotoUrl(String(localDraft?.remote_ac_photo_url || byId.get('remote_ac')?.photo_url || '').trim() || null)
         setRemoteTvPhotoUrl(String(localDraft?.remote_tv_photo_url || byId.get('remote_tv')?.photo_url || '').trim() || null)
         setLivingRoomPhotoUrl(String(localDraft?.living_room_photo_url || nextCachedRecord?.living_room_photo_url || '').trim() || null)
         setExtraPhotoUrls(nextExtraPhotos)
         setHasExistingRecord(sourceItems.length > 0)
-      } catch {}
+        hydrationSucceeded = true
+        draftHydratedRef.current = true
+        setRecordHydrated(true)
+
+        if (!localDraft && token && cleaningTaskId) {
+          try {
+            const rawExisting = await getCleaningConsumables(token, cleaningTaskId)
+            if (cancelled) return
+            const existing = asConsumablesRecord(rawExisting)
+            if (!existing) throw invalidRemoteConsumablesRecordError()
+            const existingItems = existing.items
+            const existingLivingRoomPhotoUrl = String(existing?.living_room_photo_url || '').trim() || null
+            const remoteRecord: CachedConsumablesRecord = { living_room_photo_url: existingLivingRoomPhotoUrl, items: existingItems }
+            void setJson(suppliesRecordCacheKey(cleaningTaskId), remoteRecord)
+            const remoteTemplateEvidence = existingItems.length ? { items: existingItems } : null
+            const remoteTemplateVersion = resolveCleaningKitchenPhotoTemplate(remoteTemplateEvidence, existingItems)
+            const remotePhotos = scenePhotoUrlsFrom(null, existingItems)
+            const remoteById = new Map(existingItems.map((item: any) => [String(item.item_id || ''), item]))
+
+            setInitialRecordItems(existingItems)
+            setScenePhotoTemplateVersion(remoteTemplateVersion)
+            setHasExistingRecord(existingItems.length > 0)
+            setEntryGateState('resolved')
+            if (formDirtyRef.current) {
+              setExtraPhotoUrls((current) => scenePhotoUrlsFrom({ ...remotePhotos, ...current }, existingItems))
+              setLivingRoomPhotoUrl((current) => current || existingLivingRoomPhotoUrl)
+              setRemoteAcPhotoUrl((current) => current || String(remoteById.get('remote_ac')?.photo_url || '').trim() || null)
+              setRemoteTvPhotoUrl((current) => current || String(remoteById.get('remote_tv')?.photo_url || '').trim() || null)
+            } else {
+              setExtraPhotoUrls(remotePhotos)
+              setLivingRoomPhotoUrl(existingLivingRoomPhotoUrl)
+              setRemoteAcPhotoUrl(String(remoteById.get('remote_ac')?.photo_url || '').trim() || null)
+              setRemoteTvPhotoUrl(String(remoteById.get('remote_tv')?.photo_url || '').trim() || null)
+              setDraftPhotoMeta({})
+              setDraftSubmitStatus('draft')
+            }
+          } catch {
+            if (!cancelled && !hasLocalEntryEvidence) {
+              setEntryGateState('remote_failed')
+              setInitialRecordLoadError('无法在线确认该任务使用的新旧拍照清单，请联网后重试；不会覆盖已有照片。')
+            }
+          }
+        } else if (!localDraft && !hasLocalEntryEvidence) {
+          setEntryGateState('remote_failed')
+          setInitialRecordLoadError('无法在线确认该任务使用的新旧拍照清单，请登录并联网后重试。')
+        }
+      } catch {
+        if (!cancelled) {
+          setEntryGateState('local_failed')
+          setInitialRecordLoadError('本地补品草稿读取失败，请返回任务列表后重试。')
+        }
+      }
+      finally {
+        if (!cancelled) {
+          draftHydratedRef.current = hydrationSucceeded
+          setRecordHydrated(hydrationSucceeded)
+          setLoading(false)
+        }
+      }
     })()
     return () => {
       cancelled = true
     }
-  }, [allRequiredScenePhotos, cleaningTaskId])
+  }, [cleaningTaskId, entryGateAttempt, token])
 
   useEffect(() => {
     if (!cleaningTaskId) return
@@ -346,17 +479,16 @@ export default function SuppliesFormScreen(props: Props) {
         setDraftSubmitStatus(draft.submit_status)
         setDraftPhotoMeta(draft.photo_meta || {})
         if (draft.submit_status !== 'draft' || !formDirtyRef.current) {
+          setScenePhotoTemplateVersion(resolveCleaningKitchenPhotoTemplate(draft, draft.items || []))
           setItems((current) => applyExistingToItems(current, draft.items || []))
           setLivingRoomPhotoUrl(String(draft.living_room_photo_url || '').trim() || null)
           setRemoteAcPhotoUrl(String(draft.remote_ac_photo_url || '').trim() || null)
           setRemoteTvPhotoUrl(String(draft.remote_tv_photo_url || '').trim() || null)
-          setExtraPhotoUrls((current) => Object.fromEntries(
-            allRequiredScenePhotos.map((item) => [item.id, String(draft.extra_photo_urls?.[item.id] || current[item.id] || '').trim() || null]),
-          ) as Record<string, string | null>)
+          setExtraPhotoUrls((current) => scenePhotoUrlsFrom({ ...current, ...(draft.extra_photo_urls || {}) }, draft.items || []))
         }
       }).catch(() => {})
     })
-  }, [allRequiredScenePhotos, cleaningTaskId])
+  }, [cleaningTaskId])
 
   useEffect(() => {
     if (!token) return
@@ -374,51 +506,16 @@ export default function SuppliesFormScreen(props: Props) {
   }, [initialRecordItems, items.length, recordHydrated, suppliesCatalog.hydrated, suppliesCatalog.items])
 
   useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      if (!token || !cleaningTaskId) return
-      try {
-        setLoading(true)
-        const existing = await getCleaningConsumables(token, cleaningTaskId)
-        if (cancelled) return
-        const existingItems = Array.isArray(existing?.items) ? existing.items : []
-        const existingLivingRoomPhotoUrl = String(existing?.living_room_photo_url || '').trim() || null
-        const nextRecord: CachedConsumablesRecord = { living_room_photo_url: existingLivingRoomPhotoUrl, items: existingItems }
-        void setJson(suppliesRecordCacheKey(cleaningTaskId), nextRecord)
-        if (!formDirtyRef.current) {
-          setInitialRecordItems(existingItems)
-          const byId = new Map(existingItems.map((x: any) => [String(x.item_id || ''), x]))
-          const nextExtraPhotos = Object.fromEntries(
-            allRequiredScenePhotos.map((item) => [item.id, String(byId.get(item.id)?.photo_url || '').trim() || null]),
-          ) as Record<string, string | null>
-          setRemoteAcPhotoUrl(String(byId.get('remote_ac')?.photo_url || '').trim() || null)
-          setRemoteTvPhotoUrl(String(byId.get('remote_tv')?.photo_url || '').trim() || null)
-          setLivingRoomPhotoUrl(existingLivingRoomPhotoUrl)
-          setExtraPhotoUrls(nextExtraPhotos)
-          setDraftPhotoMeta({})
-          setDraftSubmitStatus('draft')
-          setHasExistingRecord(existingItems.length > 0)
-        }
-      } catch {}
-      finally {
-        if (!cancelled) setLoading(false)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [allRequiredScenePhotos, cleaningTaskId, token])
-
-  useEffect(() => {
     if (!cleaningTaskId) return
     if (!recordHydrated || !draftHydratedRef.current) return
     if (!formDirtyRef.current) return
     if (draftSubmitStatus !== 'draft' && draftSubmitStatus !== 'ready_to_submit') return
     const draftItems = normalizeDraftItems(items)
-    void setCleaningConsumablesDraft(cleaningTaskId, {
+    void enqueueDraftWrite(cleaningTaskId, {
       property_code: propertyCode || null,
       pending_submit: pendingSubmit,
       submit_status: draftSubmitStatus,
+      scene_photo_template_version: scenePhotoTemplateVersion,
       living_room_photo_url: String(livingRoomPhotoUrl || '').trim() || null,
       remote_ac_photo_url: String(remoteAcPhotoUrl || '').trim() || null,
       remote_tv_photo_url: String(remoteTvPhotoUrl || '').trim() || null,
@@ -426,7 +523,7 @@ export default function SuppliesFormScreen(props: Props) {
       items: draftItems,
       photo_meta: draftPhotoMeta,
     })
-  }, [cleaningTaskId, draftPhotoMeta, draftSubmitStatus, extraPhotoUrls, items, livingRoomPhotoUrl, pendingSubmit, propertyCode, recordHydrated, remoteAcPhotoUrl, remoteTvPhotoUrl])
+  }, [cleaningTaskId, draftPhotoMeta, draftSubmitStatus, extraPhotoUrls, items, livingRoomPhotoUrl, pendingSubmit, propertyCode, recordHydrated, remoteAcPhotoUrl, remoteTvPhotoUrl, scenePhotoTemplateVersion])
 
   async function ensureCameraPerm() {
     try {
@@ -481,7 +578,7 @@ export default function SuppliesFormScreen(props: Props) {
 
   async function onTakeRequiredScenePhotoSequence(group: 'bathroom' | 'kitchen') {
     if (readOnly) return
-    const targets = group === 'bathroom' ? SHOWER_DRAIN_PHOTOS : KITCHEN_REQUIRED_PHOTOS
+    const targets = group === 'bathroom' ? SHOWER_DRAIN_PHOTOS : kitchenRequiredPhotos
     const pendingTargets = targets.filter((item) => !String(extraPhotoUrls[item.id] || '').trim())
     const captureTarget = pendingTargets[0] || targets[0]
     if (!captureTarget) return
@@ -578,7 +675,7 @@ export default function SuppliesFormScreen(props: Props) {
     if (!SHOWER_DRAIN_PHOTOS.some((item) => String(extraPhotoUrls[item.id] || '').trim())) {
       return { section: 'photos', photoGroup: 'bathroom', message: '请至少拍 1 张淋浴房下水口照片。' }
     }
-    for (const item of KITCHEN_REQUIRED_PHOTOS) {
+    for (const item of kitchenRequiredPhotos) {
       if (!String(extraPhotoUrls[item.id] || '').trim()) {
         return { section: 'photos', photoGroup: 'kitchen', message: `请补拍：${item.label}。` }
       }
@@ -645,10 +742,11 @@ export default function SuppliesFormScreen(props: Props) {
     const nextExtraPhotoUrls = snapshot?.extraPhotoUrls || extraPhotoUrls
     const nextPhotoMeta = snapshot?.photoMeta || draftPhotoMeta
     const draftItems = normalizeDraftItems(nextItems)
-    await setCleaningConsumablesDraft(cleaningTaskId, {
+    await enqueueDraftWrite(cleaningTaskId, {
       property_code: propertyCode || null,
       pending_submit: true,
       submit_status: 'ready_to_submit',
+      scene_photo_template_version: scenePhotoTemplateVersion,
       living_room_photo_url: String(nextLivingRoomPhotoUrl || '').trim() || null,
       remote_ac_photo_url: String(nextRemoteAcPhotoUrl || '').trim() || null,
       remote_tv_photo_url: String(nextRemoteTvPhotoUrl || '').trim() || null,
@@ -1054,7 +1152,7 @@ export default function SuppliesFormScreen(props: Props) {
                         </Pressable>
                       ) : null}
                     </View>
-                    {KITCHEN_REQUIRED_PHOTOS.map((item) => (
+                    {kitchenRequiredPhotos.map((item) => (
                       <View key={item.id} style={styles.photoChecklistEntry}>
                         <View style={styles.photoChecklistRow}>
                           <View style={styles.photoChecklistTextWrap}>
@@ -1079,7 +1177,7 @@ export default function SuppliesFormScreen(props: Props) {
                       </View>
                     ))}
                     <ResponsiveImageGrid
-                      items={KITCHEN_REQUIRED_PHOTOS}
+                      items={kitchenRequiredPhotos}
                       fixedItemWidth={96}
                       keyExtractor={(item) => `kitchen-${item.id}`}
                       renderItem={(item) => {
@@ -1303,9 +1401,26 @@ export default function SuppliesFormScreen(props: Props) {
             <Text style={styles.roomConfirmMessage}>请确认后再填写补品消耗，避免填错房源。</Text>
             <Text testID="supplies-room-confirmation-code" style={styles.roomConfirmCode}>{propertyCode || '房号未加载'}</Text>
             {!propertyCode ? <Text style={styles.roomConfirmWarning}>房号尚未加载，请返回任务列表后重试。</Text> : null}
+            {initialRecordLoadError ? <Text style={styles.roomConfirmWarning}>{initialRecordLoadError}</Text> : null}
             <View style={styles.roomConfirmActions}>
               <AppButton label="返回任务" onPress={() => props.navigation.goBack()} tone="secondary" style={styles.roomConfirmButton} />
-              <AppButton label="房号正确，继续" onPress={() => setRoomConfirmed(true)} disabled={!propertyCode} style={styles.roomConfirmButton} />
+              <AppButton
+                testID="supplies-room-confirm"
+                label={entryGateState === 'checking'
+                  ? '正在确认线上清单…'
+                  : entryGateState === 'remote_failed'
+                    ? '重新联网确认'
+                    : '房号正确，继续'}
+                onPress={() => {
+                  if (entryGateState === 'remote_failed') {
+                    setEntryGateAttempt((attempt) => attempt + 1)
+                    return
+                  }
+                  if (entryGateState === 'resolved') setRoomConfirmed(true)
+                }}
+                disabled={!propertyCode || !recordHydrated || entryGateState === 'checking' || entryGateState === 'local_failed'}
+                style={styles.roomConfirmButton}
+              />
             </View>
           </View>
         </View>

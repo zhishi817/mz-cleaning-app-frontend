@@ -1,4 +1,4 @@
-import { isRetryableApiError, isTerminalAuthApiError, saveCompletionPhotos, saveRestockProof, submitCleaningConsumables, uploadCleaningMedia, type CompletionPhotoArea } from './api'
+import { getCleaningConsumables, isRetryableApiError, isTerminalAuthApiError, saveCompletionPhotos, saveRestockProof, submitCleaningConsumables, uploadCleaningMedia, type CompletionPhotoArea } from './api'
 import { cleaningMediaReference } from './cleaningMedia'
 import {
   getCleaningConsumablesDraft,
@@ -10,6 +10,7 @@ import {
 } from './cleaningConsumablesDraft'
 import { withLocalMediaLock } from './localMediaLocks'
 import { getJson, remove, setJson } from './storage'
+import { ALL_KITCHEN_SCENE_PHOTOS } from './cleaningScenePhotoTemplate'
 
 export type CleaningConsumablesQueueItem = {
   queue_item_id: string
@@ -34,6 +35,7 @@ const STORAGE_KEY = 'mzstay.cleaning_consumables_submit_queue.v2'
 const LEGACY_STORAGE_KEY = 'mzstay.cleaning_consumables_submit_queue.v1'
 const MAX_RETRIES = 6
 const RETRY_BASE_MS = 30_000
+const MZ048_KITCHEN_PHOTO_IDS = new Set<string>(ALL_KITCHEN_SCENE_PHOTOS.map((item) => item.id))
 
 let processing = false
 const queueListeners = new Set<(taskId: string) => void>()
@@ -346,6 +348,55 @@ function buildSubmitPayload(draft: CleaningConsumablesDraft) {
   }
 }
 
+function mergeRemoteOnlyConsumablesIntoPayload(
+  payload: ReturnType<typeof buildSubmitPayload>,
+  remoteRecord: Awaited<ReturnType<typeof getCleaningConsumables>>,
+) {
+  const validRemoteRecord = !!remoteRecord
+    && typeof remoteRecord === 'object'
+    && !Array.isArray(remoteRecord)
+    && Array.isArray(remoteRecord.items)
+    && remoteRecord.items.every((item) => (
+      !!item
+      && typeof item === 'object'
+      && !Array.isArray(item)
+      && typeof item.item_id === 'string'
+      && !!item.item_id.trim()
+    ))
+  if (!validRemoteRecord) {
+    const error: any = new Error('线上补品记录格式异常，请稍后重试')
+    error.code = 'REMOTE_CONSUMABLES_RECORD_INVALID'
+    error.status = 503
+    throw error
+  }
+  const submittedIds = new Set(payload.items.map((item) => cleanText(item.item_id)).filter(Boolean))
+  const preservedRemoteItems = remoteRecord.items
+    .filter((item) => {
+      const itemId = cleanText(item?.item_id)
+      return MZ048_KITCHEN_PHOTO_IDS.has(itemId)
+        && !submittedIds.has(itemId)
+    })
+    .map((item) => {
+      const photoUrls = Array.from(new Set([
+        ...(Array.isArray(item?.photo_urls) ? item.photo_urls : []),
+        item?.photo_url,
+      ].map((url) => cleanText(url)).filter(Boolean)))
+      const status = cleanText(item?.status) === 'low' || item?.need_restock ? 'low' as const : 'ok' as const
+      return {
+        item_id: cleanText(item?.item_id),
+        status,
+        ...(status === 'low' ? { qty: Math.max(1, Number(item?.qty || 1) || 1) } : {}),
+        ...(cleanText(item?.note) ? { note: cleanText(item?.note) } : {}),
+        ...(photoUrls[0] ? { photo_url: photoUrls[0] } : {}),
+        ...(photoUrls.length ? { photo_urls: photoUrls } : {}),
+      }
+    })
+  return {
+    ...payload,
+    items: [...payload.items, ...preservedRemoteItems],
+  }
+}
+
 async function materializeDraftForSubmit(token: string, username: string, initialDraft: CleaningConsumablesDraft) {
   let draft = await updateCleaningConsumablesDraft(initialDraft.task_id, (current) => ({
     ...current,
@@ -427,8 +478,16 @@ export async function processCleaningConsumablesSubmitQueue(token: string, usern
         const materialized = await materializeDraftForSubmit(token, username, draft)
         let latestDraft = materialized.draft
         if (latestDraft.submit_consumables !== false && !latestDraft.consumables_business_saved) {
+          // The backend endpoint is replace-all: it deletes every existing row
+          // before recreating the submitted payload. Re-read immediately before
+          // that destructive boundary and carry forward only server-side MZ048
+          // kitchen compatibility rows not present in the submitted template.
+          // If the read fails or is malformed, the queue keeps the draft and
+          // does not issue the replace-all POST.
+          const remoteRecord = await getCleaningConsumables(token, item.task_id)
+          const guardedPayload = mergeRemoteOnlyConsumablesIntoPayload(materialized.payload, remoteRecord)
           await submitCleaningConsumables(token, item.task_id, {
-            ...(materialized.payload as any),
+            ...(guardedPayload as any),
             submit_id: latestDraft.submit_id,
           })
           latestDraft = await updateCleaningConsumablesDraft(item.task_id, (current) => ({
