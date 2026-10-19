@@ -85,7 +85,7 @@
 - Selected CRL identities: `mobile/CRL-20261019-001`
 - Intended action: `push`
 - Branch: `codex/mz047-special-request-keys`
-- Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; freshly rechecked at `2026-10-19 UTC`.
+- Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; freshly fetched and rechecked at `2026-10-19T14:24:48Z`.
 - Candidate patch SHA-256: `5f0a042133e77892de3bd6677ef0c55568ea044f544577f5beaaad07709f6482`
 - Commit SHA: `c04680d4ed41102b7f56cf2660111a8638573411`; the audit head will be the later ledger-only receipt commit.
 - Dependencies: none
