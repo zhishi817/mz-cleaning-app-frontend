@@ -80,15 +80,15 @@
 - Branch: `codex/mz049-deferred-inspection-20261019`
 - Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; fetched at `2026-10-19 UTC`
 - Candidate patch SHA-256: `5753c60d2d521f7be7f40bd5d1746db49fc5f4769c7d3d16e701ece7165ad5b4`
-- Commit SHA: `not committed`
+- Commit SHA: `81755387299a3bfc30b6c92dbf5938182576ffbd`
 - Dependencies: paired `root/CRL-20261018-002` on the same isolated branch name.
 - Required validation: `PASS for source commit / release integration pending`; evidence: full `check:ci` passed, including 73 suites / 474 tests, TypeScript, lint with zero errors, ledger 10/10, button audit and diff check. Real device and weak-network integration remain pending.
 - Shared-hunk review: `PASS`; evidence: extraction contains only the Mobile half of MZ-049 and its governance record.
 - Generated-file review: `PASS`; evidence: no dependency link, cache, build output, environment file or generated artifact remains.
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: the current direct instruction selects MZ-049 for paired isolated task-branch commit/push.
 - Independent review: `GO for source commit`; evidence: fresh staged review matched the fingerprint, 10 paths / 17 non-ledger hunks and branch/base with P0/P1/P2/P3 = 0.
-- Action conclusion: `GO` for the Mobile source commit; blockers: none for this commit. The paired Root candidate is independently blocked and therefore paired push/release remains `BLOCKED`; no OTA, deployment or production interaction is part of this action.
+- Action conclusion: `GO`; the exact reviewed Mobile source candidate was committed as `81755387299a3bfc30b6c92dbf5938182576ffbd`. The paired Root candidate is independently blocked, so paired push/release remains `BLOCKED`; no OTA, deployment or production interaction is part of this action.
 
 ### Risks / Release Notes
 
@@ -96,7 +96,7 @@
 - Real device and weak-network verification remain pending; automated tests only prove store coordination and rendered labels.
 - Rollback: revert this CRL's nine source/test hunks together; no data rollback is required.
 - Sensitive-information review: no secrets、凭证、`.env`、设备日志、私有媒体或生产数据。
-- Git state: exact ten-path candidate staged; not committed, not pushed, no PR, not merged, no OTA/EAS build or deployment.
+- Git state: exact content candidate committed as `81755387299a3bfc30b6c92dbf5938182576ffbd`; audit head is supplied by the range report. Not pushed, no PR, not merged, no OTA/EAS build or deployment.
 
 ## CRL-20261015-001 — MZ-036 App 缓存容量、媒体草稿保护与上传状态收敛（mobile）
 
