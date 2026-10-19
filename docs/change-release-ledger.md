@@ -130,6 +130,26 @@
 - Independent review: `GO for the exact local content commit`; evidence: the reviewer matched 10 paths / 17 non-ledger hunks, the exact fingerprint, focused/full validation and clean task/native/config/sensitive boundaries with P0/P1/P2/P3 = 0.
 - Action conclusion: `LOCAL CONTENT COMMIT COMPLETED / paired release NOT VERIFIED`; this append-only receipt may be committed locally. No push, PR, remote merge, OTA publication, deployment or production interaction is authorized or performed.
 
+#### RA-20261020-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261018-001`, `CRL-20261019-001`, `CRL-20261019-002`
+- Selected CRL identities: `mobile/CRL-20261018-001`, `mobile/CRL-20261019-001`, `mobile/CRL-20261019-002`
+- Intended action: `commit`
+- Branch: `codex/mz047-049-mobile-integration-20261019`
+- Base: `origin/Dev@fe23fb56dc2ee50e635fb689efb2c40e6339c495`; fetched at `2026-10-19 UTC`, already containing the merged MZ-047 unit.
+- Candidate patch SHA-256: `6e2134ea6d5f33c3ee9eb52cc11318e9fd97aa8fa4a35007187fdb00f756a874`
+- Commit SHA: `b6ea73184c319915053f206a662a75f35af1552e`
+- Dependencies: `none`.
+- Cross-repository dependency verification: `NOT VERIFIED for paired release`; evidence: final Root integration SHA and Render branch/preview safety are still pending, so this Mobile range must not be pushed, merged or released independently.
+- Required validation: `PASS for the exact local combined content range / release NOT VERIFIED`; evidence: MZ-048 content commit `3bf516da77530ffdba08416cfc73645253026441` and MZ-049 content commit `b6ea73184c319915053f206a662a75f35af1552e` retain their exact reviewed fingerprints; final Mobile `check:ci` passed 74 suites / 499 tests, TypeScript, lint with zero errors, button audit and ledger audits, and Root's cross-repository Phase 5 contract plus Mobile typecheck passed again through a temporary read-only link. MZ-047 was already present in the exact Dev base. Physical-device, real weak-network, installed-build/channel and native-build acceptance remain pending.
+- Shared-hunk review: `PASS`; evidence: the combined range contains the documented 047/048 four-hunk reconciliation and the byte-equivalent 049 unit, with no duplicate MZ-047 replay and no PR54/MZ-053/Root source content.
+- Generated-file review: `PASS`; evidence: the exact combined content range and clean worktree contain no dependency, native, environment, cache, build-output, generated or sensitive path.
+- Technical state: `committed`; exact combined content head `b6ea73184c319915053f206a662a75f35af1552e`, followed only by append-only ledger receipts.
+- User authorization: `selected-for-commit`; evidence: the user authorized local integration/test/freeze; this round explicitly excludes push, PR, remote merge, OTA, deployment and production interaction.
+- Independent review: `GO for local integrated content only`; evidence: separate independent reviews matched the exact MZ-048 and MZ-049 fingerprints, scope and reconciliation evidence with P0/P1 = 0. This is not device, channel, OTA or release acceptance.
+- Action conclusion: `GO for this local combined-range receipt commit only / release NOT VERIFIED`; no push, PR, remote merge, OTA publication, deployment or production interaction is authorized or performed.
+
 ### Risks / Release Notes
 
 - OTA need: yes for distributing these JS/TS App changes, but no OTA/EAS action is authorized or performed.
