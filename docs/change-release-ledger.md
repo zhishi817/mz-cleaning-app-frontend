@@ -177,7 +177,7 @@
 - Selected CRL identities: `mobile/CRL-20261019-002`
 - Intended action: `push`
 - Branch: `codex/mz048-cleaning-photo-template`
-- Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; freshly fetched and rechecked at `2026-10-19T14:24:48Z`.
+- Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; fetched at `2026-10-19T14:24:48Z`.
 - Candidate patch SHA-256: `3a199ddbcb67397385c53b31bcadb63b5e6601e774886f0169ce9aed1983db99`
 - Commit SHA: `5f5277e1b89291bb3f8b8b92a954db7ec5135185`; the audit head will be the later ledger-only receipt commit.
 - Dependencies: none
