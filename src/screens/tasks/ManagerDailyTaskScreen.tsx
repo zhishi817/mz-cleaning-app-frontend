@@ -305,6 +305,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const [luggageUploading, setLuggageUploading] = useState(false)
   const [keysRequired, setKeysRequired] = useState(1)
   const [keysDirty, setKeysDirty] = useState(false)
+  const [keysEditorOpen, setKeysEditorOpen] = useState(false)
 
   const [photosLoading, setPhotosLoading] = useState(false)
   const [photoLoadIssues, setPhotoLoadIssues] = useState<ManagerDailyTaskPhotoLoadIssue[]>([])
@@ -336,6 +337,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     const k = Number((task as any)?.keys_required_checkin ?? (task as any)?.keys_required ?? 1)
     setKeysRequired(Number.isFinite(k) && k >= 2 ? 2 : 1)
     setKeysDirty(false)
+    setKeysEditorOpen(false)
   }, [task?.id])
 
   useEffect(() => {
@@ -533,6 +535,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
       setNewCode(payload.new_code !== undefined ? String(payload.new_code || '').trim() : String(prevNewCode || '').trim())
       setGuestNote(payload.guest_special_request !== undefined ? String(payload.guest_special_request || '').trim() : String(prevGuest || '').trim())
       setKeysRequired(nextKeysValue)
+      setKeysEditorOpen(false)
 
       const changedLines: string[] = []
       const fmt = (label: string, next: any, prev: any) => `${label}：${norm(next) || '-'}（原：${norm(prev) || '-'}）`
@@ -897,7 +900,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
 
   return (
     <>
-      <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingBottom: Math.max(16, insets.bottom) + 10 }]} keyboardShouldPersistTaps="handled">
+      <ScrollView testID="manager-task-scroll" style={styles.page} contentContainerStyle={[styles.content, { paddingBottom: Math.max(16, insets.bottom) + 10 }]} keyboardShouldPersistTaps="handled">
         <View style={styles.card}>
           <View style={styles.headRow}>
             <Text style={styles.title}>每日清洁</Text>
@@ -970,36 +973,10 @@ export default function ManagerDailyTaskScreen(props: Props) {
               <TextInput value={newCode} onChangeText={setNewCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="新密码" placeholderTextColor="#9CA3AF" />
             </View>
           </View>
-          {!isStayoverTask ? (
-            <View style={styles.fieldCompact}>
-              <Text style={styles.label}>需挂钥匙套数</Text>
-              <View style={styles.pillsRow}>
-                <Pressable
-                  onPress={() => {
-                    setKeysRequired(1)
-                    setKeysDirty(true)
-                  }}
-                  disabled={!canEditKeysOnly}
-                  style={({ pressed }) => [styles.pillBtn, keysRequired === 1 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
-                >
-                  <Text style={[styles.pillBtnText, keysRequired === 1 ? styles.pillBtnTextOn : null]}>1 套</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => {
-                    setKeysRequired(2)
-                    setKeysDirty(true)
-                  }}
-                  disabled={!canEditKeysOnly}
-                  style={({ pressed }) => [styles.pillBtn, keysRequired === 2 ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
-                >
-                  <Text style={[styles.pillBtnText, keysRequired === 2 ? styles.pillBtnTextOn : null]}>2 套</Text>
-                </Pressable>
-              </View>
-            </View>
-          ) : null}
           <View style={styles.fieldCompact}>
             <Text style={styles.label}>客人特殊需求</Text>
             <TextInput
+              testID="manager-guest-note"
               value={guestNote}
               onChangeText={(v) => setGuestNote(v.slice(0, 1500))}
               editable={canEditGeneralInfo}
@@ -1009,6 +986,61 @@ export default function ManagerDailyTaskScreen(props: Props) {
               multiline
             />
           </View>
+          {!isStayoverTask ? (
+            <View style={styles.fieldCompact}>
+              <View testID="manager-keys-row" style={styles.keyRequirementRow}>
+                <View style={styles.keyRequirementValueWrap}>
+                  <Text style={[styles.label, styles.keyRequirementLabel]}>需挂钥匙套数</Text>
+                  <Text testID="manager-keys-current" style={styles.keyRequirementValue}>{`${keysRequired} 套`}</Text>
+                </View>
+                <Pressable
+                  testID="manager-keys-edit"
+                  accessibilityRole="button"
+                  accessibilityLabel="修改需挂钥匙套数"
+                  onPress={() => setKeysEditorOpen(true)}
+                  disabled={!canEditKeysOnly || keysEditorOpen}
+                  style={({ pressed }) => [styles.keyRequirementEditButton, !canEditKeysOnly || keysEditorOpen ? styles.keyRequirementEditButtonDisabled : null, pressed ? styles.pressed : null]}
+                >
+                  <Text style={styles.keyRequirementEditText}>修改</Text>
+                </Pressable>
+              </View>
+              {keysEditorOpen ? (
+                <View testID="manager-keys-editor" style={styles.keyRequirementEditor}>
+                  <Text style={styles.mutedSmall}>选择套数后仍需点击“保存修改”才会提交。</Text>
+                  <View style={styles.pillsRow}>
+                    {[1, 2].map((value) => (
+                      <Pressable
+                        key={value}
+                        testID={`manager-keys-option-${value}`}
+                        accessibilityRole="button"
+                        accessibilityLabel={`选择 ${value} 套钥匙`}
+                        accessibilityState={{ selected: keysRequired === value }}
+                        onPress={() => {
+                          setKeysRequired(value)
+                          setKeysDirty(true)
+                          setKeysEditorOpen(false)
+                        }}
+                        disabled={!canEditKeysOnly}
+                        style={({ pressed }) => [styles.pillBtn, keysRequired === value ? styles.pillBtnOn : null, pressed ? styles.pressed : null]}
+                      >
+                        <Text style={[styles.pillBtnText, keysRequired === value ? styles.pillBtnTextOn : null]}>{`${value} 套`}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <Pressable
+                    testID="manager-keys-cancel"
+                    accessibilityRole="button"
+                    accessibilityLabel="取消修改需挂钥匙套数"
+                    onPress={() => setKeysEditorOpen(false)}
+                    disabled={!canEditKeysOnly}
+                    style={({ pressed }) => [styles.keyRequirementCancelButton, pressed ? styles.pressed : null]}
+                  >
+                    <Text style={styles.keyRequirementCancelText}>取消</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
           <Pressable
             onPress={onSave}
             disabled={!canEditManagerFields || saving}
@@ -1429,6 +1461,16 @@ const styles = StyleSheet.create({
   pillBtnOn: { backgroundColor: '#EFF6FF', borderColor: '#DBEAFE' },
   pillBtnText: { color: '#6B7280', fontWeight: '900' },
   pillBtnTextOn: { color: '#2563EB' },
+  keyRequirementRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' },
+  keyRequirementValueWrap: { flex: 1, minWidth: 150 },
+  keyRequirementLabel: { marginBottom: 4 },
+  keyRequirementValue: { color: '#111827', fontWeight: '900', fontSize: 16 },
+  keyRequirementEditButton: { minHeight: 44, minWidth: 76, paddingHorizontal: 16, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', alignItems: 'center', justifyContent: 'center' },
+  keyRequirementEditButtonDisabled: { opacity: 0.55 },
+  keyRequirementEditText: { color: '#2563EB', fontWeight: '900' },
+  keyRequirementEditor: { marginTop: 8, padding: 10, borderRadius: 12, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#E5E7EB' },
+  keyRequirementCancelButton: { minHeight: 44, marginTop: 8, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  keyRequirementCancelText: { color: '#6B7280', fontWeight: '900' },
 
   checkoutBtn: { marginTop: 10, minHeight: 44, borderRadius: 12, backgroundColor: '#E0F2FE', borderWidth: hairline(), borderColor: '#BAE6FD', alignItems: 'center', justifyContent: 'center' },
   checkoutBtnDisabled: { backgroundColor: '#BAE6FD' },
