@@ -1,7 +1,8 @@
 import React from 'react'
-import { Alert } from 'react-native'
+import { Alert, Dimensions, Platform, StyleSheet } from 'react-native'
 import { fireEvent, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
+import * as api from '../../lib/api'
 
 const mockTodayKey = (() => {
   const now = new Date()
@@ -122,6 +123,10 @@ function flattenedText(node: any): string[] {
   return flattenedText(node.children || [])
 }
 
+beforeEach(() => {
+  jest.clearAllMocks()
+})
+
 test('customer-service guest-ready actions coexist with the original editor and media order', async () => {
   const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
   const ui = render(
@@ -138,6 +143,9 @@ test('customer-service guest-ready actions coexist with the original editor and 
   expect(ui.getByPlaceholderText('旧密码').props.editable).toBe(true)
   expect(ui.getByPlaceholderText('新密码').props.editable).toBe(true)
   expect(ui.getByText('保存修改')).toBeTruthy()
+  expect(ui.getByTestId('manager-keys-current').props.children).toBe('2 套')
+  expect(ui.queryByTestId('manager-keys-option-1')).toBeNull()
+  expect(ui.queryByTestId('manager-keys-option-2')).toBeNull()
   expect(ui.getByTestId('manager-guest-ready-action-record_guest_ready_notified')).toBeTruthy()
   expect(ui.getByTestId('manager-guest-ready-action-register_guest_ready_outside_key')).toBeTruthy()
 
@@ -150,9 +158,99 @@ test('customer-service guest-ready actions coexist with the original editor and 
   })
 
   const text = flattenedText(ui.toJSON())
+  expect(text.indexOf('退房时间')).toBeLessThan(text.indexOf('客人特殊需求'))
+  expect(text.indexOf('新密码')).toBeLessThan(text.indexOf('客人特殊需求'))
+  expect(text.indexOf('客人特殊需求')).toBeLessThan(text.indexOf('需挂钥匙套数'))
   expect(text.indexOf('客服信息')).toBeLessThan(text.indexOf('当天任务临时通知'))
   expect(text.indexOf('当天任务临时通知')).toBeLessThan(text.indexOf('钥匙与挂钥匙视频'))
   expect(text.indexOf('钥匙与挂钥匙视频')).toBeLessThan(text.indexOf('清洁现场照片'))
+})
+
+test('key count stays local through note keyboard and scrolling, cancel keeps the current value, and save submits once', async () => {
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <ManagerDailyTaskScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'manager-key-draft', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  const note = ui.getByTestId('manager-guest-note')
+  fireEvent(note, 'focus')
+  fireEvent.changeText(note, '更新后的特殊需求')
+  fireEvent.scroll(ui.getByTestId('manager-task-scroll'), { nativeEvent: { contentOffset: { y: 180 } } })
+  fireEvent(note, 'blur')
+
+  expect(ui.getByTestId('manager-keys-current').props.children).toBe('2 套')
+  fireEvent.press(ui.getByTestId('manager-keys-edit'))
+  expect(ui.getByTestId('manager-keys-option-2').props.accessibilityState).toEqual(expect.objectContaining({ selected: true }))
+  fireEvent.press(ui.getByTestId('manager-keys-cancel'))
+  expect(ui.queryByTestId('manager-keys-editor')).toBeNull()
+  expect(ui.getByTestId('manager-keys-current').props.children).toBe('2 套')
+
+  fireEvent.press(ui.getByTestId('manager-keys-edit'))
+  fireEvent.press(ui.getByTestId('manager-keys-option-1'))
+  expect(ui.queryByTestId('manager-keys-editor')).toBeNull()
+  expect(ui.getByTestId('manager-keys-current').props.children).toBe('1 套')
+  expect(api.updateCleaningTaskManagerFields).not.toHaveBeenCalled()
+
+  fireEvent(note, 'focus')
+  fireEvent.scroll(ui.getByTestId('manager-task-scroll'), { nativeEvent: { contentOffset: { y: 360 } } })
+  fireEvent(note, 'blur')
+  expect(ui.getByTestId('manager-keys-current').props.children).toBe('1 套')
+  expect(ui.getByDisplayValue('更新后的特殊需求')).toBeTruthy()
+
+  fireEvent.press(ui.getByText('保存修改'))
+  await waitFor(() => expect(api.updateCleaningTaskManagerFields).toHaveBeenCalledWith(
+    mockAuthState.token,
+    expect.objectContaining({
+      task_ids: ['cleaning-1'],
+      guest_special_request: '更新后的特殊需求',
+      keys_required: 1,
+    }),
+  ))
+  expect(api.updateCleaningTaskManagerFields).toHaveBeenCalledTimes(1)
+})
+
+test.each([
+  ['ios', 320, 568],
+  ['android', 360, 640],
+])('small %s viewport keeps the note and standalone key editor usable', async (os, width, height) => {
+  const originalOS = Platform.OS
+  const originalWindow = Dimensions.get('window')
+  const originalScreen = Dimensions.get('screen')
+  Object.defineProperty(Platform, 'OS', { configurable: true, value: os })
+  ;(Dimensions as any).set({
+    window: { ...originalWindow, width, height },
+    screen: { ...originalScreen, width, height },
+  })
+
+  try {
+    const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+    const ui = render(
+      <I18nProvider>
+        <ManagerDailyTaskScreen
+          navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+          route={{ key: `manager-small-${os}`, name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+        />
+      </I18nProvider>,
+    )
+
+    const keyRowStyle = StyleSheet.flatten(ui.getByTestId('manager-keys-row').props.style)
+    expect(keyRowStyle.flexWrap).toBe('wrap')
+    expect(ui.getByTestId('manager-guest-note').props.editable).toBe(true)
+    expect(ui.getByTestId('manager-keys-current').props.children).toBe('2 套')
+    fireEvent.press(ui.getByTestId('manager-keys-edit'))
+    expect(ui.getByTestId('manager-keys-option-1')).toBeTruthy()
+    expect(ui.getByTestId('manager-keys-option-2')).toBeTruthy()
+    expect(ui.getByTestId('manager-keys-cancel')).toBeTruthy()
+    ui.unmount()
+  } finally {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: originalOS })
+    ;(Dimensions as any).set({ window: originalWindow, screen: originalScreen })
+  }
 })
 
 test('disabled guest-ready action remains pressable to explain the server reason', async () => {
