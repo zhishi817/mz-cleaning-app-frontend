@@ -20,6 +20,8 @@ test('清洁未提交时，即使共享任务状态已进入 inspected，补品�
 
   expect(route).toEqual({ screen: 'SuppliesForm', params: { taskId: 'merged-task' } })
   expect(actionDisabledReasonText('cleaning_submission_required')).toBe('请先等待清洁提交补品记录和房源照片')
+  expect(actionDisabledReasonText('inspection_arrangement_conflict')).toBe('检查安排存在人员或重复任务冲突，请联系管理员处理')
+  expect(actionDisabledReasonText('inspection_action_moved_to_checkin_task')).toBe('请在同日入住任务中完成检查')
 })
 
 test('钥匙照片删除后，即使补品已提交也保留重新上传入口', () => {
