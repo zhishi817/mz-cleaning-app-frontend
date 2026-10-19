@@ -160,15 +160,15 @@
 - Branch: `codex/mz048-cleaning-photo-template`
 - Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; fetched at `2026-10-19 UTC`
 - Candidate patch SHA-256: `3a199ddbcb67397385c53b31bcadb63b5e6601e774886f0169ce9aed1983db99` over the exact nine non-ledger paths; frozen handoff aggregate content fingerprint `55cda5cc` prefix is preserved separately because it used a different aggregation method.
-- Commit SHA: `not committed`
+- Commit SHA: `5f5277e1b89291bb3f8b8b92a954db7ec5135185`
 - Dependencies: none; no backend or migration change.
 - Required validation: `PASS for source commit`; evidence: frozen final review passed 4 focused suites / 52 tests, full 74 suites / 492 tests, ledger range 44/44, changed paths 10/10, TypeScript, lint with zero errors, button audit and diff check. Physical device, weak-network and native build remain pending.
 - Shared-hunk review: `PASS`; evidence: exact byte comparison matched all nine non-ledger frozen handoff files; the ledger contains only this staged-scope/attempt bookkeeping update, and no MZ-047/MZ-049 change is present.
 - Generated-file review: `PASS`; evidence: no dependency link, cache, build output, environment file or generated artifact remains.
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: the current direct instruction selects the frozen MZ-048 handoff for isolated task-branch commit/push.
 - Independent review: `GO for source commit`; evidence: fresh staged-scope confirmation matched the fingerprint, 10 paths / 74 non-ledger hunks, nine byte-identical frozen non-ledger files and branch/base with P0/P1/P2/P3 = 0.
-- Action conclusion: `GO` for the source commit; blockers: none for commit. Physical-device/weak-network/native-build acceptance and the recorded GET→POST residual race remain release considerations; no OTA, deployment, backend change or production interaction is part of this action.
+- Action conclusion: `GO`; the exact reviewed source candidate was committed as `5f5277e1b89291bb3f8b8b92a954db7ec5135185`. Push remains separately gated; physical-device/weak-network/native-build acceptance and the recorded GET→POST residual race remain release considerations, with no OTA, deployment, backend change or production interaction in this action.
 
 ### Risks / Release Notes
 
@@ -178,7 +178,7 @@
 - Replace-all boundary: a failed or malformed safety GET leaves the offline queue waiting and never calls POST; a successful GET carries only remote-only MZ048 new/legacy kitchen compatibility rows into the replace-all payload. Unrelated remote rows retain pre-existing endpoint behavior and are not newly carried by this CRL. The GET→POST pair has no server revision/conditional-write token, so a second client changing the same task in that narrow interval remains a residual concurrency risk; fully eliminating that race would require backend cooperation, but no backend change or migration is required for this scoped candidate.
 - Rollback: revert only this CRL's Mobile source/test/ledger paths. No data rollback or migration is needed because stored photo keys are additive and immutable in meaning.
 - Sensitive-information review: test fixtures use local/example paths only; no token, credential, `.env` value, database URL, private media, real task payload or production log is included.
-- Git state: exact ten-path candidate staged on `codex/mz048-cleaning-photo-template`; not committed, not pushed, no PR, no merge, no deployment/OTA, no device or production verification.
+- Git state: exact content candidate committed as `5f5277e1b89291bb3f8b8b92a954db7ec5135185` on `codex/mz048-cleaning-photo-template`; audit head is supplied by the range report. Not pushed, no PR, no merge, no deployment/OTA, no device or production verification.
 
 ## CRL-20261015-001 — MZ-036 App 缓存容量、媒体草稿保护与上传状态收敛（mobile）
 
