@@ -431,6 +431,25 @@
 - Independent review: `GO for local merge commit`; evidence: the exact staged candidate matched latest Dev, 10 paths / 74 non-ledger hunks, fingerprint `85bf707a029f91e4623414038df4bf8731d2559f41a43a6da888df0d030528f6`, all four reconciliation mappings, both 047/048 behaviors and clean native/config/sensitive boundaries, with P0=0 / P1=0 / P2=0 / P3=0 after this ledger-only status correction.
 - Action conclusion: `GO for local merge commit / release NOT VERIFIED`; commit the exact staged 047+048 integration candidate, then continue with the separately frozen MZ-049 unit. No push, PR, remote merge, OTA or deployment is part of this attempt.
 
+#### RA-20261020-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261019-002`
+- Selected CRL identities: `mobile/CRL-20261019-002`
+- Intended action: `commit`
+- Branch: `codex/mz047-049-mobile-integration-20261019`
+- Base: `origin/Dev@fe23fb56dc2ee50e635fb689efb2c40e6339c495`; fetched at `2026-10-19 UTC` and containing the already-merged MZ-047 unit.
+- Candidate patch SHA-256: `85bf707a029f91e4623414038df4bf8731d2559f41a43a6da888df0d030528f6`
+- Commit SHA: `3bf516da77530ffdba08416cfc73645253026441`
+- Dependencies: `none`.
+- Required validation: `PASS for the local MZ-047+MZ-048 integration content commit / release NOT VERIFIED`; evidence: focused MZ-048 plus shared MZ-047 render coverage passed 4 suites / 55 tests, and the full integration-base `npm run check:ci` passed ledger-range 44/44, TypeScript, lint with zero errors, button audit, fast 8 suites / 59 tests and full 74 suites / 495 tests. Physical-device, real weak-network and native-build acceptance remain pending.
+- Shared-hunk review: `PASS`; evidence: the ordinary merge commit has exact parents `6ccea2d72aebee7c049236d6ee798736f4afc581` and `fe23fb56dc2ee50e635fb689efb2c40e6339c495`, preserves the four documented manual hunk reconciliations, and introduces no MZ-049 content.
+- Generated-file review: `PASS`; evidence: the committed content range contains no dependency, lockfile, native, environment, cache, build-output or generated-file change.
+- Technical state: `committed`; the exact content commit is `3bf516da77530ffdba08416cfc73645253026441`, and later MZ-049 plus ledger-only receipts do not change its runtime content.
+- User authorization: `selected-for-commit`; evidence: the user authorized one local Mobile integration branch while this round explicitly withholds push, PR, remote merge, OTA and release.
+- Independent review: `GO for the exact local content commit`; evidence: the prior independent review matched 10 paths / 74 non-ledger hunks, fingerprint `85bf707a029f91e4623414038df4bf8731d2559f41a43a6da888df0d030528f6`, all four reconciliations, both MZ-047/MZ-048 behaviors and clean native/config/sensitive boundaries, with P0/P1/P2/P3 = 0.
+- Action conclusion: `LOCAL CONTENT COMMIT COMPLETED / release NOT VERIFIED`; this append-only receipt may be committed locally. No push, PR, remote merge, OTA publication, deployment or production interaction is authorized or performed.
+
 ### Risks / Release Notes
 
 - Conservative boundary: any unversioned local draft is treated as legacy v1 even if no appliance photo has yet been taken. This intentionally avoids silently changing an already-started/offline task; changing those in-progress tasks to v2 later requires an explicit business decision and a separate migration plan.
