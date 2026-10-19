@@ -680,6 +680,20 @@ export type WorkTask = {
   cleaner_id?: string | null
   inspector_id?: string | null
   inspection_mode?: 'pending_decision' | 'same_day' | 'deferred' | 'self_complete' | 'checked_done' | null
+  inspection_original_checkout_date?: string | null
+  inspection_action_task_id?: string | null
+  inspection_assignment_conflict?: {
+    reasons: string[]
+    planned_inspector_id?: string | null
+    planned_inspector_name?: string | null
+    checkin_inspector_id?: string | null
+    checkin_inspector_name?: string | null
+    checkin_assignee_id?: string | null
+    checkin_assignee_name?: string | null
+    deferred_task_id: string
+    checkin_task_id: string
+    checkin_task_ids?: string[]
+  } | null
   inspection_scope?: 'inspect_and_hang' | 'password_only' | null
   inspection_due_date?: string | null
   status: string

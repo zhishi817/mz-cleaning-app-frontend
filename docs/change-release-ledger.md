@@ -1,5 +1,103 @@
 # Change Release Ledger
 
+## CRL-20261018-001 — MZ-049 延期检查权威归位与冲突展示（mobile）
+
+- **Status:** ready
+- **Repository:** `mobile`
+- **Updated:** 2026-10-18 19:12 UTC
+- **Request:** App 对检查模式、延期日和人员变化立即按服务端权威结果归位，并清楚显示原退房日及入住执行人冲突，不在客户端自动改派或转移检查费。
+- **Outcome:** membership 事件绕过冷却强制刷新；即使事件在后台到达、恢复后的首次请求失败，也保留一次可观察的有界重试。任务卡显示原退房日、计划检查人、入住检查人和入住执行人，明确不会自动改派或转费；管理视图对无显式入住关系的旧延期检查保留独立 source 身份，不再把它与同日同房源的新任务二次去重。
+
+### Implementation
+
+- Previous behavior: 一般 membership 事件受 60 秒冷却约束，跨日/周/月移动可能暂时留在旧桶；任务卡没有延期原退房日和人员冲突说明；即使 Root 已把旧延期与新任务拆成两张卡，管理视图仍按“日期 + 房源”选一张，可能再次隐藏其中一个 canonical source。
+- New behavior: membership 事件立即全量刷新当前日期范围，后台到达时等待恢复后的真实请求结果，失败后按协调器有界重试；App 消费服务端新增字段显示原退房日、冲突标签及计划检查人/入住检查人/入住执行人，并为服务端冲突禁用原因提供中文说明。管理视图只为“延期检查且没有 `inspection_original_checkout_date`”追加 source 身份，MSQ1905E 当前退房/Oscar 与旧延期/Angela 可同时显示；已有显式关系和正常同日 turnover 继续使用原分组。
+- Key decisions: 继续以服务端 `available_actions`、状态和媒体投影为权威；客户端只做显示去重边界，不推断人员、不改派、不转费，不改变提交流程和弱网媒体队列。
+
+### Files / Areas
+
+- `src/lib/api.ts` — modified: 扩展 WorkTask 可选安排/冲突字段。
+- `src/lib/cleaningInspection.ts` — modified: 为无显式入住关系的延期检查生成稳定的 Mobile 显示隔离 identity。
+- `src/lib/cleaningInspection.test.ts` — modified: 锁定无关联延期独立、已有原退房关系不隔离。
+- `src/lib/workTasksStore.ts` — modified: membership 强制权威刷新和有界重试。
+- `src/lib/workTasksStore.test.ts` — modified: 冷却期跨月移动回归。
+- `src/lib/workTaskActions.ts` — modified: 安排冲突与 canonical 入住任务引导的用户文案。
+- `src/lib/workTaskActions.test.ts` — modified: 新禁用原因中文映射回归。
+- `src/screens/tabs/TasksScreen.tsx` — modified: 原退房与冲突说明；管理视图去重键保留无关联延期 source。
+- `src/screens/tabs/TasksScreen.test.tsx` — modified: 冲突展示，以及 MSQ1905E 当前退房/Oscar 与旧延期/Angela 同时为已分配且不误显示已挂钥匙的回归。
+- `docs/change-release-ledger.md` — modified: 本变更单元。
+
+### Impact / Dependencies
+
+- API: 消费 Root 新增的三个可选字段；旧服务端缺字段时保持现状。
+- Database / migration: none.
+- Config / environment: none.
+- Dependencies: root/CRL-20261018-002；Root 应先于或同时配对发布。
+- Related units: mobile/CRL-20261013-006、root/CRL-20261018-002.
+
+### Validation
+
+- `npm run typecheck` — passed.
+- `npm test -- --runInBand --no-cache src/lib/cleaningInspection.test.ts` — passed: 1 suite / 3 tests；覆盖 Mobile source identity 边界。
+- `npm test -- --runInBand --no-cache src/screens/tabs/TasksScreen.test.tsx` — passed: 1 suite / 34 tests；覆盖 customer_service 管理视图的 MSQ1905E 双卡标题、人员与状态。
+- `npm test -- --runInBand src/lib/workTasksStore.test.ts src/lib/workTaskActions.test.ts src/screens/tabs/TasksScreen.test.tsx` — passed: 3 suites / 68 tests；覆盖后台 membership → 恢复 → 首次失败 → 一次有界重试、入住检查/执行两角色同时显示及 MSQ1905E 双 canonical source 展示。
+- `npm run check:ci` — passed after the source-isolation supplement: typecheck, lint 0 errors / 615 existing warnings, button audit, fast 3 suites / 44 tests, full 67 suites / 438 tests.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 10 changed / 10 recorded paths after restoring four exact remote ledger records required by `origin/Dev` lineage.
+- Independent review — final verdict `GO`: 初审发现的后台恢复失败漏重试、冲突角色隐藏和禁用原因无中文映射均已关闭；复审独立运行完整 `check:ci`，确认 8/8 台账覆盖且无剩余阻断项。本结论不授权 commit、push、OTA/EAS 或生产操作。
+- iOS simulator / Android emulator / physical iOS / physical Android / EAS native build / weak-network device — not run.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** none; all ten selected files are tracked, and the temporary validation dependency link was removed.
+- `src/lib/api.ts` — SHA-256: `d97ffc334387a95ba4e9bf915d3aafe91f99264b583568d9c97beb0e1e7fc84b`
+- `src/lib/cleaningInspection.test.ts` — SHA-256: `23c894571c8381f6603f3cccbabb1f4385eac5e961904c6467f38920b6e9e330`
+- `src/lib/cleaningInspection.test.ts` — SHA-256: `57341eed9217583ec4b3fb623ed7ae9bf3b00bc09f6a1273aa2e5f84a3bdb5c2`
+- `src/lib/cleaningInspection.ts` — SHA-256: `e26036143cd80fd44ced38a7eb0a3f0ca40726d8556f76a91f9eda4460b9925d`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `e0b0f53870ac5931e46b8110033d202a7876054ef905caa60eb8c4a7cd150cca`
+- `src/lib/workTaskActions.ts` — SHA-256: `b12d131c714a332f11d4912c5511cdf6f757cb6ffd1e0f0288db35437b3fd652`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `685debd7c737fa2e8dd2e5628624a15ab4a20fa823605aa9cde005960c8be5c0`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `c9e12aa4b0847866e2c69ecd84ca58077bd00c5e9e37c74f0f2b537fcffe9c3a`
+- `src/lib/workTasksStore.ts` — SHA-256: `24e646a9f373ea25e2e2922fababa5a76d984e1eb76d3918eded56eb3d96d159`
+- `src/lib/workTasksStore.ts` — SHA-256: `c4eb3c1d154905c024eba3a5179bc8e99d29ea9fdec5daf0250120031189e930`
+- `src/lib/workTasksStore.ts` — SHA-256: `fd79fa03f659e52f55d2cca8c7e952f8c9d5c248a48f908d50b65fa5b128f4a5`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `17594987e6bc0a4905a2d104ca98adb8716995bb728ed3eca4dbb2654eca573c`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `50326bdcd3bfc14288b6dfaaf986d5f04c86382af2e43cac7687ec8503e429db`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `630dee774981d94690ed5ac0168c8073f10164e32a61b99362e365a0721ce081`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `6bc2f899139fa6e0de07c0d2202d746d0c7f5760261940a57bbbdc40553788e4`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `97f1cc4ca9732f62667c47de2bb57512d216263fdb014b96e7c1132040b16a2a`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `aa0d32183b549432004c48b9a8cc9e3ee5ef4c602006d979727160eff9b7af15`
+
+### Release Attempts
+
+#### RA-20261019-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261018-001`
+- Selected CRL identities: `mobile/CRL-20261018-001`
+- Intended action: `commit`
+- Branch: `codex/mz049-deferred-inspection-20261019`
+- Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; fetched at `2026-10-19 UTC`
+- Candidate patch SHA-256: `5753c60d2d521f7be7f40bd5d1746db49fc5f4769c7d3d16e701ece7165ad5b4`
+- Commit SHA: `not committed`
+- Dependencies: paired `root/CRL-20261018-002` on the same isolated branch name.
+- Required validation: `PASS for source commit / release integration pending`; evidence: full `check:ci` passed, including 73 suites / 474 tests, TypeScript, lint with zero errors, ledger 10/10, button audit and diff check. Real device and weak-network integration remain pending.
+- Shared-hunk review: `PASS`; evidence: extraction contains only the Mobile half of MZ-049 and its governance record.
+- Generated-file review: `PASS`; evidence: no dependency link, cache, build output, environment file or generated artifact remains.
+- Technical state: `verified`
+- User authorization: `selected-for-commit`; evidence: the current direct instruction selects MZ-049 for paired isolated task-branch commit/push.
+- Independent review: `GO for source commit`; evidence: fresh staged review matched the fingerprint, 10 paths / 17 non-ledger hunks and branch/base with P0/P1/P2/P3 = 0.
+- Action conclusion: `GO` for the Mobile source commit; blockers: none for this commit. The paired Root candidate is independently blocked and therefore paired push/release remains `BLOCKED`; no OTA, deployment or production interaction is part of this action.
+
+### Risks / Release Notes
+
+- OTA need: yes for distributing these JS/TS App changes, but no OTA/EAS action is authorized or performed.
+- Real device and weak-network verification remain pending; automated tests only prove store coordination and rendered labels.
+- Rollback: revert this CRL's nine source/test hunks together; no data rollback is required.
+- Sensitive-information review: no secrets、凭证、`.env`、设备日志、私有媒体或生产数据。
+- Git state: exact ten-path candidate staged; not committed, not pushed, no PR, not merged, no OTA/EAS build or deployment.
+
 ## CRL-20261015-001 — MZ-036 App 缓存容量、媒体草稿保护与上传状态收敛（mobile）
 
 - **Status:** integrated on latest remote Dev and fully validated locally with MZ-037/MZ-043; not committed / pushed / released

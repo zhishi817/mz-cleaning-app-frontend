@@ -23,6 +23,8 @@ export function actionDisabledReasonText(reason: any) {
   if (value === 'not_participant') return '你已不再是执行人'
   if (value === 'task_completed') return '任务已完成'
   if (value === 'pending_inspection_decision') return '待确认检查安排'
+  if (value === 'inspection_arrangement_conflict') return '检查安排存在人员或重复任务冲突，请联系管理员处理'
+  if (value === 'inspection_action_moved_to_checkin_task') return '请在同日入住任务中完成检查'
   if (value === 'cleaning_submission_required') return '请先等待清洁提交补品记录和房源照片'
   if (value === 'already_recorded') return '已记录'
   if (value === 'property_not_ready') return '房屋尚未设为可入住'

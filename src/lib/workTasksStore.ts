@@ -639,10 +639,12 @@ function finishCoordinatedRefresh(scopeKey: string, scope: RefreshCoordinatorSco
   scope.completedGeneration = generation
   settleRefreshWaiters(scope, generation, true, error)
   if (scope.pendingForce) {
-    scope.pendingForce = false
-    scope.pendingConsistency = false
-    clearRefreshCoordinatorTimer(scope)
-    if (workTasksRefreshForeground) startCoordinatedRefresh(scopeKey, scope)
+    if (workTasksRefreshForeground) {
+      scope.pendingForce = false
+      scope.pendingConsistency = false
+      clearRefreshCoordinatorTimer(scope)
+      startCoordinatedRefresh(scopeKey, scope)
+    }
     return
   }
   armConsistencyRefresh(scopeKey, scope)
@@ -734,7 +736,7 @@ export function requestWorkTasksRefresh(params: WorkTasksRefreshParams & { mode:
   clearRefreshCoordinatorTimer(scope)
   if (!workTasksRefreshForeground) {
     scope.pendingForce = true
-    return Promise.resolve(true)
+    return waitForRefreshGeneration(scope, scope.runningGeneration + 1)
   }
   if (scope.running) {
     scope.pendingForce = true
@@ -781,7 +783,11 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
     return
   }
   if (membershipChanged) {
-    void requestActiveWorkTasksRefresh('consistency', eventType || 'membership')
+    void requestActiveWorkTasksRefresh('force', eventType || 'membership').catch(() => {
+      // Membership changes can move a task across day/week/month buckets.
+      // Retry once through the bounded coordinator after a transient failure.
+      void requestActiveWorkTasksRefresh('consistency', 'membership_authority_retry').catch(() => {})
+    })
     return
   }
   if (!isSafePatchEvent(event)) {

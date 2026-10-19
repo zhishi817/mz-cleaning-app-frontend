@@ -7,6 +7,7 @@ import {
   isPasswordOnlyInspectionTask,
   normalizeInspectionScope,
   shouldUseDeferredInspectionTitle,
+  unlinkedDeferredInspectionDisplayIdentity,
 } from './cleaningInspection'
 
 describe('cleaningInspection display helpers', () => {
@@ -19,6 +20,12 @@ describe('cleaningInspection display helpers', () => {
     }
     expect(shouldUseDeferredInspectionTitle(task)).toBe(true)
     expect(cleaningTaskTitleSuffix(task)).toBe('延期检查')
+    expect(unlinkedDeferredInspectionDisplayIdentity({ ...task, source_id: 'historical-source' })).toBe('deferred:historical-source')
+    expect(unlinkedDeferredInspectionDisplayIdentity({
+      ...task,
+      source_id: 'linked-source',
+      inspection_original_checkout_date: '2026-10-11',
+    })).toBeNull()
   })
 
   test('keeps checkout and checkin suffixes for non-deferred tasks', () => {
