@@ -176,6 +176,22 @@ export function shouldUseDeferredInspectionTitle(task: {
   return sourceType === 'cleaning_tasks' && taskKind === 'inspection' && effectiveInspectionMode(task) === 'deferred'
 }
 
+export function unlinkedDeferredInspectionDisplayIdentity(task: {
+  id?: any
+  source_id?: any
+  source_type?: any
+  task_kind?: any
+  task_type?: any
+  inspection_mode?: any
+  inspector_id?: any
+  inspection_original_checkout_date?: any
+}) {
+  if (!shouldUseDeferredInspectionTitle(task)) return null
+  if (String(task?.inspection_original_checkout_date || '').trim()) return null
+  const sourceId = String(task?.source_id || task?.id || '').trim()
+  return sourceId ? `deferred:${sourceId}` : null
+}
+
 export function cleaningTaskTitleSuffix(task: {
   source_type?: any
   task_kind?: any

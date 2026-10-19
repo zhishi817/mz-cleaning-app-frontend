@@ -553,6 +553,43 @@ test('forces guest-ready authority before handling a sync membership removal', a
   expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
 })
 
+test('forces membership changes through cooldown and moves the task across a month boundary', async () => {
+  const api = require('./api')
+  const params = refreshParams({
+    userId: 'refresh-user', date_from: '2026-08-31', date_to: '2026-09-06', view: 'all',
+  })
+  api.listWorkTasks.mockResolvedValueOnce([
+    makeTask({ id: 'month-move', scheduled_date: '2026-08-31', date: '2026-08-31' } as any),
+  ])
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'initial_month_bucket' })
+  await activateWorkTasksRealtime({
+    token: 't1', userId: 'refresh-user', date_from: '2026-08-31', date_to: '2026-09-06', view: 'all',
+  })
+  api.listWorkTasks.mockClear()
+  api.listWorkTasks.mockResolvedValueOnce([
+    makeTask({ id: 'month-move', scheduled_date: '2026-09-01', date: '2026-09-01' } as any),
+  ])
+
+  mockStreamListeners.work_task_event?.[0]({
+    type: 'work_task_event',
+    data: JSON.stringify({
+      event_id: 'evt-membership-month-move',
+      event_type: 'TASK_ASSIGNMENT_CHANGED',
+      change_scope: 'membership',
+      task_id: 'cleaning_task:checkout-1',
+      changed_fields: ['inspection_mode', 'inspection_due_date'],
+      payload: { patch: { inspection_mode: 'deferred', inspection_due_date: '2026-09-01' } },
+    }),
+  })
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (getWorkTasksSnapshot().items.find((item) => item.id === 'month-move')?.scheduled_date === '2026-09-01') break
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+  expect(getWorkTasksSnapshot().items.find((item) => item.id === 'month-move')?.scheduled_date).toBe('2026-09-01')
+})
+
 test('bounds and consumes a failed guest-ready refresh before one consistency retry', async () => {
   jest.useFakeTimers()
   const api = require('./api')
@@ -569,6 +606,37 @@ test('bounds and consumes a failed guest-ready refresh before one consistency re
       payload: { patch: { checkin_time: '2:30pm' } },
     }),
   })
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+
+  await jest.advanceTimersByTimeAsync(60_000)
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
+})
+
+test('retries once when a background membership refresh fails after returning to foreground', async () => {
+  jest.useFakeTimers()
+  const api = require('./api')
+  api.listWorkTasks.mockRejectedValueOnce(new Error('resume network failure')).mockResolvedValue([])
+  await activateWorkTasksRealtime({ token: 't1', userId: 'refresh-user', date_from: '2026-08-30', date_to: '2026-08-30', view: 'all' })
+  setWorkTasksRefreshForeground(false)
+
+  mockStreamListeners.work_task_event?.[0]({
+    type: 'work_task_event',
+    data: JSON.stringify({
+      event_id: 'evt-background-membership-retry',
+      event_type: 'TASK_ASSIGNMENT_CHANGED',
+      change_scope: 'membership',
+      task_id: 'cleaning_task:checkout-background',
+      changed_fields: ['inspection_mode', 'inspection_due_date', 'inspector_id'],
+      payload: { patch: {} },
+    }),
+  })
+  await Promise.resolve()
+  expect(api.listWorkTasks).not.toHaveBeenCalled()
+
+  setWorkTasksRefreshForeground(true)
   await Promise.resolve()
   await Promise.resolve()
   await Promise.resolve()

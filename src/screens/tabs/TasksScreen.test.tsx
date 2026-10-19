@@ -763,6 +763,139 @@ test('tasks screen renders primary server actions from available_actions', async
   snapshot.items[0] = previousTask
 })
 
+test('tasks screen shows original checkout and blocks silent inspection reassignment', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  snapshot.items[0] = {
+    ...snapshot.items[0],
+    task_kind: 'inspection',
+    task_type: 'checkout_clean',
+    inspection_mode: 'deferred',
+    inspection_due_date: '2026-10-18',
+    inspection_original_checkout_date: '2026-10-16',
+    inspection_assignment_conflict: {
+      reasons: ['checkin_inspector_mismatch', 'checkin_participant_mismatch'],
+      planned_inspector_id: 'oscar',
+      planned_inspector_name: 'Oscar',
+      checkin_inspector_id: 'barbara',
+      checkin_inspector_name: 'Barbara',
+      checkin_assignee_id: 'oscar',
+      checkin_assignee_name: 'Oscar',
+      deferred_task_id: 'checkout-8508',
+      checkin_task_id: 'checkin-8508',
+    },
+  }
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-inspection-conflict', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText('原退房 2026-10-16')).toBeTruthy()
+    expect(ui.getByText('检查安排冲突')).toBeTruthy()
+    expect(ui.getByText('计划检查：Oscar；入住检查：Barbara；入住执行：Oscar。不会自动改派或转移检查费。')).toBeTruthy()
+  })
+
+  snapshot.items[0] = previousTask
+})
+
+test('manager keeps MSQ1905E reopened overdue inspection separate from the current turnover', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'jt-id', username: 'JT', role: 'customer_service', roles: ['customer_service'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  snapshot.items = [
+    {
+      ...previousItems[0],
+      id: 'msq1905e-current',
+      source_id: 'msq1905e-current-checkout',
+      source_ids: ['msq1905e-current-checkout'],
+      task_kind: 'inspection',
+      task_type: 'checkout_clean',
+      inspection_mode: 'same_day',
+      inspection_due_date: null,
+      inspection_original_checkout_date: null,
+      scheduled_date: mockTodayKey,
+      start_time: '10am',
+      end_time: null,
+      status: 'assigned',
+      assignee_id: 'oscar-id',
+      inspector_id: 'oscar-id',
+      inspector_name: 'Oscar',
+      cleaner_name: 'Barbara',
+      lockbox_video_url: null,
+      property_id: 'msq1905e-property',
+      property: { ...previousItems[0].property, id: 'msq1905e-property', code: 'MSQ1905E', region: 'Southbank' },
+      date: mockTodayKey,
+    },
+    {
+      ...previousItems[0],
+      id: 'msq1905e-overdue',
+      source_id: 'msq1905e-deferred-2026-10-11',
+      source_ids: ['msq1905e-deferred-2026-10-11'],
+      task_kind: 'inspection',
+      task_type: 'checkout_clean',
+      inspection_mode: 'deferred',
+      inspection_due_date: '2026-10-13',
+      inspection_original_checkout_date: null,
+      scheduled_date: mockTodayKey,
+      start_time: '10am',
+      end_time: null,
+      status: 'assigned',
+      assignee_id: 'angela-id',
+      inspector_id: 'angela-id',
+      inspector_name: 'Angela',
+      cleaner_name: 'Barbara',
+      key_photo_url: 'https://example.invalid/historical-key.jpg',
+      lockbox_video_url: 'https://example.invalid/historical-lockbox.mp4',
+      property_id: 'msq1905e-property',
+      property: { ...previousItems[0].property, id: 'msq1905e-property', code: 'MSQ1905E', region: 'Southbank' },
+      date: mockTodayKey,
+    },
+  ]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-msq1905e-source-isolation', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText('MSQ1905E 退房')).toBeTruthy()
+    expect(ui.getByText('MSQ1905E 延期检查')).toBeTruthy()
+    expect(ui.getAllByText('已分配')).toHaveLength(2)
+    expect(ui.queryByText('已挂钥匙')).toBeNull()
+  })
+
+  expandTask(ui, 'msq1905e-current')
+  expandTask(ui, 'msq1905e-overdue')
+  await waitFor(() => {
+    expect(ui.getByText('Oscar')).toBeTruthy()
+    expect(ui.getByText('Angela')).toBeTruthy()
+  })
+
+  ui.unmount()
+  snapshot.items = previousItems
+  mockAuthState.user = previousUser
+  mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+  mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+})
+
 test('tasks screen card tap uses the customer-service manager detail for admin roles', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()

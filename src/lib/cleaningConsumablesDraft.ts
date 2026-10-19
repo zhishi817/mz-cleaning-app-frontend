@@ -3,6 +3,11 @@ import { compressImageForLocalStorage, isCompressibleImageMimeType } from './ima
 import { draftMimeTypeFrom } from './localMediaDrafts'
 import { isLocalMediaLocked } from './localMediaLocks'
 import { getJson, remove, setJson } from './storage'
+import {
+  CURRENT_KITCHEN_PHOTO_TEMPLATE_VERSION,
+  LEGACY_KITCHEN_PHOTO_TEMPLATE_VERSION,
+  type CleaningKitchenPhotoTemplateVersion,
+} from './cleaningScenePhotoTemplate'
 
 export type CleaningConsumablesUploadStatus = 'local' | 'uploading' | 'uploaded' | 'missing' | 'failed'
 
@@ -69,6 +74,7 @@ export type CleaningConsumablesDraft = {
   last_error_message?: string | null
   retry_count?: number
   next_retry_at?: string | null
+  scene_photo_template_version?: CleaningKitchenPhotoTemplateVersion
   living_room_photo_url?: string | null
   remote_ac_photo_url?: string | null
   remote_tv_photo_url?: string | null
@@ -180,6 +186,11 @@ function normalizeSubmitStatus(raw: any, pendingSubmit: boolean) {
     return status as CleaningConsumablesSubmitStatus
   }
   return pendingSubmit ? 'waiting_sync' : 'draft'
+}
+
+function normalizeScenePhotoTemplateVersion(raw: any): CleaningKitchenPhotoTemplateVersion | undefined {
+  if (raw === LEGACY_KITCHEN_PHOTO_TEMPLATE_VERSION || raw === CURRENT_KITCHEN_PHOTO_TEMPLATE_VERSION) return raw
+  return undefined
 }
 
 function normalizeUploadStatus(raw: any, localUri: string, remoteUrl: string) {
@@ -375,6 +386,7 @@ function normalizeDraft(taskId: string, raw: any): CleaningConsumablesDraft | nu
     last_error_message: cleanText(raw.last_error_message) || null,
     retry_count: Number.isFinite(Number(raw.retry_count)) ? Number(raw.retry_count) : 0,
     next_retry_at: cleanText(raw.next_retry_at) || null,
+    scene_photo_template_version: normalizeScenePhotoTemplateVersion(raw.scene_photo_template_version),
     living_room_photo_url: cleanText(raw.living_room_photo_url) || null,
     remote_ac_photo_url: cleanText(raw.remote_ac_photo_url) || null,
     remote_tv_photo_url: cleanText(raw.remote_tv_photo_url) || null,
@@ -420,6 +432,7 @@ function buildDraft(taskId: string, patch: CleaningConsumablesDraftPatch, curren
   const hasItemsPatch = Object.prototype.hasOwnProperty.call(patch, 'items')
   const hasPhotoMetaPatch = Object.prototype.hasOwnProperty.call(patch, 'photo_meta')
   const hasExtraPhotoPatch = Object.prototype.hasOwnProperty.call(patch, 'extra_photo_urls')
+  const hasScenePhotoTemplatePatch = Object.prototype.hasOwnProperty.call(patch, 'scene_photo_template_version')
   const hasSubmitConsumablesPatch = Object.prototype.hasOwnProperty.call(patch, 'submit_consumables')
   const hasRestockEnabledPatch = Object.prototype.hasOwnProperty.call(patch, 'restock_submit_enabled')
   const hasCompletionEnabledPatch = Object.prototype.hasOwnProperty.call(patch, 'completion_submit_enabled')
@@ -436,6 +449,9 @@ function buildDraft(taskId: string, patch: CleaningConsumablesDraftPatch, curren
     items: hasItemsPatch ? normalizedPatch.items : current?.items || normalizedPatch.items,
     photo_meta: hasPhotoMetaPatch ? normalizedPatch.photo_meta : current?.photo_meta || normalizedPatch.photo_meta,
     extra_photo_urls: hasExtraPhotoPatch ? normalizedPatch.extra_photo_urls : current?.extra_photo_urls || normalizedPatch.extra_photo_urls,
+    scene_photo_template_version: hasScenePhotoTemplatePatch
+      ? normalizedPatch.scene_photo_template_version
+      : current?.scene_photo_template_version || normalizedPatch.scene_photo_template_version,
     submit_consumables: hasSubmitConsumablesPatch ? normalizedPatch.submit_consumables : current?.submit_consumables ?? normalizedPatch.submit_consumables,
     restock_submit_enabled: hasRestockEnabledPatch ? normalizedPatch.restock_submit_enabled : current?.restock_submit_enabled ?? normalizedPatch.restock_submit_enabled,
     completion_submit_enabled: hasCompletionEnabledPatch ? normalizedPatch.completion_submit_enabled : current?.completion_submit_enabled ?? normalizedPatch.completion_submit_enabled,

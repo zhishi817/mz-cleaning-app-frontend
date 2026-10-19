@@ -57,6 +57,12 @@ const mockAuthState = {
   user: { id: 'customer-service-1', username: 'customer-service', role: 'customer_service', roles: ['customer_service'] },
 }
 
+const defaultConsumablesResponse = {
+  living_room_photo_urls: ['cleaning/living.jpg'],
+  items: [{ item_id: 'remote_tv', photo_urls: ['cleaning/remote.jpg'], item_label: '电视遥控器' }],
+}
+let mockConsumablesResponse: any = defaultConsumablesResponse
+
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }))
@@ -81,10 +87,7 @@ jest.mock('../../lib/auth', () => ({ useAuth: () => mockAuthState }))
 jest.mock('../../lib/api', () => ({
   changeGuestReadyNotification: jest.fn(),
   deleteGuestLuggageNotice: jest.fn(),
-  getCleaningConsumables: jest.fn(async () => ({
-    living_room_photo_urls: ['cleaning/living.jpg'],
-    items: [{ item_id: 'remote_tv', photo_urls: ['cleaning/remote.jpg'], item_label: '电视遥控器' }],
-  })),
+  getCleaningConsumables: jest.fn(async () => mockConsumablesResponse),
   getCompletionPhotos: jest.fn(async () => ({ items: [{ area: 'living', url: 'cleaning/completion.jpg' }] })),
   getInspectionPhotos: jest.fn(async () => ({ items: [{ area: 'living', url: 'cleaning/inspection.jpg' }] })),
   getRestockProof: jest.fn(async () => ({ items: [{ item_id: 'paper', proof_url: 'cleaning/restock.jpg' }] })),
@@ -125,6 +128,7 @@ function flattenedText(node: any): string[] {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockConsumablesResponse = defaultConsumablesResponse
 })
 
 test('customer-service guest-ready actions coexist with the original editor and media order', async () => {
@@ -251,6 +255,32 @@ test.each([
     Object.defineProperty(Platform, 'OS', { configurable: true, value: originalOS })
     ;(Dimensions as any).set({ window: originalWindow, screen: originalScreen })
   }
+})
+
+test('MZ048 manager history keeps legacy appliance labels and shows new storage labels by their own keys', async () => {
+  mockConsumablesResponse = {
+    living_room_photo_urls: [],
+    items: [
+      { item_id: 'coffee_machine_photo', photo_url: 'cleaning/legacy-coffee.jpg' },
+      { item_id: 'cutlery_drawer_photo_v2', photo_url: 'cleaning/cutlery-drawer.jpg' },
+      { item_id: 'kitchen_utensils_drawer_photo_v2', photo_url: 'cleaning/kitchen-drawer.jpg' },
+      { item_id: 'cups_dishes_cabinet_photo_v2', photo_url: 'cleaning/cabinet.jpg' },
+    ],
+  }
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <ManagerDailyTaskScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'manager-mz048-history', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByText('咖啡机')).toBeTruthy())
+  expect(ui.getByText('刀叉勺抽屉')).toBeTruthy()
+  expect(ui.getByText('厨房用品抽屉')).toBeTruthy()
+  expect(ui.getByText('杯子、碗碟柜')).toBeTruthy()
 })
 
 test('disabled guest-ready action remains pressable to explain the server reason', async () => {

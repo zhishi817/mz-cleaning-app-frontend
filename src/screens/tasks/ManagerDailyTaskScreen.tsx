@@ -29,6 +29,7 @@ import { hairline, moderateScale } from '../../lib/scale'
 import { getEffectiveTaskStatus, isTaskWorkflowProgressStatus } from '../../lib/taskVisualTheme'
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, patchWorkTaskItems, requestWorkTasksRefresh, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
 import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyOperationId, isGuestReadyNotificationAction, mergeGuestReadyNotificationActions } from '../../lib/workTaskActions'
+import { ALL_KITCHEN_SCENE_PHOTOS } from '../../lib/cleaningScenePhotoTemplate'
 import {
   completionPhotoTaskIdsFromTask,
   inspectionPhotoTaskIdsFromTask,
@@ -85,9 +86,7 @@ const CLEANING_SCENE_PHOTO_LABEL: Record<string, string> = {
   shower_drain_photo_1: '淋浴房下水口 1',
   shower_drain_photo_2: '淋浴房下水口 2',
   shower_drain_photo_3: '淋浴房下水口 3',
-  coffee_machine_photo: '咖啡机',
-  kettle_photo: '烧水壶',
-  toaster_photo: '面包机',
+  ...Object.fromEntries(ALL_KITCHEN_SCENE_PHOTOS.map((item) => [item.id, item.label])),
   vacuum_used_photo: '吸尘器使用后',
 }
 

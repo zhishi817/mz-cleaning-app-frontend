@@ -1,5 +1,183 @@
 # Change Release Ledger
 
+## CRL-20261018-001 — MZ-049 延期检查权威归位与冲突展示（mobile）
+
+- **Status:** ready
+- **Repository:** `mobile`
+- **Updated:** 2026-10-18 19:12 UTC
+- **Request:** App 对检查模式、延期日和人员变化立即按服务端权威结果归位，并清楚显示原退房日及入住执行人冲突，不在客户端自动改派或转移检查费。
+- **Outcome:** membership 事件绕过冷却强制刷新；即使事件在后台到达、恢复后的首次请求失败，也保留一次可观察的有界重试。任务卡显示原退房日、计划检查人、入住检查人和入住执行人，明确不会自动改派或转费；管理视图对无显式入住关系的旧延期检查保留独立 source 身份，不再把它与同日同房源的新任务二次去重。
+
+### Implementation
+
+- Previous behavior: 一般 membership 事件受 60 秒冷却约束，跨日/周/月移动可能暂时留在旧桶；任务卡没有延期原退房日和人员冲突说明；即使 Root 已把旧延期与新任务拆成两张卡，管理视图仍按“日期 + 房源”选一张，可能再次隐藏其中一个 canonical source。
+- New behavior: membership 事件立即全量刷新当前日期范围，后台到达时等待恢复后的真实请求结果，失败后按协调器有界重试；App 消费服务端新增字段显示原退房日、冲突标签及计划检查人/入住检查人/入住执行人，并为服务端冲突禁用原因提供中文说明。管理视图只为“延期检查且没有 `inspection_original_checkout_date`”追加 source 身份，MSQ1905E 当前退房/Oscar 与旧延期/Angela 可同时显示；已有显式关系和正常同日 turnover 继续使用原分组。
+- Key decisions: 继续以服务端 `available_actions`、状态和媒体投影为权威；客户端只做显示去重边界，不推断人员、不改派、不转费，不改变提交流程和弱网媒体队列。
+
+### Files / Areas
+
+- `src/lib/api.ts` — modified: 扩展 WorkTask 可选安排/冲突字段。
+- `src/lib/cleaningInspection.ts` — modified: 为无显式入住关系的延期检查生成稳定的 Mobile 显示隔离 identity。
+- `src/lib/cleaningInspection.test.ts` — modified: 锁定无关联延期独立、已有原退房关系不隔离。
+- `src/lib/workTasksStore.ts` — modified: membership 强制权威刷新和有界重试。
+- `src/lib/workTasksStore.test.ts` — modified: 冷却期跨月移动回归。
+- `src/lib/workTaskActions.ts` — modified: 安排冲突与 canonical 入住任务引导的用户文案。
+- `src/lib/workTaskActions.test.ts` — modified: 新禁用原因中文映射回归。
+- `src/screens/tabs/TasksScreen.tsx` — modified: 原退房与冲突说明；管理视图去重键保留无关联延期 source。
+- `src/screens/tabs/TasksScreen.test.tsx` — modified: 冲突展示，以及 MSQ1905E 当前退房/Oscar 与旧延期/Angela 同时为已分配且不误显示已挂钥匙的回归。
+- `docs/change-release-ledger.md` — modified: 本变更单元。
+
+### Impact / Dependencies
+
+- API: 消费 Root 新增的三个可选字段；旧服务端缺字段时保持现状。
+- Database / migration: none.
+- Config / environment: none.
+- Dependencies: root/CRL-20261018-002；Root 应先于或同时配对发布。
+- Related units: mobile/CRL-20261013-006、root/CRL-20261018-002.
+
+### Validation
+
+- `npm run typecheck` — passed.
+- `npm test -- --runInBand --no-cache src/lib/cleaningInspection.test.ts` — passed: 1 suite / 3 tests；覆盖 Mobile source identity 边界。
+- `npm test -- --runInBand --no-cache src/screens/tabs/TasksScreen.test.tsx` — passed: 1 suite / 34 tests；覆盖 customer_service 管理视图的 MSQ1905E 双卡标题、人员与状态。
+- `npm test -- --runInBand src/lib/workTasksStore.test.ts src/lib/workTaskActions.test.ts src/screens/tabs/TasksScreen.test.tsx` — passed: 3 suites / 68 tests；覆盖后台 membership → 恢复 → 首次失败 → 一次有界重试、入住检查/执行两角色同时显示及 MSQ1905E 双 canonical source 展示。
+- `npm run check:ci` — passed after the source-isolation supplement: typecheck, lint 0 errors / 615 existing warnings, button audit, fast 3 suites / 44 tests, full 67 suites / 438 tests.
+- `python3 scripts/audit_change_release_ledger.py` — passed: 10 changed / 10 recorded paths after restoring four exact remote ledger records required by `origin/Dev` lineage.
+- Independent review — final verdict `GO`: 初审发现的后台恢复失败漏重试、冲突角色隐藏和禁用原因无中文映射均已关闭；复审独立运行完整 `check:ci`，确认 8/8 台账覆盖且无剩余阻断项。本结论不授权 commit、push、OTA/EAS 或生产操作。
+- iOS simulator / Android emulator / physical iOS / physical Android / EAS native build / weak-network device — not run.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** none; all ten selected files are tracked, and the temporary validation dependency link was removed.
+- `src/lib/api.ts` — SHA-256: `d97ffc334387a95ba4e9bf915d3aafe91f99264b583568d9c97beb0e1e7fc84b`
+- `src/lib/cleaningInspection.test.ts` — SHA-256: `23c894571c8381f6603f3cccbabb1f4385eac5e961904c6467f38920b6e9e330`
+- `src/lib/cleaningInspection.test.ts` — SHA-256: `57341eed9217583ec4b3fb623ed7ae9bf3b00bc09f6a1273aa2e5f84a3bdb5c2`
+- `src/lib/cleaningInspection.ts` — SHA-256: `e26036143cd80fd44ced38a7eb0a3f0ca40726d8556f76a91f9eda4460b9925d`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `e0b0f53870ac5931e46b8110033d202a7876054ef905caa60eb8c4a7cd150cca`
+- `src/lib/workTaskActions.ts` — SHA-256: `b12d131c714a332f11d4912c5511cdf6f757cb6ffd1e0f0288db35437b3fd652`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `685debd7c737fa2e8dd2e5628624a15ab4a20fa823605aa9cde005960c8be5c0`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `c9e12aa4b0847866e2c69ecd84ca58077bd00c5e9e37c74f0f2b537fcffe9c3a`
+- `src/lib/workTasksStore.ts` — SHA-256: `24e646a9f373ea25e2e2922fababa5a76d984e1eb76d3918eded56eb3d96d159`
+- `src/lib/workTasksStore.ts` — SHA-256: `c4eb3c1d154905c024eba3a5179bc8e99d29ea9fdec5daf0250120031189e930`
+- `src/lib/workTasksStore.ts` — SHA-256: `fd79fa03f659e52f55d2cca8c7e952f8c9d5c248a48f908d50b65fa5b128f4a5`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `17594987e6bc0a4905a2d104ca98adb8716995bb728ed3eca4dbb2654eca573c`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `50326bdcd3bfc14288b6dfaaf986d5f04c86382af2e43cac7687ec8503e429db`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `630dee774981d94690ed5ac0168c8073f10164e32a61b99362e365a0721ce081`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `6bc2f899139fa6e0de07c0d2202d746d0c7f5760261940a57bbbdc40553788e4`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `97f1cc4ca9732f62667c47de2bb57512d216263fdb014b96e7c1132040b16a2a`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `aa0d32183b549432004c48b9a8cc9e3ee5ef4c602006d979727160eff9b7af15`
+
+### Release Attempts
+
+#### RA-20261019-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261018-001`
+- Selected CRL identities: `mobile/CRL-20261018-001`
+- Intended action: `commit`
+- Branch: `codex/mz049-deferred-inspection-20261019`
+- Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; fetched at `2026-10-19 UTC`
+- Candidate patch SHA-256: `5753c60d2d521f7be7f40bd5d1746db49fc5f4769c7d3d16e701ece7165ad5b4`
+- Commit SHA: `81755387299a3bfc30b6c92dbf5938182576ffbd`
+- Dependencies: none
+- Required validation: `PASS for source commit / release integration pending`; evidence: full `check:ci` passed, including 73 suites / 474 tests, TypeScript, lint with zero errors, ledger 10/10, button audit and diff check. Real device and weak-network integration remain pending.
+- Shared-hunk review: `PASS`; evidence: extraction contains only the Mobile half of MZ-049 and its governance record.
+- Generated-file review: `PASS`; evidence: no dependency link, cache, build output, environment file or generated artifact remains.
+- Technical state: `committed`
+- User authorization: `selected-for-commit`; evidence: the current direct instruction selects MZ-049 for paired isolated task-branch commit/push.
+- Independent review: `GO for source commit`; evidence: fresh staged review matched the fingerprint, 10 paths / 17 non-ledger hunks and branch/base with P0/P1/P2/P3 = 0.
+- Action conclusion: `GO`; the exact reviewed Mobile source candidate was committed as `81755387299a3bfc30b6c92dbf5938182576ffbd`. The paired Root candidate is independently blocked, so paired push/release remains `BLOCKED`; no OTA, deployment or production interaction is part of this action.
+
+#### RA-20261019-006
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261018-001`
+- Selected CRL identities: `mobile/CRL-20261018-001`
+- Intended action: `commit`
+- Branch: `codex/mz047-049-mobile-integration-20261019`
+- Base: `3bf516da77530ffdba08416cfc73645253026441`; this local integration base descends from `origin/Dev@fe23fb56dc2ee50e635fb689efb2c40e6339c495` and already contains the reviewed MZ-047 and MZ-048 units.
+- Candidate patch SHA-256: `5753c60d2d521f7be7f40bd5d1746db49fc5f4769c7d3d16e701ece7165ad5b4` over the exact nine non-ledger MZ-049 paths; it matches the frozen standalone source candidate.
+- Commit SHA: `not committed`.
+- Dependencies: `mobile/CRL-20261019-001@3bf516da77530ffdba08416cfc73645253026441`; `mobile/CRL-20261019-002@3bf516da77530ffdba08416cfc73645253026441`; paired `root/CRL-20261018-002@08c185daef5ae86175ee777f3d3f05e86693c5f7` must be contained in the final Root integration commit and delivered before or with Mobile.
+- Cross-repository dependency verification: `NOT VERIFIED for final integrated SHAs`; evidence: the paired frozen Root source commit and CRL exist locally, but its final 044+049+050 integration SHA is not yet frozen. Do not release Mobile MZ-049 first.
+- Required validation: `PASS for local source integration / release NOT VERIFIED`; evidence: focused cleaning inspection/store/action/task-screen coverage passed 4 suites / 77 tests, and final `npm run check:ci` passed ledger-range 44/44, TypeScript, lint with 0 errors / 657 warnings, button audit, fast 8 suites / 61 tests and full 74 suites / 499 tests. Real-device and weak-network integration remain pending.
+- Shared-hunk review: `PASS`; evidence: the staged MZ-049 non-ledger patch is byte-for-byte equivalent at the hunk fingerprint level to the reviewed standalone unit and applies cleanly after the integrated MZ-047/MZ-048 base.
+- Generated-file review: `PASS`; evidence: no dependency, lockfile, native, environment, cache, build-output or generated-file change is staged; the ignored temporary dependency clone is not part of the candidate.
+- Technical state: `verified`.
+- User authorization: `selected-for-commit`; evidence: the user asked to resolve 047/048/049 as one Mobile integration branch. This authorizes the local integration commit only; push, PR creation, remote merge, OTA and release remain excluded from this round.
+- Independent review: `GO for the exact source candidate after this RA correction`; evidence: the reviewer matched 10 paths / 17 non-ledger hunks, fingerprint `5753c60d2d521f7be7f40bd5d1746db49fc5f4769c7d3d16e701ece7165ad5b4`, the focused/full validations and clean task/native/config/sensitive boundaries. The only initial P1 was the absence of this current branch/base attempt record.
+- Action conclusion: `GO for local integration commit / paired release NOT VERIFIED`; commit the exact staged MZ-049 candidate, then freeze and verify the paired Root integration. No push, PR, remote merge, OTA, deployment or production interaction is part of this attempt.
+
+#### RA-20261020-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261018-001`
+- Selected CRL identities: `mobile/CRL-20261018-001`
+- Intended action: `commit`
+- Branch: `codex/mz047-049-mobile-integration-20261019`
+- Base: `3bf516da77530ffdba08416cfc73645253026441`; the exact committed local integration base containing MZ-047 and MZ-048.
+- Candidate patch SHA-256: `5753c60d2d521f7be7f40bd5d1746db49fc5f4769c7d3d16e701ece7165ad5b4`
+- Commit SHA: `b6ea73184c319915053f206a662a75f35af1552e`
+- Dependencies: `mobile/CRL-20261019-002@3bf516da77530ffdba08416cfc73645253026441`.
+- Cross-repository dependency verification: `NOT VERIFIED for final paired release`; evidence: the paired Root MZ-049 source unit exists locally and has passed its own focused integration tests, but the final Root 044+049+050 integration SHA is still awaiting independent review and freeze. Mobile must not be released first.
+- Required validation: `PASS for the local Mobile content commit / release NOT VERIFIED`; evidence: focused cleaning inspection/store/action/task-screen coverage passed 4 suites / 77 tests, final Mobile `npm run check:ci` passed ledger-range 44/44, TypeScript, lint with zero errors / 657 warnings, button audit, fast 8 suites / 61 tests and full 74 suites / 499 tests, and the Root cross-repository Phase 5 contract plus Mobile typecheck passed again through a temporary read-only link. Real-device and weak-network integration remain pending.
+- Shared-hunk review: `PASS`; evidence: the exact nine non-ledger MZ-049 paths and 17 hunks retain fingerprint `5753c60d2d521f7be7f40bd5d1746db49fc5f4769c7d3d16e701ece7165ad5b4` on the committed MZ-047/MZ-048 base.
+- Generated-file review: `PASS`; evidence: the committed content range contains no dependency, lockfile, native, environment, cache, build-output or generated-file change; all temporary dependencies and cross-repository links were removed.
+- Technical state: `committed`; the exact MZ-049 content commit is `b6ea73184c319915053f206a662a75f35af1552e` and the prior MZ-048 content commit remains `3bf516da77530ffdba08416cfc73645253026441`.
+- User authorization: `selected-for-commit`; evidence: the user authorized one local Mobile integration branch while this round explicitly withholds push, PR, remote merge, OTA and release.
+- Independent review: `GO for the exact local content commit`; evidence: the reviewer matched 10 paths / 17 non-ledger hunks, the exact fingerprint, focused/full validation and clean task/native/config/sensitive boundaries with P0/P1/P2/P3 = 0.
+- Action conclusion: `LOCAL CONTENT COMMIT COMPLETED / paired release NOT VERIFIED`; this append-only receipt may be committed locally. No push, PR, remote merge, OTA publication, deployment or production interaction is authorized or performed.
+
+#### RA-20261020-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261018-001`, `CRL-20261019-001`, `CRL-20261019-002`
+- Selected CRL identities: `mobile/CRL-20261018-001`, `mobile/CRL-20261019-001`, `mobile/CRL-20261019-002`
+- Intended action: `commit`
+- Branch: `codex/mz047-049-mobile-integration-20261019`
+- Base: `origin/Dev@fe23fb56dc2ee50e635fb689efb2c40e6339c495`; fetched at `2026-10-19 UTC`, already containing the merged MZ-047 unit.
+- Candidate patch SHA-256: `6e2134ea6d5f33c3ee9eb52cc11318e9fd97aa8fa4a35007187fdb00f756a874`
+- Commit SHA: `b6ea73184c319915053f206a662a75f35af1552e`
+- Dependencies: `none`.
+- Cross-repository dependency verification: `NOT VERIFIED for paired release`; evidence: final Root integration SHA and Render branch/preview safety are still pending, so this Mobile range must not be pushed, merged or released independently.
+- Required validation: `PASS for the exact local combined content range / release NOT VERIFIED`; evidence: MZ-048 content commit `3bf516da77530ffdba08416cfc73645253026441` and MZ-049 content commit `b6ea73184c319915053f206a662a75f35af1552e` retain their exact reviewed fingerprints; final Mobile `check:ci` passed 74 suites / 499 tests, TypeScript, lint with zero errors, button audit and ledger audits, and Root's cross-repository Phase 5 contract plus Mobile typecheck passed again through a temporary read-only link. MZ-047 was already present in the exact Dev base. Physical-device, real weak-network, installed-build/channel and native-build acceptance remain pending.
+- Shared-hunk review: `PASS`; evidence: the combined range contains the documented 047/048 four-hunk reconciliation and the byte-equivalent 049 unit, with no duplicate MZ-047 replay and no PR54/MZ-053/Root source content.
+- Generated-file review: `PASS`; evidence: the exact combined content range and clean worktree contain no dependency, native, environment, cache, build-output, generated or sensitive path.
+- Technical state: `committed`; exact combined content head `b6ea73184c319915053f206a662a75f35af1552e`, followed only by append-only ledger receipts.
+- User authorization: `selected-for-commit`; evidence: the user authorized local integration/test/freeze; this round explicitly excludes push, PR, remote merge, OTA, deployment and production interaction.
+- Independent review: `GO for local integrated content only`; evidence: separate independent reviews matched the exact MZ-048 and MZ-049 fingerprints, scope and reconciliation evidence with P0/P1 = 0. This is not device, channel, OTA or release acceptance.
+- Action conclusion: `GO for this local combined-range receipt commit only / release NOT VERIFIED`; no push, PR, remote merge, OTA publication, deployment or production interaction is authorized or performed.
+
+#### RA-20261020-004
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261018-001`, `CRL-20261019-002`
+- Selected CRL identities: `mobile/CRL-20261018-001`, `mobile/CRL-20261019-002`
+- Intended action: `commit`
+- Branch: `codex/mz047-049-mobile-integration-20261019`
+- Base: `origin/Dev@fe23fb56dc2ee50e635fb689efb2c40e6339c495`; fetched at `2026-10-19 UTC`, already containing MZ-047 through merged PR #55.
+- Candidate patch SHA-256: `6e2134ea6d5f33c3ee9eb52cc11318e9fd97aa8fa4a35007187fdb00f756a874`
+- Commit SHA: `b6ea73184c319915053f206a662a75f35af1552e`
+- Dependencies: `none`.
+- Cross-repository dependency verification: `NOT VERIFIED for paired release`; evidence: final Root integration SHA and Render branch/preview safety are still pending, so this Mobile range must not be pushed, merged or released independently.
+- Required validation: `PASS for the exact MZ-048+MZ-049 local content range on the MZ-047 Dev base / release NOT VERIFIED`; evidence: exact reviewed content commits and fingerprints, final Mobile `check:ci` with 74 suites / 499 tests, Root Phase 5 cross-repository contract and Mobile typecheck all passed. Physical-device, real weak-network, installed-build/channel and native-build acceptance remain pending.
+- Shared-hunk review: `PASS`; evidence: MZ-047 is baseline ancestry rather than a repeated range unit; the selected range contains the documented MZ-048 four-hunk reconciliation plus the byte-equivalent MZ-049 unit and no PR54/MZ-053/Root source content.
+- Generated-file review: `PASS`; evidence: exact range and clean worktree contain no dependency, native, environment, cache, build-output, generated or sensitive path.
+- Technical state: `committed`; exact selected content head `b6ea73184c319915053f206a662a75f35af1552e`, followed only by append-only ledger receipts.
+- User authorization: `selected-for-commit`; evidence: the user authorized local integration/test/freeze; this round explicitly excludes push, PR, remote merge, OTA, deployment and production interaction.
+- Independent review: `GO for local integrated content only`; evidence: separate independent reviews matched the exact MZ-048 and MZ-049 fingerprints, scope and reconciliation evidence with P0/P1 = 0. This is not device, channel, OTA or release acceptance.
+- Action conclusion: `GO for this exact local range receipt commit only / release NOT VERIFIED`; no push, PR, remote merge, OTA publication, deployment or production interaction is authorized or performed.
+
+### Risks / Release Notes
+
+- OTA need: yes for distributing these JS/TS App changes, but no OTA/EAS action is authorized or performed.
+- Real device and weak-network verification remain pending; automated tests only prove store coordination and rendered labels.
+- Rollback: revert this CRL's nine source/test hunks together; no data rollback is required.
+- Sensitive-information review: no secrets、凭证、`.env`、设备日志、私有媒体或生产数据。
+- Git state: exact content candidate committed as `81755387299a3bfc30b6c92dbf5938182576ffbd`; audit head is supplied by the range report. Not pushed, no PR, not merged, no OTA/EAS build or deployment.
+
 ## CRL-20261019-001 — MZ-047 客服任务客需置前与钥匙套数显式修改（mobile）
 
 - **Status:** implemented and focused-test verified in an isolated local branch; not committed, pushed, released, deployed, or published by OTA
@@ -103,6 +281,244 @@
 - Rollback: revert only this CRL's source/test/ledger hunks to restore the always-visible key choices and prior field order.
 - Sensitive-information review: no credentials, tokens, `.env` values, private media, production payloads, logs or user records are included.
 - Git state: exact content candidate committed as `c04680d4ed41102b7f56cf2660111a8638573411` on isolated branch `codex/mz047-special-request-keys` based on fetched `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; audit head is supplied by the range report. No push, PR, merge, deployment, build or OTA.
+
+## CRL-20261019-002 — MZ048 厨房收纳拍照模板与历史照片兼容（mobile）
+
+- **Status:** implementation, regressions and second independent code review complete; frozen candidate for separate authorized Git handoff; not committed / pushed / released by this task
+- **Repository:** `mobile`
+- **Updated:** 2026-10-19 UTC
+- **Request:** 将清洁补品页中独立必拍的咖啡机、烧水壶、面包机三项，依次改为刀叉勺抽屉、厨房用品抽屉、杯子、碗碟柜；其他拍照项、页面布局、按钮、上传与提交流程不变；历史家电照片保留原名称与关联，不做进行中任务或离线队列的大范围迁移。
+- **Outcome:** 无旧模板证据的任务按确认顺序要求三个新收纳照片；新照片使用三个全新 `v2` key。已有本地草稿/离线队列、服务端或本地缓存的旧家电 key 仍返回旧模板并可离线继续；完全没有有效草稿/缓存的首次进入必须成功读取线上记录，才恢复“房号正确，继续”。管理员历史详情同时识别新旧 key 并各自显示原始含义，不把旧咖啡机照片改标为抽屉。真正进入后端 replace-all 提交前，队列会重新读取服务端记录，并且只携带本地 payload 不含的六个 MZ048 新旧厨房兼容 key；无关 consumable/scene 行不 carry。读取失败或响应格式异常则保留队列重试且不发 POST，避免远端未知时静默删除旧厨房照片。
+
+### Implementation
+
+- Previous behavior: `coffee_machine_photo` / `kettle_photo` / `toaster_photo` 同时充当当前必拍清单和历史展示标签。如果直接复用这三个 key 改文案，旧照片会被错误重标；若仅切换界面数组，旧无版本草稿也可能在自动保存时丢失隐藏照片 key。
+- New behavior: 当前模板 `kitchen_storage_v2` 依次使用 `cutlery_drawer_photo_v2`、`kitchen_utensils_drawer_photo_v2`、`cups_dishes_cabinet_photo_v2`；历史模板 `kitchen_appliances_v1` 保留三个旧 key 及旧名称。
+- Compatibility boundary: 新草稿在既有 `mzstay.cleaning_consumables_draft.v2:*` 存储中写入可选判别字段 `scene_photo_template_version`，不提升存储 key、不删除/改写旧草稿。旧客户端创建且没有判别字段的任何草稿保守归入 v1；服务端/缓存记录有任一已有行但没有新 key 时也保守归入 v1，仅有新 key 的记录归入 v2；新旧 key 混合时旧证据优先，完全没有草稿或记录才使用 v2。
+- Media safety: 水合时保留草稿中所有 `extra_photo_urls`，只从新旧已知 key 中选择当前模板的必拍项；隐藏的兼容 key 仍随草稿保存，不重命名、搬迁或删除照片。离线队列仍使用已有稳定 `media_id` / `submit_id` 上传提交链路。
+- Hydration safety: 先完成本地草稿判定；存在本地草稿时不拉取远端覆盖它并直接允许离线继续，草稿读取异常则 fail closed（不请求远端、不自动保存、不允许进入，并提示返回重试）。有效缓存必须是非数组对象，`items` 必须为数组，且每行必须是带非空字符串 `item_id` 的对象；空数组是有效空记录，损坏缓存不算进入证据。已有有效缓存允许离线进入，后台远端旧记录稍后返回时与期间已拍照片合并，旧/新 key 均保留并按远端证据切换模板。完全没有草稿或有效缓存时，房号确认保持锁定，只有结构有效的线上 GET 成功（包括明确返回空 `items`）才显示“房号正确，继续”；失败或格式异常时原按钮变为“重新联网确认”，重试成功前不进入表单。任务/token 切换会忽略旧请求的迟到成功或失败，实际 `cleaningTaskId` 变化也重新显示门禁。
+- Write ordering: 屏幕内同一任务的自动保存与提交快照写入通过 promise chain 串行执行；迟到旧记录触发的 v1 合并写一定排在先前 v2 快照之后，避免 AsyncStorage 的 read-build-write 交错让旧快照最后覆盖。受控 deferred 回归验证第一笔写未完成时第二笔不会启动，释放后最终调用包含 v1 判别及旧/新两个 key。
+- Replace-all guard: Root 的既有 `POST /cleaning-app/tasks/:id/consumables` 会在事务内删除该任务全部 `cleaning_consumable_usages` 和对应照片媒体后重建。Mobile 队列现在在实际 POST 前强制执行一次只读 GET，只把服务端存在、本地 payload 缺少且属于六个 MZ048 新旧厨房照片 key 的兼容行以原 key 与照片 URL 带入同一 payload；同 key仍以当前本地编辑值为准，无关补品、下水口、遥控器等远端行不由本 CRL 新增 carry-forward 语义。GET 失败或 `items` 结构异常时沿用既有重试/退避状态并明确不调用 replace-all POST；已上传的本地媒体引用保留在草稿，后续重试不重复上传。
+- UI boundary: 厨房检查组仅替换三条标签与必拍 key；不改组标题、布局、拍照/重拍按钮、预览、删除、验证定位、上传、业务保存或提交顺序。唯一额外交互是用户已批准的首次无缓存在线门：房号弹窗中的原确认按钮在读取中显示“正在确认线上清单…”，失败后显示“重新联网确认”，成功后恢复原“房号正确，继续”。
+
+### Files / Areas
+
+- `src/lib/cleaningScenePhotoTemplate.ts` — added: 新旧厨房拍照模板、新旧 key/标签及保守选版规则。
+- `src/lib/cleaningScenePhotoTemplate.test.ts` — added: 新顺序/key、无版本草稿、显式 v2 和服务端 key 识别回归。
+- `src/lib/cleaningConsumablesDraft.ts` — modified: 草稿可选模板判别字段的规范化与继承。
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — modified: replace-all 提交前只读服务端记录并只合并远端独有的 MZ048 新旧厨房兼容行；读取失败或格式异常时不跨越写入边界。
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — modified: 判别字段持久化、旧草稿无迁移、新 key 原样提交、远端旧厨房行携带、无关行不 carry，以及远端读取失败/格式异常不 POST 回归。
+- `src/screens/tasks/SuppliesFormScreen.tsx` — modified: 按草稿/缓存/远端历史证据选择模板，展示和验证三个新项，保留非当前模板的历史照片 key，并实现首次无本地证据的在线门与原按钮内重试。
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — modified: 新任务文案、首个拍照 key、旧只读记录、本地草稿/有效缓存离线优先、无本地证据在线成功后才可确认、损坏缓存/远端响应 fail closed、任务切换迟到失败隔离、真实任务 key 更新后重新门禁、远端旧记录迟到合并及草稿读取失败 fail-closed 回归。
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — modified: 历史图库同时识别新旧 key，各自使用原始标签。
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — modified: 同一历史详情中旧咖啡机与三个新收纳 key 的独立标签回归。
+- `docs/change-release-ledger.md` — modified: 本独立 MZ048 变更单元。
+
+### Impact / Dependencies
+
+- API: 不改 endpoint 或 payload 结构；提交队列在既有 POST 前新增一次既有只读 GET。`POST /cleaning-app/tasks/:id/consumables` 对 `item_id` 仅要求非空字符串并执行 replace-all，`GET /mzapp/cleaning-tasks/:id/consumables` 原样返回 `item_id`；本变更仅对六个 MZ048 厨房兼容 key 做远端独有行携带。
+- Backend / Root: no source change required. Read-only contract worktree is based on Root `origin/Dev@80763db22c340c6f3df9e5e10924824e0ec7979b` fetched at 2026-10-18 23:09 UTC and remains clean.
+- Database / migration / production data: none. 不改 schema、不搬迁或更新历史行、不调用生产 API。
+- Local storage: 在既有 v2 草稿 JSON 内增加可选判别字段；对旧客户端草稿向后兼容，不改 AsyncStorage key 或队列 key。
+- Dependencies / config / auth / permissions / navigation: none.
+- Base: Mobile `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d` fetched at 2026-10-18 23:08 UTC; branch `codex/mz048-cleaning-photo-template` in the dedicated worktree.
+- Related units / concurrent work: standalone `mobile/CRL-20261019-002`; MZ047 thread/worktree and the user-protected MZ049 `prod-source` / `prod-mobile` worktrees are untouched. Preview dirty files are untouched.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/lib/cleaningScenePhotoTemplate.test.ts src/lib/cleaningConsumablesSubmitQueue.test.ts src/screens/tasks/SuppliesFormScreen.test.tsx src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — PASS: 4 suites / 43 tests.
+- Replace-all guard focused rerun — PASS: `src/lib/cleaningConsumablesSubmitQueue.test.ts`, 1 suite / 24 tests；覆盖远端旧咖啡机/面包机行随新抽屉 key 一并提交，以及 GET 503 时草稿进入 `waiting_sync` 且 POST 为 0 次。
+- Approved first-entry gate focused rerun — PASS: `src/screens/tasks/SuppliesFormScreen.test.tsx`, 1 suite / 14 tests；覆盖本地草稿离线直入、缓存直入并合并迟到旧记录、无本地证据在线失败时只允许原位重试、成功后才恢复房号确认。Final MZ048 focused set PASS: 4 suites / 46 tests.
+- Mobile TypeScript after the replace-all guard — PASS.
+- `npm test -- --runInBand --no-cache` — PASS: 74 suites / 483 tests.
+- Focused ESLint over the MZ048 helper, draft, queue and supplies source/tests — PASS: 0 errors / 0 warnings.
+- Changed-file ESLint including `ManagerDailyTaskScreen.tsx` — PASS for errors: 0 errors; 14 warnings are in unchanged pre-existing lines of that screen, and the MZ048 import/label map introduces no warning.
+- Mobile `npm run typecheck` — PASS after restoring the lockfile-declared official dependency `react-native-webview@13.15.0` into this ignored worktree-local `node_modules` with `npm ci --ignore-scripts`; `package.json` and `package-lock.json` remain unchanged.
+- Full `npm run lint` — PASS for errors: 0 errors / 629 existing warnings. The focused changed-file lint above has no MZ048 error or warning.
+- Root `test_idempotency_submit_id_contract.ts` on latest Root Dev — PASS; the existing consumables/idempotency contract remains valid.
+- Isolated static Root contract assertion — PASS: consumable `item_id` remains arbitrary non-empty `z.string()` rather than an enum and is persisted as `String(it.item_id)`.
+- `python3 scripts/audit_change_release_ledger.py` — PASS: 9 changed paths / 9 recorded paths.
+- `npm run test:ledger-range-audit` — PASS: 44 tests.
+- `npm run check:buttons` — PASS: no suspicious new hard-coded button dimension.
+- `git diff --check` — PASS.
+- Independent read-only review — initial hydration/write-order races and remote-unknown product boundary were found; the user explicitly approved the first-entry online gate. The second review then found malformed-cache bypass, stale rejected-request contamination, actual task-key gate reset, over-broad preflight carry-forward and audit-scope wording issues; all were corrected. Final independent verdict on the frozen code is GO with no P0/P1/P2/P3 functional finding.
+- Dependency verification — `npm ls react-native-webview --depth=0` reports exactly `react-native-webview@13.15.0`; install used the existing official npm lockfile, did not run dependency scripts, and produced no manifest/lock diff.
+- Full Mobile `npm run check:ci` — PASS after the worktree-local lockfile install: ledger range 44/44, changed-path ledger coverage 9/9, TypeScript, lint with 0 errors / 629 existing warnings, button contract, fast 8 suites / 59 tests, and full 74 suites / 483 tests.
+- Final Mobile `npm run check:ci` after the replace-all guard — PASS: ledger range 44/44, changed-path ledger coverage 10/10, TypeScript, lint with 0 errors / 635 warnings, button contract, fast 8 suites / 59 tests, and full 74 suites / 485 tests. The warning increase is confined to the queue test file's existing dynamic-require test pattern; the changed queue source has no new lint error or warning.
+- Final Mobile `npm run check:ci` after the approved first-entry gate — PASS: ledger range 44/44, changed-path ledger coverage 10/10, TypeScript, lint with 0 errors / 637 warnings, button contract, fast 8 suites / 59 tests, and full 74 suites / 486 tests. The two additional warnings are the same existing dynamic-require test pattern in the new gate fixtures; changed production source adds no lint error.
+- Second-review correction focused run — PASS: `src/screens/tasks/SuppliesFormScreen.test.tsx` and `src/lib/cleaningConsumablesSubmitQueue.test.ts`, 2 suites / 44 tests；覆盖损坏 cache/GET 不解门、旧请求迟到失败隔离、真实任务 key 更新重置门、只保留六个 MZ048 kitchen key、无关低库存/scene 行不 carry，以及异常 preflight 不 POST。
+- Second-review correction TypeScript and `git diff --check` — PASS.
+- Final independent reviewer run — PASS: exact MZ048 set 4 suites / 52 tests；full Mobile 74 suites / 492 tests；`npm run check:ci` ledger-range 44/44、changed-path 10/10、TypeScript、lint 0 errors / 651 warnings、button audit、fast 8 suites / 59 tests、full 492/492；`git diff --check` PASS. Reviewer verdict: GO, P0=0 / P1=0 / P2=0 / P3=0.
+- iOS simulator, Android emulator, physical iOS/Android, EAS/native build, real weak network, production API/data, OTA/deployment: not run and not authorized.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared` in the separately assigned isolated Git worktree.
+- **Untracked review:** none; the two intentional new template source/test files are staged, all nine non-ledger source paths are byte-identical to the reviewed handoff, and no dependency link, cache, build output, environment file or generated artifact remains.
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `362b207aeaa853ff91efbeee83424d436945ff59ab1f5d7497c2c3e3abf730bb`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `6a7943af1d662fd02b08330725ee1c7ac0882b923966f604eafa0f59a8373ce3`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `8fe392f3d40b39278acdadf554167eba7327c023085407635855959de67dc395`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `96ece29231302c3915bdd8aca640ae9ddc40572b9c710895d6b245106b8d6ed1`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `b8528266b8a56da960ba7a0bcbb289c5cc4b746cf9945f627c0c76ed2458f489`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `f710ef9331837425de669737e3c5c22611134e785d960013704eadec90cae4f8`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `23bba9dbfc12095760b1dccfc728a96406991391c6734fd67fd1218f52cc070a`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `8dbb8309279ac2a061053a8f0c1a0e965bfd0715267f47d7cd37f6e6e1153e11`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `08badaa1315b0ff20c00091fd0b10231c27266f86a73cb77271c793b6ea66f98`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `12f5282f362c4279d701d3407f577aa4b5c95bbb14b02200ad656d70be002e7d`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `15470bc86165aa05bedc5f8469ffd3a836f4dc8c10f731aee82d3dd389d3ef00`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `9d8d260e8f49815d3656ddd0d3824d7c057d53a13649d3d71d7830a8dc178f71`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `d84766ac0f577b52e59be587f1484fc54ce2c0c1926ce361dc5e597233641f82`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `da73d8e79f2dc2a628c52129ce647155a368bb9f73093b80268b85700f8f6fd5`
+- `src/lib/cleaningScenePhotoTemplate.test.ts` — SHA-256: `c25875fa27be885310a3c5e7a3186940bfbab447413fe10fda17122bce6237f3`
+- `src/lib/cleaningScenePhotoTemplate.ts` — SHA-256: `43088c98397dab067bb1082a743141e6f86fcf03054ccd788144c0ba5db54c55`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `72eabbbc968842e309e8690d8f45cc842879e677a0754da6a480ee29e3e199ed`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `81e521df46375f561f45986f9385a4c163145bb98c9654caefc93e40c3893199`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `d5f74b5e04af54564af5bb5c5330174f80bc430b9ab4272401585858470d3eaf`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `fa605330f853f62c1d7c0566ca507918aa6f9dd53c58f54332d7c759cd013c0f`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `6d806f1f8990c324aabe350e7f95416607d192d7219333fbaeeec4cc1957509f`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `b8fb8bd0211e714bcd39edfd7f4e7f905d3632cbc62227d7821f54b804a8b129`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `099c6c234caf377e78784b1809a17b8c415ac861c7fec614e58d440c1e9d971f`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `11e40e6ed869cdb47cd819087153a2fa9f219755293579b052f200b5bc0cc16b`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `2d4b2f62c174c720a15915c9c5d6b6d49f3723b050995e8382432971f65a7603`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `58ae4f850ec738dbc291d5891859dc0a5a0d5493dd39f9465d220c2da9f61750`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `5f1db651d4caaadd3f1180c30875b3557a20db1c85c0928d0a1554cf3dcd2f65`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `6fda57090f803c9d4551414968a6aa52b3058cc1851fad681aaa8cff125577c7`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `87b68beb301c4cce410cca5f9d7f5c5a78f7c45b2d7114e99f1fbe6460e0df65`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `957584d9e9dc61013a45cd0c497b2295e8030595bffcde433ca0c46517a33f48`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `a2614df13cca4d0ab22a9b99ff40f84403315821f4455d8a1c20ec78c2c7b6eb`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `cf932b14e2e33649b9ebaadbc8e0d4fc2e8c0b6a10ce1ee8609b45311229d7b9`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `ef6c5750cd2ce78478caf74154a95c2e3068249be2d0c53e9800f7d0fe466fe6`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `f143c435578c1fd57cf70cf4e352133b19cdfa9b91a0fc8300f7ad1e80f9ee59`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `f262b895ae2b4b5085269ffe0749cc3749002299fae6f3e618d6f49414ebba34`
+- `src/screens/tasks/SuppliesFormScreen.test.tsx` — SHA-256: `f82503f4e30a4fc8ecee267004861223b26e292bf60cd1037958b67500a782bc`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `0402bf14d1445b04619da0d0a4886e7010629d56e13423cb9f5d5133a09a25bd`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `0f988401b536872bcef792cff5a580ac21b1fe881716e30e4f54edb50d131279`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `107207c94698f0a7f02e7c24067ce082b2b1df6749f0a119d3bb1b6373e3dace`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `13a11330b9ccf9d555c0f57f00c5f510b65b5cd54282e5b1ddf7dca21a169d90`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `185a78875cac95c25ce0fc54cdbc8113d238304ebbfcb2fa83d00a868eebfd83`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `1a64e317ac3c0faa8e77b0399890581d34aea3522a27d104f402bd3bdbde404c`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `2cbe60ebeec0f5067a73ea528d8145f8e10bb9d72bfcd71100f18b2751bc1536`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `31a1e43f50265c199b7c3bf2c6f0c5ea844521fd65a8d020027abc8a3e53d460`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `33c85b1ae86130bbe13c8fb013aa01bd8a397397efa135fdfbb80f2bfa322a1a`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `347d2e9ff7c3876078b1f8181268cf630bbee95f35cfaf9bfed51b9383d92233`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `3749026182c34eb9e0af53e44a43d52d4ae13d046094f0dc3f293f0f6915e6c8`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `41870138a3addccd086b27a47e15845a0a4bb280998744c87d3ff09ded025b23`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `47d2404a522e720277e0dbad55d81bd7c6131657869e57f6b7617040871ccf95`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `4a29911d73f758eaeb83d3f0929daff3260df3fd078b7ceda20a7574f755f72c`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `4d15ddcc2b3d0159efcaa872f0961d68f7c5afd3819b699b63223347a7e9d46b`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `4da113257fed9b3165c286811f9d26f662df8eb720168abd9c870469b8eafe1f`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `58790de5119b43c8881ed2f185338feafeccfc99960ebc2118918c90fd07a9fb`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `5b9187d9dc86f165b00448bae437ec07f3f78f13289334b5376b94efb6299150`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `5ffaa319d672c018bd59fdfef802624bde010d8018c8c0516712532b3ec11041`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `671063a50a11ccd32066d070217f41876cc8e462418765f48d10c4f968f2533c`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `77221db9881a66c6abd70b911be1d8c99869a681ed307e07d54f73ded723f9c1`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `8a509421345ad6b35051b3adee845890a82b0db35fd9cdd410799f2995b9f9f6`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `8d32ee2f9f4ba03ef8a8034a6c0585e3cfa8a7d7c740f027555ad0ea77f84853`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `a120592c90fe0b05d255be32c210dbfe812aa032e5db0dcfa42aed3a3266f74b`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `b33d03e545a23c07af003beffd70c94c3dec33eee31a449eeb1771f505b6cfe7`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `c1cf76260c6dff69464c3fc59afd4a49b575ae6a7ef0623e558e5058070f838e`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `c921cbce76879242dec5014b43ce65bd130bb53ea5a5ce55c86eee2ec7e00c19`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `d1ac852dbc8ba5c72751f13e416c77a3e5892110ae24910cd49caed980b567c1`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `d1ae73b929b1f5823e4cd1b735b197ce6eb82a70fed4c6f6f3a8e0ee4f47cbce`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `d8f66035a5d63be7360dacff3616dbe2283f3245ca0df61f6b3cb685355ca2d4`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `e1976ee8e964b7b388f0d3b4cda1f466eff676cf440fd3868650bedcb387337f`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `e535b1d5a9b618f7fe6b0ae998d0e6c514fe10e7a6e409c424659de5cc8160b8`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `f185d2571f4037d40288c00534ea8870bf8fae47914c27bf371490bf152393eb`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `f271071d6456d4a1440c163541e699a1179bff5f5489701fa367006551379f44`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `f4c320f7b753d6caf9fdb48048c43d3482ac78e81824d435a6d5ac4399a1be91`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `f5b5b8d05246517c9d7d79f79fbe9512140b41feaa5eb0a0a370e39f6e51e853`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `f8bb07cf8771b389a3f7b75c1520dd70297fa6e464d48be7b583ce87336dd952`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `ff5d72946cb2c300f0898af2d3a574020f5e2627a2dd41ba3dcbbaa88cb5a4fb`
+
+### Release Attempts
+
+#### RA-20261019-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261019-002`
+- Selected CRL identities: `mobile/CRL-20261019-002`
+- Intended action: `commit`
+- Branch: `codex/mz048-cleaning-photo-template`
+- Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; fetched at `2026-10-19 UTC`
+- Candidate patch SHA-256: `3a199ddbcb67397385c53b31bcadb63b5e6601e774886f0169ce9aed1983db99` over the exact nine non-ledger paths; frozen handoff aggregate content fingerprint `55cda5cc` prefix is preserved separately because it used a different aggregation method.
+- Commit SHA: `5f5277e1b89291bb3f8b8b92a954db7ec5135185`
+- Dependencies: none
+- Required validation: `PASS for source commit`; evidence: frozen final review passed 4 focused suites / 52 tests, full 74 suites / 492 tests, ledger range 44/44, changed paths 10/10, TypeScript, lint with zero errors, button audit and diff check. Physical device, weak-network and native build remain pending.
+- Shared-hunk review: `PASS`; evidence: exact byte comparison matched all nine non-ledger frozen handoff files; the ledger contains only this staged-scope/attempt bookkeeping update, and no MZ-047/MZ-049 change is present.
+- Generated-file review: `PASS`; evidence: no dependency link, cache, build output, environment file or generated artifact remains.
+- Technical state: `committed`
+- User authorization: `selected-for-commit`; evidence: the current direct instruction selects the frozen MZ-048 handoff for isolated task-branch commit/push.
+- Independent review: `GO for source commit`; evidence: fresh staged-scope confirmation matched the fingerprint, 10 paths / 74 non-ledger hunks, nine byte-identical frozen non-ledger files and branch/base with P0/P1/P2/P3 = 0.
+- Action conclusion: `GO`; the exact reviewed source candidate was committed as `5f5277e1b89291bb3f8b8b92a954db7ec5135185`. Push remains separately gated; physical-device/weak-network/native-build acceptance and the recorded GET→POST residual race remain release considerations, with no OTA, deployment, backend change or production interaction in this action.
+
+#### RA-20261019-004
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261019-002`
+- Selected CRL identities: `mobile/CRL-20261019-002`
+- Intended action: `push`
+- Branch: `codex/mz048-cleaning-photo-template`
+- Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; fetched at `2026-10-19T14:24:48Z`.
+- Candidate patch SHA-256: `3a199ddbcb67397385c53b31bcadb63b5e6601e774886f0169ce9aed1983db99`
+- Commit SHA: `5f5277e1b89291bb3f8b8b92a954db7ec5135185`; the audit head will be the later ledger-only receipt commit.
+- Dependencies: none
+- Required validation: `PASS for source range / release NOT VERIFIED`; evidence: the exact committed range report passed at pre-receipt head `36f1dd801f231f4897b4b60c8c476f18aa21eb56`. Physical-device, real weak-network and native-build acceptance remain pending release gates.
+- Shared-hunk review: `PASS`; evidence: the exact range contains no MZ-047 or MZ-049 change.
+- Generated-file review: `PASS`; evidence: no dependency link, cache, build output, environment file or generated artifact is present.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: after repository, branch and pre-receipt exact HEAD `36f1dd801f231f4897b4b60c8c476f18aa21eb56` were shown, the user replied `一起推送吧`. This ledger-only receipt changes the final audit HEAD, so repository policy requires refreshed approval of that resulting exact SHA before push.
+- Independent review: `GO for this ledger-only receipt commit; NO-GO for push until refreshed exact-HEAD approval`; evidence: independent read-only push review found P0/P1/P2/P3 = 0 for the disclosed source range, verified branch/base/fingerprint, clean scope, absent live remote target, and no feature-branch OTA/production trigger.
+- Action conclusion: `NOT VERIFIED`; blockers: commit this ledger-only receipt, run the clean exact committed-range report, obtain explicit approval for repository `mobile`, branch `codex/mz048-cleaning-photo-template`, and the resulting final HEAD, then rerun immediate remote preflight before one ordinary non-force push. No push has occurred.
+
+#### RA-20261019-005
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261019-002`
+- Selected CRL identities: `mobile/CRL-20261019-002`
+- Intended action: `commit`
+- Branch: `codex/mz047-049-mobile-integration-20261019`
+- Base: `origin/Dev@fe23fb56dc2ee50e635fb689efb2c40e6339c495`; fetched at `2026-10-19 UTC`.
+- Candidate patch SHA-256: `85bf707a029f91e4623414038df4bf8731d2559f41a43a6da888df0d030528f6` over the exact nine non-ledger MZ-048 paths relative to the latest Dev containing MZ-047.
+- Commit SHA: pending.
+- Dependencies: `mobile/CRL-20261019-001` is already contained in the exact Dev base.
+- Required validation: `PASS for the resolved integration candidate / release NOT VERIFIED`; evidence: focused MZ-048 plus shared MZ-047 render coverage passed 4 suites / 55 tests, and full `npm run check:ci` passed ledger-range 44/44, TypeScript, lint with 0 errors / 651 warnings, button audit, fast 8 suites / 59 tests and full 74 suites / 495 tests. Physical-device, real weak-network and native-build acceptance remain release gates.
+- Shared-hunk review: `PASS for manual resolution`; evidence: the render-test conflict keeps MZ-047 mock clearing, key-edit/save and small-screen coverage and also keeps the MZ-048 consumables reset plus legacy/new kitchen-label coverage. The ledger keeps both CRLs intact.
+- Generated-file review: `PASS`; evidence: no dependency, lockfile, native, environment, cache, build-output or generated-file change is present.
+- Hunk reconciliation: `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx#36d114ac6cc3b58e2391c335d9232f78272d04e7bddea039f9f9314bc3e5b659 -> 72eabbbc968842e309e8690d8f45cc842879e677a0754da6a480ee29e3e199ed`; evidence: the MZ-048 setup hunk now shares the latest Dev setup block and preserves MZ-047 mock clearing. | `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx#3ae67ea2e8d815fe0cfc1b005c5e462a2479dca8abb957e9b6e85562d74b979a -> 81e521df46375f561f45986f9385a4c163145bb98c9654caefc93e40c3893199`; evidence: the MZ-048 history test follows the already-merged MZ-047 editor regression on the latest Dev baseline. | `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx#c1cc4ccd4b5a033f20d3ad98a010c0447065acaf8999592af3368260d3c0aee7 -> d5f74b5e04af54564af5bb5c5330174f80bc430b9ab4272401585858470d3eaf`; evidence: the MZ-048 route fixture is represented in the combined base-relative test hunk without changing its assertions. | `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx#e373bca0253ba185b98a451caadf54aaabf31a6d50464419c7a74880e72cb88b -> fa605330f853f62c1d7c0566ca507918aa6f9dd53c58f54332d7c759cd013c0f`; evidence: the MZ-048 four-label assertion block is preserved after the adjacent MZ-047 small-screen regression.
+- Technical state: `prepared`.
+- User authorization: `selected-for-commit`; evidence: the user asked to resolve the overlapping PR conflicts as one Mobile integration branch. This authorizes the local integration commit only; push, PR creation, remote merge, OTA and release remain excluded from this round.
+- Independent review: `GO for local merge commit`; evidence: the exact staged candidate matched latest Dev, 10 paths / 74 non-ledger hunks, fingerprint `85bf707a029f91e4623414038df4bf8731d2559f41a43a6da888df0d030528f6`, all four reconciliation mappings, both 047/048 behaviors and clean native/config/sensitive boundaries, with P0=0 / P1=0 / P2=0 / P3=0 after this ledger-only status correction.
+- Action conclusion: `GO for local merge commit / release NOT VERIFIED`; commit the exact staged 047+048 integration candidate, then continue with the separately frozen MZ-049 unit. No push, PR, remote merge, OTA or deployment is part of this attempt.
+
+#### RA-20261020-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261019-002`
+- Selected CRL identities: `mobile/CRL-20261019-002`
+- Intended action: `commit`
+- Branch: `codex/mz047-049-mobile-integration-20261019`
+- Base: `origin/Dev@fe23fb56dc2ee50e635fb689efb2c40e6339c495`; fetched at `2026-10-19 UTC` and containing the already-merged MZ-047 unit.
+- Candidate patch SHA-256: `85bf707a029f91e4623414038df4bf8731d2559f41a43a6da888df0d030528f6`
+- Commit SHA: `3bf516da77530ffdba08416cfc73645253026441`
+- Dependencies: `none`.
+- Required validation: `PASS for the local MZ-047+MZ-048 integration content commit / release NOT VERIFIED`; evidence: focused MZ-048 plus shared MZ-047 render coverage passed 4 suites / 55 tests, and the full integration-base `npm run check:ci` passed ledger-range 44/44, TypeScript, lint with zero errors, button audit, fast 8 suites / 59 tests and full 74 suites / 495 tests. Physical-device, real weak-network and native-build acceptance remain pending.
+- Shared-hunk review: `PASS`; evidence: the ordinary merge commit has exact parents `6ccea2d72aebee7c049236d6ee798736f4afc581` and `fe23fb56dc2ee50e635fb689efb2c40e6339c495`, preserves the four documented manual hunk reconciliations, and introduces no MZ-049 content.
+- Generated-file review: `PASS`; evidence: the committed content range contains no dependency, lockfile, native, environment, cache, build-output or generated-file change.
+- Technical state: `committed`; the exact content commit is `3bf516da77530ffdba08416cfc73645253026441`, and later MZ-049 plus ledger-only receipts do not change its runtime content.
+- User authorization: `selected-for-commit`; evidence: the user authorized one local Mobile integration branch while this round explicitly withholds push, PR, remote merge, OTA and release.
+- Independent review: `GO for the exact local content commit`; evidence: the prior independent review matched 10 paths / 74 non-ledger hunks, fingerprint `85bf707a029f91e4623414038df4bf8731d2559f41a43a6da888df0d030528f6`, all four reconciliations, both MZ-047/MZ-048 behaviors and clean native/config/sensitive boundaries, with P0/P1/P2/P3 = 0.
+- Action conclusion: `LOCAL CONTENT COMMIT COMPLETED / release NOT VERIFIED`; this append-only receipt may be committed locally. No push, PR, remote merge, OTA publication, deployment or production interaction is authorized or performed.
+
+### Risks / Release Notes
+
+- Conservative boundary: any unversioned local draft is treated as legacy v1 even if no appliance photo has yet been taken. This intentionally avoids silently changing an already-started/offline task; changing those in-progress tasks to v2 later requires an explicit business decision and a separate migration plan.
+- A task with no local draft and no stored record uses v2. Any non-empty existing server/cache record without a new key conservatively remains v1; new-key rows are v2. This intentionally favors not changing an already-started task, while Manager history can display both sets without relabeling.
+- Weak-network boundary: existing local drafts and valid cache records remain usable offline. A task with neither cannot be started for the first time until one successful server read establishes v1/v2; the room-confirm button exposes retry without dismissing the task. The user explicitly approved this tradeoff after being told that a completely offline first entry would be unavailable.
+- Replace-all boundary: a failed or malformed safety GET leaves the offline queue waiting and never calls POST; a successful GET carries only remote-only MZ048 new/legacy kitchen compatibility rows into the replace-all payload. Unrelated remote rows retain pre-existing endpoint behavior and are not newly carried by this CRL. The GET→POST pair has no server revision/conditional-write token, so a second client changing the same task in that narrow interval remains a residual concurrency risk; fully eliminating that race would require backend cooperation, but no backend change or migration is required for this scoped candidate.
+- Rollback: revert only this CRL's Mobile source/test/ledger paths. No data rollback or migration is needed because stored photo keys are additive and immutable in meaning.
+- Sensitive-information review: test fixtures use local/example paths only; no token, credential, `.env` value, database URL, private media, real task payload or production log is included.
+- Git state: exact content candidate committed as `5f5277e1b89291bb3f8b8b92a954db7ec5135185` on `codex/mz048-cleaning-photo-template`; audit head is supplied by the range report. Not pushed, no PR, no merge, no deployment/OTA, no device or production verification.
 
 ## CRL-20261015-001 — MZ-036 App 缓存容量、媒体草稿保护与上传状态收敛（mobile）
 

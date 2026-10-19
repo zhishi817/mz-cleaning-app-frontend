@@ -38,6 +38,7 @@ import {
   isPasswordOnlyInspectionTask,
   isSelfCompleteMode,
   isStayoverTaskType,
+  unlinkedDeferredInspectionDisplayIdentity,
 } from '../../lib/cleaningInspection'
 import { canSwitchTaskMode, isTaskManagerUser } from '../../lib/roles'
 import { isDailyTaskExecutionVisible } from '../../lib/dailyTaskExecutionVisibility'
@@ -1687,7 +1688,8 @@ export default function TasksScreen(props: Props) {
         const title = String(t.title || '').trim()
         const propKey = code || pid || title
         if (!d || !propKey) return ''
-        return `${d}|${propKey}`
+        const sourceIdentity = unlinkedDeferredInspectionDisplayIdentity(t as any)
+        return `${d}|${propKey}${sourceIdentity ? `|${sourceIdentity}` : ''}`
       }
       const isDone = (t: WorkTaskItem) => {
         const s = String(t.status || '').trim().toLowerCase()
@@ -2953,6 +2955,29 @@ function showBanner(title: string, message: string) {
                   : null
               const inspectionMode = effectiveInspectionMode(task as any)
               const inspectionPlanLabel = inspectionModeLabel(inspectionMode, String((task as any).inspection_due_date || '').trim() || null)
+              const inspectionOriginalCheckoutDate = String((task as any).inspection_original_checkout_date || '').slice(0, 10)
+              const inspectionAssignmentConflict = (task as any).inspection_assignment_conflict || null
+              const inspectionConflictPlannedName = String(
+                inspectionAssignmentConflict?.planned_inspector_name
+                || inspectionAssignmentConflict?.planned_inspector_id
+                || '未分配',
+              ).trim()
+              const inspectionConflictCheckinInspectorName = String(
+                inspectionAssignmentConflict?.checkin_inspector_name
+                || inspectionAssignmentConflict?.checkin_inspector_id
+                || '',
+              ).trim()
+              const inspectionConflictCheckinAssigneeName = String(
+                inspectionAssignmentConflict?.checkin_assignee_name
+                || inspectionAssignmentConflict?.checkin_assignee_id
+                || '',
+              ).trim()
+              const inspectionConflictParticipants = [
+                `计划检查：${inspectionConflictPlannedName}`,
+                ...(inspectionConflictCheckinInspectorName ? [`入住检查：${inspectionConflictCheckinInspectorName}`] : []),
+                ...(inspectionConflictCheckinAssigneeName ? [`入住执行：${inspectionConflictCheckinAssigneeName}`] : []),
+                ...(!inspectionConflictCheckinInspectorName && !inspectionConflictCheckinAssigneeName ? ['入住检查/执行：未分配'] : []),
+              ].join('；')
               const stayoverTagStyles = taskTagStylePair('normal')
               const kindTagStyles = taskTagStylePair(getTaskKindTone(task.task_kind))
               const inspectionPlanTagStyles = taskTagStylePair(getInspectionModeTone(inspectionMode))
@@ -3252,6 +3277,16 @@ function showBanner(title: string, message: string) {
                             <Text style={inspectionPlanTagStyles.text}>{inspectionPlanLabel}</Text>
                           </View>
                         ) : null}
+                        {inspectionOriginalCheckoutDate ? (
+                          <View style={taskTagStylePair('neutral').container}>
+                            <Text style={taskTagStylePair('neutral').text}>{`原退房 ${inspectionOriginalCheckoutDate}`}</Text>
+                          </View>
+                        ) : null}
+                        {inspectionAssignmentConflict ? (
+                          <View style={taskTagStylePair('danger').container}>
+                            <Text style={taskTagStylePair('danger').text}>检查安排冲突</Text>
+                          </View>
+                        ) : null}
                         {inspectionScopeTag ? (
                           <View style={inspectionScopeTagStyles.container}>
                             <Text style={inspectionScopeTagStyles.text}>{inspectionScopeTag}</Text>
@@ -3280,6 +3315,18 @@ function showBanner(title: string, message: string) {
                         <Text style={styles.collapsedGuestRequestLabel}>客人需求</Text>
                         <Text style={styles.collapsedGuestRequestText} numberOfLines={2}>
                           {guestSpecialRequest}
+                        </Text>
+                      </View>
+                    </View>
+                  ) : null}
+
+                  {inspectionAssignmentConflict ? (
+                    <View style={styles.collapsedGuestRequest}>
+                      <Ionicons name="alert-circle-outline" size={moderateScale(16)} color="#B91C1C" />
+                      <View style={styles.collapsedGuestRequestTextWrap}>
+                        <Text style={[styles.collapsedGuestRequestLabel, { color: '#B91C1C' }]}>检查安排需要管理员核对</Text>
+                        <Text style={styles.collapsedGuestRequestText}>
+                          {`${inspectionConflictParticipants}。不会自动改派或转移检查费。`}
                         </Text>
                       </View>
                     </View>

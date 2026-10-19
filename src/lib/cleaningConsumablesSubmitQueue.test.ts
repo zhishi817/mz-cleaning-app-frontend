@@ -1,4 +1,5 @@
 jest.mock('./api', () => ({
+  getCleaningConsumables: jest.fn(async () => ({ items: [] })),
   isRetryableApiError: jest.fn(),
   isTerminalAuthApiError: jest.fn(),
   saveCompletionPhotos: jest.fn(),
@@ -16,6 +17,233 @@ function getAsyncStorage() {
 beforeEach(async () => {
   jest.resetModules()
   await getAsyncStorage().clear()
+})
+
+test('persists the scene photo template discriminator through unrelated draft writes', async () => {
+  const draftMod = require('./cleaningConsumablesDraft') as typeof import('./cleaningConsumablesDraft')
+  await draftMod.setCleaningConsumablesDraft('task-template-v2', {
+    scene_photo_template_version: 'kitchen_storage_v2',
+    extra_photo_urls: { cutlery_drawer_photo_v2: 'file:///tmp/cutlery.jpg' },
+    items: [],
+  })
+  await draftMod.updateCleaningConsumablesDraft('task-template-v2', (current) => ({
+    ...current,
+    pending_submit: true,
+    submit_status: 'ready_to_submit',
+  }))
+
+  expect(await draftMod.getCleaningConsumablesDraft('task-template-v2')).toMatchObject({
+    scene_photo_template_version: 'kitchen_storage_v2',
+    extra_photo_urls: { cutlery_drawer_photo_v2: 'file:///tmp/cutlery.jpg' },
+  })
+})
+
+test('keeps pre-MZ048 drafts unversioned for the screen compatibility resolver', async () => {
+  const draftMod = require('./cleaningConsumablesDraft') as typeof import('./cleaningConsumablesDraft')
+  await draftMod.setCleaningConsumablesDraft('task-legacy-template', {
+    extra_photo_urls: { coffee_machine_photo: 'file:///tmp/coffee.jpg' },
+    items: [],
+  })
+
+  expect((await draftMod.getCleaningConsumablesDraft('task-legacy-template'))?.scene_photo_template_version).toBeUndefined()
+})
+
+test('submits MZ048 scene photos with their new keys instead of relabeling appliance keys', async () => {
+  const api = require('./api') as {
+    isRetryableApiError: jest.Mock
+    isTerminalAuthApiError: jest.Mock
+    submitCleaningConsumables: jest.Mock
+  }
+  api.isRetryableApiError.mockReturnValue(false)
+  api.isTerminalAuthApiError.mockReturnValue(false)
+  api.submitCleaningConsumables.mockResolvedValue({ ok: true })
+  const draftMod = require('./cleaningConsumablesDraft') as typeof import('./cleaningConsumablesDraft')
+  const queueMod = require('./cleaningConsumablesSubmitQueue') as typeof import('./cleaningConsumablesSubmitQueue')
+
+  await draftMod.setCleaningConsumablesDraft('task-mz048-keys', {
+    pending_submit: true,
+    scene_photo_template_version: 'kitchen_storage_v2',
+    extra_photo_urls: {
+      cutlery_drawer_photo_v2: 'cleaning/media/cutlery.jpg',
+      kitchen_utensils_drawer_photo_v2: 'cleaning/media/kitchen-utensils.jpg',
+      cups_dishes_cabinet_photo_v2: 'cleaning/media/cups-dishes.jpg',
+    },
+    items: [],
+  })
+  await queueMod.enqueueCleaningConsumablesSubmit('task-mz048-keys')
+  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+
+  expect(api.submitCleaningConsumables).toHaveBeenCalledWith('token', 'task-mz048-keys', {
+    items: [
+      { item_id: 'cutlery_drawer_photo_v2', status: 'ok', photo_url: 'cleaning/media/cutlery.jpg' },
+      { item_id: 'kitchen_utensils_drawer_photo_v2', status: 'ok', photo_url: 'cleaning/media/kitchen-utensils.jpg' },
+      { item_id: 'cups_dishes_cabinet_photo_v2', status: 'ok', photo_url: 'cleaning/media/cups-dishes.jpg' },
+    ],
+    submit_id: expect.any(String),
+  })
+})
+
+test('preserves remote-only legacy photo rows before the replace-all consumables submit', async () => {
+  const api = require('./api') as {
+    getCleaningConsumables: jest.Mock
+    isRetryableApiError: jest.Mock
+    isTerminalAuthApiError: jest.Mock
+    submitCleaningConsumables: jest.Mock
+  }
+  api.isRetryableApiError.mockReturnValue(false)
+  api.isTerminalAuthApiError.mockReturnValue(false)
+  api.getCleaningConsumables.mockResolvedValue({
+    items: [
+      { item_id: 'cutlery_drawer_photo_v2', status: 'ok', photo_url: 'cleaning/media/stale-cutlery.jpg' },
+      { item_id: 'coffee_machine_photo', status: 'ok', photo_url: 'cleaning/media/legacy-coffee.jpg' },
+      { item_id: 'toaster_photo', status: 'ok', photo_urls: ['cleaning/media/legacy-toaster.jpg'] },
+      { item_id: 'toilet_paper', status: 'low', qty: 2, photo_url: 'cleaning/media/stock.jpg' },
+    ],
+  })
+  api.submitCleaningConsumables.mockResolvedValue({ ok: true })
+  const draftMod = require('./cleaningConsumablesDraft') as typeof import('./cleaningConsumablesDraft')
+  const queueMod = require('./cleaningConsumablesSubmitQueue') as typeof import('./cleaningConsumablesSubmitQueue')
+
+  await draftMod.setCleaningConsumablesDraft('task-mz048-remote-legacy', {
+    pending_submit: true,
+    scene_photo_template_version: 'kitchen_storage_v2',
+    extra_photo_urls: { cutlery_drawer_photo_v2: 'cleaning/media/cutlery.jpg' },
+    items: [],
+  })
+  await queueMod.enqueueCleaningConsumablesSubmit('task-mz048-remote-legacy')
+  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+
+  expect(api.getCleaningConsumables).toHaveBeenCalledWith('token', 'task-mz048-remote-legacy')
+  expect(api.submitCleaningConsumables).toHaveBeenCalledWith('token', 'task-mz048-remote-legacy', {
+    items: [
+      { item_id: 'cutlery_drawer_photo_v2', status: 'ok', photo_url: 'cleaning/media/cutlery.jpg' },
+      {
+        item_id: 'coffee_machine_photo',
+        status: 'ok',
+        photo_url: 'cleaning/media/legacy-coffee.jpg',
+        photo_urls: ['cleaning/media/legacy-coffee.jpg'],
+      },
+      {
+        item_id: 'toaster_photo',
+        status: 'ok',
+        photo_url: 'cleaning/media/legacy-toaster.jpg',
+        photo_urls: ['cleaning/media/legacy-toaster.jpg'],
+      },
+    ],
+    submit_id: expect.any(String),
+  })
+})
+
+test('preserves only MZ048 kitchen compatibility rows at the replace-all boundary', async () => {
+  const api = require('./api') as {
+    getCleaningConsumables: jest.Mock
+    isRetryableApiError: jest.Mock
+    isTerminalAuthApiError: jest.Mock
+    submitCleaningConsumables: jest.Mock
+  }
+  api.isRetryableApiError.mockReturnValue(false)
+  api.isTerminalAuthApiError.mockReturnValue(false)
+  api.getCleaningConsumables.mockResolvedValue({
+    items: [
+      { item_id: 'coffee_machine_photo', status: 'ok', photo_url: 'cleaning/media/legacy-coffee.jpg' },
+      { item_id: 'shower_drain_photo_2', status: 'ok', photo_url: 'cleaning/media/shower.jpg' },
+      { item_id: 'remote_ac', status: 'ok', photo_url: 'cleaning/media/remote-ac.jpg' },
+      { item_id: 'toilet_paper', status: 'low', qty: 2, photo_url: 'cleaning/media/stock.jpg' },
+    ],
+  })
+  api.submitCleaningConsumables.mockResolvedValue({ ok: true })
+  const draftMod = require('./cleaningConsumablesDraft') as typeof import('./cleaningConsumablesDraft')
+  const queueMod = require('./cleaningConsumablesSubmitQueue') as typeof import('./cleaningConsumablesSubmitQueue')
+
+  await draftMod.setCleaningConsumablesDraft('task-mz048-scoped-preservation', {
+    pending_submit: true,
+    scene_photo_template_version: 'kitchen_storage_v2',
+    extra_photo_urls: { cutlery_drawer_photo_v2: 'cleaning/media/cutlery.jpg' },
+    items: [],
+  })
+  await queueMod.enqueueCleaningConsumablesSubmit('task-mz048-scoped-preservation')
+  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+
+  expect(api.submitCleaningConsumables).toHaveBeenCalledWith('token', 'task-mz048-scoped-preservation', {
+    items: [
+      { item_id: 'cutlery_drawer_photo_v2', status: 'ok', photo_url: 'cleaning/media/cutlery.jpg' },
+      {
+        item_id: 'coffee_machine_photo',
+        status: 'ok',
+        photo_url: 'cleaning/media/legacy-coffee.jpg',
+        photo_urls: ['cleaning/media/legacy-coffee.jpg'],
+      },
+    ],
+    submit_id: expect.any(String),
+  })
+})
+
+test('does not submit when the preservation read succeeds with a malformed record', async () => {
+  const api = require('./api') as {
+    getCleaningConsumables: jest.Mock
+    isRetryableApiError: jest.Mock
+    isTerminalAuthApiError: jest.Mock
+    submitCleaningConsumables: jest.Mock
+  }
+  api.isRetryableApiError.mockReturnValue(false)
+  api.isTerminalAuthApiError.mockReturnValue(false)
+  api.getCleaningConsumables.mockResolvedValue({ living_room_photo_url: null })
+  const draftMod = require('./cleaningConsumablesDraft') as typeof import('./cleaningConsumablesDraft')
+  const queueMod = require('./cleaningConsumablesSubmitQueue') as typeof import('./cleaningConsumablesSubmitQueue')
+
+  await draftMod.setCleaningConsumablesDraft('task-mz048-malformed-remote', {
+    pending_submit: true,
+    scene_photo_template_version: 'kitchen_storage_v2',
+    extra_photo_urls: { cutlery_drawer_photo_v2: 'cleaning/media/cutlery.jpg' },
+    items: [],
+  })
+  await queueMod.enqueueCleaningConsumablesSubmit('task-mz048-malformed-remote')
+  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+
+  expect(api.submitCleaningConsumables).not.toHaveBeenCalled()
+  expect(await draftMod.getCleaningConsumablesDraft('task-mz048-malformed-remote')).toMatchObject({
+    submit_status: 'waiting_sync',
+    pending_submit: true,
+    last_error_code: 'REMOTE_CONSUMABLES_RECORD_INVALID',
+  })
+  expect(await queueMod.getCleaningConsumablesSubmitQueueItem('task-mz048-malformed-remote')).toMatchObject({
+    status: 'active',
+    last_error_code: 'REMOTE_CONSUMABLES_RECORD_INVALID',
+  })
+})
+
+test('does not cross the replace-all submit boundary when the remote preservation read fails', async () => {
+  const api = require('./api') as {
+    getCleaningConsumables: jest.Mock
+    isRetryableApiError: jest.Mock
+    isTerminalAuthApiError: jest.Mock
+    submitCleaningConsumables: jest.Mock
+  }
+  api.isRetryableApiError.mockReturnValue(true)
+  api.isTerminalAuthApiError.mockReturnValue(false)
+  api.getCleaningConsumables.mockRejectedValue({ status: 503, message: '远端记录暂不可读' })
+  const draftMod = require('./cleaningConsumablesDraft') as typeof import('./cleaningConsumablesDraft')
+  const queueMod = require('./cleaningConsumablesSubmitQueue') as typeof import('./cleaningConsumablesSubmitQueue')
+
+  await draftMod.setCleaningConsumablesDraft('task-mz048-remote-unknown', {
+    pending_submit: true,
+    scene_photo_template_version: 'kitchen_storage_v2',
+    extra_photo_urls: { cutlery_drawer_photo_v2: 'cleaning/media/cutlery.jpg' },
+    items: [],
+  })
+  await queueMod.enqueueCleaningConsumablesSubmit('task-mz048-remote-unknown')
+  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+
+  expect(api.submitCleaningConsumables).not.toHaveBeenCalled()
+  expect(await draftMod.getCleaningConsumablesDraft('task-mz048-remote-unknown')).toMatchObject({
+    submit_status: 'waiting_sync',
+    pending_submit: true,
+    last_error_code: 'HTTP_503',
+  })
+  expect(await queueMod.getCleaningConsumablesSubmitQueueItem('task-mz048-remote-unknown')).toMatchObject({
+    status: 'active',
+    last_error_code: 'HTTP_503',
+  })
 })
 
 test('queues consumables draft and flushes it after network recovery', async () => {
