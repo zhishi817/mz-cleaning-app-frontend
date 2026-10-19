@@ -1,5 +1,109 @@
 # Change Release Ledger
 
+## CRL-20261019-001 — MZ-047 客服任务客需置前与钥匙套数显式修改（mobile）
+
+- **Status:** implemented and focused-test verified in an isolated local branch; not committed, pushed, released, deployed, or published by OTA
+- **Repository:** `mobile`
+- **Board item:** `MZ-047`
+- **Updated:** 2026-10-19 Australia/Melbourne
+- **Request:** 在客服任务编辑页把“客人特殊需求”备注置前；在备注下方用独立行显示当前需挂钥匙套数，只有点击明确“修改”入口后才可选择 1 套或 2 套；选择只进入当前页面编辑态，继续由既有“保存修改”统一提交。备注聚焦、键盘开合、页面滑动和正常重渲染不得重置已有套数，取消修改保留进入编辑器前的值。
+- **Outcome:** 原退房/入住时间与旧/新密码顺序不变；客需输入框保留原位置并置于钥匙要求之前，钥匙行移动到备注正下方，默认只显示当前值与“修改”，展开后才显示 1/2 套选项和取消入口。选择套数不会调用接口，统一保存时才沿用既有 `updateCleaningTaskManagerFields` 契约提交；任务 ID 未变化时，备注/键盘/滑动引发的重渲染不会重新初始化钥匙草稿。
+
+### Implementation
+
+- Previous behavior: 退房/入住时间与密码在前，钥匙 1/2 套按钮常驻并位于客需备注上方，容易在查看或编辑备注时误触并改变草稿。
+- New behavior: 时间和密码字段完全保留原顺序；客需备注仍在它们之后，钥匙要求从备注上方移至备注正下方，并以独立、可换行的“当前套数 + 修改”行展示。展开选择器后，选项只更新 React 编辑态并关闭选择器；取消直接关闭且不改变当前值；保存仍由既有单一按钮、API payload、本地 patch、通知和刷新流程完成。
+- State boundary: 初始化仍只发生在任务 ID 改变时；打开/关闭键盘、滚动、媒体加载和同任务普通重渲染不会重置 `keysRequired`。切换到另一任务时会按该任务服务端/缓存值重新初始化并关闭选择器。
+- Preserved behavior: 客服/admin/线下经理权限、历史任务仅钥匙可改、入住中清洁隐藏钥匙要求、退房/入住时间、旧/新密码、媒体区、钥匙外挂、已通知客人、保存 payload、任务刷新及页面其余顺序均未改变。
+
+### Files / Areas
+
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — 保留时间/密码/备注原顺序，仅将钥匙要求移至备注下方，并提供当前值/显式修改/取消编辑态和窄屏可换行布局。
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — 字段顺序、默认值、显式展开、取消、仅保存时提交、备注键盘/滑动状态保持，以及 320×568 iOS / 360×640 Android mock 小屏交互覆盖。
+- `docs/change-release-ledger.md` — 本 MZ-047 变更、范围、验证和发布边界。
+
+### Impact / Dependencies
+
+- User-visible scope: 仅客服任务详情的“客服信息”编辑卡；不重设计其他卡片或任务列表。
+- API / payload / backend / database / schema / auth / permissions / production data / configuration / packages: none changed.
+- Dependencies: none；MZ-048 仍待用户需求确认，MZ-049 和其他工作区明确排除且未触碰。
+- Cross-repository dependency: none；Root repository 未修改。
+
+### Validation
+
+- PASS — focused Jest: `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` and `src/screens/tasks/ManagerDailyTaskScreen.test.ts`, 2 suites / 11 tests.
+- PASS — mock small-screen matrix: iOS 320×568 and Android 360×640 render the note, wrapping standalone key row, explicit 1/2 choices and cancel action; native simulator/emulator was not launched.
+- PASS after the CRL renumber and order-scope correction — repository `npm run check:ci`: ledger range-auditor tests 44/44; current changed-file coverage 3/3; TypeScript; ESLint with 0 errors / 613 pre-existing warnings and no warning introduced; button contract; fast Jest 8 suites / 59 tests; full Jest 73 suites / 473 tests.
+- PASS after the correction — `git diff --check`, change-ledger audit (3/3), and independent read-only review. Reviewer verdict: `GO` with no P0/P1/P2/P3 findings; confirmed the unique `mobile/CRL-20261019-001`, no old conflicting ID, exact original time/password/note order with only the key block moved below the note, no MZ-049 change, and unchanged sensitive-data/production-write boundaries.
+- Not run / not authorized: physical iOS/Android, native/EAS build, real weak network, production API, production data write, deployment, OTA, commit, push, or PR.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** none; all three selected files are tracked, and the temporary validation dependency link was removed.
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `18108e19a746dc5ad6715ceb1f2c2f5491749d9ec8fc5398adf3d06bfe544ccd`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `1b2d24ed31bb30e62a921a8d01eeb60660f314165e2187cb554ff585689e13fd`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `32e5e91715568dee5adcdb91172649c10622100bf97916c6f3496a1e884c9fac`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `d29a5ba3f434f939f0f6af96e395179a7851f3cadd0149eaeaf7b8a02258f902`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `fb6e8dad9bbd4df690e24e6bda8ac09b596ede730f54a8c11ef2746213a07225`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `fea6b3dc20be1216752c00db82984ab8e9a73091a6a43a424e9f32774ff43d16`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `34053bd34972d1f4a5d593f7366559137d448e80b1f09bf1a7d788a0502495e4`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `36eb8167a82a3392f3638369ca1f8a4090b4f32e27f2a521ebe7fa76ddd7e054`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `4d29f7ea530104dd16f942b55a494beb5ebb8303c27a56f375ee311610e0ba51`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `5009b84b9ac79cc46f2a85f4af15165b606bfaa9f6e6a52c4fbae7379cbcf456`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `57a73eabd6563c90bb8313df6237a20b16db9bf1bf349e020e27681e9b9e0002`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `e541130b419e161ddcb2a20773e53ac2b9a05fb475ab851aa2ef763d4a8854a6`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `e885acf47cf02e90c31f63a50b1a949a29f7ae6fb4542440e14690961722c00c`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `f3daedecc6d3f65b28f8e12aa451a189e6378e82fb16c4a0163d78f771c32b99`
+
+### Release Attempts
+
+#### RA-20261019-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261019-001`
+- Selected CRL identities: `mobile/CRL-20261019-001`
+- Intended action: `commit`
+- Branch: `codex/mz047-special-request-keys`
+- Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; fetched at `2026-10-19 UTC`
+- Candidate patch SHA-256: `5f0a042133e77892de3bd6677ef0c55568ea044f544577f5beaaad07709f6482`
+- Commit SHA: `c04680d4ed41102b7f56cf2660111a8638573411`
+- Dependencies: none.
+- Required validation: `PASS for source commit`; evidence: focused 2-suite/11-test coverage and full `check:ci` passed, including 73 suites / 473 tests, TypeScript, lint with zero errors, ledger 3/3 and button audit. Physical-device/native-build acceptance remains not run.
+- Shared-hunk review: `PASS`; evidence: exact three-path extraction contains no MZ-048/MZ-049 change.
+- Generated-file review: `PASS`; evidence: no dependency link, cache, build output, environment file or generated artifact remains.
+- Technical state: `committed`
+- User authorization: `selected-for-commit`; evidence: the current direct instruction selects MZ-047 for isolated task-branch commit/push.
+- Independent review: `GO for source commit`; evidence: fresh staged review matched the fingerprint, 3 paths / 14 non-ledger hunks and branch/base with P0=0, P1=0, P2=0 and one repository-governance P3.
+- Action conclusion: `GO`; the exact reviewed source candidate was committed as `c04680d4ed41102b7f56cf2660111a8638573411`. Push remains separately gated; physical-device/native-build acceptance remains a release gate and no OTA, deployment or production interaction is part of this action.
+
+#### RA-20261019-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261019-001`
+- Selected CRL identities: `mobile/CRL-20261019-001`
+- Intended action: `push`
+- Branch: `codex/mz047-special-request-keys`
+- Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; fetched at `2026-10-19T14:24:48Z`.
+- Candidate patch SHA-256: `5f0a042133e77892de3bd6677ef0c55568ea044f544577f5beaaad07709f6482`
+- Commit SHA: `c04680d4ed41102b7f56cf2660111a8638573411`; the audit head will be the later ledger-only receipt commit.
+- Dependencies: none
+- Required validation: `PASS for source range / release NOT VERIFIED`; evidence: the exact committed range report passed at pre-receipt head `c5d3c88261807e5679b2934b4e760c93bc733a56`. Physical-device and native-build acceptance remain pending release gates.
+- Shared-hunk review: `PASS`; evidence: the exact three-path source extraction contains no MZ-048 or MZ-049 change.
+- Generated-file review: `PASS`; evidence: no dependency link, cache, build output, environment file or generated artifact is present.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: after repository, branch and pre-receipt exact HEAD `c5d3c88261807e5679b2934b4e760c93bc733a56` were shown, the user replied `一起推送吧`. This ledger-only receipt changes the final audit HEAD, so repository policy requires refreshed approval of that resulting exact SHA before push.
+- Independent review: `GO for this accurate ledger-only receipt commit; NO-GO for push until refreshed exact-HEAD approval`; evidence: independent read-only review verified the exact source range, fingerprint, branch/base, clean scope, absent live remote target and no feature-branch OTA/production trigger, while identifying the missing push-scoped attempt as the sole P1 gate.
+- Action conclusion: `NOT VERIFIED`; blockers: commit this ledger-only receipt, run the clean exact committed-range report, obtain explicit approval for repository `mobile`, branch `codex/mz047-special-request-keys`, and the resulting final HEAD, then rerun immediate remote preflight before one ordinary non-force push. No push has occurred.
+
+### Risks / Release Notes
+
+- Risk: this is JS view-state/UI ordering only; real keyboard inset and OEM font rendering remain native-device acceptance items even though keyboard focus/blur, scrolling and small-screen mock interactions are covered.
+- Rollback: revert only this CRL's source/test/ledger hunks to restore the always-visible key choices and prior field order.
+- Sensitive-information review: no credentials, tokens, `.env` values, private media, production payloads, logs or user records are included.
+- Git state: exact content candidate committed as `c04680d4ed41102b7f56cf2660111a8638573411` on isolated branch `codex/mz047-special-request-keys` based on fetched `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; audit head is supplied by the range report. No push, PR, merge, deployment, build or OTA.
+
 ## CRL-20261015-001 — MZ-036 App 缓存容量、媒体草稿保护与上传状态收敛（mobile）
 
 - **Status:** integrated on latest remote Dev and fully validated locally with MZ-037/MZ-043; not committed / pushed / released
