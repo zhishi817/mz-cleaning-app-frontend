@@ -81,7 +81,7 @@
 - Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; fetched at `2026-10-19 UTC`
 - Candidate patch SHA-256: `5753c60d2d521f7be7f40bd5d1746db49fc5f4769c7d3d16e701ece7165ad5b4`
 - Commit SHA: `81755387299a3bfc30b6c92dbf5938182576ffbd`
-- Dependencies: paired `root/CRL-20261018-002` on the same isolated branch name.
+- Dependencies: none
 - Required validation: `PASS for source commit / release integration pending`; evidence: full `check:ci` passed, including 73 suites / 474 tests, TypeScript, lint with zero errors, ledger 10/10, button audit and diff check. Real device and weak-network integration remain pending.
 - Shared-hunk review: `PASS`; evidence: extraction contains only the Mobile half of MZ-049 and its governance record.
 - Generated-file review: `PASS`; evidence: no dependency link, cache, build output, environment file or generated artifact remains.
