@@ -161,7 +161,7 @@
 - Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; fetched at `2026-10-19 UTC`
 - Candidate patch SHA-256: `3a199ddbcb67397385c53b31bcadb63b5e6601e774886f0169ce9aed1983db99` over the exact nine non-ledger paths; frozen handoff aggregate content fingerprint `55cda5cc` prefix is preserved separately because it used a different aggregation method.
 - Commit SHA: `5f5277e1b89291bb3f8b8b92a954db7ec5135185`
-- Dependencies: none; no backend or migration change.
+- Dependencies: none
 - Required validation: `PASS for source commit`; evidence: frozen final review passed 4 focused suites / 52 tests, full 74 suites / 492 tests, ledger range 44/44, changed paths 10/10, TypeScript, lint with zero errors, button audit and diff check. Physical device, weak-network and native build remain pending.
 - Shared-hunk review: `PASS`; evidence: exact byte comparison matched all nine non-ledger frozen handoff files; the ledger contains only this staged-scope/attempt bookkeeping update, and no MZ-047/MZ-049 change is present.
 - Generated-file review: `PASS`; evidence: no dependency link, cache, build output, environment file or generated artifact remains.
