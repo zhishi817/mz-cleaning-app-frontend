@@ -78,6 +78,25 @@
 - Independent review: `GO for source commit`; evidence: fresh staged review matched the fingerprint, 3 paths / 14 non-ledger hunks and branch/base with P0=0, P1=0, P2=0 and one repository-governance P3.
 - Action conclusion: `GO`; the exact reviewed source candidate was committed as `c04680d4ed41102b7f56cf2660111a8638573411`. Push remains separately gated; physical-device/native-build acceptance remains a release gate and no OTA, deployment or production interaction is part of this action.
 
+#### RA-20261019-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261019-001`
+- Selected CRL identities: `mobile/CRL-20261019-001`
+- Intended action: `push`
+- Branch: `codex/mz047-special-request-keys`
+- Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; freshly rechecked at `2026-10-19 UTC`.
+- Candidate patch SHA-256: `5f0a042133e77892de3bd6677ef0c55568ea044f544577f5beaaad07709f6482`
+- Commit SHA: `c04680d4ed41102b7f56cf2660111a8638573411`; the audit head will be the later ledger-only receipt commit.
+- Dependencies: none
+- Required validation: `PASS for source range / release NOT VERIFIED`; evidence: the exact committed range report passed at pre-receipt head `c5d3c88261807e5679b2934b4e760c93bc733a56`. Physical-device and native-build acceptance remain pending release gates.
+- Shared-hunk review: `PASS`; evidence: the exact three-path source extraction contains no MZ-048 or MZ-049 change.
+- Generated-file review: `PASS`; evidence: no dependency link, cache, build output, environment file or generated artifact is present.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: after repository, branch and pre-receipt exact HEAD `c5d3c88261807e5679b2934b4e760c93bc733a56` were shown, the user replied `一起推送吧`. This ledger-only receipt changes the final audit HEAD, so repository policy requires refreshed approval of that resulting exact SHA before push.
+- Independent review: `GO for this accurate ledger-only receipt commit; NO-GO for push until refreshed exact-HEAD approval`; evidence: independent read-only review verified the exact source range, fingerprint, branch/base, clean scope, absent live remote target and no feature-branch OTA/production trigger, while identifying the missing push-scoped attempt as the sole P1 gate.
+- Action conclusion: `NOT VERIFIED`; blockers: commit this ledger-only receipt, run the clean exact committed-range report, obtain explicit approval for repository `mobile`, branch `codex/mz047-special-request-keys`, and the resulting final HEAD, then rerun immediate remote preflight before one ordinary non-force push. No push has occurred.
+
 ### Risks / Release Notes
 
 - Risk: this is JS view-state/UI ordering only; real keyboard inset and OEM font rendering remain native-device acceptance items even though keyboard focus/blur, scrolling and small-screen mock interactions are covered.
