@@ -12,6 +12,7 @@ import {
 import * as SecureStore from 'expo-secure-store'
 import { validateLoginForm } from '../lib/validators'
 import type { AuthStackParamList } from '../navigation/RootNavigator'
+import AppButton from '../components/ui/AppButton'
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'Login'>
 
@@ -202,22 +203,26 @@ export default function LoginScreen(props: Props) {
           {!!errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
         </View>
 
-        <Pressable
-          style={({ pressed }) => [styles.submitBtn, !canSubmit ? styles.submitBtnDisabled : null, pressed && canSubmit ? styles.submitBtnPressed : null]}
+        <AppButton
+          label="登录"
+          loading={isSigningIn}
           disabled={!canSubmit}
           onPress={onSubmit}
+          fullWidth
+          style={styles.submitBtn}
         >
-          <Text style={styles.submitText}>{isSigningIn ? '登录中…' : '登录'}</Text>
-        </Pressable>
+        </AppButton>
 
         {canUseBiometricLogin ? (
-          <Pressable
-            style={({ pressed }) => [styles.secondaryBtn, pressed ? styles.secondaryBtnPressed : null]}
+          <AppButton
+            label={`${biometricLabel}登录`}
             disabled={isSigningIn}
             onPress={onBiometricLogin}
+            tone="secondary"
+            fullWidth
+            style={styles.secondaryBtn}
           >
-            <Text style={styles.secondaryBtnText}>{`${biometricLabel}登录`}</Text>
-          </Pressable>
+          </AppButton>
         ) : null}
 
         {rememberedHint?.username ? (
@@ -307,46 +312,11 @@ const styles = StyleSheet.create({
   },
   submitBtn: {
     marginTop: 18,
-    minHeight: 48,
-    justifyContent: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    backgroundColor: '#2563EB',
-    alignItems: 'center',
-  },
-  submitBtnPressed: {
-    opacity: 0.9,
-  },
-  submitBtnDisabled: {
-    backgroundColor: '#93C5FD',
-  },
-  submitText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-    textAlign: 'center',
+    alignSelf: 'stretch',
   },
   secondaryBtn: {
     marginTop: 10,
-    minHeight: 46,
-    justifyContent: 'center',
-    paddingVertical: 13,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
-  },
-  secondaryBtnPressed: {
-    opacity: 0.92,
-  },
-  secondaryBtnText: {
-    color: '#1D4ED8',
-    fontSize: 15,
-    fontWeight: '700',
-    textAlign: 'center',
+    alignSelf: 'stretch',
   },
   hintText: {
     marginTop: 10,

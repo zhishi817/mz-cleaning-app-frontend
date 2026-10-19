@@ -4,7 +4,9 @@ import * as ImagePicker from 'expo-image-picker'
 import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect } from '@react-navigation/native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { API_BASE_URL } from '../../config/env'
 import { useAuth } from '../../lib/auth'
+import { buildMzappExpenseReceiptImageSource, type MzappExpenseReceiptImageSource } from '../../lib/expenseReceiptMedia'
 import {
   createMzappExpenseReceipt,
   deleteMyMzappExpenseReceipt,
@@ -45,6 +47,8 @@ type ReceiptFormState = {
   receipt_urls: string[]
   items: ReceiptItemForm[]
 }
+
+type ReceiptImageDisplaySource = MzappExpenseReceiptImageSource | { uri: string }
 
 const COMPANY_PERMS = {
   submit: 'cleaning_app.expense.company.submit',
@@ -233,8 +237,9 @@ export default function ExpenseCenterScreen() {
   const [categoryPickerTarget, setCategoryPickerTarget] = useState<number | null>(null)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deleteChecked, setDeleteChecked] = useState(false)
-  const [imageViewerUrl, setImageViewerUrl] = useState<string | null>(null)
-  const [imageViewerSize, setImageViewerSize] = useState<{ width: number; height: number } | null>(null)
+  const [draftReceiptPreviewByUrl, setDraftReceiptPreviewByUrl] = useState<Record<string, string>>({})
+  const [savedReceiptImageIdsByUrl, setSavedReceiptImageIdsByUrl] = useState<Record<string, string>>({})
+  const [imageViewerSource, setImageViewerSource] = useState<ReceiptImageDisplaySource | null>(null)
   const [imageViewerSession, setImageViewerSession] = useState(0)
   const [datePickerOpen, setDatePickerOpen] = useState(false)
   const [dateDraft, setDateDraft] = useState(() => {
@@ -331,9 +336,27 @@ export default function ExpenseCenterScreen() {
     (scope?: MzappExpenseScope) => {
       const baseScope = scope || createScopes[0] || allowedScopes[0] || 'company'
       setEditingId(null)
+      setDraftReceiptPreviewByUrl({})
+      setSavedReceiptImageIdsByUrl({})
       setForm(buildEmptyForm(baseScope))
     },
     [allowedScopes, createScopes],
+  )
+
+  const savedReceiptImageSource = useCallback(
+    (receiptId: string | null | undefined, imageId: string | null | undefined) => (
+      buildMzappExpenseReceiptImageSource(API_BASE_URL, token, receiptId, imageId)
+    ),
+    [token],
+  )
+
+  const formReceiptImageSource = useCallback(
+    (url: string): ReceiptImageDisplaySource | null => {
+      const localUri = String(draftReceiptPreviewByUrl[url] || '').trim()
+      if (localUri) return { uri: localUri }
+      return savedReceiptImageSource(editingId, savedReceiptImageIdsByUrl[url])
+    },
+    [draftReceiptPreviewByUrl, editingId, savedReceiptImageIdsByUrl, savedReceiptImageSource],
   )
 
   useEffect(() => {
@@ -421,18 +444,14 @@ export default function ExpenseCenterScreen() {
   }, [])
 
   const closeImageViewer = useCallback(() => {
-    setImageViewerUrl(null)
-    setImageViewerSize(null)
+    setImageViewerSource(null)
     setImageViewerSession((prev) => prev + 1)
   }, [])
 
-  const openImageViewer = useCallback((url: string) => {
-    const nextUrl = String(url || '').trim()
-    if (!nextUrl) return
-    Image.prefetch(nextUrl).catch(() => undefined)
-    setImageViewerSize(null)
+  const openImageViewer = useCallback((source: ReceiptImageDisplaySource | null) => {
+    if (!String(source?.uri || '').trim()) return
     setImageViewerSession((prev) => prev + 1)
-    setImageViewerUrl(nextUrl)
+    setImageViewerSource(source)
   }, [])
 
   const patchItem = useCallback((index: number, patch: Partial<ReceiptItemForm>) => {
@@ -491,7 +510,10 @@ export default function ExpenseCenterScreen() {
         name: asset.fileName || `receipt-${Date.now()}.jpg`,
         mimeType: asset.mimeType || 'image/jpeg',
       })
-      setForm((prev) => ({ ...prev, receipt_urls: [...prev.receipt_urls, String(uploaded.url || '').trim()].filter(Boolean).slice(0, 5) }))
+      const uploadedUrl = String(uploaded.url || '').trim()
+      if (!uploadedUrl) throw new Error('上传未返回凭证引用')
+      setDraftReceiptPreviewByUrl((prev) => ({ ...prev, [uploadedUrl]: uri }))
+      setForm((prev) => ({ ...prev, receipt_urls: [...prev.receipt_urls, uploadedUrl].slice(0, 5) }))
     } catch (e: any) {
       Alert.alert('上传失败', String(e?.message || '发票照片上传失败'))
     } finally {
@@ -526,7 +548,10 @@ export default function ExpenseCenterScreen() {
         name: asset.fileName || `receipt-${Date.now()}.jpg`,
         mimeType: asset.mimeType || 'image/jpeg',
       })
-      setForm((prev) => ({ ...prev, receipt_urls: [...prev.receipt_urls, String(uploaded.url || '').trim()].filter(Boolean).slice(0, 5) }))
+      const uploadedUrl = String(uploaded.url || '').trim()
+      if (!uploadedUrl) throw new Error('上传未返回凭证引用')
+      setDraftReceiptPreviewByUrl((prev) => ({ ...prev, [uploadedUrl]: uri }))
+      setForm((prev) => ({ ...prev, receipt_urls: [...prev.receipt_urls, uploadedUrl].slice(0, 5) }))
     } catch (e: any) {
       Alert.alert('上传失败', String(e?.message || '发票照片上传失败'))
     } finally {
@@ -536,6 +561,14 @@ export default function ExpenseCenterScreen() {
 
   const removeReceiptPhoto = useCallback((url: string) => {
     setForm((prev) => ({ ...prev, receipt_urls: prev.receipt_urls.filter((item) => item !== url) }))
+    setDraftReceiptPreviewByUrl((prev) => {
+      const { [url]: _removed, ...rest } = prev
+      return rest
+    })
+    setSavedReceiptImageIdsByUrl((prev) => {
+      const { [url]: _removed, ...rest } = prev
+      return rest
+    })
   }, [])
 
   const validateAndBuildPayload = useCallback(() => {
@@ -623,6 +656,12 @@ export default function ExpenseCenterScreen() {
       setDetailOpen(false)
       setDetail(null)
       setEditingId(receipt.id)
+      setDraftReceiptPreviewByUrl({})
+      setSavedReceiptImageIdsByUrl(() => Object.fromEntries(
+        (Array.isArray(receipt.images) ? receipt.images : [])
+          .map((image) => [String(image?.url || '').trim(), String(image?.id || '').trim()] as const)
+          .filter(([url, imageId]) => Boolean(url && imageId)),
+      ))
       setForm(mapDetailToForm(receipt))
       setActiveTab('create')
     },
@@ -651,62 +690,17 @@ export default function ExpenseCenterScreen() {
     }
   }, [deleteChecked, deleting, detail, loadRecords, token])
 
-  useEffect(() => {
-    if (!imageViewerUrl) {
-      setImageViewerSize(null)
-      return
-    }
-    let cancelled = false
-    Image.getSize(
-      imageViewerUrl,
-      (width, height) => {
-        if (cancelled) return
-        setImageViewerSize({ width, height })
-      },
-      () => {
-        if (cancelled) return
-        setImageViewerSize(null)
-      },
-    )
-    return () => {
-      cancelled = true
-    }
-  }, [imageViewerUrl])
-
-  useEffect(() => {
-    const urls = Array.isArray(detail?.images) ? detail.images.map((item) => String(item?.url || '').trim()).filter(Boolean) : []
-    if (!urls.length) return
-    urls.forEach((url) => {
-      Image.prefetch(url).catch(() => undefined)
-    })
-  }, [detail])
-
   const viewerLayout = useMemo(() => {
     const win = Dimensions.get('window')
     const frameWidth = Math.max(220, win.width - moderateScale(24))
     const frameHeight = Math.max(280, win.height - moderateScale(170))
-    if (!imageViewerSize?.width || !imageViewerSize?.height) {
-      return {
-        frameWidth,
-        frameHeight,
-        imageWidth: frameWidth,
-        imageHeight: frameHeight,
-      }
-    }
-    const ratio = imageViewerSize.width / imageViewerSize.height
-    let baseWidth = frameWidth
-    let baseHeight = baseWidth / ratio
-    if (baseHeight > frameHeight) {
-      baseHeight = frameHeight
-      baseWidth = baseHeight * ratio
-    }
     return {
       frameWidth,
       frameHeight,
-      imageWidth: baseWidth,
-      imageHeight: baseHeight,
+      imageWidth: frameWidth,
+      imageHeight: frameHeight,
     }
-  }, [imageViewerSize])
+  }, [])
 
   const datePickerYears = useMemo(() => {
     const currentYear = new Date().getFullYear()
@@ -850,16 +844,25 @@ export default function ExpenseCenterScreen() {
           </View>
           {form.receipt_urls.length ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoList}>
-              {form.receipt_urls.map((url) => (
-                <View key={url} style={styles.photoCard}>
-                  <Pressable onPressIn={() => openImageViewer(url)} hitSlop={8}>
-                    <Image source={{ uri: url }} style={styles.photoThumb as any} />
-                  </Pressable>
-                  <Pressable onPress={() => removeReceiptPhoto(url)} style={styles.photoRemove}>
-                    <Ionicons name="close-circle" size={20} color="#dc2626" />
-                  </Pressable>
-                </View>
-              ))}
+              {form.receipt_urls.map((url) => {
+                const source = formReceiptImageSource(url)
+                return (
+                  <View key={url} style={styles.photoCard}>
+                    {source ? (
+                      <Pressable onPressIn={() => openImageViewer(source)} hitSlop={8}>
+                        <Image source={source as any} style={styles.photoThumb as any} />
+                      </Pressable>
+                    ) : (
+                      <View style={[styles.photoThumb, styles.photoUnavailable]}>
+                        <Ionicons name="lock-closed-outline" size={18} color="#6b7280" />
+                      </View>
+                    )}
+                    <Pressable onPress={() => removeReceiptPhoto(url)} style={styles.photoRemove}>
+                      <Ionicons name="close-circle" size={20} color="#dc2626" />
+                    </Pressable>
+                  </View>
+                )
+              })}
             </ScrollView>
           ) : (
             <Text style={styles.helperText}>最多 5 张，点击缩略图可放大查看。</Text>
@@ -984,7 +987,10 @@ export default function ExpenseCenterScreen() {
               <Text style={styles.recordMeta}>日期 {displayDate(record.receipt_date)}</Text>
               <Text style={styles.recordMeta}>明细 {Number(record.item_count || 0)} 条</Text>
             </View>
-            {record.first_image_url ? <Image source={{ uri: record.first_image_url }} style={styles.recordImage as any} /> : null}
+            {record.first_image_id ? (() => {
+              const source = savedReceiptImageSource(record.id, record.first_image_id)
+              return source ? <Image source={source as any} style={styles.recordImage as any} /> : null
+            })() : null}
             {record.note ? <Text style={styles.recordNote}>{record.note}</Text> : null}
           </Pressable>
         ))}
@@ -1215,11 +1221,18 @@ export default function ExpenseCenterScreen() {
                 ) : null}
                 {detail.images?.length ? (
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoList}>
-                    {detail.images.map((image) => (
-                      <Pressable key={image.id} onPressIn={() => openImageViewer(String(image.url || ''))} hitSlop={8}>
-                        <Image source={{ uri: image.url }} style={styles.photoThumb as any} />
-                      </Pressable>
-                    ))}
+                    {detail.images.map((image) => {
+                      const source = savedReceiptImageSource(detail.id, image.id)
+                      return source ? (
+                        <Pressable key={image.id} onPressIn={() => openImageViewer(source)} hitSlop={8}>
+                          <Image source={source as any} style={styles.photoThumb as any} />
+                        </Pressable>
+                      ) : (
+                        <View key={image.id} style={[styles.photoThumb, styles.photoUnavailable]}>
+                          <Ionicons name="lock-closed-outline" size={18} color="#6b7280" />
+                        </View>
+                      )
+                    })}
                   </ScrollView>
                 ) : null}
                 {detail.images?.length ? <Text style={styles.helperText}>点击发票缩略图可放大查看。</Text> : null}
@@ -1261,7 +1274,7 @@ export default function ExpenseCenterScreen() {
               ) : null}
             </View>
           ) : null}
-          {detailOpen && imageViewerUrl ? (
+          {detailOpen && imageViewerSource ? (
             <View style={styles.overlayAbsolute}>
               <Pressable style={styles.overlayBackdrop} onPress={closeImageViewer} />
               <View style={styles.viewerShell}>
@@ -1269,7 +1282,7 @@ export default function ExpenseCenterScreen() {
                   <Ionicons name="close" size={22} color="#fff" />
                 </Pressable>
                 <ScrollView
-                  key={`detail_viewer_${imageViewerSession}_${imageViewerUrl}`}
+                  key={`detail_viewer_${imageViewerSession}_${imageViewerSource.uri}`}
                   style={[styles.viewerFrame, { width: viewerLayout.frameWidth, height: viewerLayout.frameHeight }]}
                   contentContainerStyle={[styles.viewerFrameContent, { minWidth: viewerLayout.frameWidth, minHeight: viewerLayout.frameHeight }]}
                   maximumZoomScale={4}
@@ -1281,7 +1294,7 @@ export default function ExpenseCenterScreen() {
                 >
                   <View style={styles.viewerZoomContent}>
                     <Image
-                      source={{ uri: imageViewerUrl }}
+                      source={imageViewerSource as any}
                       style={[
                         styles.viewerImage as any,
                         { width: viewerLayout.imageWidth, height: viewerLayout.imageHeight },
@@ -1323,17 +1336,17 @@ export default function ExpenseCenterScreen() {
         </Pressable>
       </Modal>
 
-      <Modal transparent visible={!!imageViewerUrl && !detailOpen} animationType="fade" onRequestClose={closeImageViewer}>
+      <Modal transparent visible={!!imageViewerSource && !detailOpen} animationType="fade" onRequestClose={closeImageViewer}>
         <View style={styles.overlay}>
           <Pressable style={styles.overlayBackdrop} onPress={closeImageViewer} />
           <View style={styles.viewerShell}>
             <Pressable style={[styles.viewerClose, { top: insets.top + moderateScale(10) }]} onPress={closeImageViewer}>
               <Ionicons name="close" size={22} color="#fff" />
             </Pressable>
-            {imageViewerUrl ? (
+            {imageViewerSource ? (
               <>
                 <ScrollView
-                  key={`viewer_${imageViewerSession}_${imageViewerUrl}`}
+                  key={`viewer_${imageViewerSession}_${imageViewerSource.uri}`}
                   style={[styles.viewerFrame, { width: viewerLayout.frameWidth, height: viewerLayout.frameHeight }]}
                   contentContainerStyle={[styles.viewerFrameContent, { minWidth: viewerLayout.frameWidth, minHeight: viewerLayout.frameHeight }]}
                   maximumZoomScale={4}
@@ -1345,7 +1358,7 @@ export default function ExpenseCenterScreen() {
                 >
                   <View style={styles.viewerZoomContent}>
                     <Image
-                        source={{ uri: imageViewerUrl }}
+                        source={imageViewerSource as any}
                         style={[
                           styles.viewerImage as any,
                           { width: viewerLayout.imageWidth, height: viewerLayout.imageHeight },
@@ -1573,6 +1586,10 @@ const styles = StyleSheet.create({
     height: moderateScale(88),
     borderRadius: moderateScale(12),
     backgroundColor: '#e5e7eb',
+  },
+  photoUnavailable: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   photoRemove: {
     position: 'absolute',

@@ -1,6 +1,9 @@
 import { Directory, File, Paths } from 'expo-file-system'
 import { getJson, setJson } from './storage'
-import { uploadCleaningMedia, uploadDayEndHandover } from './api'
+import { compressImageForLocalStorage } from './imageCompression'
+import { isRetryableApiError, uploadCleaningMedia, uploadDayEndHandover } from './api'
+import { cleaningMediaReference } from './cleaningMedia'
+import { isLocalMediaLocked, withLocalMediaLock } from './localMediaLocks'
 
 export type DayEndDraftPhoto = {
   id: string
@@ -38,14 +41,27 @@ function keyOf(userId: string, date: string) {
   return `${String(userId || '').trim()}::${String(date || '').slice(0, 10)}`
 }
 
+export function buildDayEndMediaUploadIdentity(params: {
+  user_id: string
+  date: string
+  prefix: string
+  media_id: string
+}) {
+  const userId = String(params.user_id || '').trim()
+  const date = String(params.date || '').slice(0, 10)
+  const prefix = String(params.prefix || '').trim()
+  const mediaId = String(params.media_id || '').trim()
+  return {
+    name: `${prefix}-${mediaId}.jpg`,
+    task_id: `day-end:${userId}:${date}`,
+    media_id: mediaId,
+  }
+}
+
 function isNetworkishError(e: any) {
-  const m = String(e?.message || e || '').toLowerCase()
-  if (!m) return false
-  if (m.includes('network request failed')) return true
-  if (m.includes('timeout')) return true
-  if (m.includes('timed out')) return true
-  if (m.includes('aborted')) return true
-  return false
+  if (isRetryableApiError(e)) return true
+  const code = String(e?.code || '').trim().toUpperCase()
+  return code === 'TIMEOUT' || code === 'NETWORK_ERROR'
 }
 
 async function loadAllDrafts(): Promise<Record<string, DayEndHandoverDraft>> {
@@ -62,8 +78,15 @@ async function ensurePersistedUri(sourceUri: string, prefix: string) {
   dir.create({ intermediates: true, idempotent: true })
   const name = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`
   const target = new File(dir, name)
-  new File(sourceUri).copy(target)
+  const preparedUri = await compressImageForLocalStorage(sourceUri, { maxWidth: 1800, quality: 0.72 })
+  new File(preparedUri || sourceUri).copy(target)
   return target.uri
+}
+
+function deleteLocalFile(uri: string) {
+  const localUri = String(uri || '').trim()
+  if (!localUri || /^https?:\/\//i.test(localUri) || isLocalMediaLocked(localUri)) return
+  try { new File(localUri).delete() } catch {}
 }
 
 function normalizeDraft(raw: any): DayEndHandoverDraft | null {
@@ -109,9 +132,7 @@ export async function clearDayEndHandoverDraft(userId: string, date: string) {
     ...((draft?.reject_items || []).flatMap((item) => item.photos || [])),
   ]
   for (const item of allPhotos) {
-    const localUri = String(item.uri || '').trim()
-    if (!localUri || /^https?:\/\//i.test(localUri)) continue
-    try { new File(localUri).delete() } catch {}
+    deleteLocalFile(item.uri)
   }
 }
 
@@ -164,7 +185,7 @@ export async function processDayEndHandoverQueue(token: string) {
     const entries = Object.entries(drafts)
     let processed = 0
 
-    const uploadItems = async (purpose: string, prefix: string, items: DayEndDraftPhoto[]) => {
+    const uploadItems = async (draft: DayEndHandoverDraft, purpose: string, prefix: string, items: DayEndDraftPhoto[]) => {
       const out: DayEndDraftPhoto[] = []
       for (const item of items || []) {
         if (item.uploaded_url) {
@@ -172,17 +193,26 @@ export async function processDayEndHandoverQueue(token: string) {
           continue
         }
         try {
-          const up = await uploadCleaningMedia(
+          const identity = buildDayEndMediaUploadIdentity({
+            user_id: draft.user_id,
+            date: draft.date,
+            prefix,
+            media_id: item.id,
+          })
+          const up = await withLocalMediaLock(item.uri, () => uploadCleaningMedia(
             token,
-            { uri: item.uri, name: `${prefix}-${item.id}.jpg`, mimeType: 'image/jpeg' },
+            { uri: item.uri, name: identity.name, mimeType: 'image/jpeg' },
             {
               purpose,
+              task_id: identity.task_id,
+              media_id: identity.media_id,
               captured_at: item.captured_at,
               watermark: item.watermark_text ? '1' : '',
               watermark_text: item.watermark_text || '',
             },
-          )
-          out.push({ ...item, uploaded_url: up.url })
+            { skipImageCompression: true },
+          ))
+          out.push({ ...item, uploaded_url: cleaningMediaReference(up) })
         } catch (e: any) {
           if (isNetworkishError(e)) throw e
           out.push(item)
@@ -195,13 +225,13 @@ export async function processDayEndHandoverQueue(token: string) {
       const draft = normalizeDraft(rawDraft)
       if (!draft) continue
       try {
-        const keyItems = await uploadItems('backup_key_return', 'key', draft.key_items || [])
-        const returnWashItems = await uploadItems('return_wash_linen', 'return-wash', draft.return_wash_items || [])
-        const warehouseKeyItems = await uploadItems('warehouse_key_return', 'warehouse-key', draft.warehouse_key_items || [])
-        const consumableItems = await uploadItems('remaining_consumables', 'consumables', draft.consumable_items || [])
+        const keyItems = await uploadItems(draft, 'backup_key_return', 'key', draft.key_items || [])
+        const returnWashItems = await uploadItems(draft, 'return_wash_linen', 'return-wash', draft.return_wash_items || [])
+        const warehouseKeyItems = await uploadItems(draft, 'warehouse_key_return', 'warehouse-key', draft.warehouse_key_items || [])
+        const consumableItems = await uploadItems(draft, 'remaining_consumables', 'consumables', draft.consumable_items || [])
         const rejectItems: DayEndRejectDraftItem[] = []
         for (const item of draft.reject_items || []) {
-          const photos = await uploadItems('reject_linen_return', `reject-${item.id}`, item.photos || [])
+          const photos = await uploadItems(draft, 'reject_linen_return', `reject-${item.id}`, item.photos || [])
           rejectItems.push({ ...item, photos })
         }
         const nextDraft: DayEndHandoverDraft = {
@@ -217,6 +247,8 @@ export async function processDayEndHandoverQueue(token: string) {
         if (nextDraft.pending_submit) {
           nextDraft.pending_submit = false
         }
+        drafts[k] = nextDraft
+        await saveAllDrafts(drafts)
 
         const payload = {
           date: nextDraft.date,
@@ -251,8 +283,6 @@ export async function processDayEndHandoverQueue(token: string) {
           continue
         }
 
-        drafts[k] = nextDraft
-        await saveAllDrafts(drafts)
       } catch (e: any) {
         if (isNetworkishError(e)) break
       }

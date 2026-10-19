@@ -15,6 +15,7 @@
     },
     "preview": {
       "distribution": "internal",
+      "channel": "preview",
       "env": {
         "EXPO_PUBLIC_APP_ENV": "dev",
         "EXPO_PUBLIC_API_BASE_URL_DEV": "https://mz-property-system-v3-2.onrender.com",
@@ -22,7 +23,24 @@
       }
     },
     "production": {
+      "channel": "production",
       "autoIncrement": false,
+      "env": {
+        "EXPO_PUBLIC_APP_ENV": "prod",
+        "EXPO_PUBLIC_API_BASE_URL_PROD": "https://mz-property-system-v3-docker.onrender.com"
+      }
+    },
+    "testflight": {
+      "extends": "production",
+      "channel": "testflight"
+    },
+    "production-apk": {
+      "distribution": "internal",
+      "channel": "production",
+      "autoIncrement": false,
+      "android": {
+        "buildType": "apk"
+      },
       "env": {
         "EXPO_PUBLIC_APP_ENV": "prod",
         "EXPO_PUBLIC_API_BASE_URL_PROD": "https://mz-property-system-v3-docker.onrender.com"

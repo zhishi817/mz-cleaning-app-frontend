@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { AppState } from 'react-native'
+import NetInfo from '@react-native-community/netinfo'
 import { forgotPasswordApi, loginApi, meApi, unregisterExpoPushToken } from './api'
 import { API_BASE_URL, LOCAL_LOGIN_ENABLED, LOCAL_LOGIN_PASSWORD, LOCAL_LOGIN_ROLE, LOCAL_LOGIN_USERNAME } from '../config/env'
 import {
@@ -17,8 +18,15 @@ import {
   type StoredUser,
 } from './authStorage'
 import { subscribeAuthInvalidated } from './authEvents'
+import { processCleaningConsumablesSubmitQueue } from './cleaningConsumablesSubmitQueue'
+import { processDayEndHandoverQueue } from './dayEndHandoverQueue'
+import { processInspectionMediaQueue, pruneExpiredInspectionMediaItems } from './inspectionMediaQueue'
+import { processInspectionPanelSubmitQueue } from './inspectionPanelSubmitQueue'
+import { processKeyUploadQueue } from './keyUploadQueue'
+import { runLocalMediaHousekeeping } from './localMediaHousekeeping'
+import { clearCleaningMediaCache, establishCleaningMediaCacheSession, runCleaningMediaCacheMaintenance } from './cleaningMediaCache'
 import { clearRegisteredExpoPushToken, getRegisteredExpoPushToken } from './pushTokenStorage'
-import { deactivateWorkTasksRealtime } from './workTasksStore'
+import { deactivateWorkTasksRealtime, establishWorkTasksSession } from './workTasksStore'
 
 type AuthStatus = 'booting' | 'signedOut' | 'signedIn'
 
@@ -59,6 +67,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
 
   const signOutInternal = useCallback(async (reason: 'manual' | 'session_expired' = 'manual') => {
     deactivateWorkTasksRealtime()
+    await clearCleaningMediaCache()
     const currentToken = token
     try {
       const expoPushToken = await getRegisteredExpoPushToken()
@@ -84,8 +93,15 @@ export function AuthProvider(props: { children: React.ReactNode }) {
   }, [])
 
   const applySignedInState = useCallback(async (nextToken: string, nextUser: StoredUser) => {
+    await establishCleaningMediaCacheSession({
+      userId: nextUser.id,
+      role: nextUser.role,
+      roles: nextUser.roles,
+      permissions: nextUser.permissions,
+    })
     await setAuthToken(nextToken)
     await setStoredUser(nextUser)
+    establishWorkTasksSession({ token: nextToken, userId: nextUser.id })
     setToken(nextToken)
     setUser(nextUser)
     setStatus('signedIn')
@@ -132,12 +148,14 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       const u = await getStoredUser()
       if (!t) {
         deactivateWorkTasksRealtime()
+        await clearCleaningMediaCache()
         setStatus('signedOut')
         return
       }
       if (t.startsWith('local:')) {
         if (!canUseLocalLogin()) {
           deactivateWorkTasksRealtime()
+          await clearCleaningMediaCache()
           await clearAuthToken()
           if (u) await clearStoredUser()
           setStatus('signedOut')
@@ -148,6 +166,11 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         const id = u?.id || `local:${username}`
         const localUser = { id, username, role }
         await setStoredUser(localUser)
+        await establishCleaningMediaCacheSession({
+          userId: localUser.id,
+          role: localUser.role,
+        })
+        establishWorkTasksSession({ token: t, userId: localUser.id })
         setToken(t)
         setUser(localUser)
         setStatus('signedIn')
@@ -162,6 +185,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       }
     } catch {
       deactivateWorkTasksRealtime()
+      await clearCleaningMediaCache()
       setStatus('signedOut')
     }
   }, [applySignedInState, signOutInternal, trySilentReauth])
@@ -181,6 +205,41 @@ export function AuthProvider(props: { children: React.ReactNode }) {
   }, [applySignedInState, status, token])
 
   useEffect(() => {
+    if (status !== 'signedIn' || !token) return
+    let cancelled = false
+    const runQueueMaintenance = async () => {
+      if (cancelled) return
+      try {
+        await pruneExpiredInspectionMediaItems()
+        await processInspectionMediaQueue(token)
+        await processInspectionPanelSubmitQueue(token)
+        await processCleaningConsumablesSubmitQueue(token, String(user?.username || '').trim())
+        await processKeyUploadQueue(token)
+        await processDayEndHandoverQueue(token)
+        await runLocalMediaHousekeeping()
+        void runCleaningMediaCacheMaintenance()
+      } catch {}
+    }
+    void runQueueMaintenance()
+    const netInfoUnsub = NetInfo.addEventListener((state) => {
+      if (cancelled) return
+      if (state.isConnected && state.isInternetReachable !== false) void runQueueMaintenance()
+    })
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') void runQueueMaintenance()
+    })
+    return () => {
+      cancelled = true
+      try {
+        netInfoUnsub()
+      } catch {}
+      try {
+        appStateSub.remove()
+      } catch {}
+    }
+  }, [status, token, user?.username])
+
+  useEffect(() => {
     return subscribeAuthInvalidated(() => {
       deactivateWorkTasksRealtime()
       trySilentReauth().then((recovered) => {
@@ -198,9 +257,14 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       if (canUseLocalLogin() && username.trim() === LOCAL_LOGIN_USERNAME && params.password === LOCAL_LOGIN_PASSWORD) {
         const localUser = { id: `local:${username.trim()}`, username: username.trim(), role: LOCAL_LOGIN_ROLE }
         const localToken = localTokenFor(localUser.username)
+        await establishCleaningMediaCacheSession({
+          userId: localUser.id,
+          role: localUser.role,
+        })
         await setAuthToken(localToken)
         await setStoredUser(localUser)
         await clearRememberedLogin()
+        establishWorkTasksSession({ token: localToken, userId: localUser.id })
         setToken(localToken)
         setUser(localUser)
         setStatus('signedIn')

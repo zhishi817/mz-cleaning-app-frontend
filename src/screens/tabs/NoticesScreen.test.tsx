@@ -1,0 +1,403 @@
+import React from 'react'
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
+import { I18nProvider } from '../../lib/i18n'
+
+const mockNavigate = jest.fn()
+let mockNoticeItems: any[] = []
+
+jest.mock('@react-navigation/native', () => ({
+  useIsFocused: () => true,
+}))
+
+jest.mock('../../lib/auth', () => ({
+  useAuth: () => ({
+    status: 'signedIn',
+    token: 'local:test',
+    user: { id: 'u1', username: 'tester', role: 'cleaner', roles: ['cleaner'] },
+  }),
+}))
+
+jest.mock('../../lib/api', () => ({
+  listCompanySecretsForApp: jest.fn(async () => [
+    {
+      id: 'secret-1',
+      title: '883 Locker 14号',
+      property_codes: ['831606', '831402'],
+      property_ids: ['p-831606', 'p-831402'],
+      secret_kind: 'locker',
+      box_number: '',
+      location: '前台对面的locker箱',
+      note: '备用钥匙',
+      status: 'active',
+      secret: '2468',
+      has_key: true,
+      updated_at: '2026-07-13T08:00:00.000Z',
+    },
+  ]),
+  listCompanyAnnouncementsForApp: jest.fn(async () => []),
+  listCompanyDocsForApp: jest.fn(async () => []),
+  listCustomerServiceManualsForApp: jest.fn(async () => []),
+  listWarehouseGuidesForApp: jest.fn(async () => []),
+  listWorkTasks: jest.fn(async () => []),
+  markInboxNotificationsRead: jest.fn(async () => ({})),
+}))
+
+jest.mock('../../lib/notificationInbox', () => ({
+  syncInboxNotifications: jest.fn(async () => ({ nextCursor: null })),
+}))
+
+jest.mock('../../lib/noticesStore', () => ({
+  getNoticesSnapshot: () => ({ items: mockNoticeItems, unreadIds: {}, readIds: {}, updatedAt: null }),
+  initNoticesStore: jest.fn(async () => {}),
+  markNoticeRead: jest.fn(async () => {}),
+  refreshNotices: jest.fn(async () => {}),
+  subscribeNotices: () => () => {},
+}))
+
+jest.mock('../../components/CleaningMediaImage', () => {
+  const mockReact = require('react')
+  const mockView = require('react-native').View
+  return (props: any) => {
+    const mediaContext: any = { guestLuggageId: props.guestLuggageId || null, accessTaskId: props.accessTaskId || null }
+    if (props.accessWorkTaskId || props.offlineWorkTaskMedia) {
+      mediaContext.accessWorkTaskId = props.accessWorkTaskId || null
+      mediaContext.offlineWorkTaskMedia = Boolean(props.offlineWorkTaskMedia)
+    }
+    return mockReact.createElement(mockView, {
+      testID: props.testID || 'cleaning-media-image',
+      accessibilityLabel: JSON.stringify(mediaContext),
+    })
+  }
+})
+
+jest.mock('../../lib/roles', () => ({
+  isTaskInspectorUser: () => false,
+  isTaskManagerUser: () => false,
+  roleNamesOf: (user: any) => Array.isArray(user?.roles) ? user.roles : [user?.role].filter(Boolean),
+}))
+
+jest.mock('../../lib/workTasksStore', () => ({
+  findWorkTaskItemByAnyId: () => null,
+  findWorkTaskItemByAnyIds: () => null,
+  getWorkTasksSnapshot: () => ({
+    items: [
+      {
+        id: 'task-1',
+        property: {
+          id: 'p-831402',
+          code: '831402',
+          address: '883 Collins Street, Docklands',
+          wifi_ssid: 'TP-Link',
+          wifi_password: 'wifi-123',
+          access_guide_link: '',
+        },
+      },
+    ],
+  }),
+  subscribeWorkTasks: () => () => {},
+}))
+
+function renderScreen() {
+  const NoticesScreen = require('./NoticesScreen').default as React.ComponentType<any>
+  return render(
+    <I18nProvider>
+      <NoticesScreen
+        navigation={{ navigate: mockNavigate, addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'notices', name: 'NoticesList' } as any}
+      />
+    </I18nProvider>,
+  )
+}
+
+test('information center search shows offline passwords without copy action', async () => {
+  mockNavigate.mockClear()
+  const ui = renderScreen()
+
+  fireEvent.changeText(
+    ui.getByPlaceholderText('输入关键词搜索房源、线下密码、历史任务、公司文档、仓库指南、公告...'),
+    '883',
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText('线下密码')).toBeTruthy()
+    expect(ui.getByText('883 Locker 14号')).toBeTruthy()
+    expect(ui.getByText(/密码：2468/)).toBeTruthy()
+  })
+
+  fireEvent.press(ui.getByText('883 Locker 14号'))
+
+  expect(mockNavigate).toHaveBeenCalledWith('InfoCenterDetail', expect.objectContaining({
+    kind: 'secret',
+    title: '883 Locker 14号',
+    copyText: null,
+    secretId: 'secret-1',
+  }))
+}, 10000)
+
+test('temporary-notice thumbnails keep the saved notice id for authenticated media reads', async () => {
+  mockNoticeItems = [{
+    id: '4a0dbea0-cbaf-4eef-87ec-2f4bb038703e',
+    type: 'update',
+    title: '当天任务临时通知：TEST01',
+    summary: '请勿移动客人物品',
+    content: '请勿移动客人物品',
+    createdAt: '2026-08-14T00:00:00.000Z',
+    images: ['mzapp/guest-luggage.jpg'],
+    data: {
+      kind: 'guest_luggage_updated',
+      guest_luggage_id: '4a0dbea0-cbaf-4eef-87ec-2f4bb038703e',
+      photo_urls: ['mzapp/guest-luggage.jpg'],
+    },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  await waitFor(() => expect(ui.getByTestId('guest-luggage-notice-thumbnail')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('guest-luggage-notice-thumbnail').props.accessibilityLabel)).toEqual({ guestLuggageId: '4a0dbea0-cbaf-4eef-87ec-2f4bb038703e', accessTaskId: null })
+  mockNoticeItems = []
+})
+
+test('keys-hung thumbnail keeps the Inbox task id for authenticated media reads', async () => {
+  mockNoticeItems = [{
+    id: 'keys-hung-1',
+    type: 'update',
+    title: 'TEST01 · 房间已挂钥匙',
+    summary: '挂钥匙视频已上传，房间钥匙已挂好',
+    content: '挂钥匙视频已上传，房间钥匙已挂好',
+    createdAt: '2026-08-15T00:00:00.000Z',
+    images: ['cleaning/inspection-photo.jpg'],
+    data: {
+      kind: 'keys_hung',
+      task_id: 'cleaning-task-1',
+      photo_urls: ['cleaning/inspection-photo.jpg'],
+    },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  await waitFor(() => expect(ui.getByTestId('key-media-notice-thumbnail')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('key-media-notice-thumbnail').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
+  mockNoticeItems = []
+})
+
+test('key-photo-uploaded thumbnail keeps the Inbox task id for authenticated media reads', async () => {
+  mockNoticeItems = [{
+    id: 'key-photo-uploaded-1',
+    type: 'key',
+    title: 'TEST01 · 钥匙照片已上传',
+    summary: '清洁员已上传钥匙照片',
+    content: '清洁员已上传钥匙照片',
+    createdAt: '2026-08-16T00:00:00.000Z',
+    images: ['cleaning/key-photo.jpg'],
+    data: {
+      kind: 'key_photo_uploaded',
+      task_id: 'cleaning-task-1',
+      photo_url: 'cleaning/key-photo.jpg',
+    },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  await waitFor(() => expect(ui.getByTestId('key-media-notice-thumbnail')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('key-media-notice-thumbnail').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
+  mockNoticeItems = []
+})
+
+test('consumables thumbnail keeps the Inbox task id for authenticated media reads', async () => {
+  mockNoticeItems = [{
+    id: 'consumables-1',
+    type: 'update',
+    title: 'TEST01 · 清洁已完成',
+    summary: '待补货：卷纸 x1',
+    content: '待补货：卷纸 x1',
+    createdAt: '2026-08-16T00:00:00.000Z',
+    images: ['cleaning/consumables-photo.jpg'],
+    data: { kind: 'consumables_submitted', task_id: 'cleaning-task-1', photo_urls: ['cleaning/consumables-photo.jpg'] },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+  await waitFor(() => expect(ui.getByTestId('consumables-notice-thumbnail')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('consumables-notice-thumbnail').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
+  mockNoticeItems = []
+})
+
+test('issue-reported thumbnails fail closed without task context and keep it when present', async () => {
+  mockNoticeItems = [
+    {
+      id: 'property-issue-1', type: 'update', title: 'TEST01 · 发现房源问题', summary: '漏水', content: '漏水', createdAt: '2026-08-16T00:00:00.000Z',
+      images: ['cleaning/property-issue.jpg'], data: { kind: 'issue_reported', photo_urls: ['cleaning/property-issue.jpg'] },
+    },
+    {
+      id: 'task-issue-1', type: 'update', title: 'TEST02 · 发现房源问题', summary: '漏水', content: '漏水', createdAt: '2026-08-16T00:01:00.000Z',
+      images: ['cleaning/task-issue.jpg'], data: { kind: 'issue_reported', task_id: 'cleaning-task-1', photo_urls: ['cleaning/task-issue.jpg'] },
+    },
+  ]
+
+  const ui = renderScreen()
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+  await waitFor(() => expect(ui.getByTestId('issue-reported-notice-thumbnail')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('issue-reported-notice-thumbnail').props.accessibilityLabel)).toEqual({ guestLuggageId: null, accessTaskId: 'cleaning-task-1' })
+  mockNoticeItems = []
+})
+
+test('keys-hung thumbnail does not render private media without a string task id', async () => {
+  mockNoticeItems = [{
+    id: 'keys-hung-missing-task-id',
+    type: 'update',
+    title: 'TEST02 · 房间已挂钥匙',
+    summary: '挂钥匙视频已上传，房间钥匙已挂好',
+    content: '挂钥匙视频已上传，房间钥匙已挂好',
+    createdAt: '2026-08-15T00:00:00.000Z',
+    images: ['cleaning/inspection-photo.jpg'],
+    data: {
+      kind: 'keys_hung',
+      task_id: { id: 'cleaning-task-1' },
+      photo_urls: ['cleaning/inspection-photo.jpg'],
+    },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  await waitFor(() => expect(ui.getByText('房间已挂钥匙')).toBeTruthy())
+  expect(ui.queryByTestId('key-media-notice-thumbnail')).toBeNull()
+  mockNoticeItems = []
+})
+
+test('key-photo-uploaded thumbnail fails closed without a string task id', async () => {
+  mockNoticeItems = [{
+    id: 'key-photo-uploaded-missing-task-id',
+    type: 'key',
+    title: 'TEST02 · 钥匙照片已上传',
+    summary: '清洁员已上传钥匙照片',
+    content: '清洁员已上传钥匙照片',
+    createdAt: '2026-08-16T00:00:00.000Z',
+    images: ['cleaning/key-photo.jpg'],
+    data: {
+      kind: 'key_photo_uploaded',
+      task_id: { id: 'cleaning-task-1' },
+      photo_url: 'cleaning/key-photo.jpg',
+    },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  await waitFor(() => expect(ui.getAllByText('钥匙照片已上传').length).toBeGreaterThan(0))
+  expect(ui.queryByTestId('key-media-notice-thumbnail')).toBeNull()
+  mockNoticeItems = []
+})
+
+test('consumables thumbnail fails closed without a string task id', async () => {
+  mockNoticeItems = [{
+    id: 'consumables-missing-task-id', type: 'update', title: 'TEST02 · 补品记录已更新', summary: '待补货：卷纸 x1', content: '待补货：卷纸 x1', createdAt: '2026-08-16T00:00:00.000Z',
+    images: ['cleaning/consumables-photo.jpg'], data: { kind: 'consumables_updated', task_id: { id: 'cleaning-task-1' }, photo_urls: ['cleaning/consumables-photo.jpg'] },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+  await waitFor(() => expect(ui.getAllByText('补品记录已更新').length).toBeGreaterThan(0))
+  expect(ui.queryByTestId('consumables-notice-thumbnail')).toBeNull()
+  mockNoticeItems = []
+})
+
+test('offline work-task completion thumbnail keeps the exact Inbox work task id and fails closed otherwise', async () => {
+  mockNoticeItems = [{
+    id: 'offline-work-task-completed-1', type: 'update', title: '收 202 密码盒，7988 · 线下任务已完成', summary: '收取密码盒', content: '收取密码盒', createdAt: '2026-08-16T07:55:00.000Z',
+    images: ['https://legacy-media.r2.dev/mzapp/offline-completion.jpg'],
+    data: { kind: 'work_task_completed', task_id: 'cleaning_offline_tasks:offline-task-1', photo_urls: ['https://legacy-media.r2.dev/mzapp/offline-completion.jpg'] },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+  await waitFor(() => expect(ui.getByTestId('offline-work-task-completed-notice-thumbnail')).toBeTruthy())
+  expect(JSON.parse(ui.getByTestId('offline-work-task-completed-notice-thumbnail').props.accessibilityLabel)).toEqual({
+    guestLuggageId: null, accessTaskId: null, accessWorkTaskId: 'cleaning_offline_tasks:offline-task-1', offlineWorkTaskMedia: true,
+  })
+  mockNoticeItems = [{
+    id: 'offline-work-task-completed-missing-id', type: 'update', title: '收 202 密码盒，7988 · 线下任务已完成', summary: '收取密码盒', content: '收取密码盒', createdAt: '2026-08-16T07:56:00.000Z',
+    images: ['https://legacy-media.r2.dev/mzapp/offline-completion.jpg'],
+    data: { kind: 'work_task_completed', task_id: 'work-task-1', photo_urls: ['https://legacy-media.r2.dev/mzapp/offline-completion.jpg'] },
+  }]
+  const invalidUi = renderScreen()
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+  await waitFor(() => expect(invalidUi.getByText('线下任务已完成')).toBeTruthy())
+  expect(invalidUi.queryByTestId('offline-work-task-completed-notice-thumbnail')).toBeNull()
+  mockNoticeItems = []
+})
+
+test('temporary-notice thumbnails do not render private media when the notice id is missing', async () => {
+  mockNoticeItems = [{
+    id: 'guest-luggage-missing-id',
+    type: 'update',
+    title: '当天任务临时通知：TEST02',
+    summary: '请勿移动客人物品',
+    content: '请勿移动客人物品',
+    createdAt: '2026-08-14T00:00:00.000Z',
+    images: ['mzapp/guest-luggage.jpg'],
+    data: {
+      kind: 'guest_luggage_updated',
+      photo_urls: ['mzapp/guest-luggage.jpg'],
+    },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  await waitFor(() => expect(ui.getByText('当天临时通知')).toBeTruthy())
+  expect(ui.queryByTestId('guest-luggage-notice-thumbnail')).toBeNull()
+  mockNoticeItems = []
+})
+
+test('temporary-notice thumbnails do not render private media when the notice id is invalid', async () => {
+  mockNoticeItems = [{
+    id: 'guest-luggage-invalid-id',
+    type: 'update',
+    title: '当天任务临时通知：TEST03',
+    summary: '请勿移动客人物品',
+    content: '请勿移动客人物品',
+    createdAt: '2026-08-14T00:00:00.000Z',
+    images: ['mzapp/guest-luggage.jpg'],
+    data: {
+      kind: 'guest_luggage_updated',
+      guest_luggage_id: { id: '4a0dbea0-cbaf-4eef-87ec-2f4bb038703e' },
+      photo_urls: ['mzapp/guest-luggage.jpg'],
+    },
+  }]
+
+  const ui = renderScreen()
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  await waitFor(() => expect(ui.getByText('当天临时通知')).toBeTruthy())
+  expect(ui.queryByTestId('guest-luggage-notice-thumbnail')).toBeNull()
+  mockNoticeItems = []
+})
