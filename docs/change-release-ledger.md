@@ -68,22 +68,22 @@
 - Branch: `codex/mz047-special-request-keys`
 - Base: `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; fetched at `2026-10-19 UTC`
 - Candidate patch SHA-256: `5f0a042133e77892de3bd6677ef0c55568ea044f544577f5beaaad07709f6482`
-- Commit SHA: `not committed`
+- Commit SHA: `c04680d4ed41102b7f56cf2660111a8638573411`
 - Dependencies: none.
 - Required validation: `PASS for source commit`; evidence: focused 2-suite/11-test coverage and full `check:ci` passed, including 73 suites / 473 tests, TypeScript, lint with zero errors, ledger 3/3 and button audit. Physical-device/native-build acceptance remains not run.
 - Shared-hunk review: `PASS`; evidence: exact three-path extraction contains no MZ-048/MZ-049 change.
 - Generated-file review: `PASS`; evidence: no dependency link, cache, build output, environment file or generated artifact remains.
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: the current direct instruction selects MZ-047 for isolated task-branch commit/push.
 - Independent review: `GO for source commit`; evidence: fresh staged review matched the fingerprint, 3 paths / 14 non-ledger hunks and branch/base with P0=0, P1=0, P2=0 and one repository-governance P3.
-- Action conclusion: `GO` for the source commit; blockers: none for commit. Physical-device/native-build acceptance remains a release gate; no OTA, deployment or production interaction is part of this action.
+- Action conclusion: `GO`; the exact reviewed source candidate was committed as `c04680d4ed41102b7f56cf2660111a8638573411`. Push remains separately gated; physical-device/native-build acceptance remains a release gate and no OTA, deployment or production interaction is part of this action.
 
 ### Risks / Release Notes
 
 - Risk: this is JS view-state/UI ordering only; real keyboard inset and OEM font rendering remain native-device acceptance items even though keyboard focus/blur, scrolling and small-screen mock interactions are covered.
 - Rollback: revert only this CRL's source/test/ledger hunks to restore the always-visible key choices and prior field order.
 - Sensitive-information review: no credentials, tokens, `.env` values, private media, production payloads, logs or user records are included.
-- Git state: isolated branch `codex/mz047-special-request-keys` based on fetched `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; working tree changes only, with no commit, push, PR, merge, deployment, build or OTA.
+- Git state: exact content candidate committed as `c04680d4ed41102b7f56cf2660111a8638573411` on isolated branch `codex/mz047-special-request-keys` based on fetched `origin/Dev@93292c130ae94250e498ad672c8ad9dd188a5d9d`; audit head is supplied by the range report. No push, PR, merge, deployment, build or OTA.
 
 ## CRL-20261015-001 — MZ-036 App 缓存容量、媒体草稿保护与上传状态收敛（mobile）
 
