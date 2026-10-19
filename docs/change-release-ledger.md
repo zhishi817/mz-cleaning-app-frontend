@@ -110,6 +110,26 @@
 - Independent review: `GO for the exact source candidate after this RA correction`; evidence: the reviewer matched 10 paths / 17 non-ledger hunks, fingerprint `5753c60d2d521f7be7f40bd5d1746db49fc5f4769c7d3d16e701ece7165ad5b4`, the focused/full validations and clean task/native/config/sensitive boundaries. The only initial P1 was the absence of this current branch/base attempt record.
 - Action conclusion: `GO for local integration commit / paired release NOT VERIFIED`; commit the exact staged MZ-049 candidate, then freeze and verify the paired Root integration. No push, PR, remote merge, OTA, deployment or production interaction is part of this attempt.
 
+#### RA-20261020-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261018-001`
+- Selected CRL identities: `mobile/CRL-20261018-001`
+- Intended action: `commit`
+- Branch: `codex/mz047-049-mobile-integration-20261019`
+- Base: `3bf516da77530ffdba08416cfc73645253026441`; the exact committed local integration base containing MZ-047 and MZ-048.
+- Candidate patch SHA-256: `5753c60d2d521f7be7f40bd5d1746db49fc5f4769c7d3d16e701ece7165ad5b4`
+- Commit SHA: `b6ea73184c319915053f206a662a75f35af1552e`
+- Dependencies: `mobile/CRL-20261019-002@3bf516da77530ffdba08416cfc73645253026441`.
+- Cross-repository dependency verification: `NOT VERIFIED for final paired release`; evidence: the paired Root MZ-049 source unit exists locally and has passed its own focused integration tests, but the final Root 044+049+050 integration SHA is still awaiting independent review and freeze. Mobile must not be released first.
+- Required validation: `PASS for the local Mobile content commit / release NOT VERIFIED`; evidence: focused cleaning inspection/store/action/task-screen coverage passed 4 suites / 77 tests, final Mobile `npm run check:ci` passed ledger-range 44/44, TypeScript, lint with zero errors / 657 warnings, button audit, fast 8 suites / 61 tests and full 74 suites / 499 tests, and the Root cross-repository Phase 5 contract plus Mobile typecheck passed again through a temporary read-only link. Real-device and weak-network integration remain pending.
+- Shared-hunk review: `PASS`; evidence: the exact nine non-ledger MZ-049 paths and 17 hunks retain fingerprint `5753c60d2d521f7be7f40bd5d1746db49fc5f4769c7d3d16e701ece7165ad5b4` on the committed MZ-047/MZ-048 base.
+- Generated-file review: `PASS`; evidence: the committed content range contains no dependency, lockfile, native, environment, cache, build-output or generated-file change; all temporary dependencies and cross-repository links were removed.
+- Technical state: `committed`; the exact MZ-049 content commit is `b6ea73184c319915053f206a662a75f35af1552e` and the prior MZ-048 content commit remains `3bf516da77530ffdba08416cfc73645253026441`.
+- User authorization: `selected-for-commit`; evidence: the user authorized one local Mobile integration branch while this round explicitly withholds push, PR, remote merge, OTA and release.
+- Independent review: `GO for the exact local content commit`; evidence: the reviewer matched 10 paths / 17 non-ledger hunks, the exact fingerprint, focused/full validation and clean task/native/config/sensitive boundaries with P0/P1/P2/P3 = 0.
+- Action conclusion: `LOCAL CONTENT COMMIT COMPLETED / paired release NOT VERIFIED`; this append-only receipt may be committed locally. No push, PR, remote merge, OTA publication, deployment or production interaction is authorized or performed.
+
 ### Risks / Release Notes
 
 - OTA need: yes for distributing these JS/TS App changes, but no OTA/EAS action is authorized or performed.
