@@ -37,7 +37,7 @@
 - **Repository:** `mobile`
 - **Status:** prepared on `codex/mz053-five-fixes-unified` after pushed head `b206fab3ab0357e05f9ffa052b8e101d408dfa50`.
 - **Untracked review:** PASS; no untracked path or runtime file is selected.
-- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `36dab6c350eceabee99c1da9d109d868818b5ba387e8011f648904c733b87341`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `891c73cb9c950daed24dc901cae663c9d928953943300842412b266ad852a534`
 
 ### Release Attempts
 
@@ -59,6 +59,28 @@
 - User authorization: `approved-for-push`; evidence: user authorized in-scope CI fixes and normal push updates for the exact MZ-053 draft PR candidates while merge, deployment, OTA and production writes remain excluded
 - Technical state: `candidate`; staged only
 - Sensitive-information review: `PASS`; test-only change contains no secret or production data
+
+#### RA-20261020-011
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261020-005`, `CRL-20261020-006`, `CRL-20261020-007`
+- Selected CRL identities: `mobile/CRL-20261020-005`, `mobile/CRL-20261020-006`, `mobile/CRL-20261020-007`
+- Intended action: `push`
+- Branch: `codex/mz053-five-fixes-unified`
+- Base: `origin/Dev@c24abbb61b2982a4869ee663f4e337006a0fa1df`; fetched at `2026-10-20 23:18 UTC`
+- Candidate patch SHA-256: `7cd8bc14bb98d4feacb05fa7bdbf5c448b63eeb0d54a6e95980cd514db6c1d30`, excluding `docs/change-release-ledger.md`
+- Commit SHA: `c369d18f777fb05be7b4b16d54aaae07400fb707`; exact content commit containing only the reviewed test-level CI timing follow-up after the original MZ-053 content
+- Dependencies: none
+- Cross-repository deployment evidence: paired Root content remains `root/CRL-20261020-007@b015187b9fa78441a40b502468259aeb5d85aca6`, whose exact Root release report is GO; Root must deploy before Mobile, and this records release ordering rather than a Mobile ancestry dependency
+- Required validation: `PASS`; post-change targeted Jest and complete `PYTHONDONTWRITEBYTECODE=1 npm run check:ci` passed with ledger 44/44, changed-file coverage, TypeScript, lint 0 errors / 747 warnings, strict button contract, fast 8 suites / 113 tests and full Jest 76 suites / 584 tests
+- Shared-hunk review: `PASS`; the test-level timeout changes one line inside the existing base-relative ready-bucket regression hunk, and the structured reconciliation below preserves the exact 254-hunk final range
+- Hunk reconciliation: `src/screens/tabs/TasksScreen.test.tsx#1d3807ac9346180dabd2214b8f942f6ec3c9d62aa15dcdb67d19cb0a773faea0 -> 891c73cb9c950daed24dc901cae663c9d928953943300842412b266ad852a534`; evidence: the explicit 15-second test timeout changes one line at the boundary of the previously selected base-relative ready-bucket regression hunk while preserving every assertion and cleanup step. | `src/screens/tabs/TasksScreen.test.tsx#36dab6c350eceabee99c1da9d109d868818b5ba387e8011f648904c733b87341 -> 891c73cb9c950daed24dc901cae663c9d928953943300842412b266ad852a534`; evidence: the isolated CI-stability hunk folds into the same final base-relative ready-bucket regression hunk.
+- Generated-file review: `PASS`; no generated file, dependency directory, cache, native output or environment file is selected
+- Technical state: `committed`; exact content commit `c369d18f777fb05be7b4b16d54aaae07400fb707` is local, with this later ledger-only receipt pending commit
+- User authorization: `approved-for-push`; evidence: user explicitly requested the five fixes plus Web offline-task optional assignee be committed, pushed and opened as two draft PRs, and authorized in-scope CI fixes while merge, deployment, OTA and production writes remain excluded
+- Independent review: `GO`; P0=0, P1=0 and P2=0 for this exact CI-stability increment after the validation receipt was staged; the reviewer independently confirmed unchanged assertions, cleanup, runtime code and global Jest configuration
+- Remote evidence: existing Draft PR #62 branch is at `b206fab3ab0357e05f9ffa052b8e101d408dfa50`; one normal non-force update is pending, and exact-SHA CI must pass afterward
+- Action conclusion: `GO for normal branch update`; Root CI already passed, Mobile exact-SHA CI must pass before final handoff, while merge, deployment, OTA, physical-device verification and production writes remain excluded
 
 ### Risks / Release Notes
 
@@ -280,7 +302,7 @@
 - `src/lib/workTasksStore.ts` — SHA-256: `f1be54630ef0d36319f8bf3f07eaac994163e2cd7fc53e8a86222460db0794b8`
 - `src/lib/workTasksStore.ts` — SHA-256: `fcbf655c71f57ab4f96c5ba625c7c65eda433ab15f75cea55b801f92e3538428`
 - `src/screens/tabs/TasksScreen.store.integration.test.tsx` — SHA-256: `c98924e04dc2823eebfe140b5ccc4df055b56cfba8c55b7995c4c9ede9e3e9a1`
-- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `1d3807ac9346180dabd2214b8f942f6ec3c9d62aa15dcdb67d19cb0a773faea0`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `891c73cb9c950daed24dc901cae663c9d928953943300842412b266ad852a534`
 - `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `282218eb1df4c8c583d7e2097163563cd3311d176695d2b895b995680bbed2f1`
 - `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `28605893e88fb597d1d0b45fd7a442754d847ec8f59a6c4475d693a5a6a09f87`
 - `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `383c116afc087f0a7561b10595b3305d7f710c23a55ff8745fea1a333de5c42a`
