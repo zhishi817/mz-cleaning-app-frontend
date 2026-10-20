@@ -59,7 +59,7 @@ import {
 } from '../../lib/turnoverDisplay'
 import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
 import { guestReadyNotificationForActiveRole, guestReadyOperationId, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, primaryActionsForTask } from '../../lib/workTaskActions'
-import { dailyTaskGroupCounts } from '../../lib/dailyTaskPresentation'
+import { dailyTaskGroupCounts, dailyTaskStatusCounts, partitionDailyTasks } from '../../lib/dailyTaskPresentation'
 import { millisecondsUntilNextTaskBusinessDate, shouldFollowTaskBusinessDate, taskBusinessDateKey } from '../../lib/taskBusinessDate'
 import {
   activateWorkTasksRealtime,
@@ -1357,6 +1357,10 @@ export default function TasksScreen(props: Props) {
   const dailyGroupStats = useMemo(() => dailyTaskGroupCounts(selectedTasks, {
     includeManagerUnassignedOffline,
   }), [includeManagerUnassignedOffline, selectedTasks])
+  const dailyStatusStats = useMemo(
+    () => dailyTaskStatusCounts(selectedTasks, selectedDate),
+    [selectedDate, selectedTasks],
+  )
 
   const canReorder = useMemo(() => {
     const writableTasks = selectedTasks.filter((task) => task.work_record_read_only !== true)
@@ -1685,7 +1689,12 @@ export default function TasksScreen(props: Props) {
     })
     if (canManagerMode && mode === 'manager') {
       const keyOf = (t: WorkTaskItem) => {
+        // Immutable records are separate business events and must never be
+        // folded into a live cleaning/inspection projection for the same room.
+        if (t.work_record_visible === true && t.work_record_read_only === true) return ''
         if (!isCleaningExecutionTask(t) && !isInspectionExecutionTask(t) && !isKeyHandoverExecutionTask(t)) return ''
+        const stableKey = String(t.daily_stats_key || '').trim()
+        if (stableKey) return stableKey
         const d = String(t.scheduled_date || (t as any).date || '').slice(0, 10)
         const code = String(t.property?.code || '').trim()
         const pid = String(t.property_id || '').trim()
@@ -1732,12 +1741,37 @@ export default function TasksScreen(props: Props) {
     }
     return list
   }, [renderTasks, search, canManagerMode, mode])
+  const visibleTaskSections = useMemo(
+    () => partitionDailyTasks(visibleTasks, selectedDate),
+    [selectedDate, visibleTasks],
+  )
+  const displayTasks = useMemo(() => [
+    ...visibleTaskSections.active,
+    ...visibleTaskSections.overdue,
+    ...visibleTaskSections.history,
+  ], [visibleTaskSections])
+  const taskSectionStarts = useMemo(() => {
+    const starts = new Map<number, { label: string; count: number; tone: 'normal' | 'danger' | 'neutral' }>()
+    let index = 0
+    if (visibleTaskSections.active.length) {
+      starts.set(index, { label: '活动', count: visibleTaskSections.active.length, tone: 'normal' })
+      index += visibleTaskSections.active.length
+    }
+    if (visibleTaskSections.overdue.length) {
+      starts.set(index, { label: '逾期', count: visibleTaskSections.overdue.length, tone: 'danger' })
+      index += visibleTaskSections.overdue.length
+    }
+    if (visibleTaskSections.history.length) {
+      starts.set(index, { label: '历史', count: visibleTaskSections.history.length, tone: 'neutral' })
+    }
+    return starts
+  }, [visibleTaskSections])
   const showDayEndCard = period === 'today'
     && (isCleanerSelf || isInspectorSelf ? selfDayEndTasks.length > 0 : false)
     && !!dayEndViewerTarget.userId
   const dayEndInsertIndex = useMemo(() => {
     if (!showDayEndCard) return -1
-    const eligibleIndexes = visibleTasks
+    const eligibleIndexes = displayTasks
       .map((task, index) => ({ task, index }))
       .filter(({ task }) => {
         const cleaning = isCleaningExecutionTask(task)
@@ -1753,7 +1787,7 @@ export default function TasksScreen(props: Props) {
     const firstDone = eligibleIndexes.find(({ task }) => isDoneLikeStatus(String(task.status || '')))
     if (firstDone) return firstDone.index
     return eligibleIndexes[eligibleIndexes.length - 1].index + 1
-  }, [canManagerMode, isCleanerSelf, isInspectorSelf, isReorderableTask, roleNames, showDayEndCard, visibleTasks])
+  }, [canManagerMode, displayTasks, isCleanerSelf, isInspectorSelf, isReorderableTask, roleNames, showDayEndCard])
 
 function showBanner(title: string, message: string) {
     setBanner({ title, message })
@@ -2570,6 +2604,9 @@ function showBanner(title: string, message: string) {
               </Pressable>
             ) : null}
             <Text style={styles.sectionCount}>{`入住＋退房 ${dailyGroupStats.turnover} · 线下 ${dailyGroupStats.offline}`}</Text>
+            <Text style={styles.sectionCount}>
+              {`在办 ${dailyStatusStats.active} · 完成 ${dailyStatusStats.completed} · 取消 ${dailyStatusStats.cancelled}${dailyStatusStats.overdue ? ` · 逾期 ${dailyStatusStats.overdue}` : ''}${dailyStatusStats.changed ? ` · 变更 ${dailyStatusStats.changed}` : ''}`}
+            </Text>
             {search.trim() ? <Text style={styles.sectionCount}>{`搜索 ${visibleTasks.length} ${t('tasks_tasks_suffix')}`}</Text> : null}
           </View>
         </View>
@@ -2909,15 +2946,18 @@ function showBanner(title: string, message: string) {
               <Text style={styles.emptyRetryText}>重试</Text>
             </Pressable>
           </View>
-        ) : visibleTasks.length === 0 ? (
+        ) : displayTasks.length === 0 ? (
           <View style={styles.emptyCard}>
             <Text style={styles.emptyText}>{t('tasks_no_tasks')}</Text>
           </View>
         ) : (
           <View style={{ marginTop: 10, gap: 12 }}>
-            {visibleTasks.map((task, taskIndex) => {
+            {displayTasks.map((task, taskIndex) => {
               const shouldRenderDayEndBefore = showDayEndCard && dayEndInsertIndex === taskIndex
-              const meta = getTaskStatusMeta(task, roleNames, user?.id)
+              const taskSection = taskSectionStarts.get(taskIndex)
+              const meta = getTaskStatusMeta(task, roleNames, user?.id, {
+                managerView: canManagerMode && mode === 'manager',
+              })
               const metaStyles = statusPillStylePair(meta.tone)
               const kind = taskKindLabel(task.task_kind)
               const addr = task.property?.address || ''
@@ -3183,6 +3223,32 @@ function showBanner(title: string, message: string) {
                         </Pressable>
                       </View>
                     </Pressable>
+                  ) : null}
+                  {taskSection ? (
+                    <View style={styles.taskSectionHeader}>
+                      <View
+                        style={[
+                          styles.taskSectionDot,
+                          taskSection.tone === 'danger'
+                            ? styles.taskSectionDotDanger
+                            : taskSection.tone === 'neutral'
+                              ? styles.taskSectionDotNeutral
+                              : null,
+                        ]}
+                      />
+                      <Text
+                        style={[
+                          styles.taskSectionLabel,
+                          taskSection.tone === 'danger'
+                            ? styles.taskSectionLabelDanger
+                            : taskSection.tone === 'neutral'
+                              ? styles.taskSectionLabelNeutral
+                              : null,
+                        ]}
+                      >
+                        {`${taskSection.label} ${taskSection.count}`}
+                      </Text>
+                    </View>
                   ) : null}
                   <Pressable
                     accessibilityRole="button"
@@ -3755,7 +3821,7 @@ function showBanner(title: string, message: string) {
                 </React.Fragment>
               )
             })}
-            {showDayEndCard && dayEndInsertIndex === visibleTasks.length ? (
+            {showDayEndCard && dayEndInsertIndex === displayTasks.length ? (
               <Pressable
                 onPress={() => openDayEndScreen({
                   taskRoomCodes: dayEndTaskRoomCodes,
@@ -4035,6 +4101,13 @@ const styles = StyleSheet.create({
   emptyRetryBtn: { marginTop: 12, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', alignSelf: 'flex-start' },
   emptyRetryText: { color: '#FFFFFF', fontWeight: '900' },
 
+  taskSectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 2, paddingTop: 4 },
+  taskSectionDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#2563EB' },
+  taskSectionDotDanger: { backgroundColor: '#EF4444' },
+  taskSectionDotNeutral: { backgroundColor: '#9CA3AF' },
+  taskSectionLabel: { color: '#1D4ED8', fontSize: moderateScale(13), fontWeight: '900' },
+  taskSectionLabelDanger: { color: '#B91C1C' },
+  taskSectionLabelNeutral: { color: '#6B7280' },
   taskCard: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 16, borderWidth: hairline(), borderColor: '#E8EDF5', shadowColor: '#0F172A', shadowOpacity: 0.04, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1 },
   taskHeroRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   taskHeroMain: { flex: 1, minWidth: 0 },
