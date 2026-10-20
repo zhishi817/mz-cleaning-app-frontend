@@ -38,7 +38,6 @@ import {
   isPasswordOnlyInspectionTask,
   isSelfCompleteMode,
   isStayoverTaskType,
-  unlinkedDeferredInspectionDisplayIdentity,
 } from '../../lib/cleaningInspection'
 import { canSwitchTaskMode, isTaskManagerUser } from '../../lib/roles'
 import { isDailyTaskListVisible } from '../../lib/dailyTaskExecutionVisibility'
@@ -57,16 +56,18 @@ import {
   isLateCheckoutDisplay,
   turnoverDisplayOf,
 } from '../../lib/turnoverDisplay'
-import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
+import { getInspectionModeTone, getInspectionScopeTone, getKeyHandoverPendingNotice, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
 import { guestReadyNotificationForActiveRole, guestReadyOperationId, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, primaryActionsForTask } from '../../lib/workTaskActions'
-import { dailyTaskGroupCounts, dailyTaskStatusCounts, partitionDailyTasks } from '../../lib/dailyTaskPresentation'
+import { dailyTaskCurrentIdentityKey, dailyTaskGroupCounts, dailyTaskStatusCounts, partitionDailyTasks, reconcileDailyTaskDisplay } from '../../lib/dailyTaskPresentation'
 import { millisecondsUntilNextTaskBusinessDate, shouldFollowTaskBusinessDate, taskBusinessDateKey } from '../../lib/taskBusinessDate'
+import { formatTaskLoadDiagnosticsText } from '../../lib/taskLoadDiagnostics'
 import {
   activateWorkTasksRealtime,
   deactivateWorkTasksRealtime,
   getWorkTasksSnapshot,
   initWorkTasksStore,
   makeWorkTasksBucketKey,
+  makeWorkTasksProjectionKey,
   patchWorkTaskItem,
   patchWorkTaskItems,
   requestWorkTasksRefresh,
@@ -627,6 +628,10 @@ export default function TasksScreen(props: Props) {
     return Array.from(new Set(ids))
   }, [user])
   const activeRole = String((user as any)?.role || '').trim().toLowerCase()
+  const permissionCodes = useMemo(() => {
+    const values = Array.isArray((user as any)?.permissions) ? ((user as any).permissions as any[]) : []
+    return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)))
+  }, [user])
   const canManagerMode = useMemo(() => isManagerRole(roleNames), [roleNames])
   const canSeeDayEndOverview = useMemo(() => roleNames.includes('admin') || roleNames.includes('offline_manager'), [roleNames])
   const canTaskManagerView = useMemo(() => isTaskManagerUser(user), [user])
@@ -634,8 +639,9 @@ export default function TasksScreen(props: Props) {
   const [mode, setMode] = useState<'cleaning' | 'manager'>('cleaning')
   const [period, setPeriod] = useState<Period>('today')
   const [selectedDate, setSelectedDate] = useState<string>(() => taskBusinessDateKey())
-  const [hasInit, setHasInit] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [taskLoadDiagnosticsText, setTaskLoadDiagnosticsText] = useState<string | null>(null)
+  const [taskLoadDiagnosticsCopied, setTaskLoadDiagnosticsCopied] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [view, setView] = useState<WorkTasksView>('all')
   const [reorderMode, setReorderMode] = useState(false)
@@ -689,6 +695,22 @@ export default function TasksScreen(props: Props) {
   const selectedDateRef = useRef(selectedDate)
   const periodRef = useRef<Period>(period)
   const businessDateRef = useRef(taskBusinessDateKey())
+  const taskScreenMountedRef = useRef(true)
+  const keyQueueReconcilePromiseRef = useRef<Promise<void> | null>(null)
+  const dayEndQueueReconcilePromiseRef = useRef<Promise<void> | null>(null)
+  const currentQueueRefreshContextRef = useRef<{
+    sessionKey: string
+    scopeKey: string
+    token: string
+    userId: string
+    date_from: string
+    date_to: string
+    view: WorkTasksView
+    projectionKey: string
+  } | null>(null)
+  const currentTaskBucketKeyRef = useRef<string | null>(null)
+  const currentTaskProjectionKeyRef = useRef<string | null>(null)
+  const currentTaskDisplayScopeRef = useRef<string | null>(null)
   const [taskCacheHint, setTaskCacheHint] = useState<TaskCacheHint>(null)
   const [isShowingCachedTasks, setIsShowingCachedTasks] = useState(false)
   const [collapsedTaskIds, setCollapsedTaskIds] = useState<Record<string, boolean>>({})
@@ -712,6 +734,17 @@ export default function TasksScreen(props: Props) {
   const allowDerivedTaskNotices = String(token || '').startsWith('local:')
   const [keyQueueByTaskId, setKeyQueueByTaskId] = useState<Record<string, true>>({})
 
+  const openTaskLoadDiagnostics = useCallback(() => {
+    setTaskLoadDiagnosticsText(formatTaskLoadDiagnosticsText())
+    setTaskLoadDiagnosticsCopied(false)
+  }, [])
+
+  const copyTaskLoadDiagnostics = useCallback(async () => {
+    const report = taskLoadDiagnosticsText || formatTaskLoadDiagnosticsText()
+    await Clipboard.setStringAsync(report)
+    setTaskLoadDiagnosticsCopied(true)
+  }, [taskLoadDiagnosticsText])
+
   const reloadKeyQueueState = useCallback(async () => {
     const items = await listKeyUploadQueueItems().catch(() => [])
     const next: Record<string, true> = {}
@@ -724,7 +757,11 @@ export default function TasksScreen(props: Props) {
 
   const handleTaskRefreshFailure = useCallback((message: string, preserveError: boolean) => {
     const snapshot = getWorkTasksSnapshot()
-    const cachedItems = Array.isArray(snapshot.items) ? snapshot.items : []
+    const snapshotMatchesCurrentScope = snapshot.ready === true
+      && !!snapshot.bucketKey
+      && snapshot.bucketKey === currentTaskBucketKeyRef.current
+      && snapshot.projectionKey === currentTaskProjectionKeyRef.current
+    const cachedItems = snapshotMatchesCurrentScope && Array.isArray(snapshot.items) ? snapshot.items : []
     if (cachedItems.length > 0) {
       setIsShowingCachedTasks(true)
       setTaskCacheHint(buildTaskCacheHint(snapshot.lastFullSyncTimestamp || null, true))
@@ -754,7 +791,9 @@ export default function TasksScreen(props: Props) {
   }, [])
 
   useEffect(() => {
+    taskScreenMountedRef.current = true
     return () => {
+      taskScreenMountedRef.current = false
       if (bannerTimerRef.current) {
         clearTimeout(bannerTimerRef.current)
         bannerTimerRef.current = null
@@ -970,82 +1009,217 @@ export default function TasksScreen(props: Props) {
     return canManagerMode && mode === 'manager' ? view : 'mine'
   }, [canManagerMode, mode, view])
   const includeManagerUnassignedOffline = canTaskManagerView && mode === 'manager' && view === 'all'
+  const currentTaskProjectionKey = useMemo(() => makeWorkTasksProjectionKey({
+    roles: roleNames,
+    permissions: permissionCodes,
+    activeRole,
+    view: effectiveView,
+    includeManagerUnassignedOffline,
+  }), [activeRole, effectiveView, includeManagerUnassignedOffline, permissionCodes, roleNames])
+  const currentTaskBucketKey = useMemo(() => {
+    if (status !== 'signedIn' || !user?.id || !token) return null
+    return makeWorkTasksBucketKey({ userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
+  }, [effectiveView, range.date_from, range.date_to, status, token, user?.id])
+  currentTaskBucketKeyRef.current = currentTaskBucketKey
+  currentTaskProjectionKeyRef.current = currentTaskProjectionKey
+  const currentTaskDisplayScope = currentTaskBucketKey ? `${currentTaskBucketKey}|${currentTaskProjectionKey}` : null
+  currentTaskDisplayScopeRef.current = currentTaskDisplayScope
+  const queueSessionKey = `${String(token || '')}|${String(user?.id || '')}`
+  const queueScopeKey = `${queueSessionKey}|${range.date_from}|${range.date_to}|${effectiveView}|${currentTaskProjectionKey}`
+  currentQueueRefreshContextRef.current = status === 'signedIn' && token && user?.id
+    ? {
+        sessionKey: queueSessionKey,
+        scopeKey: queueScopeKey,
+        token,
+        userId: user.id,
+        date_from: range.date_from,
+        date_to: range.date_to,
+        view: effectiveView,
+        projectionKey: currentTaskProjectionKey,
+      }
+    : null
+
+  const startOfflineQueueMaintenance = useCallback(() => {
+    if (status !== 'signedIn' || !user?.id || !token) return
+    const sessionKey = queueSessionKey
+    const reconcile = async (result: { processed?: number } | null | undefined, invalidateDayEnd: boolean) => {
+      if (Number(result?.processed || 0) <= 0) return
+      const current = currentQueueRefreshContextRef.current
+      if (!taskScreenMountedRef.current || !current || current.sessionKey !== sessionKey) return
+      if (invalidateDayEnd) {
+        dayEndOverviewByDateRef.current = {}
+        setDayEndOverviewRevision((prev) => prev + 1)
+      }
+      // A successful upload changes authoritative task/day-end state after the
+      // visible GET may already have completed. Force goes through the shared
+      // MZ-049 coordinator, so concurrent refreshes still coalesce and a real
+      // background transition defers the read until foreground resumes.
+      try {
+        await requestWorkTasksRefresh({
+          token: current.token,
+          userId: current.userId,
+          date_from: current.date_from,
+          date_to: current.date_to,
+          view: current.view,
+          projectionKey: current.projectionKey,
+          isCurrent: () => taskScreenMountedRef.current
+            && currentQueueRefreshContextRef.current?.scopeKey === current.scopeKey,
+          mode: 'force',
+          reason: 'offline_queue_reconciled',
+        })
+      } catch {
+        const retry = currentQueueRefreshContextRef.current
+        if (!taskScreenMountedRef.current || !retry || retry.sessionKey !== sessionKey) return
+        // Match MZ-049 authority refreshes: preserve one bounded retry through
+        // the coordinator after a transient authoritative GET failure.
+        await requestWorkTasksRefresh({
+          token: retry.token,
+          userId: retry.userId,
+          date_from: retry.date_from,
+          date_to: retry.date_to,
+          view: retry.view,
+          projectionKey: retry.projectionKey,
+          isCurrent: () => taskScreenMountedRef.current
+            && currentQueueRefreshContextRef.current?.scopeKey === retry.scopeKey,
+          mode: 'consistency',
+          reason: 'offline_queue_reconcile_retry',
+        }).catch(() => {})
+      }
+    }
+    if (!keyQueueReconcilePromiseRef.current) {
+      const keyRun = Promise.resolve()
+        .then(() => processKeyUploadQueue(token))
+        .then((result) => reconcile(result, false))
+        .catch(() => {})
+      keyQueueReconcilePromiseRef.current = keyRun
+      void keyRun.finally(() => {
+        if (keyQueueReconcilePromiseRef.current === keyRun) keyQueueReconcilePromiseRef.current = null
+      })
+    }
+    if (!dayEndQueueReconcilePromiseRef.current) {
+      const dayEndRun = Promise.resolve()
+        .then(() => processDayEndHandoverQueue(token))
+        .then((result) => reconcile(result, true))
+        .catch(() => {})
+      dayEndQueueReconcilePromiseRef.current = dayEndRun
+      void dayEndRun.finally(() => {
+        if (dayEndQueueReconcilePromiseRef.current === dayEndRun) dayEndQueueReconcilePromiseRef.current = null
+      })
+    }
+  }, [queueSessionKey, status, token, user?.id])
 
   const refreshTasksData = useCallback(async (opts?: { silent?: boolean; preserveError?: boolean; mode?: 'passive' | 'force'; reason?: string }) => {
-    if (status !== 'signedIn' || !user?.id || !token) return
+    if (status !== 'signedIn' || !user?.id || !token || !currentTaskDisplayScope) return
     const silent = opts?.silent === true
     const preserveError = opts?.preserveError === true
+    const requestedScope = currentTaskDisplayScope
+    const isCurrent = () => taskScreenMountedRef.current
+      && currentTaskDisplayScopeRef.current === requestedScope
     if (!silent) {
+      // A pull-to-refresh gesture proves this screen is interactively visible.
+      // Release any force refresh that iOS may have queued while AppState was
+      // briefly `inactive`, so the native refresh indicator cannot wait forever.
+      setWorkTasksRefreshForeground(true)
       setRefreshing(true)
       dayEndOverviewByDateRef.current = {}
       setDayEndOverviewRevision((prev) => prev + 1)
     }
     try {
-      await Promise.all([processKeyUploadQueue(token), processDayEndHandoverQueue(token)])
+      // Offline write queues have their own app-start, foreground and
+      // reconnect maintenance. A task-list pull must not wait for every
+      // queued photo upload before it can settle the native refresh control.
+      startOfflineQueueMaintenance()
       await requestWorkTasksRefresh({
         token,
         userId: user.id,
         date_from: range.date_from,
         date_to: range.date_to,
         view: effectiveView,
+        projectionKey: currentTaskProjectionKey,
+        isCurrent,
         mode: opts?.mode || 'force',
         reason: opts?.reason || 'tasks_screen_refresh',
       })
+      if (!isCurrent()) return
       const realtimeActive = await activateWorkTasksRealtime({
         token,
         userId: user.id,
         date_from: range.date_from,
         date_to: range.date_to,
         view: effectiveView,
+        projectionKey: currentTaskProjectionKey,
         includeManagerUnassignedOffline,
+        isCurrent,
       })
-      if (!realtimeActive) return
-      await maybeFetchSlaAlerts()
+      if (!realtimeActive || !isCurrent()) return
+      // SLA alerts are ancillary to the list refresh. Their independent
+      // network timeout must not extend the pull-to-refresh spinner.
+      void maybeFetchSlaAlerts().catch(() => {})
       seedTaskNoticeBaseline(getWorkTasksSnapshot().items || [])
       setTaskNoticeArmed(true)
       setIsShowingCachedTasks(false)
       setTaskCacheHint(null)
       setLoadError(null)
     } catch (e: any) {
+      if (!isCurrent()) return
       handleTaskRefreshFailure(String(e?.message || '加载失败'), preserveError)
       throw e
     } finally {
-      if (!silent) setRefreshing(false)
+      if (!silent && isCurrent()) setRefreshing(false)
     }
-  }, [effectiveView, handleTaskRefreshFailure, includeManagerUnassignedOffline, range.date_from, range.date_to, status, token, user?.id])
+  }, [currentTaskDisplayScope, currentTaskProjectionKey, effectiveView, handleTaskRefreshFailure, includeManagerUnassignedOffline, range.date_from, range.date_to, startOfflineQueueMaintenance, status, token, user?.id])
 
   useEffect(() => {
     if (status === 'signedIn' && token && user?.id) return
     deactivateWorkTasksRealtime()
     setTaskCacheHint(null)
     setIsShowingCachedTasks(false)
+    setRefreshing(false)
   }, [status, token, user?.id])
+
+  useEffect(() => {
+    setTaskCacheHint(null)
+    setIsShowingCachedTasks(false)
+    setLoadError(null)
+    setRefreshing(false)
+  }, [currentTaskDisplayScope])
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      if (status !== 'signedIn' || !user?.id || !token) return
+      if (status !== 'signedIn' || !user?.id || !token || !currentTaskBucketKey || !currentTaskDisplayScope) return
+      const requestedScope = currentTaskDisplayScope
+      const isCurrent = () => !cancelled
+        && taskScreenMountedRef.current
+        && currentTaskDisplayScopeRef.current === requestedScope
       setTaskNoticeArmed(false)
-      await initNoticesStore().catch(() => null)
-      const bucketKey = makeWorkTasksBucketKey({ userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
-      const hydrated = await initWorkTasksStore({ bucketKey, session: { token, userId: user.id } })
-      if (!hydrated || cancelled) return
+      void initNoticesStore().catch(() => null)
+      const hydrated = await initWorkTasksStore({
+        bucketKey: currentTaskBucketKey,
+        projectionKey: currentTaskProjectionKey,
+        session: { token, userId: user.id },
+        canApply: isCurrent,
+      })
+      if (!hydrated || !isCurrent()) return
       const hydratedSnapshot = getWorkTasksSnapshot()
+      const hydratedCurrentProjection = hydratedSnapshot.ready === true
+        && hydratedSnapshot.bucketKey === currentTaskBucketKey
+        && hydratedSnapshot.projectionKey === currentTaskProjectionKey
+      if (!hydratedCurrentProjection) return
       const hasCachedItems = Array.isArray(hydratedSnapshot.items) && hydratedSnapshot.items.length > 0
-      setHasInit(true)
       setLoadError(null)
       setIsShowingCachedTasks(hasCachedItems)
       setTaskCacheHint(hasCachedItems ? buildTaskCacheHint(hydratedSnapshot.lastFullSyncTimestamp || null, false) : null)
       try {
         await refreshTasksData({ silent: true, mode: 'force', reason: 'tasks_initial_load' })
       } catch (e: any) {
-        if (!cancelled) handleTaskRefreshFailure(String((e as any)?.message || '加载失败'), false)
+        if (isCurrent()) handleTaskRefreshFailure(String((e as any)?.message || '加载失败'), false)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [effectiveView, handleTaskRefreshFailure, range.date_from, range.date_to, refreshTasksData, status, token, user?.id])
+  }, [currentTaskBucketKey, currentTaskDisplayScope, currentTaskProjectionKey, handleTaskRefreshFailure, refreshTasksData, status, token, user?.id])
 
   useEffect(() => {
     if (status !== 'signedIn' || !token || !user?.id) return
@@ -1067,7 +1241,7 @@ export default function TasksScreen(props: Props) {
   useEffect(() => {
     if (!token || !user?.id) return
     let cancelled = false
-    setWorkTasksRefreshForeground(AppState.currentState === 'active')
+    setWorkTasksRefreshForeground(AppState.currentState !== 'background')
     const onAppActive = async () => {
       if (cancelled) return
       if (advanceFollowedBusinessDate()) return
@@ -1076,7 +1250,9 @@ export default function TasksScreen(props: Props) {
       } catch {}
     }
     const sub = AppState.addEventListener('change', (nextState) => {
-      setWorkTasksRefreshForeground(nextState === 'active')
+      // iOS reports `inactive` during short foreground interruptions. Only a
+      // real background transition should suspend coordinated task refreshes.
+      setWorkTasksRefreshForeground(nextState !== 'background')
       if (nextState !== 'active') return
       void onAppActive()
     })
@@ -1088,16 +1264,29 @@ export default function TasksScreen(props: Props) {
     }
   }, [advanceFollowedBusinessDate, refreshTasksData, token, user?.id])
 
-  const items = getWorkTasksSnapshot().items
+  const taskSnapshot = getWorkTasksSnapshot()
+  const snapshotMatchesCurrentScope = !!currentTaskBucketKey
+    && taskSnapshot.bucketKey === currentTaskBucketKey
+    && taskSnapshot.projectionKey === currentTaskProjectionKey
+  const currentTaskBucketReady = snapshotMatchesCurrentScope && taskSnapshot.ready === true
+  const items = useMemo(
+    () => currentTaskBucketReady && Array.isArray(taskSnapshot.items) ? taskSnapshot.items : [],
+    [currentTaskBucketReady, taskSnapshot.items],
+  )
+  // Reconcile against the complete authorized bucket before grouping by the
+  // display date. A current projection stays on its scheduled date while an
+  // immutable completion record belongs to the actual work-record date, so a
+  // per-day reconciliation cannot see both sides of a cross-day completion.
+  const reconciledItems = useMemo(() => reconcileDailyTaskDisplay(items), [items])
   const tasksByDate = useMemo(() => {
     const map = new Map<string, WorkTaskItem[]>()
-    for (const task of items) {
+    for (const task of reconciledItems) {
       const list = map.get(task.date) || []
       list.push(task)
       map.set(task.date, list)
     }
     return map
-  }, [items])
+  }, [reconciledItems])
 
   function findWorkTaskForCleaningIds(cleaningIds: any[]) {
     const ids = (cleaningIds || []).map((x: any) => String(x || '').trim()).filter(Boolean)
@@ -1116,6 +1305,7 @@ export default function TasksScreen(props: Props) {
 
   async function maybeFetchSlaAlerts() {
     if (!token) return
+    const requestScope = currentQueueRefreshContextRef.current?.scopeKey
     const role = String(user?.role || '')
     const isCleaner = role === 'cleaner' || role === 'cleaner_inspector'
     const interval = isCleaner ? 120000 : 300000
@@ -1128,11 +1318,10 @@ export default function TasksScreen(props: Props) {
     } catch {
       return
     }
+    if (!taskScreenMountedRef.current || currentQueueRefreshContextRef.current?.scopeKey !== requestScope) return
     const next = alerts.find(a => a && a.id && !shownAlertIdsRef.current[String(a.id)])
     if (!next) return
     const id = String(next.id)
-    shownAlertIdsRef.current[id] = true
-    try { await markMzappAlertRead(token, id) } catch {}
     const payload = (next as any).payload || {}
     const level = String((next as any).level || payload.level || '')
     const position = Number(payload.position || (next as any).position || 0)
@@ -1141,6 +1330,9 @@ export default function TasksScreen(props: Props) {
     const phone = payload.cleaner_phone_au == null ? null : String(payload.cleaner_phone_au || '').trim()
     const cleaningIds = Array.isArray(payload.cleaning_task_ids) ? payload.cleaning_task_ids : []
     const workTask = findWorkTaskForCleaningIds(cleaningIds)
+    if (!taskScreenMountedRef.current || currentQueueRefreshContextRef.current?.scopeKey !== requestScope) return
+    shownAlertIdsRef.current[id] = true
+    void markMzappAlertRead(token, id).catch(() => {})
     const title = level === 'escalate' ? '钥匙未上传（超时）' : '请上传钥匙照片'
     const lines = [position ? `第 ${position} 个房间` : '', code ? `房源：${code}` : '', addr ? addr : ''].filter(Boolean)
     const msg = lines.join('\n')
@@ -1351,7 +1543,7 @@ export default function TasksScreen(props: Props) {
 
       return String(a.title || '').localeCompare(String(b.title || ''))
     })
-    return list
+    return reconcileDailyTaskDisplay(list)
   }, [canManagerMode, includeManagerUnassignedOffline, mode, period, selectedDate, tasksByDate])
 
   const dailyGroupStats = useMemo(() => dailyTaskGroupCounts(selectedTasks, {
@@ -1599,7 +1791,7 @@ export default function TasksScreen(props: Props) {
         if (typeof unsub === 'function') unsub()
       } catch {}
     }
-  }, [canManagerMode, dayEndDate, dayEndViewerTarget.userId, isCleanerSelf, isInspectorOnlySelf, isInspectorSelf, period, props.navigation, selfDayEndTasks.length, token])
+  }, [canManagerMode, dayEndDate, dayEndOverviewRevision, dayEndViewerTarget.userId, isCleanerSelf, isInspectorOnlySelf, isInspectorSelf, period, props.navigation, selfDayEndTasks.length, token])
   useEffect(() => {
     if (!token || !canSeeDayEndOverview || !(canManagerMode && mode === 'manager')) {
       setDayEndOverviewUsers([])
@@ -1693,16 +1885,7 @@ export default function TasksScreen(props: Props) {
         // folded into a live cleaning/inspection projection for the same room.
         if (t.work_record_visible === true && t.work_record_read_only === true) return ''
         if (!isCleaningExecutionTask(t) && !isInspectionExecutionTask(t) && !isKeyHandoverExecutionTask(t)) return ''
-        const stableKey = String(t.daily_stats_key || '').trim()
-        if (stableKey) return stableKey
-        const d = String(t.scheduled_date || (t as any).date || '').slice(0, 10)
-        const code = String(t.property?.code || '').trim()
-        const pid = String(t.property_id || '').trim()
-        const title = String(t.title || '').trim()
-        const propKey = code || pid || title
-        if (!d || !propKey) return ''
-        const sourceIdentity = unlinkedDeferredInspectionDisplayIdentity(t as any)
-        return `${d}|${propKey}${sourceIdentity ? `|${sourceIdentity}` : ''}`
+        return dailyTaskCurrentIdentityKey(t)
       }
       const isDone = (t: WorkTaskItem) => {
         const s = String(t.status || '').trim().toLowerCase()
@@ -1763,6 +1946,7 @@ export default function TasksScreen(props: Props) {
     }
     if (visibleTaskSections.history.length) {
       starts.set(index, { label: '历史', count: visibleTaskSections.history.length, tone: 'neutral' })
+      index += visibleTaskSections.history.length
     }
     return starts
   }, [visibleTaskSections])
@@ -2258,6 +2442,9 @@ function showBanner(title: string, message: string) {
         date_from: range.date_from,
         date_to: range.date_to,
         view: canManagerMode && mode === 'manager' ? view : 'mine',
+        projectionKey: currentTaskProjectionKey,
+        isCurrent: () => taskScreenMountedRef.current
+          && currentTaskDisplayScopeRef.current === currentTaskDisplayScope,
         mode: 'force',
         reason: 'mixed_reorder_saved',
       }).catch(() => null)
@@ -2605,7 +2792,7 @@ function showBanner(title: string, message: string) {
             ) : null}
             <Text style={styles.sectionCount}>{`入住＋退房 ${dailyGroupStats.turnover} · 线下 ${dailyGroupStats.offline}`}</Text>
             <Text style={styles.sectionCount}>
-              {`在办 ${dailyStatusStats.active} · 完成 ${dailyStatusStats.completed} · 取消 ${dailyStatusStats.cancelled}${dailyStatusStats.overdue ? ` · 逾期 ${dailyStatusStats.overdue}` : ''}${dailyStatusStats.changed ? ` · 变更 ${dailyStatusStats.changed}` : ''}`}
+              {`在办 ${dailyStatusStats.active} · 完成 ${dailyStatusStats.completed}${dailyStatusStats.overdue ? ` · 逾期 ${dailyStatusStats.overdue}` : ''}${dailyStatusStats.changed ? ` · 变更 ${dailyStatusStats.changed}` : ''}`}
             </Text>
             {search.trim() ? <Text style={styles.sectionCount}>{`搜索 ${visibleTasks.length} ${t('tasks_tasks_suffix')}`}</Text> : null}
           </View>
@@ -2925,25 +3112,69 @@ function showBanner(title: string, message: string) {
           </View>
         </Modal>
 
-        {taskCacheHint ? (
+        <Modal
+          visible={taskLoadDiagnosticsText !== null}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setTaskLoadDiagnosticsText(null)}
+        >
+          <View style={styles.modalBackdrop} accessibilityViewIsModal>
+            <View style={styles.taskDiagnosticsModal}>
+              <Text style={styles.taskDiagnosticsTitle}>任务加载诊断</Text>
+              <Text style={styles.taskDiagnosticsPrivacy}>仅保存在当前 App 内存，可复制给技术人员；不含账号、房源或任务内容。</Text>
+              <ScrollView style={styles.taskDiagnosticsScroll} contentContainerStyle={styles.taskDiagnosticsScrollContent}>
+                <Text testID="task-load-diagnostics-text" selectable style={styles.taskDiagnosticsText}>{taskLoadDiagnosticsText || ''}</Text>
+              </ScrollView>
+              <View style={styles.taskDiagnosticsActions}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="复制任务加载诊断"
+                  onPress={() => { void copyTaskLoadDiagnostics() }}
+                  style={({ pressed }) => [styles.taskDiagnosticsButton, pressed ? styles.segmentPressed : null]}
+                >
+                  <Text style={styles.taskDiagnosticsButtonText}>{taskLoadDiagnosticsCopied ? '已复制' : '复制诊断'}</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="关闭任务加载诊断"
+                  onPress={() => setTaskLoadDiagnosticsText(null)}
+                  style={({ pressed }) => [styles.taskDiagnosticsButton, styles.taskDiagnosticsCloseButton, pressed ? styles.segmentPressed : null]}
+                >
+                  <Text style={[styles.taskDiagnosticsButtonText, styles.taskDiagnosticsCloseButtonText]}>关闭</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {taskCacheHint && snapshotMatchesCurrentScope ? (
           <View style={styles.cacheHintCard}>
             <View style={styles.cacheHintHeader}>
               <Text style={styles.cacheHintTitle}>{isShowingCachedTasks ? '本地缓存' : '正在同步'}</Text>
               <Text style={styles.cacheHintMeta}>{taskCacheHint.lastSyncedAt ? `上次同步 ${formatSyncTimestamp(taskCacheHint.lastSyncedAt)}` : '等待首次同步'}</Text>
             </View>
             <Text style={styles.cacheHintText}>{taskCacheHint.message}</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="查看任务加载诊断" onPress={openTaskLoadDiagnostics} style={styles.taskDiagnosticsLink}>
+              <Text style={styles.taskDiagnosticsLinkText}>查看加载诊断</Text>
+            </Pressable>
           </View>
         ) : null}
 
-        {!hasInit ? (
-          <View style={styles.emptyCard}>
-            <Text style={styles.emptyText}>{t('common_loading')}</Text>
-          </View>
-        ) : loadError ? (
+        {loadError ? (
           <View style={styles.emptyCard}>
             <Text style={styles.emptyText}>{loadError}</Text>
             <Pressable onPress={() => { void refreshTasksData() }} style={({ pressed }) => [styles.emptyRetryBtn, pressed ? styles.segmentPressed : null]}>
               <Text style={styles.emptyRetryText}>重试</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="查看任务加载诊断" onPress={openTaskLoadDiagnostics} style={styles.taskDiagnosticsLink}>
+              <Text style={styles.taskDiagnosticsLinkText}>查看加载诊断</Text>
+            </Pressable>
+          </View>
+        ) : !currentTaskBucketReady ? (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyText}>{t('common_loading')}</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="查看任务加载诊断" onPress={openTaskLoadDiagnostics} style={styles.taskDiagnosticsLink}>
+              <Text style={styles.taskDiagnosticsLinkText}>查看加载诊断</Text>
             </Pressable>
           </View>
         ) : displayTasks.length === 0 ? (
@@ -3136,6 +3367,7 @@ function showBanner(title: string, message: string) {
                     originalScheduledDate ? `原计划 ${originalScheduledDate}` : null,
                   ].filter(Boolean).join(' · ')
                 : ''
+              const keyHandoverPendingNotice = getKeyHandoverPendingNotice(task)
               const title2 = isOfflineTask
                 ? [code || '', offlineTitleSuffix].filter(Boolean).join(' ').trim() || offlineTitleRaw || '-'
                 : isPropertyFollowupTask(task) && followupTitle
@@ -3326,7 +3558,7 @@ function showBanner(title: string, message: string) {
                     ) : (
                       <>
                         <View style={kindTagStyles.container}>
-                          <Text style={kindTagStyles.text}>{isKeyHandoverTask || isCheckinSiteExecution ? '执行' : kind}</Text>
+                          <Text style={kindTagStyles.text}>{isKeyHandoverTask || isCheckinSiteExecution ? '检查/挂钥匙' : kind}</Text>
                         </View>
                         {showCheckout ? (
                           <View style={checkoutTagStyles.container}>
@@ -3391,6 +3623,16 @@ function showBanner(title: string, message: string) {
 
                   {workRecordContext ? (
                     <Text style={styles.summary} numberOfLines={2}>{workRecordContext}</Text>
+                  ) : null}
+
+                  {keyHandoverPendingNotice ? (
+                    <View style={styles.collapsedGuestRequest}>
+                      <Ionicons name="information-circle-outline" size={moderateScale(16)} color="#92400E" />
+                      <View style={styles.collapsedGuestRequestTextWrap}>
+                        <Text style={[styles.collapsedGuestRequestLabel, { color: '#92400E' }]}>挂钥匙已完成</Text>
+                        <Text style={styles.collapsedGuestRequestText}>{keyHandoverPendingNotice}</Text>
+                      </View>
+                    </View>
                   ) : null}
 
                   {taskCollapsed && guestSpecialRequest ? (
@@ -3963,6 +4205,19 @@ const styles = StyleSheet.create({
   warehouseRefresh: { alignSelf: 'flex-start', marginTop: 10, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 12, backgroundColor: '#DCFCE7', flexDirection: 'row', alignItems: 'center', gap: 6 },
   warehouseRefreshText: { color: '#047857', fontSize: moderateScale(12), fontWeight: '900' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(17, 24, 39, 0.42)', justifyContent: 'center', padding: 18 },
+  taskDiagnosticsModal: { maxHeight: '82%', backgroundColor: '#FFFFFF', borderRadius: 18, padding: 16, gap: 10 },
+  taskDiagnosticsTitle: { color: '#111827', fontSize: moderateScale(18), fontWeight: '900' },
+  taskDiagnosticsPrivacy: { color: '#6B7280', fontSize: moderateScale(12), lineHeight: moderateScale(18) },
+  taskDiagnosticsScroll: { maxHeight: 420, borderWidth: hairline(), borderColor: '#E5E7EB', borderRadius: 12, backgroundColor: '#F9FAFB' },
+  taskDiagnosticsScrollContent: { padding: 12 },
+  taskDiagnosticsText: { color: '#1F2937', fontSize: moderateScale(11), lineHeight: moderateScale(17), fontFamily: 'monospace' },
+  taskDiagnosticsActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10 },
+  taskDiagnosticsButton: { minHeight: layoutTokens.button.height, minWidth: 108, borderRadius: 12, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14 },
+  taskDiagnosticsButtonText: { color: '#FFFFFF', fontSize: moderateScale(13), fontWeight: '900' },
+  taskDiagnosticsCloseButton: { backgroundColor: '#F3F4F6', borderWidth: hairline(), borderColor: '#D1D5DB' },
+  taskDiagnosticsCloseButtonText: { color: '#374151' },
+  taskDiagnosticsLink: { minHeight: layoutTokens.button.height, alignSelf: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  taskDiagnosticsLinkText: { color: '#2563EB', fontSize: moderateScale(12), fontWeight: '800' },
   transferModal: { maxHeight: '78%', backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14 },
   transferHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   transferTitle: { flex: 1, minWidth: 0, fontSize: moderateScale(17), lineHeight: moderateScale(22), fontWeight: '900', color: '#111827' },

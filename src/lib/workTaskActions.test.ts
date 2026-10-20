@@ -304,3 +304,21 @@ test('入住检查不会显示退房动作，旧服务端缓存动作同样会�
   ] }, { roleNames: ['admin'] })
   expect(cached.map((action) => action.id)).toEqual(['submit_inspection'])
 })
+
+test('legacy password-only check-in fallback exposes site execution but never cleaning actions', () => {
+  const legacyTask: any = {
+    id: 'eq3401-password-only',
+    source_type: 'cleaning_tasks',
+    task_kind: 'cleaning',
+    task_type: 'checkin_clean',
+    inspection_scope: 'password_only',
+    status: 'pending',
+    assignee_id: 'oscar-id',
+  }
+
+  expect(availableActionsForTask(legacyTask, { roleNames: ['cleaner'] }).map((action) => action.id)).toEqual([
+    'upload_access_video',
+    'report_issue',
+  ])
+  expect(availableActionsForTask({ ...legacyTask, available_actions: [] }, { roleNames: ['cleaner'] })).toEqual([])
+})

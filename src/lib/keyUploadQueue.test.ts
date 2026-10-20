@@ -81,3 +81,43 @@ test('retries key upload from start_cleaning_task without re-uploading media', a
   expect(await queueMod.getKeyUploadQueueItem('cleaning-task-1')).toBeNull()
   expect(queueMod.selectKeyPhotoEffectiveState({ key_photo_url: 'cleaning/media/cleaning-task-1/key-1', has_local_pending: true })).toBe('recorded')
 })
+
+test('shares one in-flight key upload run across concurrent maintenance callers', async () => {
+  const api = require('./api') as {
+    startCleaningTask: jest.Mock
+    uploadCleaningMedia: jest.Mock
+  }
+  let finishUpload!: (value: { key: string; url: string }) => void
+  let markUploadStarted!: () => void
+  const uploadStarted = new Promise<void>((resolve) => {
+    markUploadStarted = resolve
+  })
+  api.uploadCleaningMedia.mockImplementation(() => new Promise((resolve) => {
+    markUploadStarted()
+    finishUpload = resolve
+  }))
+  api.startCleaningTask.mockResolvedValue({ ok: true })
+  const queueMod = require('./keyUploadQueue') as typeof import('./keyUploadQueue')
+
+  await queueMod.enqueueKeyUpload({
+    cleaning_task_id: 'cleaning-task-shared',
+    source_uri: 'file:///camera/key-shared.jpg',
+    property_code: 'A1201',
+    captured_at: '2026-06-23T11:00:00.000Z',
+    mime_type: 'image/jpeg',
+    file_name: 'key-shared.jpg',
+  })
+
+  const first = queueMod.processKeyUploadQueue('token-1')
+  const second = queueMod.processKeyUploadQueue('token-1')
+
+  expect(second).toBe(first)
+  await uploadStarted
+  finishUpload({ key: 'cleaning/media/cleaning-task-shared/key', url: 'https://cdn.example.com/key' })
+  await expect(Promise.all([first, second])).resolves.toEqual([
+    { processed: 1, remaining: 0 },
+    { processed: 1, remaining: 0 },
+  ])
+  expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
+  expect(api.startCleaningTask).toHaveBeenCalledTimes(1)
+})

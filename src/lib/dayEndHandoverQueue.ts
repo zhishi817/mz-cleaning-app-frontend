@@ -35,7 +35,8 @@ export type DayEndHandoverDraft = {
 }
 
 const STORAGE_KEY = 'mzstay.day_end_handover_queue.v2'
-let processing = false
+type DayEndHandoverQueueProcessResult = { processed: number; remaining: number }
+let processingPromise: Promise<DayEndHandoverQueueProcessResult> | null = null
 
 function keyOf(userId: string, date: string) {
   return `${String(userId || '').trim()}::${String(date || '').slice(0, 10)}`
@@ -177,10 +178,9 @@ export async function persistDayEndDraftPhoto(params: {
   return item
 }
 
-export async function processDayEndHandoverQueue(token: string) {
-  if (processing) return { processed: 0, remaining: 0 }
-  processing = true
-  try {
+export function processDayEndHandoverQueue(token: string): Promise<DayEndHandoverQueueProcessResult> {
+  if (processingPromise) return processingPromise
+  const run = (async () => {
     const drafts = await loadAllDrafts()
     const entries = Object.entries(drafts)
     let processed = 0
@@ -290,7 +290,15 @@ export async function processDayEndHandoverQueue(token: string) {
 
     const latest = await loadAllDrafts()
     return { processed, remaining: Object.keys(latest).length }
-  } finally {
-    processing = false
-  }
+  })()
+  processingPromise = run
+  void run.then(
+    () => {
+      if (processingPromise === run) processingPromise = null
+    },
+    () => {
+      if (processingPromise === run) processingPromise = null
+    },
+  )
+  return run
 }

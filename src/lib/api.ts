@@ -1,6 +1,7 @@
 import { API_BASE_URL } from '../config/env'
 import { notifyAuthInvalidated } from './authEvents'
 import { Directory, File, Paths } from 'expo-file-system'
+import { recordTaskLoadStage } from './taskLoadDiagnostics'
 
 type Json = any
 type AuthenticatedRequestOptions = {
@@ -222,11 +223,35 @@ async function parseErrorMessage(res: Response) {
 
 async function parseJsonOrThrow(res: Response) {
   const txt = await res.text()
+  return parseJsonTextOrThrow(res.status, txt)
+}
+
+function parseJsonTextOrThrow(status: number, txt: string) {
   try {
     return JSON.parse(txt)
   } catch {
     const t = String(txt || '').trim()
-    throw new Error(`后端返回非 JSON（${res.status}）：${t ? t.slice(0, 180) : 'empty body'}`)
+    throw new Error(`后端返回非 JSON（${status}）：${t ? t.slice(0, 180) : 'empty body'}`)
+  }
+}
+
+function taskListTimeoutError() {
+  return new ApiError('网络超时，请检查网络后重试', 0, 'TIMEOUT', true)
+}
+
+async function readTaskListBodyBeforeDeadline(res: Response, deadline: number) {
+  const remaining = Math.max(0, deadline - Date.now())
+  if (remaining <= 0) throw taskListTimeoutError()
+  let timer: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      res.text(),
+      new Promise<string>((_, reject) => {
+        timer = setTimeout(() => reject(taskListTimeoutError()), remaining)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 }
 
@@ -749,6 +774,13 @@ export type WorkTask = {
   inspector_name?: string | null
   key_photo_url?: string | null
   lockbox_video_url?: string | null
+  key_handover?: {
+    state: 'completed' | string
+    source_task_id: string
+    completed_at: string | null
+    workflow_finalization_pending: boolean
+    missing_requirements: string[]
+  } | null
   living_room_photo_urls?: string[] | null
   living_room_photo_url?: string | null
   completion_photos_ok?: boolean
@@ -1032,6 +1064,9 @@ export async function markGuestCheckedOutByTasks(token: string, params: { task_i
 export async function listWorkTasks(token: string, params: { date_from: string; date_to: string; view?: 'mine' | 'all' }) {
   const urls = buildUrlCandidates('mzapp/work-tasks')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  const startedAt = Date.now()
+  const deadline = startedAt + 15000
+  recordTaskLoadStage('task_fetch.start')
 
   const qs = new URLSearchParams()
   qs.set('date_from', params.date_from)
@@ -1041,19 +1076,78 @@ export async function listWorkTasks(token: string, params: { date_from: string; 
 
   let lastRes: Response | null = null
   for (const url of fullUrls) {
-    lastRes = await fetchWithTimeout(
-      url,
-      {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
-      },
-      15000,
-    )
+    const remaining = Math.max(0, deadline - Date.now())
+    if (remaining <= 0) {
+      recordTaskLoadStage('task_fetch.timeout', { elapsedMs: Date.now() - startedAt, errorClass: 'timeout' })
+      throw taskListTimeoutError()
+    }
+    try {
+      lastRes = await fetchWithTimeout(
+        url,
+        {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+        },
+        remaining,
+      )
+    } catch (error) {
+      recordTaskLoadStage('task_fetch.error', {
+        elapsedMs: Date.now() - startedAt,
+        errorClass: (error as any)?.code === 'TIMEOUT' ? 'timeout' : 'network',
+      })
+      throw error
+    }
+    recordTaskLoadStage('task_fetch.headers', { elapsedMs: Date.now() - startedAt, status: lastRes.status })
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
-  const data = (await parseJsonOrThrow(res)) as any
+  if (!res.ok) {
+    if (res.status === 401) {
+      recordTaskLoadStage('task_fetch.permission_error', { elapsedMs: Date.now() - startedAt, status: 401, errorClass: 'auth' })
+      throw new ApiError('登录已失效，请重新登录', 401, 'UNAUTHORIZED', false)
+    }
+    if (res.status === 403) {
+      recordTaskLoadStage('task_fetch.permission_error', { elapsedMs: Date.now() - startedAt, status: 403, errorClass: 'auth' })
+      throw new ApiError('权限不足', 403, 'FORBIDDEN', false)
+    }
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const remaining = Math.max(0, deadline - Date.now())
+    if (remaining <= 0) throw taskListTimeoutError()
+    try {
+      const message = await Promise.race([
+        parseErrorMessage(res),
+        new Promise<string>((_, reject) => {
+          timer = setTimeout(() => reject(taskListTimeoutError()), remaining)
+        }),
+      ])
+      throw new Error(message)
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+  recordTaskLoadStage('task_fetch.body_start', { elapsedMs: Date.now() - startedAt, status: res.status })
+  const txt = await readTaskListBodyBeforeDeadline(res, deadline).catch((error) => {
+    const timedOut = (error as any)?.code === 'TIMEOUT'
+    recordTaskLoadStage(timedOut ? 'task_fetch.body_timeout' : 'task_fetch.body_error', {
+      elapsedMs: Date.now() - startedAt,
+      status: res.status,
+      errorClass: timedOut ? 'timeout' : 'network',
+    })
+    throw error
+  })
+  // JSON.parse is synchronous and cannot be interrupted by a Promise timer.
+  // Bound the accepted body size and reject an over-budget parse after it returns;
+  // do not claim this is a pre-emptive CPU timeout.
+  if (txt.length > 8_000_000) {
+    recordTaskLoadStage('task_fetch.body_too_large', { elapsedMs: Date.now() - startedAt, status: res.status, errorClass: 'parse' })
+    throw new Error('任务列表返回内容过大')
+  }
+  const data = parseJsonTextOrThrow(res.status, txt) as any
+  if (Date.now() > deadline) {
+    recordTaskLoadStage('task_fetch.parse_over_budget', { elapsedMs: Date.now() - startedAt, status: res.status, errorClass: 'timeout' })
+    throw taskListTimeoutError()
+  }
+  recordTaskLoadStage('task_fetch.body_ok', { elapsedMs: Date.now() - startedAt, status: res.status })
   if (!Array.isArray(data)) throw new Error('任务列表返回格式不正确')
   return data as WorkTask[]
 }

@@ -3,10 +3,13 @@ import {
   deactivateWorkTasksRealtime,
   establishWorkTasksSession,
   eventRequiresGuestReadyAuthorityRefresh,
+  eventRequiresKeyHandoverAuthorityRefresh,
+  findWorkTaskItemByAnyId,
   getWorkTasksSnapshot,
   initWorkTasksStore,
   isSafePatchEvent,
   makeWorkTasksBucketKey,
+  makeWorkTasksProjectionKey,
   mergePatchIntoTask,
   mergeRemoteWorkTaskItems,
   patchWorkTaskItem,
@@ -14,6 +17,7 @@ import {
   reconcileExecutionListVisibilityAfterPatch,
   requestWorkTasksRefresh,
   setWorkTasksRefreshForeground,
+  subscribeWorkTasks,
   type WorkTaskItem,
 } from './workTasksStore'
 
@@ -71,6 +75,33 @@ function makeTask(patch: Partial<WorkTaskItem>): WorkTaskItem {
     ...patch,
   } as WorkTaskItem
 }
+
+test('permission projection changes across roles, permissions, view and manager-unassigned scope', () => {
+  const base = makeWorkTasksProjectionKey({
+    roles: ['cleaner'],
+    permissions: [],
+    activeRole: 'cleaner',
+    view: 'mine',
+  })
+  const variants = [
+    makeWorkTasksProjectionKey({ roles: ['admin'], permissions: [], activeRole: 'admin', view: 'mine' }),
+    makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: ['tasks.manage'], activeRole: 'cleaner', view: 'mine' }),
+    makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: [], activeRole: 'cleaner', view: 'all' }),
+    makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: [], activeRole: 'cleaner', view: 'mine', includeManagerUnassignedOffline: true }),
+  ]
+  expect(new Set([base, ...variants])).toHaveProperty('size', 5)
+  expect(makeWorkTasksProjectionKey({
+    roles: ['cleaner', 'admin', 'cleaner'],
+    permissions: ['b', 'a', 'a'],
+    activeRole: 'admin',
+    view: 'all',
+  })).toBe(makeWorkTasksProjectionKey({
+    roles: ['admin', 'cleaner'],
+    permissions: ['a', 'b'],
+    activeRole: 'admin',
+    view: 'all',
+  }))
+})
 
 test('recomputes a cached visible projection when local or SSE visibility inputs change', () => {
   const maintenance = makeTask({
@@ -376,7 +407,11 @@ test('does not let an in-flight stale list response overwrite a maintenance rece
   const staleResponse = new Promise<WorkTaskItem[]>((resolve) => {
     resolveRemote = resolve
   })
-  store.getJson.mockResolvedValueOnce({ items: [assignedTask] })
+  store.getJson.mockResolvedValueOnce({
+    items: [assignedTask],
+    projectionKey: 'unscoped-v1:mine',
+    ready: true,
+  })
   api.listWorkTasks.mockReturnValueOnce(staleResponse)
   establishWorkTasksSession({ token: 't1', userId })
   await initWorkTasksStore({ bucketKey, session: { token: 't1', userId } })
@@ -646,6 +681,7 @@ test('keeps a backgrounded queued force waiter until foreground after the runnin
     ...params,
     mode: 'force',
     reason: 'background_queue',
+    waitForForeground: true,
   }).then((applied) => {
     queuedSettled = true
     return applied
@@ -697,8 +733,8 @@ test('drops an old account response after logout without scheduling its queued f
   establishWorkTasksSession({ token: accountA.token, userId: accountA.userId })
 
   const oldRequest = requestWorkTasksRefresh({ ...accountA, mode: 'force', reason: 'initial' })
-  await Promise.resolve()
-  await Promise.resolve()
+  for (let attempt = 0; attempt < 20 && api.listWorkTasks.mock.calls.length < 1; attempt += 1) await Promise.resolve()
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
   const queuedOldFollowUp = requestWorkTasksRefresh({ ...accountA, mode: 'force', reason: 'manual_refresh' })
   deactivateWorkTasksRealtime()
   establishWorkTasksSession({ token: accountB.token, userId: accountB.userId })
@@ -711,6 +747,37 @@ test('drops an old account response after logout without scheduling its queued f
   expect(getWorkTasksSnapshot().items.map((task) => task.id)).toEqual(['new-account-task'])
   expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
   expect(api.listWorkTasks.mock.calls.map((call: any[]) => call[0])).toEqual(['token-a', 'token-b'])
+})
+
+test('switching accounts with the same authority hides the old account before new hydration', async () => {
+  const storage = require('./storage')
+  const accountA = { token: 'same-role-token-a', userId: 'same-role-account-a' }
+  const accountB = { token: 'same-role-token-b', userId: 'same-role-account-b' }
+  const projectionKey = makeWorkTasksProjectionKey({
+    roles: ['cleaner'],
+    permissions: [],
+    activeRole: 'cleaner',
+    view: 'mine',
+  })
+  const bucketKeyA = makeWorkTasksBucketKey({
+    userId: accountA.userId,
+    date_from: '2026-10-20',
+    date_to: '2026-10-20',
+    view: 'mine',
+  })
+  storage.getJson.mockResolvedValueOnce({
+    items: [makeTask({ id: 'account-a-cache', scheduled_date: '2026-10-20', date: '2026-10-20' })],
+    projectionKey,
+    ready: true,
+  })
+  establishWorkTasksSession({ ...accountA, role: 'cleaner', roles: ['cleaner'], permissions: [] })
+  await initWorkTasksStore({ bucketKey: bucketKeyA, projectionKey, session: accountA })
+  expect(findWorkTaskItemByAnyId('account-a-cache')).toMatchObject({ id: 'account-a-cache' })
+
+  establishWorkTasksSession({ ...accountB, role: 'cleaner', roles: ['cleaner'], permissions: [] })
+
+  expect(getWorkTasksSnapshot()).toMatchObject({ bucketKey: null, projectionKey: null, ready: false, items: [] })
+  expect(findWorkTaskItemByAnyId('account-a-cache')).toBeNull()
 })
 
 test('rejects a queue-delayed old account caller after a new account session starts', async () => {
@@ -936,6 +1003,39 @@ test('treats key re-upload as an incremental event so existing consumable photos
   expect(mergePatchIntoTask(task, event).restock_items).toEqual(task.restock_items)
 })
 
+test('forces authoritative refresh for key handover instead of patching a merged card', async () => {
+  const api = require('./api')
+  await activateWorkTasksRealtime({ token: 't1', userId: 'refresh-user', date_from: '2026-08-30', date_to: '2026-08-30', view: 'all' })
+  api.listWorkTasks.mockClear()
+  const keyHandover = {
+    state: 'completed',
+    source_task_id: 'cleaning-1',
+    completed_at: '2026-10-20T02:32:15.623Z',
+    workflow_finalization_pending: true,
+    missing_requirements: ['cleaning_consumables', 'cleaning_property_photo'],
+  }
+  const event = {
+    event_id: 'evt-key-handover-authority',
+    event_type: 'TASK_UPDATED',
+    change_scope: 'list',
+    task_id: 'cleaning_task:checkout-1',
+    source_ref_ids: ['checkout-1'],
+    changed_fields: ['status', 'key_handover'],
+    payload: { patch: { status: 'in_progress', key_handover: keyHandover } },
+  } as any
+
+  expect(eventRequiresKeyHandoverAuthorityRefresh(event)).toBe(true)
+  expect(isSafePatchEvent(event)).toBe(false)
+  mockStreamListeners.work_task_event?.[0]({
+    type: 'work_task_event',
+    data: JSON.stringify(event),
+  })
+  await Promise.resolve()
+  await Promise.resolve()
+
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+})
+
 test('forces an authoritative refresh instead of merging a partial guest-ready qualification event', async () => {
   const api = require('./api')
   await activateWorkTasksRealtime({ token: 't1', userId: 'refresh-user', date_from: '2026-08-30', date_to: '2026-08-30', view: 'all' })
@@ -1073,4 +1173,383 @@ test('retries once when a background membership refresh fails after returning to
 
   await jest.advanceTimersByTimeAsync(60_000)
   expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
+})
+
+test('does not leave a user-triggered force refresh pending while iOS reports the app inactive', async () => {
+  const api = require('./api')
+  const params = refreshParams()
+  setWorkTasksRefreshForeground(false)
+
+  let settled = false
+  let result: boolean | undefined
+  const refresh = requestWorkTasksRefresh({
+    ...params,
+    mode: 'force',
+    reason: 'tasks_screen_refresh',
+  }).then((value) => {
+    settled = true
+    result = value
+    return value
+  })
+  await Promise.resolve()
+
+  expect(settled).toBe(true)
+  expect(result).toBe(false)
+  expect(api.listWorkTasks).not.toHaveBeenCalled()
+
+  setWorkTasksRefreshForeground(true)
+  await refresh
+  for (let attempt = 0; attempt < 20 && api.listWorkTasks.mock.calls.length < 1; attempt += 1) await Promise.resolve()
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+})
+
+test('shares one real hydration promise and marks an empty current projection ready', async () => {
+  const storage = require('./storage')
+  const userId = 'shared-hydration-user'
+  const bucketKey = makeWorkTasksBucketKey({ userId, date_from: '2026-10-20', date_to: '2026-10-20', view: 'mine' })
+  const projectionKey = makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: [], activeRole: 'cleaner', view: 'mine' })
+  let releaseStorage!: (value: null) => void
+  storage.getJson.mockImplementationOnce(() => new Promise<null>((resolve) => {
+    releaseStorage = resolve
+  }))
+  establishWorkTasksSession({ token: 't1', userId })
+
+  const first = initWorkTasksStore({ bucketKey, projectionKey, session: { token: 't1', userId } })
+  const second = initWorkTasksStore({ bucketKey, projectionKey, session: { token: 't1', userId } })
+  expect(storage.getJson).toHaveBeenCalledTimes(1)
+  expect(getWorkTasksSnapshot()).toMatchObject({ bucketKey, projectionKey, ready: false, items: [] })
+
+  releaseStorage(null)
+  await expect(Promise.all([first, second])).resolves.toEqual([true, true])
+  expect(getWorkTasksSnapshot()).toMatchObject({ bucketKey, projectionKey, ready: true, items: [] })
+})
+
+test('bounds a pending cache read and ignores its late result', async () => {
+  jest.useFakeTimers()
+  const storage = require('./storage')
+  const userId = 'late-hydration-user'
+  const bucketKey = makeWorkTasksBucketKey({ userId, date_from: '2026-10-20', date_to: '2026-10-20', view: 'mine' })
+  const projectionKey = makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: [], activeRole: 'cleaner', view: 'mine' })
+  const lateTask = makeTask({ id: 'late-cache-task', scheduled_date: '2026-10-20', date: '2026-10-20' })
+  let releaseStorage!: (value: any) => void
+  storage.getJson.mockImplementationOnce(() => new Promise((resolve) => {
+    releaseStorage = resolve
+  }))
+  establishWorkTasksSession({ token: 't1', userId })
+
+  const hydration = initWorkTasksStore({ bucketKey, projectionKey, session: { token: 't1', userId } })
+  await jest.advanceTimersByTimeAsync(3_000)
+  await expect(hydration).resolves.toBe(true)
+  expect(getWorkTasksSnapshot()).toMatchObject({ bucketKey, projectionKey, ready: true, items: [] })
+
+  releaseStorage({ items: [lateTask], projectionKey, ready: true })
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(getWorkTasksSnapshot().items).toEqual([])
+})
+
+test('fails closed when a saved bucket belongs to a broader role or permission projection', async () => {
+  const storage = require('./storage')
+  const userId = 'permission-narrowing-user'
+  const bucketKey = makeWorkTasksBucketKey({ userId, date_from: '2026-10-20', date_to: '2026-10-20', view: 'all' })
+  const broadProjection = makeWorkTasksProjectionKey({ roles: ['admin'], permissions: ['tasks.manage'], activeRole: 'admin', view: 'all' })
+  const narrowProjection = makeWorkTasksProjectionKey({ roles: ['customer_service'], permissions: [], activeRole: 'customer_service', view: 'all' })
+  storage.getJson.mockResolvedValueOnce({
+    items: [makeTask({ id: 'admin-only-cache', scheduled_date: '2026-10-20', date: '2026-10-20' })],
+    projectionKey: broadProjection,
+    ready: true,
+  })
+  establishWorkTasksSession({ token: 't1', userId })
+
+  await expect(initWorkTasksStore({ bucketKey, projectionKey: narrowProjection, session: { token: 't1', userId } })).resolves.toBe(true)
+  expect(getWorkTasksSnapshot()).toMatchObject({ bucketKey, projectionKey: narrowProjection, ready: true, items: [] })
+})
+
+test('same-account permission narrowing immediately hides old cache from global detail getters', async () => {
+  const storage = require('./storage')
+  const api = require('./api')
+  const token = 'same-account-token'
+  const userId = 'same-account-user'
+  const params = refreshParams({ token, userId, date_from: '2026-10-20', date_to: '2026-10-20', view: 'all' })
+  const bucketKey = makeWorkTasksBucketKey(params)
+  const broadProjection = makeWorkTasksProjectionKey({ roles: ['admin'], permissions: ['tasks.manage'], activeRole: 'admin', view: 'all' })
+  const broadTask = makeTask({ id: 'previous-admin-task', scheduled_date: '2026-10-20', date: '2026-10-20' })
+  storage.getJson.mockResolvedValueOnce({ items: [broadTask], projectionKey: broadProjection, ready: true })
+  establishWorkTasksSession({
+    token,
+    userId,
+    role: 'admin',
+    roles: ['admin'],
+    permissions: ['tasks.manage'],
+  })
+  await initWorkTasksStore({ bucketKey, projectionKey: broadProjection, session: { token, userId } })
+  expect(findWorkTaskItemByAnyId('previous-admin-task')).toMatchObject({ id: 'previous-admin-task' })
+
+  establishWorkTasksSession({
+    token,
+    userId,
+    role: 'customer_service',
+    roles: ['customer_service'],
+    permissions: [],
+  })
+  expect(getWorkTasksSnapshot()).toMatchObject({ ready: false, items: [] })
+  expect(findWorkTaskItemByAnyId('previous-admin-task')).toBeNull()
+
+  api.listWorkTasks.mockRejectedValueOnce(new Error('offline after permission change'))
+  await expect(requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'permission_narrowed_offline' })).rejects.toThrow('offline after permission change')
+  expect(findWorkTaskItemByAnyId('previous-admin-task')).toBeNull()
+})
+
+test('deactivation immediately hides the prior account cache and emits while already idle', async () => {
+  const storage = require('./storage')
+  const token = 'sign-out-token'
+  const userId = 'sign-out-user'
+  const bucketKey = makeWorkTasksBucketKey({
+    userId,
+    date_from: '2026-10-20',
+    date_to: '2026-10-20',
+    view: 'mine',
+  })
+  const projectionKey = makeWorkTasksProjectionKey({
+    roles: ['cleaner'],
+    permissions: [],
+    activeRole: 'cleaner',
+    view: 'mine',
+  })
+  storage.getJson.mockResolvedValueOnce({
+    items: [makeTask({ id: 'prior-account-task', scheduled_date: '2026-10-20', date: '2026-10-20' })],
+    projectionKey,
+    ready: true,
+  })
+  establishWorkTasksSession({ token, userId, role: 'cleaner', roles: ['cleaner'], permissions: [] })
+  await initWorkTasksStore({ bucketKey, projectionKey, session: { token, userId } })
+  expect(findWorkTaskItemByAnyId('prior-account-task')).toMatchObject({ id: 'prior-account-task' })
+
+  const listener = jest.fn()
+  const unsubscribe = subscribeWorkTasks(listener)
+  deactivateWorkTasksRealtime()
+
+  expect(listener).toHaveBeenCalledTimes(1)
+  expect(getWorkTasksSnapshot()).toMatchObject({ ready: false, items: [] })
+  expect(findWorkTaskItemByAnyId('prior-account-task')).toBeNull()
+  unsubscribe()
+})
+
+test.each([401, 403])('clears current cached tasks when the authority read returns %s', async (status) => {
+  const storage = require('./storage')
+  const api = require('./api')
+  const userId = `authority-${status}-user`
+  const params = refreshParams({ userId, date_from: '2026-10-20', date_to: '2026-10-20' })
+  const bucketKey = makeWorkTasksBucketKey(params)
+  const projectionKey = makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: [], activeRole: 'cleaner', view: 'mine' })
+  storage.getJson.mockResolvedValueOnce({
+    items: [makeTask({ id: `cached-${status}`, scheduled_date: '2026-10-20', date: '2026-10-20' })],
+    projectionKey,
+    ready: true,
+  })
+  establishWorkTasksSession({ token: params.token, userId })
+  await initWorkTasksStore({ bucketKey, projectionKey, session: params })
+  api.listWorkTasks.mockRejectedValueOnce(Object.assign(new Error('permission changed'), { status }))
+
+  await expect(requestWorkTasksRefresh({
+    ...params,
+    projectionKey,
+    mode: 'force',
+    reason: `authority_${status}`,
+  })).rejects.toMatchObject({ status })
+  expect(getWorkTasksSnapshot()).toMatchObject({ bucketKey, projectionKey, ready: true, items: [] })
+})
+
+test('a late 403 still clears the current projection after its screen guard becomes stale', async () => {
+  const storage = require('./storage')
+  const api = require('./api')
+  const userId = 'late-403-user'
+  const params = refreshParams({ userId, date_from: '2026-10-20', date_to: '2026-10-20' })
+  const bucketKey = makeWorkTasksBucketKey(params)
+  const projectionKey = makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: [], activeRole: 'cleaner', view: 'mine' })
+  storage.getJson.mockResolvedValueOnce({
+    items: [makeTask({ id: 'revoked-cache', scheduled_date: '2026-10-20', date: '2026-10-20' })],
+    projectionKey,
+    ready: true,
+  })
+  let rejectRemote!: (error: Error & { status: number }) => void
+  api.listWorkTasks.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+    rejectRemote = reject
+  }))
+  establishWorkTasksSession({ token: params.token, userId })
+  await initWorkTasksStore({ bucketKey, projectionKey, session: params })
+  let screenIsCurrent = true
+
+  const refresh = requestWorkTasksRefresh({
+    ...params,
+    projectionKey,
+    isCurrent: () => screenIsCurrent,
+    mode: 'force',
+    reason: 'authority_revoked_while_unmounting',
+  })
+  for (let attempt = 0; attempt < 20 && api.listWorkTasks.mock.calls.length < 1; attempt += 1) await Promise.resolve()
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+  screenIsCurrent = false
+  rejectRemote(Object.assign(new Error('permission changed'), { status: 403 }))
+
+  await expect(refresh).resolves.toBe(false)
+  expect(getWorkTasksSnapshot()).toMatchObject({ bucketKey, projectionKey, ready: true, items: [] })
+  expect(findWorkTaskItemByAnyId('revoked-cache')).toBeNull()
+})
+
+test('publishes fresh tasks before a cache write settles and bounds the caller wait', async () => {
+  jest.useFakeTimers()
+  const storage = require('./storage')
+  const api = require('./api')
+  const params = refreshParams({ userId: 'persist-pending-user', date_from: '2026-10-20', date_to: '2026-10-20' })
+  const projectionKey = makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: [], activeRole: 'cleaner', view: 'mine' })
+  let releaseWrite!: () => void
+  storage.setJson.mockImplementationOnce(() => new Promise<void>((resolve) => {
+    releaseWrite = resolve
+  }))
+  api.listWorkTasks.mockResolvedValueOnce([makeTask({ id: 'fresh-before-persist', scheduled_date: '2026-10-20', date: '2026-10-20' })])
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+  const listener = jest.fn()
+  const unsubscribe = subscribeWorkTasks(listener)
+
+  const refresh = requestWorkTasksRefresh({ ...params, projectionKey, mode: 'force', reason: 'persist_pending' })
+  for (let attempt = 0; attempt < 30 && getWorkTasksSnapshot().items[0]?.id !== 'fresh-before-persist'; attempt += 1) await Promise.resolve()
+  expect(getWorkTasksSnapshot().items[0]?.id).toBe('fresh-before-persist')
+  expect(listener).toHaveBeenCalled()
+  let settled = false
+  void refresh.then(() => { settled = true })
+  await Promise.resolve()
+  expect(settled).toBe(false)
+
+  await jest.advanceTimersByTimeAsync(1_500)
+  await expect(refresh).resolves.toBe(true)
+  releaseWrite()
+  await Promise.resolve()
+  unsubscribe()
+})
+
+test('does not roll back fresh state when cache persistence rejects', async () => {
+  const storage = require('./storage')
+  const api = require('./api')
+  const params = refreshParams({ userId: 'persist-error-user', date_from: '2026-10-20', date_to: '2026-10-20' })
+  const projectionKey = makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: [], activeRole: 'cleaner', view: 'mine' })
+  storage.setJson.mockRejectedValueOnce(new Error('disk full'))
+  api.listWorkTasks.mockResolvedValueOnce([makeTask({ id: 'fresh-despite-persist-error', scheduled_date: '2026-10-20', date: '2026-10-20' })])
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+
+  await expect(requestWorkTasksRefresh({ ...params, projectionKey, mode: 'force', reason: 'persist_error' })).resolves.toBe(true)
+  expect(getWorkTasksSnapshot().items[0]?.id).toBe('fresh-despite-persist-error')
+})
+
+test('does not apply a late response after the same bucket changes permission projection', async () => {
+  const api = require('./api')
+  const params = refreshParams({ userId: 'projection-race-user', date_from: '2026-10-20', date_to: '2026-10-20', view: 'all' })
+  const broadProjection = makeWorkTasksProjectionKey({ roles: ['admin'], permissions: ['tasks.manage'], activeRole: 'admin', view: 'all' })
+  const narrowProjection = makeWorkTasksProjectionKey({ roles: ['customer_service'], permissions: [], activeRole: 'customer_service', view: 'all' })
+  const broadTask = makeTask({ id: 'broad-late-task', scheduled_date: '2026-10-20', date: '2026-10-20' })
+  const narrowTask = makeTask({ id: 'narrow-current-task', scheduled_date: '2026-10-20', date: '2026-10-20' })
+  let releaseBroad!: (items: WorkTaskItem[]) => void
+  api.listWorkTasks
+    .mockImplementationOnce(() => new Promise<WorkTaskItem[]>((resolve) => { releaseBroad = resolve }))
+    .mockResolvedValueOnce([narrowTask])
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+  let activeProjection = broadProjection
+
+  const broadRefresh = requestWorkTasksRefresh({
+    ...params,
+    projectionKey: broadProjection,
+    isCurrent: () => activeProjection === broadProjection,
+    mode: 'force',
+    reason: 'broad_started_first',
+  })
+  for (let attempt = 0; attempt < 20 && api.listWorkTasks.mock.calls.length < 1; attempt += 1) await Promise.resolve()
+  activeProjection = narrowProjection
+  const narrowRefresh = requestWorkTasksRefresh({
+    ...params,
+    projectionKey: narrowProjection,
+    isCurrent: () => activeProjection === narrowProjection,
+    mode: 'force',
+    reason: 'permission_narrowed',
+  })
+  for (let attempt = 0; attempt < 30 && getWorkTasksSnapshot().items[0]?.id !== 'narrow-current-task'; attempt += 1) await Promise.resolve()
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
+  expect(getWorkTasksSnapshot().items[0]?.id).toBe('narrow-current-task')
+  await expect(narrowRefresh).resolves.toBe(true)
+
+  releaseBroad([broadTask])
+  await expect(broadRefresh).resolves.toBe(false)
+  expect(getWorkTasksSnapshot()).toMatchObject({ projectionKey: narrowProjection, ready: true })
+  expect(getWorkTasksSnapshot().items.map((task) => task.id)).toEqual(['narrow-current-task'])
+})
+
+test('a new caller for the same scope can adopt an in-flight refresh from an unmounted caller', async () => {
+  const api = require('./api')
+  const params = refreshParams({ userId: 'same-scope-handoff-user', date_from: '2026-10-20', date_to: '2026-10-20' })
+  const projectionKey = makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: [], activeRole: 'cleaner', view: 'mine' })
+  const freshTask = makeTask({ id: 'same-scope-fresh-task', scheduled_date: '2026-10-20', date: '2026-10-20' })
+  let releaseRemote!: (items: WorkTaskItem[]) => void
+  api.listWorkTasks.mockImplementationOnce(() => new Promise<WorkTaskItem[]>((resolve) => {
+    releaseRemote = resolve
+  }))
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+  let currentCaller = 'old'
+
+  const oldRefresh = requestWorkTasksRefresh({
+    ...params,
+    projectionKey,
+    isCurrent: () => currentCaller === 'old',
+    mode: 'force',
+    reason: 'old_component_initial',
+  })
+  for (let attempt = 0; attempt < 20 && api.listWorkTasks.mock.calls.length < 1; attempt += 1) await Promise.resolve()
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+
+  currentCaller = 'new'
+  await expect(requestWorkTasksRefresh({
+    ...params,
+    projectionKey,
+    isCurrent: () => currentCaller === 'new',
+    mode: 'passive',
+    reason: 'new_component_focus',
+  })).resolves.toBe(false)
+  releaseRemote([freshTask])
+
+  await expect(oldRefresh).resolves.toBe(true)
+  expect(getWorkTasksSnapshot().items.map((task) => task.id)).toEqual(['same-scope-fresh-task'])
+})
+
+test('an already stale same-scope caller cannot replace the current in-flight guard', async () => {
+  const api = require('./api')
+  const params = refreshParams({ userId: 'same-scope-stale-caller-user', date_from: '2026-10-20', date_to: '2026-10-20' })
+  const projectionKey = makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: [], activeRole: 'cleaner', view: 'mine' })
+  const freshTask = makeTask({ id: 'current-caller-task', scheduled_date: '2026-10-20', date: '2026-10-20' })
+  let releaseRemote!: (items: WorkTaskItem[]) => void
+  api.listWorkTasks.mockImplementationOnce(() => new Promise<WorkTaskItem[]>((resolve) => {
+    releaseRemote = resolve
+  }))
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+
+  const currentRefresh = requestWorkTasksRefresh({
+    ...params,
+    projectionKey,
+    isCurrent: () => true,
+    mode: 'force',
+    reason: 'current_caller_started_first',
+  })
+  for (let attempt = 0; attempt < 20 && api.listWorkTasks.mock.calls.length < 1; attempt += 1) await Promise.resolve()
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+
+  const staleRefresh = requestWorkTasksRefresh({
+    ...params,
+    projectionKey,
+    isCurrent: () => false,
+    mode: 'force',
+    reason: 'already_stale_caller',
+  })
+  await expect(staleRefresh).resolves.toBe(false)
+
+  releaseRemote([freshTask])
+  await expect(currentRefresh).resolves.toBe(true)
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+  expect(getWorkTasksSnapshot().items.map((task) => task.id)).toEqual(['current-caller-task'])
 })

@@ -5,6 +5,7 @@ import EventSource from 'react-native-sse'
 import { notifyAuthInvalidated } from './authEvents'
 import { invalidateCleaningMediaCache } from './cleaningMediaCache'
 import { isDailyTaskExecutionVisible, type DailyTaskExecutionVisibilityOptions } from './dailyTaskExecutionVisibility'
+import { recordTaskLoadStage } from './taskLoadDiagnostics'
 
 export type WorkTaskItem = WorkTask & {
   date: string
@@ -19,6 +20,8 @@ export type WorkTasksRefreshMode = 'passive' | 'consistency' | 'force'
 type StoreState = {
   items: WorkTaskItem[]
   bucketKey: string | null
+  projectionKey: string | null
+  ready: boolean
   updatedAt: string | null
   lastReceivedEventId: string | null
   lastFullSyncTimestamp: string | null
@@ -32,12 +35,15 @@ type ActiveRealtimeParams = {
   date_from: string
   date_to: string
   view: WorkTasksView
+  projectionKey?: string
   includeManagerUnassignedOffline?: boolean
+  isCurrent?: () => boolean
 }
 
 type StreamIdentity = {
   token: string
   userId: string
+  authorityKey?: string
 }
 
 type WorkTaskStreamEvent = {
@@ -60,6 +66,8 @@ const RECONNECT_DELAY_MS = 1500
 const HEALTH_CHECK_INTERVAL_MS = 15000
 const STREAM_IDLE_TIMEOUT_MS = 65000
 const FULL_REFRESH_COOLDOWN_MS = 60_000
+const HYDRATION_WAIT_MS = 3_000
+const PERSIST_WAIT_MS = 1_500
 const SAFE_PATCH_FIELDS = new Set([
   'status',
   'scheduled_date',
@@ -157,13 +165,14 @@ const listeners = new Set<() => void>()
 let state: StoreState = {
   items: [],
   bucketKey: null,
+  projectionKey: null,
+  ready: false,
   updatedAt: null,
   lastReceivedEventId: null,
   lastFullSyncTimestamp: null,
   dirtyBuckets: {},
   sseConnectionState: 'idle',
 }
-let initializedKey: string | null = null
 let workTasksHydrationGeneration = 0
 let workTasksSessionIdentity: StreamIdentity | null = null
 let workTasksSessionEpoch = 0
@@ -174,6 +183,8 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let healthTimer: ReturnType<typeof setInterval> | null = null
 let lastStreamActivityAt = 0
 const refreshWorkTasksInFlight = new Map<string, Promise<boolean>>()
+const workTasksHydrations = new Map<string, Promise<boolean>>()
+const persistQueues = new Map<string, Promise<void>>()
 let localPatchRevision = 0
 const localPatchRevisionsByBucket = new Map<string, Map<string, number>>()
 let workTasksRefreshForeground = true
@@ -185,6 +196,8 @@ type WorkTasksRefreshParams = {
   date_from: string
   date_to: string
   view: WorkTasksView
+  projectionKey?: string
+  isCurrent?: () => boolean
 }
 
 type RefreshWaiter = {
@@ -242,12 +255,94 @@ function storageKey(bucketKey: string) {
   return `${STORAGE_PREFIX}${bucketKey}`
 }
 
-function buildStateFromSaved(saved: Partial<StoreState> | null | undefined, bucketKey: string): StoreState {
+function normalizedAuthorityValues(values: unknown[] | undefined) {
+  return Array.from(new Set((Array.isArray(values) ? values : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)))
+    .sort()
+}
+
+function makeWorkTasksAuthorityKey(params: {
+  roles?: unknown[]
+  permissions?: unknown[]
+  activeRole?: string | null
+}) {
+  return `authority-v1:${encodeURIComponent(JSON.stringify({
+    activeRole: String(params.activeRole || '').trim().toLowerCase(),
+    roles: normalizedAuthorityValues(params.roles),
+    permissions: normalizedAuthorityValues(params.permissions),
+  }))}`
+}
+
+function projectionKeyFromAuthority(
+  authorityKey: string,
+  view: WorkTasksView,
+  includeManagerUnassignedOffline = false,
+) {
+  return [
+    'projection-v1',
+    authorityKey,
+    `view=${view === 'all' ? 'all' : 'mine'}`,
+    `manager_unassigned=${includeManagerUnassignedOffline ? '1' : '0'}`,
+  ].join('|')
+}
+
+function normalizeProjectionKey(value: unknown, view: WorkTasksView) {
+  const explicit = String(value || '').trim()
+  if (explicit) return explicit
+  const authorityKey = String(workTasksSessionIdentity?.authorityKey || '').trim()
+  return authorityKey
+    ? projectionKeyFromAuthority(authorityKey, view)
+    : `unscoped-v1:${view}`
+}
+
+export function makeWorkTasksProjectionKey(params: {
+  roles?: unknown[]
+  permissions?: unknown[]
+  activeRole?: string | null
+  view: WorkTasksView
+  includeManagerUnassignedOffline?: boolean
+}) {
+  return projectionKeyFromAuthority(
+    makeWorkTasksAuthorityKey(params),
+    params.view,
+    params.includeManagerUnassignedOffline === true,
+  )
+}
+
+function emptyStoreState(bucketKey: string, projectionKey: string, ready: boolean): StoreState {
+  return {
+    items: [],
+    bucketKey,
+    projectionKey,
+    ready,
+    updatedAt: null,
+    lastReceivedEventId: null,
+    lastFullSyncTimestamp: null,
+    dirtyBuckets: {},
+    sseConnectionState: state.sseConnectionState,
+  }
+}
+
+function buildStateFromSaved(
+  saved: Partial<StoreState> | null | undefined,
+  bucketKey: string,
+  projectionKey: string,
+): StoreState {
+  // Old cache entries did not record their role/permission projection. Reusing
+  // them after a permission reduction could expose fields that the current
+  // session is no longer allowed to see, so legacy or mismatched entries fail
+  // closed and are replaced by an empty, ready bucket until the network wins.
+  if (String(saved?.projectionKey || '').trim() !== projectionKey) {
+    return emptyStoreState(bucketKey, projectionKey, true)
+  }
   return {
     items: Array.isArray(saved?.items)
       ? (saved?.items as WorkTaskItem[]).map(redactReadOnlyWorkRecord)
       : [],
     bucketKey,
+    projectionKey,
+    ready: true,
     updatedAt: saved?.updatedAt || null,
     lastReceivedEventId: saved?.lastReceivedEventId || null,
     lastFullSyncTimestamp: saved?.lastFullSyncTimestamp || null,
@@ -263,12 +358,17 @@ function sameRealtimeParams(a: ActiveRealtimeParams | null, b: ActiveRealtimePar
     && a.date_from === b.date_from
     && a.date_to === b.date_to
     && a.view === b.view
+    && a.projectionKey === b.projectionKey
     && a.includeManagerUnassignedOffline === b.includeManagerUnassignedOffline
 }
 
 function sameStreamIdentity(a: StreamIdentity | null, b: StreamIdentity | null) {
   if (!a || !b) return false
   return a.token === b.token && a.userId === b.userId
+}
+
+function sameWorkTasksSessionIdentity(a: StreamIdentity | null, b: StreamIdentity | null) {
+  return sameStreamIdentity(a, b) && a?.authorityKey === b?.authorityKey
 }
 
 function isCurrentWorkTasksSession(params: { token: string; userId: string }, epoch: number = workTasksSessionEpoch) {
@@ -338,6 +438,8 @@ function closeStream() {
 }
 
 export function deactivateWorkTasksRealtime() {
+  const hadSession = workTasksSessionIdentity !== null
+  const previousConnectionState = state.sseConnectionState
   workTasksSessionIdentity = null
   workTasksSessionEpoch += 1
   activeRealtimeParams = null
@@ -347,20 +449,55 @@ export function deactivateWorkTasksRealtime() {
   clearWorkTasksRefreshCoordinator()
   lastStreamActivityAt = 0
   setConnectionState('idle')
+  if (hadSession && previousConnectionState === 'idle') emit()
 }
 
-export function establishWorkTasksSession(params: { token: string; userId: string }) {
+export function establishWorkTasksSession(params: {
+  token: string
+  userId: string
+  role?: string | null
+  roles?: unknown[]
+  permissions?: unknown[]
+}) {
+  const hasAuthority = Object.prototype.hasOwnProperty.call(params, 'role')
+    || Object.prototype.hasOwnProperty.call(params, 'roles')
+    || Object.prototype.hasOwnProperty.call(params, 'permissions')
+  const primaryRole = String(params.role || '').trim()
   const next: StreamIdentity = {
     token: String(params.token || '').trim(),
     userId: String(params.userId || '').trim(),
+    authorityKey: hasAuthority
+      ? makeWorkTasksAuthorityKey({
+          activeRole: primaryRole,
+          roles: primaryRole ? [primaryRole, ...(Array.isArray(params.roles) ? params.roles : [])] : params.roles,
+          permissions: params.permissions,
+        })
+      : undefined,
   }
   if (!next.token || !next.userId) {
     deactivateWorkTasksRealtime()
     return false
   }
-  if (sameStreamIdentity(workTasksSessionIdentity, next)) return true
+  if (sameWorkTasksSessionIdentity(workTasksSessionIdentity, next)) return true
+  const previousSession = workTasksSessionIdentity
   deactivateWorkTasksRealtime()
+  if (!previousSession
+    || previousSession.userId !== next.userId
+    || previousSession.authorityKey !== next.authorityKey) {
+    state = {
+      ...state,
+      items: [],
+      bucketKey: null,
+      projectionKey: null,
+      ready: false,
+      updatedAt: new Date().toISOString(),
+      lastReceivedEventId: null,
+      lastFullSyncTimestamp: null,
+      dirtyBuckets: {},
+    }
+  }
   workTasksSessionIdentity = next
+  emit()
   return true
 }
 
@@ -424,7 +561,13 @@ export function isSafePatchEvent(event: WorkTaskStreamEvent) {
   const fields = Array.isArray(event.changed_fields) ? event.changed_fields.map((x) => String(x || '').trim()).filter(Boolean) : []
   if (!fields.length) return false
   if (eventRequiresGuestReadyAuthorityRefresh(event)) return false
+  if (eventRequiresKeyHandoverAuthorityRefresh(event)) return false
   return fields.every((field) => SAFE_PATCH_FIELDS.has(field))
+}
+
+export function eventRequiresKeyHandoverAuthorityRefresh(event: WorkTaskStreamEvent) {
+  const fields = Array.isArray(event.changed_fields) ? event.changed_fields : []
+  return fields.some((field) => String(field || '').trim().split('.')[0] === 'key_handover')
 }
 
 export function eventRequiresGuestReadyAuthorityRefresh(event: WorkTaskStreamEvent) {
@@ -658,18 +801,29 @@ function eventDirectlyTargetsTask(task: WorkTaskItem, event: WorkTaskStreamEvent
 }
 
 function normalizeRefreshParams(params: WorkTasksRefreshParams): WorkTasksRefreshParams | null {
+  const token = String(params.token || '').trim()
+  const userId = String(params.userId || '').trim()
+  const view = params.view === 'all' ? 'all' : 'mine'
+  const activeProjection = activeRealtimeParams
+    && activeRealtimeParams.token === token
+    && activeRealtimeParams.userId === userId
+    && activeRealtimeParams.view === view
+    ? activeRealtimeParams.projectionKey
+    : null
   const next: WorkTasksRefreshParams = {
-    token: String(params.token || '').trim(),
-    userId: String(params.userId || '').trim(),
+    token,
+    userId,
     date_from: String(params.date_from || '').trim(),
     date_to: String(params.date_to || '').trim(),
-    view: params.view === 'all' ? 'all' : 'mine',
+    view,
+    projectionKey: normalizeProjectionKey(params.projectionKey || activeProjection, view),
+    isCurrent: params.isCurrent,
   }
   return next.token && next.userId && next.date_from && next.date_to ? next : null
 }
 
 function refreshScopeKey(params: WorkTasksRefreshParams) {
-  return makeWorkTasksBucketKey(params)
+  return `${makeWorkTasksBucketKey(params)}|${normalizeProjectionKey(params.projectionKey, params.view)}`
 }
 
 function getRefreshCoordinatorScope(params: WorkTasksRefreshParams) {
@@ -775,28 +929,36 @@ function startCoordinatedRefresh(scopeKey: string, scope: RefreshCoordinatorScop
   const generation = scope.runningGeneration
   const epoch = refreshCoordinatorEpoch
   const sessionEpoch = workTasksSessionEpoch
-  const isCurrent = () => (
+  const isCoordinatorCurrent = () => (
     isRefreshCoordinatorScopeCurrent(scopeKey, scope, epoch)
     && isCurrentWorkTasksSession(scope.params, sessionEpoch)
   )
+  const isCurrent = () => isCoordinatorCurrent() && (scope.params.isCurrent?.() ?? true)
   scope.cooldownUntil = Date.now() + FULL_REFRESH_COOLDOWN_MS
   void executeWorkTasksRefresh(scope.params, isCurrent)
     .then((applied) => {
-      if (!isCurrent()) return
-      if (!applied) {
+      if (!isCoordinatorCurrent()) return
+      if (!applied || !(scope.params.isCurrent?.() ?? true)) {
         discardCoordinatedRefresh(scope, generation)
         return
       }
       finishCoordinatedRefresh(scopeKey, scope, generation, null)
     })
     .catch((error) => {
-      if (isCurrent()) finishCoordinatedRefresh(scopeKey, scope, generation, error)
+      if (!isCoordinatorCurrent()) return
+      if (!(scope.params.isCurrent?.() ?? true)) discardCoordinatedRefresh(scope, generation)
+      else finishCoordinatedRefresh(scopeKey, scope, generation, error)
     })
 }
 
 function requestActiveWorkTasksRefresh(mode: WorkTasksRefreshMode, reason: string) {
   if (!activeRealtimeParams) return Promise.resolve()
-  return requestWorkTasksRefresh({ ...activeRealtimeParams, mode, reason })
+  return requestWorkTasksRefresh({
+    ...activeRealtimeParams,
+    mode,
+    reason,
+    waitForForeground: mode === 'force',
+  })
 }
 
 export function setWorkTasksRefreshForeground(isForeground: boolean) {
@@ -816,14 +978,18 @@ export function setWorkTasksRefreshForeground(isForeground: boolean) {
   }
 }
 
-export function requestWorkTasksRefresh(params: WorkTasksRefreshParams & { mode: WorkTasksRefreshMode; reason: string }) {
+export function requestWorkTasksRefresh(params: WorkTasksRefreshParams & {
+  mode: WorkTasksRefreshMode
+  reason: string
+  waitForForeground?: boolean
+}) {
   const next = normalizeRefreshParams(params)
-  if (!next || !isCurrentWorkTasksSession(next)) return Promise.resolve(false)
+  if (!next || !isCurrentWorkTasksSession(next) || next.isCurrent?.() === false) return Promise.resolve(false)
   const { key, scope } = getRefreshCoordinatorScope(next)
   const mode = params.mode
   const reason = String(params.reason || mode).trim() || mode
-  const bucketKey = state.bucketKey
-  if (bucketKey === key) markBucketDirty(bucketKey, reason)
+  const bucketKey = makeWorkTasksBucketKey(next)
+  if (state.bucketKey === bucketKey && state.projectionKey === next.projectionKey) markBucketDirty(bucketKey, reason)
 
   if (mode === 'passive') {
     if (!workTasksRefreshForeground || scope.running || Date.now() < scope.cooldownUntil) return Promise.resolve(false)
@@ -843,6 +1009,7 @@ export function requestWorkTasksRefresh(params: WorkTasksRefreshParams & { mode:
   clearRefreshCoordinatorTimer(scope)
   if (!workTasksRefreshForeground) {
     scope.pendingForce = true
+    if (params.waitForForeground !== true) return Promise.resolve(false)
     return waitForRefreshGeneration(scope, scope.runningGeneration + 1)
   }
   if (scope.running) {
@@ -857,8 +1024,8 @@ export function requestWorkTasksRefresh(params: WorkTasksRefreshParams & { mode:
 function clearWorkTasksRefreshCoordinator() {
   refreshCoordinatorEpoch += 1
   workTasksHydrationGeneration += 1
-  initializedKey = null
   refreshWorkTasksInFlight.clear()
+  workTasksHydrations.clear()
   for (const scope of refreshCoordinatorScopes.values()) {
     clearRefreshCoordinatorTimer(scope)
     for (const waiter of scope.waiters) waiter.resolve(false)
@@ -886,6 +1053,15 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
       // Keep one bounded retry after a transient failure. The coordinator
       // applies its normal cooldown and coalesces any additional SSE events.
       void requestActiveWorkTasksRefresh('consistency', 'guest_ready_authority_retry').catch(() => {})
+    })
+    return
+  }
+  if (eventRequiresKeyHandoverAuthorityRefresh(event)) {
+    // A source event can match a merged turnover card through active/related
+    // IDs. Only the server has the canonical source set, so never graft this
+    // fact onto the cached merged card locally.
+    void requestActiveWorkTasksRefresh('force', 'key_handover_authority_changed').catch(() => {
+      void requestActiveWorkTasksRefresh('consistency', 'key_handover_authority_retry').catch(() => {})
     })
     return
   }
@@ -1058,28 +1234,40 @@ export function subscribeWorkTasks(cb: () => void) {
 }
 
 export function getWorkTasksSnapshot() {
+  if (!workTasksSessionIdentity) return { ...state, items: [], ready: false }
+  const authorityKey = String(workTasksSessionIdentity?.authorityKey || '').trim()
+  if (authorityKey && !String(state.projectionKey || '').includes(`|${authorityKey}|`)) {
+    return { ...state, items: [], ready: false }
+  }
   return state
 }
 
 export async function activateWorkTasksRealtime(params: ActiveRealtimeParams) {
+  const callerIsCurrent = params.isCurrent || (() => true)
   const next: ActiveRealtimeParams = {
     token: String(params.token || '').trim(),
     userId: String(params.userId || '').trim(),
     date_from: String(params.date_from || '').trim(),
     date_to: String(params.date_to || '').trim(),
     view: params.view === 'all' ? 'all' : 'mine',
+    projectionKey: normalizeProjectionKey(params.projectionKey, params.view === 'all' ? 'all' : 'mine'),
     includeManagerUnassignedOffline: params.includeManagerUnassignedOffline === true,
   }
   if (!next.token || !next.userId || !next.date_from || !next.date_to) return false
   const sessionEpoch = workTasksSessionEpoch
-  const isCurrent = () => isCurrentWorkTasksSession(next, sessionEpoch)
+  const isCurrent = () => callerIsCurrent() && isCurrentWorkTasksSession(next, sessionEpoch)
   if (!isCurrent()) return false
   const nextIdentity: StreamIdentity = { token: next.token, userId: next.userId }
   const streamChanged = !sameStreamIdentity(activeStreamIdentity, nextIdentity)
   if (streamChanged) clearWorkTasksRefreshCoordinator()
   const bucketKey = makeWorkTasksBucketKey(next)
-  if (state.bucketKey !== bucketKey) {
-    const initialized = await initWorkTasksStore({ bucketKey, session: next, canApply: isCurrent })
+  if (state.bucketKey !== bucketKey || state.projectionKey !== next.projectionKey || !state.ready) {
+    const initialized = await initWorkTasksStore({
+      bucketKey,
+      projectionKey: next.projectionKey,
+      session: next,
+      canApply: isCurrent,
+    })
     if (!initialized || !isCurrent()) return false
   }
   if (!isCurrent()) return false
@@ -1092,13 +1280,13 @@ export async function activateWorkTasksRealtime(params: ActiveRealtimeParams) {
 export function findWorkTaskItemByAnyId(id0: string) {
   const id = String(id0 || '').trim()
   if (!id) return null
-  return state.items.find((task) => matchTaskIds(task, [id])) || null
+  return getWorkTasksSnapshot().items.find((task) => matchTaskIds(task, [id])) || null
 }
 
 export function findWorkTaskItemByAnyIds(ids0: any[]) {
   const ids = Array.from(new Set((Array.isArray(ids0) ? ids0 : []).map((v) => String(v || '').trim()).filter(Boolean)))
   if (!ids.length) return null
-  return state.items.find((task) => matchTaskIds(task, ids)) || null
+  return getWorkTasksSnapshot().items.find((task) => matchTaskIds(task, ids)) || null
 }
 
 export async function patchWorkTaskItem(id0: string, patch: Partial<WorkTaskItem>) {
@@ -1116,8 +1304,8 @@ export async function patchWorkTaskItem(id0: string, patch: Partial<WorkTaskItem
   items[idx] = next
   recordLocalTaskPatch(state.bucketKey, next.id)
   state = { ...state, items, updatedAt: new Date().toISOString() }
-  await persist()
   emit()
+  await persist()
 }
 
 export async function patchWorkTaskItems(patches0: Array<{ id: string; patch: Partial<WorkTaskItem> }>) {
@@ -1142,43 +1330,110 @@ export async function patchWorkTaskItems(patches0: Array<{ id: string; patch: Pa
   })
   if (!changed) return
   state = { ...state, items, updatedAt: new Date().toISOString() }
-  await persist()
   emit()
+  await persist()
 }
 
-async function persist() {
-  if (!state.bucketKey) return
+async function persist(snapshot: StoreState = state) {
+  if (!snapshot.bucketKey) return false
+  const key = storageKey(snapshot.bucketKey)
   const toSave: StoreState = {
-    ...state,
+    ...snapshot,
     sseConnectionState: 'idle',
   }
-  await setJson(storageKey(state.bucketKey), toSave)
+  const previous = persistQueues.get(key) || Promise.resolve()
+  let settled = false
+  const write = previous
+    .catch(() => {})
+    .then(() => setJson(key, toSave))
+    .finally(() => {
+      settled = true
+    })
+  persistQueues.set(key, write)
+  void write.finally(() => {
+    if (persistQueues.get(key) === write) persistQueues.delete(key)
+  }).catch(() => {})
+  let timer: ReturnType<typeof setTimeout> | null = null
+  try {
+    await Promise.race([
+      write,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, PERSIST_WAIT_MS)
+      }),
+    ])
+    if (!settled) {
+      recordTaskLoadStage('task_cache.persist_timeout', { errorClass: 'storage' })
+      return false
+    }
+    recordTaskLoadStage('task_cache.persist_ok')
+    return true
+  } catch {
+    recordTaskLoadStage('task_cache.persist_error', { errorClass: 'storage' })
+    return false
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
-export async function initWorkTasksStore(params: { bucketKey: string; session: { token: string; userId: string }; canApply?: () => boolean }) {
+export async function initWorkTasksStore(params: {
+  bucketKey: string
+  projectionKey?: string
+  session: { token: string; userId: string }
+  canApply?: () => boolean
+}) {
   const key = String(params.bucketKey || '').trim()
   if (!key) throw new Error('missing bucketKey')
+  const projectionKey = normalizeProjectionKey(params.projectionKey, key.endsWith(':all') ? 'all' : 'mine')
+  const hydrationKey = `${key}|${projectionKey}|session=${workTasksSessionEpoch}`
   const sessionEpoch = workTasksSessionEpoch
   const canApply = params.canApply || (() => true)
-  const canApplyCurrentSession = () => canApply() && isCurrentWorkTasksSession(params.session, sessionEpoch)
-  if (!canApplyCurrentSession()) return false
-  if (initializedKey === key && state.bucketKey === key) return true
+  const isCurrentSession = () => isCurrentWorkTasksSession(params.session, sessionEpoch)
+  if (!canApply() || !isCurrentSession()) return false
+  if (state.ready && state.bucketKey === key && state.projectionKey === projectionKey) return true
+  const existing = workTasksHydrations.get(hydrationKey)
+  if (existing) return (await existing) && canApply()
   const hydrationGeneration = ++workTasksHydrationGeneration
-  initializedKey = key
-  state = {
-    items: [],
-    bucketKey: key,
-    updatedAt: null,
-    lastReceivedEventId: null,
-    lastFullSyncTimestamp: null,
-    dirtyBuckets: {},
-    sseConnectionState: state.sseConnectionState,
-  }
-  const saved = await getJson<StoreState>(storageKey(key))
-  if (!canApplyCurrentSession() || hydrationGeneration !== workTasksHydrationGeneration) return false
-  state = buildStateFromSaved(saved, key)
+  state = emptyStoreState(key, projectionKey, false)
   emit()
-  return true
+  recordTaskLoadStage('task_cache.hydration_start')
+
+  const hydration = (async () => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let saved: StoreState | null = null
+    let timedOut = false
+    try {
+      saved = await Promise.race([
+        getJson<StoreState>(storageKey(key)),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => {
+            timedOut = true
+            resolve(null)
+          }, HYDRATION_WAIT_MS)
+        }),
+      ])
+    } catch {
+      recordTaskLoadStage('task_cache.hydration_error', { errorClass: 'storage' })
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+    if (timedOut) recordTaskLoadStage('task_cache.hydration_timeout', { errorClass: 'storage' })
+    if (!isCurrentSession() || hydrationGeneration !== workTasksHydrationGeneration) {
+      recordTaskLoadStage('task_cache.hydration_stale', { errorClass: 'stale' })
+      return false
+    }
+    state = buildStateFromSaved(saved, key, projectionKey)
+    recordTaskLoadStage(saved?.projectionKey === projectionKey
+      ? 'task_cache.hydration_cache'
+      : 'task_cache.hydration_empty')
+    emit()
+    return true
+  })()
+  workTasksHydrations.set(hydrationKey, hydration)
+  try {
+    return (await hydration) && canApply()
+  } finally {
+    if (workTasksHydrations.get(hydrationKey) === hydration) workTasksHydrations.delete(hydrationKey)
+  }
 }
 
 function mapRemoteTask(t: WorkTask): WorkTaskItem {
@@ -1266,16 +1521,43 @@ export function mergeRemoteWorkTaskItems(
 
 async function executeWorkTasksRefresh(params: WorkTasksRefreshParams, canApply: () => boolean = () => true) {
   const bucketKey = makeWorkTasksBucketKey({ userId: params.userId, date_from: params.date_from, date_to: params.date_to, view: params.view })
+  const projectionKey = normalizeProjectionKey(params.projectionKey, params.view)
+  const refreshKey = `${bucketKey}|${projectionKey}`
+  const sessionEpoch = workTasksSessionEpoch
+  const isSessionCurrent = () => isCurrentWorkTasksSession(params, sessionEpoch)
   if (!canApply()) return false
-  const inFlight = refreshWorkTasksInFlight.get(bucketKey)
+  const inFlight = refreshWorkTasksInFlight.get(refreshKey)
   if (inFlight) return inFlight
 
   const run = (async () => {
-    const initialized = await initWorkTasksStore({ bucketKey, session: params, canApply })
-    if (!initialized || !canApply() || state.bucketKey !== bucketKey) return false
+    // The coordinator owns the live same-scope guard. A later caller for the
+    // exact same bucket/projection may replace a now-unmounted caller while
+    // this request is in flight; using the frozen original callback here would
+    // incorrectly discard data that is valid for the new current screen.
+    const isCurrent = () => canApply()
+    const initialized = await initWorkTasksStore({ bucketKey, projectionKey, session: params, canApply: isCurrent })
+    if (!initialized || !isCurrent() || state.bucketKey !== bucketKey || state.projectionKey !== projectionKey) return false
     const refreshStartPatchRevision = localPatchRevision
-    const remote = await listWorkTasks(params.token, { date_from: params.date_from, date_to: params.date_to, view: params.view })
-    if (!canApply() || state.bucketKey !== bucketKey) return false
+    let remote: WorkTask[]
+    try {
+      remote = await listWorkTasks(params.token, { date_from: params.date_from, date_to: params.date_to, view: params.view })
+    } catch (error) {
+      const status = Number((error as any)?.status || 0)
+      if ((status === 401 || status === 403)
+        && isSessionCurrent()
+        && state.bucketKey === bucketKey
+        && state.projectionKey === projectionKey) {
+        state = emptyStoreState(bucketKey, projectionKey, true)
+        recordTaskLoadStage('task_refresh.permission_fail_closed', { status, errorClass: 'auth' })
+        emit()
+        await persist(state)
+      }
+      throw error
+    }
+    if (!isCurrent() || state.bucketKey !== bucketKey || state.projectionKey !== projectionKey) {
+      recordTaskLoadStage('task_refresh.response_stale', { errorClass: 'stale' })
+      return false
+    }
     const mappedRemote = remote.map(mapRemoteTask).filter((t) => t.date !== 'unknown')
     const locallyPatchedTaskIds = taskIdsPatchedAfter(bucketKey, refreshStartPatchRevision)
     const items = mergeRemoteWorkTaskItems(mappedRemote, state.items, { retainLocalTaskIds: locallyPatchedTaskIds })
@@ -1287,19 +1569,22 @@ async function executeWorkTasksRefresh(params: WorkTasksRefreshParams, canApply:
       ...state,
       items,
       bucketKey,
+      projectionKey,
+      ready: true,
       updatedAt: now,
       lastFullSyncTimestamp: now,
     }
-    await persist()
     emit()
+    recordTaskLoadStage('task_refresh.applied')
+    await persist(state)
     return true
   })()
 
-  refreshWorkTasksInFlight.set(bucketKey, run)
+  refreshWorkTasksInFlight.set(refreshKey, run)
   try {
     return await run
   } finally {
-    if (refreshWorkTasksInFlight.get(bucketKey) === run) refreshWorkTasksInFlight.delete(bucketKey)
+    if (refreshWorkTasksInFlight.get(refreshKey) === run) refreshWorkTasksInFlight.delete(refreshKey)
   }
 }
 
@@ -1311,8 +1596,9 @@ export async function reconcileActiveWorkTasksAfterLocalPatch() {
   const params = activeRealtimeParams ? { ...activeRealtimeParams } : null
   if (!params) return false
   const bucketKey = makeWorkTasksBucketKey(params)
-  if (state.bucketKey !== bucketKey) return false
-  const inFlight = refreshWorkTasksInFlight.get(bucketKey)
+  const projectionKey = normalizeProjectionKey(params.projectionKey, params.view)
+  if (state.bucketKey !== bucketKey || state.projectionKey !== projectionKey) return false
+  const inFlight = refreshWorkTasksInFlight.get(`${bucketKey}|${projectionKey}`)
   if (inFlight) {
     try {
       await inFlight
@@ -1320,7 +1606,7 @@ export async function reconcileActiveWorkTasksAfterLocalPatch() {
       // The next refresh still gives the receipt a chance to reconcile.
     }
   }
-  if (!sameRealtimeParams(activeRealtimeParams, params) || state.bucketKey !== bucketKey) return false
+  if (!sameRealtimeParams(activeRealtimeParams, params) || state.bucketKey !== bucketKey || state.projectionKey !== projectionKey) return false
   await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'local_patch_reconcile' })
   return true
 }

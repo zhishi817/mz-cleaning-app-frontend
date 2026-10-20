@@ -1,6 +1,7 @@
 import type { WorkTaskAvailableAction } from './api'
 import {
   effectiveInspectionMode,
+  isCheckinSiteExecutionTask,
   isKeyHandoverExecutionTask,
   isPasswordOnlyInspectionTask,
   isSelfCompleteMode,
@@ -235,6 +236,7 @@ export function availableActionsForTask(task: WorkTaskItem | null | undefined, o
   const isCleaningTask = isCleaningSource && taskKind === 'cleaning'
   const isInspectionTask = isCleaningSource && taskKind === 'inspection'
   const isKeyHandoverTask = isKeyHandoverExecutionTask(task as any)
+  const isCheckinSiteExecution = isCheckinSiteExecutionTask(task as any)
   const isStayoverTask = isCleaningTask && isStayoverTaskType(taskType)
   const isCheckoutTask = taskType === 'checkout_clean' || !!cleanText((task as any).start_time)
   const inspectionMode = effectiveInspectionMode(task as any)
@@ -245,6 +247,17 @@ export function availableActionsForTask(task: WorkTaskItem | null | undefined, o
   const isCleaningSubmitted = isCleaningTask && isCleaningWorkSubmitted(task.status)
   const isInspectorUser = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
   const actions: WorkTaskAvailableAction[] = []
+
+  // Older payloads can project a password-only check-in as `cleaning` even
+  // though its assignee performs only the on-site password/key handover. When
+  // the server action array is absent, preserve that execution semantics and
+  // never synthesize cleaning photo/supplies actions. A present server array
+  // remains authoritative via the early return above.
+  if (isCleaningTask && isCheckinSiteExecution && isPasswordOnlyInspection) {
+    actions.push(legacyAction({ id: 'upload_access_video', label: '改密码并完成', placement: 'primary', target: 'InspectionComplete', intent: 'site_action' }))
+    actions.push(legacyAction({ id: 'report_issue', label: '房源问题反馈', placement: 'more', target: 'FeedbackForm', intent: 'issue' }))
+    return actions
+  }
 
   if (isKeyHandoverTask) {
     actions.push(legacyAction({ id: 'upload_access_video', label: '上传视频并完成', placement: 'primary', target: 'InspectionComplete', intent: 'site_action' }))

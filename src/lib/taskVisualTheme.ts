@@ -1,4 +1,4 @@
-import { effectiveInspectionMode } from './cleaningInspection'
+import { effectiveInspectionMode, isCheckinSiteExecutionTask } from './cleaningInspection'
 import type { WorkTaskItem } from './workTasksStore'
 
 export type TaskTone = 'normal' | 'special' | 'pending' | 'danger' | 'success' | 'info' | 'neutral'
@@ -60,7 +60,8 @@ export function getEffectiveTaskStatus(task: Partial<WorkTaskItem> | null | unde
   const status = String(status0 ?? task?.status ?? '').trim().toLowerCase()
   const source = String(task?.source_type || '').trim().toLowerCase()
   const kind = String(task?.task_kind || '').trim().toLowerCase()
-  if (source === 'cleaning_tasks' && kind === 'cleaning' && (task as any)?.cleaning_submission_ready === false) {
+  const isCheckinSiteExecution = isCheckinSiteExecutionTask(task as any)
+  if (source === 'cleaning_tasks' && kind === 'cleaning' && !isCheckinSiteExecution && (task as any)?.cleaning_submission_ready === false) {
     const cleaningStatus = String((task as any)?.cleaning_status || '').trim().toLowerCase()
     if (status === 'cancelled' || status === 'canceled') return status
     if (cleaningStatus && !isDoneLikeStatus(cleaningStatus)) return cleaningStatus
@@ -112,6 +113,33 @@ function isMaintenancePendingReview(task: WorkTaskItem, status: string, source: 
   return workflowStatus === 'pending_review' || status === 'pending_review'
 }
 
+export function hasCompletedKeyHandover(task: Partial<WorkTaskItem> | null | undefined) {
+  const status = String(task?.status || '').trim().toLowerCase()
+  const workRecordState = String(task?.work_record_state || '').trim().toLowerCase()
+  const lifecycleState = String((task as any)?.lifecycle_state || '').trim().toLowerCase()
+  if (status === 'cancelled' || status === 'canceled' || ['cancelled', 'rescheduled', 'reassigned'].includes(workRecordState)) return false
+  if (['deleted', 'removed', 'tombstone', 'superseded'].includes(lifecycleState)) return false
+  return String((task as any)?.key_handover?.state || '').trim().toLowerCase() === 'completed'
+}
+
+const KEY_HANDOVER_REQUIREMENT_LABELS: Record<string, string> = {
+  cleaning_consumables: '补品记录',
+  cleaning_property_photo: '房源照片',
+  inspection_photos: '检查照片',
+}
+
+export function getKeyHandoverPendingNotice(task: Partial<WorkTaskItem> | null | undefined) {
+  if (!hasCompletedKeyHandover(task)) return null
+  const keyHandover = (task as any)?.key_handover
+  if (keyHandover?.workflow_finalization_pending !== true) return null
+  const labels = Array.from(new Set(
+    (Array.isArray(keyHandover?.missing_requirements) ? keyHandover.missing_requirements : [])
+      .map((requirement: unknown) => KEY_HANDOVER_REQUIREMENT_LABELS[String(requirement || '').trim().toLowerCase()] || '')
+      .filter(Boolean),
+  ))
+  return labels.length ? `资料待补：${labels.join('、')}` : '资料待补'
+}
+
 export function getTaskStatusMeta(
   task: WorkTaskItem,
   roleNames: string[],
@@ -130,16 +158,31 @@ export function getTaskStatusMeta(
     }
     if (state === 'reassigned') return { text: '已改派', tone: 'neutral' as const }
   }
+  if (hasCompletedKeyHandover(task)) return { text: '已挂钥匙', tone: 'success' as const }
   const s = getEffectiveTaskStatus(task)
   const meta = baseStatusMeta(s)
   const source = String(task.source_type || '').trim().toLowerCase()
   const kind = String(task.task_kind || '').trim().toLowerCase()
+  const isCheckinSiteExecution = isCheckinSiteExecutionTask(task as any)
 
   if (isMaintenancePendingReview(task, s, source)) {
     const assigneeId = String(task.assignee_id || '').trim()
     const viewerId = String(viewerUserId || '').trim()
     if (assigneeId && viewerId && assigneeId === viewerId) return { text: '已完成', tone: 'success' as const }
     return { text: '待审核', tone: 'pending' as const }
+  }
+
+  if (source === 'cleaning_tasks' && isCheckinSiteExecution && (s === 'todo' || s === 'pending' || s === 'unassigned')) {
+    const hasExecutor = !!(
+      String((task as any).executor_name || '').trim()
+      || String((task as any).assignee_name || '').trim()
+      || String((task as any).assignee_id || '').trim()
+      || String((task as any).inspector_name || '').trim()
+      || String((task as any).inspector_id || '').trim()
+      || String((task as any).cleaner_name || '').trim()
+      || String((task as any).cleaner_id || '').trim()
+    )
+    if (hasExecutor) return { text: '已分配', tone: 'normal' as const }
   }
 
   if (source === 'cleaning_tasks' && kind === 'inspection') {
@@ -157,7 +200,7 @@ export function getTaskStatusMeta(
     return meta
   }
 
-  if (source === 'cleaning_tasks' && kind === 'cleaning') {
+  if (source === 'cleaning_tasks' && kind === 'cleaning' && !isCheckinSiteExecution) {
     const isCleanerView = context.managerView !== true && !hasManagementRole(roleNames) && isCleanerRole(roleNames)
     const cleanerName = String((task as any).cleaner_name || '').trim()
     const inspectorName = String((task as any).inspector_name || '').trim()

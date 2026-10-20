@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
+import { Alert, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
@@ -39,7 +39,7 @@ import {
   isLateCheckoutDisplay,
   turnoverDisplayOf,
 } from '../../lib/turnoverDisplay'
-import { getInspectionModeTone, getInspectionScopeTone, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
+import { getInspectionModeTone, getInspectionScopeTone, getKeyHandoverPendingNotice, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
 import CleaningMediaImage from '../../components/CleaningMediaImage'
 import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 import AppButton from '../../components/ui/AppButton'
@@ -1242,6 +1242,7 @@ export default function TaskDetailScreen(props: Props) {
           : null,
       ].filter(Boolean).join(' · ')
     : ''
+  const keyHandoverPendingNotice = getKeyHandoverPendingNotice(task)
   const metaStyles = statusPillStylePair(meta.tone)
   const kind = taskKindLabel(task.task_kind)
   const region = String(task.property?.region || '').trim()
@@ -1357,6 +1358,7 @@ export default function TaskDetailScreen(props: Props) {
 
   async function saveOfflineEdit() {
     if (!task || !token || !canEditOfflineTask || offlineEditBusy) return
+    Keyboard.dismiss()
     const date = String(offlineEditDate || '').trim()
     const title0 = String(offlineEditTitle || '').trim()
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -1580,7 +1582,7 @@ export default function TaskDetailScreen(props: Props) {
               ) : (
                 <>
                   <View style={kindTagStyles.container}>
-                    <Text style={kindTagStyles.text}>{isKeyHandoverTask || isCheckinSiteExecution ? '执行' : kind}</Text>
+                    <Text style={kindTagStyles.text}>{isKeyHandoverTask || isCheckinSiteExecution ? '检查/挂钥匙' : kind}</Text>
                   </View>
                   {showCheckout ? (
                     <View style={checkoutTagStyles.container}>
@@ -1664,6 +1666,14 @@ export default function TaskDetailScreen(props: Props) {
               <Text style={styles.summary}>{`延期至 ${String(task.rescheduled_to_date).slice(0, 10)}`}</Text>
             ) : null}
             {task.completion_reason ? <Text style={styles.summary}>{`原因：${task.completion_reason}`}</Text> : null}
+          </View>
+        ) : null}
+
+        {keyHandoverPendingNotice ? (
+          <View style={styles.detailPanel}>
+            <Text style={styles.sectionTitle}>挂钥匙已完成</Text>
+            <Text style={styles.summary}>{keyHandoverPendingNotice}</Text>
+            <Text style={styles.mutedSmall}>任务整体仍未完成，请按下方操作补齐资料。</Text>
           </View>
         ) : null}
 
@@ -2128,22 +2138,38 @@ export default function TaskDetailScreen(props: Props) {
         )}
       </View>
     </ScrollView>
-    <Modal visible={offlineEditOpen} transparent animationType="slide" onRequestClose={() => (offlineEditBusy ? undefined : setOfflineEditOpen(false))}>
-      <View style={styles.editModalBackdrop}>
+    <Modal visible={offlineEditOpen} transparent animationType="slide" onRequestClose={() => {
+      if (offlineEditBusy) return
+      Keyboard.dismiss()
+      setOfflineEditOpen(false)
+    }}>
+      <KeyboardAvoidingView
+        testID="offline-edit-keyboard-avoider"
+        style={styles.editModalBackdrop}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <Pressable testID="offline-edit-dismiss-keyboard" accessible={false} style={StyleSheet.absoluteFill} onPress={Keyboard.dismiss} />
         <View style={[styles.editModalCard, { paddingBottom: Math.max(insets.bottom, 12) }]}>
           <View style={styles.editModalHeader}>
             <Text style={styles.editModalTitle}>编辑线下任务</Text>
-            <Pressable onPress={() => setOfflineEditOpen(false)} disabled={offlineEditBusy} style={({ pressed }) => [styles.previewCloseBtn, pressed ? styles.pressed : null]}>
+            <Pressable onPress={() => { Keyboard.dismiss(); setOfflineEditOpen(false) }} disabled={offlineEditBusy} style={({ pressed }) => [styles.previewCloseBtn, pressed ? styles.pressed : null]}>
               <Text style={styles.editModalCloseText}>关闭</Text>
             </Pressable>
           </View>
-          <ScrollView style={styles.editModalScroll} contentContainerStyle={styles.editModalContent} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            testID="offline-edit-scroll"
+            style={styles.editModalScroll}
+            contentContainerStyle={styles.editModalContent}
+            keyboardShouldPersistTaps="always"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            onScrollBeginDrag={Keyboard.dismiss}
+          >
             <Text style={styles.label}>执行日期</Text>
-            <TextInput accessibilityLabel="offline-edit-date" value={offlineEditDate} onChangeText={setOfflineEditDate} editable={!offlineEditBusy} style={styles.input} placeholder="YYYY-MM-DD" placeholderTextColor="#9CA3AF" />
+            <TextInput accessibilityLabel="offline-edit-date" value={offlineEditDate} onChangeText={setOfflineEditDate} editable={!offlineEditBusy} style={styles.input} placeholder="YYYY-MM-DD" placeholderTextColor="#9CA3AF" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
             <Text style={styles.label}>任务标题</Text>
-            <TextInput accessibilityLabel="offline-edit-title" value={offlineEditTitle} onChangeText={setOfflineEditTitle} editable={!offlineEditBusy} style={styles.input} placeholder="任务标题" placeholderTextColor="#9CA3AF" />
+            <TextInput accessibilityLabel="offline-edit-title" value={offlineEditTitle} onChangeText={setOfflineEditTitle} editable={!offlineEditBusy} style={styles.input} placeholder="任务标题" placeholderTextColor="#9CA3AF" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
             <Text style={styles.label}>任务内容</Text>
-            <TextInput accessibilityLabel="offline-edit-content" value={offlineEditContent} onChangeText={setOfflineEditContent} editable={!offlineEditBusy} style={[styles.input, styles.editModalTextArea]} placeholder="补充说明" placeholderTextColor="#9CA3AF" multiline />
+            <TextInput accessibilityLabel="offline-edit-content" value={offlineEditContent} onChangeText={setOfflineEditContent} editable={!offlineEditBusy} style={[styles.input, styles.editModalTextArea]} placeholder="补充说明" placeholderTextColor="#9CA3AF" multiline returnKeyType="default" submitBehavior="newline" />
             <Text style={styles.label}>房源（可选）</Text>
             <Pressable accessibilityLabel="offline-edit-property" onPress={() => setOfflineEditPropertyOpen((prev) => !prev)} disabled={offlineEditBusy} style={({ pressed }) => [styles.editModalSelect, pressed ? styles.pressed : null]}>
               <Text style={styles.editModalSelectText} numberOfLines={1}>{selectedOfflineEditProperty?.code || String(task.property?.code || offlineEditPropertyId || '').trim() || '未关联房源'}</Text>
@@ -2190,7 +2216,7 @@ export default function TaskDetailScreen(props: Props) {
             <Text style={styles.editModalSaveText}>{offlineEditBusy ? '保存中...' : '保存修改'}</Text>
           </Pressable>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
     <Modal visible={!!previewUrl} transparent animationType="fade" onRequestClose={closePreview}>
       <Pressable style={styles.previewBackdrop} onPress={closePreview}>
@@ -2332,11 +2358,11 @@ const styles = StyleSheet.create({
   maintenanceActionButtonCompact: { flexGrow: 0, width: '100%' },
   markBtnDisabled: { backgroundColor: '#E5E7EB' },
   editModalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,23,42,0.45)' },
-  editModalCard: { maxHeight: '92%', borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingTop: 14 },
+  editModalCard: { width: '100%', maxHeight: '92%', flexShrink: 1, borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingTop: 14 },
   editModalHeader: { minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   editModalTitle: { flex: 1, color: '#111827', fontSize: moderateScale(18), fontWeight: '900' },
   editModalCloseText: { color: '#374151', fontWeight: '900' },
-  editModalScroll: { flexGrow: 0 },
+  editModalScroll: { flexGrow: 0, flexShrink: 1 },
   editModalContent: { paddingBottom: 12 },
   editModalTextArea: { minHeight: 88, paddingTop: 10, textAlignVertical: 'top' },
   editModalSelect: { minHeight: 44, borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },

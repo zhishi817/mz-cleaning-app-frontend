@@ -101,7 +101,13 @@ export function AuthProvider(props: { children: React.ReactNode }) {
     })
     await setAuthToken(nextToken)
     await setStoredUser(nextUser)
-    establishWorkTasksSession({ token: nextToken, userId: nextUser.id })
+    establishWorkTasksSession({
+      token: nextToken,
+      userId: nextUser.id,
+      role: nextUser.role,
+      roles: nextUser.roles,
+      permissions: nextUser.permissions,
+    })
     setToken(nextToken)
     setUser(nextUser)
     setStatus('signedIn')
@@ -164,13 +170,19 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         const username = u?.username || decodeURIComponent(t.split(':')[1] || '') || LOCAL_LOGIN_USERNAME
         const role = u?.role || LOCAL_LOGIN_ROLE
         const id = u?.id || `local:${username}`
-        const localUser = { id, username, role }
+        const localUser: StoredUser = { id, username, role }
         await setStoredUser(localUser)
         await establishCleaningMediaCacheSession({
           userId: localUser.id,
           role: localUser.role,
         })
-        establishWorkTasksSession({ token: t, userId: localUser.id })
+        establishWorkTasksSession({
+          token: t,
+          userId: localUser.id,
+          role: localUser.role,
+          roles: localUser.roles,
+          permissions: localUser.permissions,
+        })
         setToken(t)
         setUser(localUser)
         setStatus('signedIn')
@@ -255,7 +267,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       setIsSigningIn(true)
       const username = normalizeUsername(params.username)
       if (canUseLocalLogin() && username.trim() === LOCAL_LOGIN_USERNAME && params.password === LOCAL_LOGIN_PASSWORD) {
-        const localUser = { id: `local:${username.trim()}`, username: username.trim(), role: LOCAL_LOGIN_ROLE }
+        const localUser: StoredUser = { id: `local:${username.trim()}`, username: username.trim(), role: LOCAL_LOGIN_ROLE }
         const localToken = localTokenFor(localUser.username)
         await establishCleaningMediaCacheSession({
           userId: localUser.id,
@@ -264,7 +276,13 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         await setAuthToken(localToken)
         await setStoredUser(localUser)
         await clearRememberedLogin()
-        establishWorkTasksSession({ token: localToken, userId: localUser.id })
+        establishWorkTasksSession({
+          token: localToken,
+          userId: localUser.id,
+          role: localUser.role,
+          roles: localUser.roles,
+          permissions: localUser.permissions,
+        })
         setToken(localToken)
         setUser(localUser)
         setStatus('signedIn')

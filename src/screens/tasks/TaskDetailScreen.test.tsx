@@ -1,5 +1,5 @@
 import React from 'react'
-import { Alert, StyleSheet } from 'react-native'
+import { Alert, Keyboard, Platform, StyleSheet } from 'react-native'
 import { fireEvent, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 
@@ -442,6 +442,13 @@ test('inspection lockbox completion keeps unfinished cleaning supplies action ac
     cleaning_status: 'assigned',
     cleaning_submission_ready: false,
     lockbox_video_url: 'https://example.com/lockbox.mp4',
+    key_handover: {
+      state: 'completed',
+      source_task_id: 'ct-1',
+      completed_at: '2026-10-20T02:32:15.623Z',
+      workflow_finalization_pending: true,
+      missing_requirements: ['cleaning_consumables', 'cleaning_property_photo'],
+    },
     available_actions: [
       { id: 'fill_supplies', label: '补品填报', placement: 'primary', enabled: true, target: 'SuppliesForm', intent: 'cleaning' },
     ],
@@ -456,6 +463,10 @@ test('inspection lockbox completion keeps unfinished cleaning supplies action ac
     )
 
     await waitFor(() => {
+      expect(ui.getByText('已挂钥匙')).toBeTruthy()
+      expect(ui.getByText('挂钥匙已完成')).toBeTruthy()
+      expect(ui.getByText('资料待补：补品记录、房源照片')).toBeTruthy()
+      expect(ui.getByText('任务整体仍未完成，请按下方操作补齐资料。')).toBeTruthy()
       expect(ui.getByText('补品填报')).toBeTruthy()
       expect(ui.queryByText('补品已记录')).toBeNull()
     })
@@ -905,7 +916,7 @@ test('key handover execution task shows user-facing password-only label and vide
   )
 
   await waitFor(() => {
-    expect(ui.getByText('执行')).toBeTruthy()
+    expect(ui.getByText('检查/挂钥匙')).toBeTruthy()
     expect(ui.getByText('检查执行方式：仅改密码')).toBeTruthy()
     expect(ui.getByText('上传视频并完成')).toBeTruthy()
     expect(ui.queryByText('execution')).toBeNull()
@@ -947,7 +958,7 @@ test('check-in site execution task shows scope and assignee in detail', async ()
   )
 
   await waitFor(() => {
-    expect(ui.getByText('执行')).toBeTruthy()
+    expect(ui.getByText('检查/挂钥匙')).toBeTruthy()
     expect(ui.getByText('检查执行方式：检查后挂钥匙')).toBeTruthy()
     expect(ui.getByText('执行人员：Carrie')).toBeTruthy()
     expect(ui.queryByText('execution')).toBeNull()
@@ -966,6 +977,55 @@ test('check-in site execution task shows scope and assignee in detail', async ()
   snapshot.items[0].executor_name = undefined
   snapshot.items[0].cleaner_name = undefined
   snapshot.items[0].inspector_name = undefined
+})
+
+test('legacy password-only check-in detail shows generic executor instead of cleaner', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  snapshot.items[0] = {
+    ...previousTask,
+    task_kind: 'cleaning',
+    execution_role: undefined,
+    execution_semantics: undefined,
+    task_type: 'checkin_clean',
+    inspection_scope: 'password_only',
+    inspection_mode: 'same_day',
+    status: 'pending',
+    start_time: null,
+    end_time: '3pm',
+    assignee_id: 'oscar-id',
+    assignee_name: 'Oscar',
+    executor_name: null,
+    cleaner_id: null,
+    cleaner_name: 'Oscar',
+    inspector_id: null,
+    inspector_name: null,
+    property: { ...previousTask.property, code: 'EQ3401' },
+  }
+
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TaskDetailScreen navigation={{ goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k-eq3401-password-only', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => {
+      expect(ui.getByText('检查/挂钥匙')).toBeTruthy()
+      expect(ui.getByText('检查执行方式：仅改密码')).toBeTruthy()
+      expect(ui.getByText('执行人员：Oscar')).toBeTruthy()
+      expect(ui.getByText('已分配')).toBeTruthy()
+      expect(ui.getByText('改密码并完成')).toBeTruthy()
+      expect(ui.queryByText('清洁人员：Oscar')).toBeNull()
+      expect(ui.queryByText('未分配')).toBeNull()
+      expect(ui.queryByText('上传钥匙')).toBeNull()
+      expect(ui.queryByText('补品填报')).toBeNull()
+    })
+  } finally {
+    snapshot.items[0] = previousTask
+  }
 })
 
 test('task detail uses server available actions and shows disabled reason', async () => {
@@ -1503,6 +1563,7 @@ test('completed non-maintenance task hides supplemental photo controls without t
 
 test('customer service can edit an offline task and save its executor', async () => {
   jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+  const dismissKeyboard = jest.spyOn(Keyboard, 'dismiss').mockImplementation(() => {})
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
   const previousTask = { ...snapshot.items[0] }
@@ -1554,8 +1615,19 @@ test('customer service can edit an offline task and save its executor', async ()
   await waitFor(() => expect(ui.getByTestId('offline-edit-button')).toBeTruthy())
   fireEvent.press(ui.getByTestId('offline-edit-button'))
   await waitFor(() => expect(ui.getByDisplayValue('送暖气')).toBeTruthy())
+  expect(ui.getByTestId('offline-edit-keyboard-avoider')).toBeTruthy()
+  expect(ui.getByTestId('offline-edit-scroll').props.keyboardShouldPersistTaps).toBe('always')
+  expect(ui.getByTestId('offline-edit-scroll').props.keyboardDismissMode).toBe(Platform.OS === 'ios' ? 'interactive' : 'on-drag')
   fireEvent.changeText(ui.getByDisplayValue('送暖气'), '送暖气（已确认）')
   fireEvent.changeText(ui.getByLabelText('offline-edit-date'), '2026-07-24')
+  fireEvent.changeText(ui.getByLabelText('offline-edit-content'), '中文 English 内容保留')
+  expect(ui.getByLabelText('offline-edit-content').props.submitBehavior).toBe('newline')
+  fireEvent(ui.getByDisplayValue('送暖气（已确认）'), 'submitEditing')
+  expect(dismissKeyboard).toHaveBeenCalled()
+  expect(ui.getByDisplayValue('中文 English 内容保留')).toBeTruthy()
+  fireEvent.press(ui.getByTestId('offline-edit-dismiss-keyboard'))
+  expect(dismissKeyboard).toHaveBeenCalledTimes(2)
+  expect(ui.getByTestId('offline-edit-save').props.accessibilityState?.disabled).not.toBe(true)
   expect(ui.queryByText('紧急度')).toBeNull()
   fireEvent.press(ui.getByLabelText('offline-edit-assignee'))
   await waitFor(() => expect(ui.getByText('zhi-f')).toBeTruthy())
@@ -1569,6 +1641,7 @@ test('customer service can edit an offline task and save its executor', async ()
       expect.objectContaining({
         date: '2026-07-24',
         title: '送暖气（已确认）',
+        content: '中文 English 内容保留',
         assignee_id: 'cleaner-2',
       }),
     )
@@ -1577,6 +1650,7 @@ test('customer service can edit an offline task and save its executor', async ()
   updateMock.mockRestore()
   ;(api.listUsers as jest.Mock).mockRestore()
   ;(api.listCleaningAppPropertyCodes as jest.Mock).mockRestore()
+  dismissKeyboard.mockRestore()
   snapshot.items[0] = previousTask
   mockAuthState.user = previousUser
 })
