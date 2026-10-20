@@ -120,7 +120,7 @@ test('submitted cleaning may still display complete after keys are hung', () => 
     }),
     ['cleaner'],
   )
-  expect(meta).toEqual({ text: '已完成', tone: 'success' })
+  expect(meta).toEqual({ text: '清洁已完成', tone: 'success' })
 })
 
 test('maintenance executor sees completed after submitting while management sees pending review', () => {
@@ -136,7 +136,7 @@ test('maintenance executor sees completed after submitting while management sees
   expect(getTaskStatusMeta(task, ['admin'], 'manager-1')).toEqual({ text: '待审核', tone: 'pending' })
 })
 
-test('server-authorized work records use one status vocabulary for every role', () => {
+test('work-record lifecycle never replaces a more specific business status', () => {
   const base = makeTask({
     source_type: 'property_maintenance',
     task_kind: 'maintenance',
@@ -148,8 +148,76 @@ test('server-authorized work records use one status vocabulary for every role', 
   } as any)
 
   expect(getTaskStatusMeta({ ...base, work_record_state: 'pending_review' }, ['cleaner'], 'executor-1')).toEqual({ text: '待审核', tone: 'pending' })
-  expect(getTaskStatusMeta({ ...base, work_record_state: 'completed' }, ['admin'], 'manager-1')).toEqual({ text: '已完成', tone: 'success' })
+  expect(getTaskStatusMeta({ ...base, work_record_state: 'completed' }, ['admin'], 'manager-1')).toEqual({ text: '待审核', tone: 'pending' })
   expect(getTaskStatusMeta({ ...base, work_record_state: 'cancelled' }, ['customer_service'], 'cs-1')).toEqual({ text: '已取消', tone: 'neutral' })
   expect(getTaskStatusMeta({ ...base, work_record_state: 'rescheduled', rescheduled_to_date: '2026-10-22' } as any, ['offline_manager'], 'manager-2')).toEqual({ text: '延期至10-22', tone: 'neutral' })
   expect(getTaskStatusMeta({ ...base, work_record_state: 'reassigned' }, ['cleaner'], 'former-executor')).toEqual({ text: '已改派', tone: 'neutral' })
+})
+
+test.each([
+  ['admin', 'manager-1'],
+  ['customer_service', 'cs-1'],
+  ['offline_manager', 'manager-2'],
+  ['cleaning_inspector', 'inspector-1'],
+])('completed keys-hung work records preserve the business status for %s', (role, viewerUserId) => {
+  const base = makeTask({
+    status: 'keys_hung',
+    work_record_visible: true,
+    work_record_read_only: true,
+    work_record_state: 'completed',
+    work_record_date: '2026-10-20',
+    original_scheduled_date: '2026-10-19',
+  } as any)
+
+  expect(getTaskStatusMeta(base, [role], viewerUserId)).toEqual({ text: '已挂钥匙', tone: 'success' })
+  expect(getTaskStatusMeta({ ...base, status: 'done', inspection_status: 'keys_hung' } as any, [role], viewerUserId)).toEqual({ text: '已挂钥匙', tone: 'success' })
+})
+
+test('cleaner completion label distinguishes cleaning from the later inspection phase', () => {
+  const task = makeTask({
+    task_kind: 'cleaning',
+    status: 'done',
+    cleaner_id: 'cleaner-1',
+    cleaner_name: '清洁A',
+    inspection_mode: 'deferred',
+    inspection_status: 'assigned',
+    work_record_visible: true,
+    work_record_read_only: true,
+    work_record_state: 'completed',
+    work_record_date: '2026-10-20',
+  } as any)
+
+  expect(getTaskStatusMeta(task, ['cleaner'], 'cleaner-1')).toEqual({ text: '清洁已完成', tone: 'success' })
+  expect(getTaskStatusMeta(task, ['admin'], 'manager-1')).toEqual({ text: '待检查', tone: 'pending' })
+  expect(getTaskStatusMeta(task, ['admin', 'cleaner'], 'manager-1')).toEqual({ text: '待检查', tone: 'pending' })
+  expect(getTaskStatusMeta(task, ['admin', 'cleaner'], 'manager-1', { managerView: true })).toEqual({ text: '待检查', tone: 'pending' })
+})
+
+test('restock-pending cleaning keeps phase-specific labels without ending the whole task', () => {
+  const task = makeTask({
+    task_kind: 'cleaning',
+    status: 'restock_pending',
+    cleaner_id: 'cleaner-1',
+    cleaner_name: '清洁A',
+    inspection_mode: 'deferred',
+    inspection_status: 'assigned',
+  } as any)
+
+  expect(getTaskStatusMeta(task, ['cleaner'], 'cleaner-1')).toEqual({ text: '清洁已完成', tone: 'success' })
+  expect(getTaskStatusMeta(task, ['admin'], 'manager-1')).toEqual({ text: '待补品', tone: 'pending' })
+  expect(getTaskStatusMeta(task, ['cleaning_inspector'], 'inspector-1')).toEqual({ text: '待补品', tone: 'pending' })
+})
+
+test('completed record state remains a fallback for an unknown source status', () => {
+  const task = makeTask({
+    source_type: 'manual_work_task',
+    task_kind: 'offline',
+    status: 'archived_unknown',
+    work_record_visible: true,
+    work_record_read_only: true,
+    work_record_state: 'completed',
+    work_record_date: '2026-10-20',
+  } as any)
+
+  expect(getTaskStatusMeta(task, ['offline_manager'], 'manager-1')).toEqual({ text: '已完成', tone: 'success' })
 })

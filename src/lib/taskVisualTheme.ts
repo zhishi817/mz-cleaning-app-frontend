@@ -36,6 +36,11 @@ function isCleanerRole(roleNames: string[]) {
   return rs.includes('cleaner') || rs.includes('cleaner_inspector')
 }
 
+function hasManagementRole(roleNames: string[]) {
+  const rs = (roleNames || []).map((x) => String(x || '').trim()).filter(Boolean)
+  return rs.includes('admin') || rs.includes('offline_manager') || rs.includes('customer_service') || rs.includes('inventory_manager')
+}
+
 function isDoneLikeStatus(status0: string) {
   const s = String(status0 || '').trim().toLowerCase()
   return s === 'done' || s === 'completed' || s === 'ready' || s === 'keys_hung' || s === 'cleaned' || s === 'restock_pending' || s === 'restocked' || s === 'inspected'
@@ -80,7 +85,7 @@ export function getEffectiveTaskStatus(task: Partial<WorkTaskItem> | null | unde
 
 function baseStatusMeta(status: string) {
   const s = String(status || '').trim().toLowerCase()
-  if (s === 'done' || s === 'completed') return { text: '已完成', tone: 'success' as const }
+  if (s === 'done' || s === 'completed' || s === 'ready' || s === 'closed') return { text: '已完成', tone: 'success' as const }
   if (s === 'to_inspect') return { text: '待检查', tone: 'pending' as const }
   if (s === 'to_hang_keys') return { text: '待挂钥匙', tone: 'pending' as const }
   if (s === 'to_complete') return { text: '待完成', tone: 'pending' as const }
@@ -107,11 +112,17 @@ function isMaintenancePendingReview(task: WorkTaskItem, status: string, source: 
   return workflowStatus === 'pending_review' || status === 'pending_review'
 }
 
-export function getTaskStatusMeta(task: WorkTaskItem, roleNames: string[], viewerUserId?: string | null) {
+export function getTaskStatusMeta(
+  task: WorkTaskItem,
+  roleNames: string[],
+  viewerUserId?: string | null,
+  context: { managerView?: boolean } = {},
+) {
+  let isCompletedWorkRecord = false
   if (task.work_record_visible === true) {
     const state = String(task.work_record_state || '').trim().toLowerCase()
     if (state === 'pending_review') return { text: '待审核', tone: 'pending' as const }
-    if (state === 'completed') return { text: '已完成', tone: 'success' as const }
+    isCompletedWorkRecord = state === 'completed'
     if (state === 'cancelled') return { text: '已取消', tone: 'neutral' as const }
     if (state === 'rescheduled') {
       const toDate = String(task.rescheduled_to_date || '').trim().slice(0, 10)
@@ -133,11 +144,13 @@ export function getTaskStatusMeta(task: WorkTaskItem, roleNames: string[], viewe
 
   if (source === 'cleaning_tasks' && kind === 'inspection') {
     const checkedOutAt = String((task as any).checked_out_at || '').trim()
+    const inspectionStatus = String((task as any).inspection_status || '').trim().toLowerCase()
     const hasInspector = !!(
       String((task as any).inspector_id || '').trim()
       || String((task as any).inspector_name || '').trim()
       || String((task as any).assignee_id || '').trim()
     )
+    if (s === 'keys_hung' || inspectionStatus === 'keys_hung') return { text: '已挂钥匙', tone: 'success' as const }
     if (s === 'cleaned' || s === 'restock_pending' || s === 'restocked') return { text: '待检查', tone: 'pending' as const }
     if (checkedOutAt && !isTaskWorkflowProgressStatus(s) && !isDoneLikeStatus(s) && s !== 'cancelled' && s !== 'canceled') return { text: '已退房', tone: 'special' as const }
     if ((s === 'todo' || s === 'pending' || s === 'unassigned') && hasInspector) return { text: '已分配', tone: 'normal' as const }
@@ -145,7 +158,7 @@ export function getTaskStatusMeta(task: WorkTaskItem, roleNames: string[], viewe
   }
 
   if (source === 'cleaning_tasks' && kind === 'cleaning') {
-    const isCleanerView = isCleanerRole(roleNames)
+    const isCleanerView = context.managerView !== true && !hasManagementRole(roleNames) && isCleanerRole(roleNames)
     const cleanerName = String((task as any).cleaner_name || '').trim()
     const inspectorName = String((task as any).inspector_name || '').trim()
     const hasExecutor = !!(cleanerName || inspectorName || String((task as any).cleaner_id || '').trim() || String((task as any).assignee_id || '').trim() || String((task as any).inspector_id || '').trim())
@@ -154,7 +167,8 @@ export function getTaskStatusMeta(task: WorkTaskItem, roleNames: string[], viewe
     const inspectionMode = effectiveInspectionMode(task as any)
 
     if (isDoneLikeStatus(s)) {
-      if (isCleanerView) return { text: '已完成', tone: 'success' as const }
+      if (isCleanerView) return { text: '清洁已完成', tone: 'success' as const }
+      if (s === 'restock_pending') return { text: '待补品', tone: 'pending' as const }
       if (inspectionMode === 'same_day' || inspectionMode === 'deferred' || hasInspection || inspectionStatus) {
         if (inspectionStatus === 'keys_hung' || inspectionStatus === 'done' || inspectionStatus === 'completed') {
           return { text: '已挂钥匙', tone: 'success' as const }
@@ -173,5 +187,9 @@ export function getTaskStatusMeta(task: WorkTaskItem, roleNames: string[], viewe
     }
   }
 
+  // `work_record_state` marks the record lifecycle, but must not erase a more
+  // specific business status above. It remains the fallback only when the
+  // source did not provide a status that this client understands.
+  if (isCompletedWorkRecord && meta.text === '待处理') return { text: '已完成', tone: 'success' as const }
   return meta
 }

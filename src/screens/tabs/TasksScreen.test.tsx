@@ -929,6 +929,78 @@ test('manager keeps MSQ1905E reopened overdue inspection separate from the curre
   mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
 })
 
+test('manager keeps separate readonly change records for the same property and stable task key', async () => {
+  // Match this test file's existing late-bound mocked-module pattern.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const store = jest.requireMock('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  const base = previousItems[0]
+  mockAuthState.user = { id: 'admin-history', username: 'admin-history', role: 'admin', roles: ['admin', 'cleaner'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  snapshot.items = [
+    {
+      ...base,
+      id: 'record-reassigned',
+      source_id: 'same-cleaning-source',
+      daily_stats_key: `turnover:${mockTodayKey}:same-property`,
+      work_record_visible: true,
+      work_record_read_only: true,
+      work_record_state: 'reassigned',
+      work_record_date: mockTodayKey,
+      original_scheduled_date: mockTodayKey,
+      scheduled_date: mockTodayKey,
+      status: 'assigned',
+      date: mockTodayKey,
+    },
+    {
+      ...base,
+      id: 'record-rescheduled',
+      source_id: 'same-cleaning-source',
+      daily_stats_key: `turnover:${mockTodayKey}:same-property`,
+      work_record_visible: true,
+      work_record_read_only: true,
+      work_record_state: 'rescheduled',
+      work_record_date: mockTodayKey,
+      original_scheduled_date: mockTodayKey,
+      rescheduled_to_date: '2026-10-14',
+      scheduled_date: mockTodayKey,
+      status: 'assigned',
+      date: mockTodayKey,
+    },
+  ]
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const TasksScreen = jest.requireActual('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-manager-work-record-events', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => {
+      expect(ui.getByLabelText('task-card-record-reassigned')).toBeTruthy()
+      expect(ui.getByLabelText('task-card-record-rescheduled')).toBeTruthy()
+      expect(ui.getByText('已改派')).toBeTruthy()
+      expect(ui.getByText('延期至10-14')).toBeTruthy()
+      expect(ui.getByText('历史 2')).toBeTruthy()
+    })
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
 test('tasks screen card tap uses the customer-service manager detail for admin roles', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()

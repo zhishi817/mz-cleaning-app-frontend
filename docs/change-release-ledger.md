@@ -1,5 +1,130 @@
 # Change Release Ledger
 
+## CRL-20261020-004 — MZ053 unified task status and history presentation
+
+- **Status:** exact staged candidate selected for local commit; not yet committed, pushed, merged, built or published
+- **Repository:** `mobile`
+- **Updated:** 2026-10-20 UTC
+- **Request:** 统一维修、深清、补日用品、线下及清洁/检查任务的当日/历史呈现：当天完成记录不能消失，执行人员、admin、客服和线下经理在既有权限内看到活动、逾期与历史；清洁执行完成须与后续检查阶段区分，统计不得重复或吞掉延期/改派记录。
+- **Outcome:** 当前接口已经返回且已授权的所选日卡片按“活动 / 逾期 / 历史”分区，并显示在办、完成、取消、逾期及变更统计；清洁人员看到“清洁已完成”，管理/检查角色继续看到“待检查 / 已挂钥匙”等具体阶段；只读工作记录仍无动作且不扩大数据范围。
+
+### Implementation
+
+- Previous behavior: 任务卡平铺展示，仅有入住＋退房/线下数量；completed 工作记录会过早返回通用“已完成”，遮住具体检查阶段；清洁完成、检查完成和历史记录不易区分。
+- New behavior: 终态与取消/延期/改派记录进入历史，未终态旧到期任务单列逾期，待审核记录留在活动；“在办 / 逾期 / 完成 / 取消 / 变更”为互斥统计；统计及管理视图的当前投影优先按 Root 提供的 `daily_stats_key` 去重，工作记录按不可变记录 ID 计数且绝不参与当前投影折叠；completed 记录先解析业务状态，未知状态才回退“已完成”。
+- Key decisions: 任一已知开放的 source / cleaning / inspection phase 优先于 generic completed record marker；`cleaned`、`restock_pending`、`restocked`、`inspected` 不作为已验证整体终态；延期检查只用 `inspection_due_date` 判断逾期，其余任务用计划日；搜索不改变所选日统计；保持 Root 权威日期分桶、权限、available actions、导航、提交和缓存合同，不修改 MZ-049 延期任务后端候选，也不触碰 MZ-048 脏工作树。
+
+### Files / Areas
+
+- `src/lib/taskVisualTheme.ts` — modified: completed 工作记录保留具体业务状态；清洁角色使用“清洁已完成”，管理/检查角色保留检查进度。
+- `src/lib/taskVisualTheme.test.ts` — modified: 覆盖清洁、管理、客服、线下经理、检查角色及记录状态回退。
+- `src/lib/dailyTaskPresentation.ts` — modified: 定义活动/逾期/历史分区、确定性终态、稳定身份去重及状态统计。
+- `src/lib/dailyTaskPresentation.test.ts` — modified: 覆盖跨日完成、旧延期逾期、待审核、取消、改派/延期事件及 merged projection 去重。
+- `src/screens/tabs/TasksScreen.tsx` — modified: 在现有所选日/权限结果上展示状态统计和三段列表，不新增数据读取或动作。
+- `src/screens/tabs/TasksScreen.test.tsx` — modified: 覆盖经理模式下同房同稳定键的改派、延期记录均保留。
+- `docs/change-release-ledger.md` — modified: 记录扩大后的本地候选范围、验证和发布边界。
+
+### Impact / Dependencies
+
+- API: none; consumes existing Root `status`、`source_workflow_status`、`inspection_status`、`inspection_mode`、`inspection_due_date`、`work_record_state` and `daily_stats_key` fields。
+- Database / migration: none。
+- Config / environment: none; no EAS/native/runtime change。
+- Dependencies: requires the existing deployed Root work-record payload contract from `root/CRL-20261019-003`；MZ-049 的延期任务查询候选仍由 Root 单独治理，本候选只做展示分区，不替代或修改该规则。
+- Related units: `mobile/CRL-20261019-004`; this is a new display correction and does not modify the released CRL lineage。
+
+### Validation
+
+- Focused Jest `src/lib/dailyTaskPresentation.test.ts src/lib/taskVisualTheme.test.ts src/screens/tabs/TasksScreen.test.tsx` — passed: 3 suites / 68 tests。
+- TypeScript `npx tsc --noEmit` and `git diff --check` — passed。
+- `PYTHONDONTWRITEBYTECODE=1 npm run check:ci` — passed after final scope: ledger range tests 44/44, ledger coverage 7/7, TypeScript, button contract, lint with 0 errors / 667 pre-existing warnings, fast 8 suites / 87 tests, full 74 suites / 528 tests。
+- Independent read-only complete-diff review — GO: P0/P1/P2 = 0, P3 evidence-count typo corrected here; confirmed stage precedence, readonly-event preservation, stable-key current projection dedupe, mutually exclusive status totals, multi-role management labels, day-end insertion, unchanged permissions/actions/writes and no sensitive or release behavior。
+- Simulator, physical device, EAS/native build, OTA and production verification — not run。
+
+### Staged Commit Scope
+
+- **Repository:** mobile
+- **Status:** prepared on `codex/mz053-unified-display` from `origin/Dev@09cb3ac5ffd68182be1e89e3270edca708462b24`
+- **Untracked review:** none; six reviewed source/test files are staged and the release worktree contains no untracked path。
+- `src/lib/dailyTaskPresentation.test.ts` — SHA-256: `5349a9eecff055fd3b390e07e1483fdc5b8ae8f97b4a9b2e84bcb0492047a2bf`
+- `src/lib/dailyTaskPresentation.test.ts` — SHA-256: `ded7b4e933541449babfcfa492313ff4429a1105291686a4da29f267ffb0900d`
+- `src/lib/dailyTaskPresentation.ts` — SHA-256: `409b2433755ea3b563b22620197dcb61fe82ff7fef854c328e714a4744cd32d2`
+- `src/lib/taskVisualTheme.test.ts` — SHA-256: `2d8134f5a8746735d65b86ec9e6161bbad0e7ff6bf64a8ce89a9de328946171a`
+- `src/lib/taskVisualTheme.test.ts` — SHA-256: `4914ea645bd29bedb25a365b5ef9def90b96813993f9a2e057c41416953e1d18`
+- `src/lib/taskVisualTheme.test.ts` — SHA-256: `49555ccc65fe4d9f754d67a4c18291a052efc05eb3e927199a51ecc3cc39c029`
+- `src/lib/taskVisualTheme.test.ts` — SHA-256: `61e510c33f7e76e27945827b411b6ccbd7d65425a0f318c0d51ce8c85c6c9129`
+- `src/lib/taskVisualTheme.ts` — SHA-256: `08b2f82637549ed564657ee10a791db0a4fd0f1aa9a40bf2698d61d5d793037e`
+- `src/lib/taskVisualTheme.ts` — SHA-256: `149bf3adeac42f886d6b501769c7a81efa330ab5cc9717a0ec8c48770d9446c0`
+- `src/lib/taskVisualTheme.ts` — SHA-256: `15f7354b61c53ff1bdca1b07e9f784925c1adce409d8e2fb8d6c03a30bccea7d`
+- `src/lib/taskVisualTheme.ts` — SHA-256: `75e24588cfb52182005d7161b60e05f2aec028c7ee77b6f43b3de18c682e4bd5`
+- `src/lib/taskVisualTheme.ts` — SHA-256: `9b5cacc4223d5acd63354bb9149ff206772be8793200af7c8a2fca6fd04e837c`
+- `src/lib/taskVisualTheme.ts` — SHA-256: `a9b26ff521ad2e9244291cdfb2f8882bede365c8c63f6836dbf5495084d5eca0`
+- `src/lib/taskVisualTheme.ts` — SHA-256: `aa9b64fc30ac8a050267ed2a6afe448727461cabf314a4a8969d7a2a0a101a33`
+- `src/lib/taskVisualTheme.ts` — SHA-256: `ae2b647287370043eafda4807cee55408dac43756a94ace9fb48575830daa3b2`
+- `src/lib/taskVisualTheme.ts` — SHA-256: `f51e765c8206cc7fd6f9f52616421cc2bc69a23e765ce678d425b7519d38eff9`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `263e30dccd648120aa8de0f6cbecdd907ce00886004d53c68667ecaccb5bc537`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `1b152f3a853c7042e42dddf3abb960cec19ec33c1ed911725f620856e5e21f83`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `24d83f4554fd6565fb26cc063aff249eb3f1e9f49d393848fc293fea52a3c636`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `3f31777deaa2f7f427762eaf3611e71064f7278c79d16e499256d7320a1501c1`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `4abebe06733a7bf563a538e615476e2ae61a29be8a3980f829c4af35f0bfc459`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `51404132fc3391df169f18ca0fbd379c54dd7a98738c330da6027af03e950710`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `79cb83812c83a28d61904fb2213928b964aacbb2a68de9400e04ba99eb106790`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `8c9ac4eec791e03b59e09bd85b90ab3ea0551ddf703f21940dd6ab5feb446d7e`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `9112c9b22fac11f9d0324abf59ba15cd52070b2b715e083b4c13ab4a19f454ce`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `9918498b88f0781b43789fe9d4cedc77ecd3e8893c7d3cac66625532374f62f9`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `af145aaa4bb259bd867f704e99209b93136b90138f054e0bb769da91787743ee`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `d4f601145442be51199437f6c1b1037f4f5e496d55fb47557530f94eb4dab72b`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `f1a5527ab5829739a8a927adaac075ace6f73dbe90aaf0ee5289cb0edb7da78f`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `f38a2647feb7be60b41e02ed59c4b2e18e38b9844d7925d36493de9a928c916e`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `f9e84a9250871865bdd8f6c6ac53718a7d2c543fe810ee09d3a565368bd2766f`
+
+### Release Attempts
+
+#### RA-20261020-006
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261020-004`
+- Selected CRL identities: `mobile/CRL-20261020-004`
+- Intended action: `commit`
+- Branch: `codex/mz053-unified-display`
+- Base: `origin/Dev@09cb3ac5ffd68182be1e89e3270edca708462b24`; fetched at `2026-10-20 14:02 UTC`
+- Candidate patch SHA-256: `cd1d81a47e11c435b0bd1f0f175febb19d7f19b7dfff2c472d460dae873385af`
+- Commit SHA: `eee2ace7d77f8342c6a1b4052dc7641a9a19bd96`; exact reviewed MZ053 content commit; the final audit head is the later ledger-only freeze receipt commit
+- Dependencies: `root/CRL-20261019-003@27aff6bf923425aa15885a83570906f570a1a003`
+- Required validation: `PASS for local content commit / release NOT VERIFIED`; evidence: focused 3 suites / 68 tests, TypeScript, diff check, ledger 7/7 and complete Mobile `check:ci` with 74 suites / 528 tests passed; post-commit `origin/Dev...eee2ace7d77f8342c6a1b4052dc7641a9a19bd96` non-ledger fingerprint exactly matches `cd1d81a47e11c435b0bd1f0f175febb19d7f19b7dfff2c472d460dae873385af`; simulator, device, native build, OTA and production verification were not run
+- Shared-hunk review: `PASS`; evidence: all 31 staged non-ledger hunks belong to this CRL, with no unselected or unexpected path
+- Generated-file review: `PASS`; evidence: no generated, native, dependency, cache or build artifact is selected
+- Technical state: `committed`; exact content commit `eee2ace7d77f8342c6a1b4052dc7641a9a19bd96`, followed only by this ledger-only freeze receipt
+- User authorization: `selected-for-commit`; evidence: after Root and Mobile candidates and the no-push/no-OTA boundary were stated, the user replied `可以`
+- Independent review: `GO for this exact local commit candidate`; evidence: final read-only review found P0/P1/P2 = 0 across phase precedence, immutable-record preservation, stable-key current projection dedupe, mutually exclusive status buckets, multi-role labels, permissions/actions/writes and sensitive/release boundaries
+- Action conclusion: `LOCAL CONTENT COMMIT COMPLETED / push NOT AUTHORIZED`; this ledger-only freeze receipt may be committed under the same bookkeeping authorization, but push, PR, merge, EAS/native build, OTA publication, deployment and production actions require separate approval and evidence
+
+#### RA-20261020-007
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261020-004`
+- Selected CRL identities: `mobile/CRL-20261020-004`
+- Intended action: `push`
+- Branch: `codex/mz053-unified-display`
+- Base: `origin/Dev@09cb3ac5ffd68182be1e89e3270edca708462b24`; freshly fetched at `2026-10-20T14:24:55Z`
+- Candidate patch SHA-256: `cd1d81a47e11c435b0bd1f0f175febb19d7f19b7dfff2c472d460dae873385af`, excluding `docs/change-release-ledger.md`
+- Commit SHA: `eee2ace7d77f8342c6a1b4052dc7641a9a19bd96`; exact reviewed content commit. Source audit HEAD before this push-attempt receipt is `0547dc69f2c54ad5b36faa3e59e0f96924583794`; the final audit HEAD will be this later ledger-only receipt commit.
+- Dependencies: `root/CRL-20261019-003@27aff6bf923425aa15885a83570906f570a1a003`
+- Required validation: `PASS for committed content / single-repository release dependency NOT VERIFIED`; evidence: focused 3 suites / 68 tests, TypeScript, diff check, ledger 7/7 and complete Mobile `check:ci` with 74 suites / 528 tests passed; the exact non-ledger fingerprint matches the reviewed candidate. The release reporter cannot independently inspect the separate Root repository dependency, so the paired local ancestry check must remain explicit.
+- Shared-hunk review: `PASS`; evidence: the exact range contains only the six declared Mobile source/test files and 31 selected non-ledger hunks plus ledger receipts.
+- Generated-file review: `PASS`; evidence: no generated output, native file, dependency, lockfile, cache, environment file or bundle is in the range.
+- Technical state: `committed`; push receipt preparation is in progress and the remote feature branch is absent.
+- User authorization: `not yet approved for the final receipt HEAD`; evidence: the user said `推送`, which selects this already-completed Root/Mobile pair for push preparation, but the exact resulting receipt HEAD had not yet been shown. Repository policy requires a final confirmation bound to repository, branch and the immutable receipt HEAD.
+- Independent review: `GO for the exact local content commit`; push-only review of the frozen final receipt HEAD remains required immediately before push.
+- Remote preflight: read-only fetch confirmed `origin/Dev@09cb3ac5ffd68182be1e89e3270edca708462b24` unchanged at `2026-10-20T14:24:55Z`; `git ls-remote --heads origin codex/mz053-unified-display` returned no branch.
+- Action conclusion: `NOT VERIFIED for push`; blockers: commit this ledger-only push-attempt receipt, run the exact final range report and push-only read-only review, then obtain explicit user confirmation of `zhishi817/mz-cleaning-app-frontend`, branch `codex/mz053-unified-display` and the resulting final receipt HEAD. No ledger mutation is required after that confirmation. Push does not authorize PR, merge, EAS/native build, OTA or deployment.
+
+### Risks / Release Notes
+
+- Risk: presentation-only grouping changes task order within the selected day and depends on server status/date accuracy; it does not hide cards, but an incorrect upstream status could place a card in the wrong section。
+- Rollback: revert this CRL's six source/test paths; the previous flat list and generic completed-record label return without a data rollback。
+- Sensitive-information review: no secrets, credentials, production payloads or customer data added。
+- Git state: local uncommitted candidate based on `origin/Dev@09cb3ac5ffd68182be1e89e3270edca708462b24`; not pushed, not published, not device verified。
+
 ## CRL-20261020-003 — MZ053 failed-force retry storm guard
 
 - **Status:** selected Mobile release candidate on freshly fetched `origin/Dev@7021aeda7e7336c0a20e99412e7d370e0e12f8c5`; exact staging and current-base validation passed; exact staged independent review remains pending; not committed, pushed, merged, built or published
