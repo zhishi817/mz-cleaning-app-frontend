@@ -41,7 +41,7 @@ import {
   unlinkedDeferredInspectionDisplayIdentity,
 } from '../../lib/cleaningInspection'
 import { canSwitchTaskMode, isTaskManagerUser } from '../../lib/roles'
-import { isDailyTaskExecutionVisible } from '../../lib/dailyTaskExecutionVisibility'
+import { isDailyTaskListVisible } from '../../lib/dailyTaskExecutionVisibility'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { resolveKeyRequirementTags } from '../../lib/keyRequirementTags'
 import { normalizeAuMobile } from '../../lib/phone'
@@ -1316,7 +1316,8 @@ export default function TasksScreen(props: Props) {
 
   const selectedTasks = useMemo(() => {
     const list = (tasksByDate.get(selectedDate) || []).filter((task) => {
-      if (!isDailyTaskExecutionVisible(task, { includeManagerUnassignedOffline })) return false
+      if (!isDailyTaskListVisible(task, { includeManagerUnassignedOffline })) return false
+      if (task.work_record_visible === true && task.work_record_read_only === true) return true
       if (!includeManagerUnassignedOffline) return hasMobileExecutor(task)
       if (isCleaningExecutionTask(task) || isInspectionExecutionTask(task) || isKeyHandoverExecutionTask(task)) return true
       if (isPropertyFollowupTask(task)) return hasMobileExecutor(task)
@@ -1358,13 +1359,16 @@ export default function TasksScreen(props: Props) {
   }), [includeManagerUnassignedOffline, selectedTasks])
 
   const canReorder = useMemo(() => {
+    const writableTasks = selectedTasks.filter((task) => task.work_record_read_only !== true)
+    if (!writableTasks.length) return false
     if (roleNames.includes('cleaner') || roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')) return true
     if (canManagerMode && mode === 'manager') return false
-    return selectedTasks.some((task) => !isCleaningExecutionTask(task) && !isInspectionExecutionTask(task) && !isKeyHandoverExecutionTask(task))
+    return writableTasks.some((task) => !isCleaningExecutionTask(task) && !isInspectionExecutionTask(task) && !isKeyHandoverExecutionTask(task))
   }, [canManagerMode, mode, selectedTasks, roleNames.join('|')])
 
   const isReorderableTask = useMemo(() => {
     return (task: WorkTaskItem) => {
+      if (task.work_record_read_only === true) return false
       const cleaning = isCleaningExecutionTask(task)
       const inspection = isInspectionExecutionTask(task)
       const handover = isKeyHandoverExecutionTask(task)
@@ -2999,7 +3003,9 @@ function showBanner(title: string, message: string) {
               const isHistoricalTask = isBeforeToday(String(task.scheduled_date || (task as any).date || ''))
               const isManager = canManagerMode && mode === 'manager'
               const isInspectorUser = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
-              const taskPrimaryActions = primaryActionsForTask(task, { roleNames, activeRole, limit: 2 })
+              const taskPrimaryActions = task.work_record_read_only === true
+                ? []
+                : primaryActionsForTask(task, { roleNames, activeRole, limit: 2 })
               const renderPrimaryAction = (action: WorkTaskAvailableAction) => {
                 const checkedOutVisual = action.id === 'mark_guest_checkout' && !!checkedOutAt
                 const localDisabled =
@@ -3081,6 +3087,15 @@ function showBanner(title: string, message: string) {
                 ? offlineTitleRaw
                 : ''
               const followupTitle = isPropertyFollowupTask(task) ? propertyFollowupTaskTitle(task) : ''
+              const workRecordDate = String(task.work_record_date || '').trim().slice(0, 10)
+              const originalScheduledDate = String(task.original_scheduled_date || (task.work_record_visible ? '' : task.scheduled_date) || '').trim().slice(0, 10)
+              const workRecordContext = task.work_record_visible === true
+                ? [
+                    '工作记录',
+                    workRecordDate && workRecordDate !== originalScheduledDate ? `记录日 ${workRecordDate}` : null,
+                    originalScheduledDate ? `原计划 ${originalScheduledDate}` : null,
+                  ].filter(Boolean).join(' · ')
+                : ''
               const title2 = isOfflineTask
                 ? [code || '', offlineTitleSuffix].filter(Boolean).join(' ').trim() || offlineTitleRaw || '-'
                 : isPropertyFollowupTask(task) && followupTitle
@@ -3307,6 +3322,10 @@ function showBanner(title: string, message: string) {
                       </View>
                     ) : null}
                   </View>
+
+                  {workRecordContext ? (
+                    <Text style={styles.summary} numberOfLines={2}>{workRecordContext}</Text>
+                  ) : null}
 
                   {taskCollapsed && guestSpecialRequest ? (
                     <View style={styles.collapsedGuestRequest}>

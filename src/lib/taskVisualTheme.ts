@@ -108,6 +108,17 @@ function isMaintenancePendingReview(task: WorkTaskItem, status: string, source: 
 }
 
 export function getTaskStatusMeta(task: WorkTaskItem, roleNames: string[], viewerUserId?: string | null) {
+  if (task.work_record_visible === true) {
+    const state = String(task.work_record_state || '').trim().toLowerCase()
+    if (state === 'pending_review') return { text: '待审核', tone: 'pending' as const }
+    if (state === 'completed') return { text: '已完成', tone: 'success' as const }
+    if (state === 'cancelled') return { text: '已取消', tone: 'neutral' as const }
+    if (state === 'rescheduled') {
+      const toDate = String(task.rescheduled_to_date || '').trim().slice(0, 10)
+      return { text: toDate ? `延期至${toDate.slice(5)}` : '已延期', tone: 'neutral' as const }
+    }
+    if (state === 'reassigned') return { text: '已改派', tone: 'neutral' as const }
+  }
   const s = getEffectiveTaskStatus(task)
   const meta = baseStatusMeta(s)
   const source = String(task.source_type || '').trim().toLowerCase()

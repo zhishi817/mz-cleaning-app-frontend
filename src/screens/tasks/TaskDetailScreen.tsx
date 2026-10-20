@@ -287,6 +287,7 @@ export default function TaskDetailScreen(props: Props) {
 
   const items = getWorkTasksSnapshot().items
   const task = useMemo<WorkTaskItem | null>(() => findWorkTaskItemByAnyId(id), [id, items])
+  const mediaAccessWorkTaskId = String(task?.media_access_work_task_id || task?.id || '').trim() || null
   const maintenancePhotoDraftTaskId = task && maintenanceDomainForSourceType(task.source_type) ? String(task.id || '').trim() : ''
   const maintenancePhotoDraftOwnerId = String((user as any)?.id || (user as any)?.user_id || (user as any)?.username || '').trim()
   const completionPhotoPendingTaskId = task && String(task.source_type || '').trim() === 'cleaning_offline_tasks' ? String(task.id || '').trim() : ''
@@ -375,7 +376,8 @@ export default function TaskDetailScreen(props: Props) {
   const guestLuggage = (task as any)?.guest_luggage || null
   const cleaningTaskId = String((task as any)?.source_id || '').trim()
   const isOfflineTaskForEdit = String(task?.task_kind || '').toLowerCase() === 'offline'
-  const canEditOfflineTask = isOfflineTaskForEdit && canManagerView
+  const workRecordReadOnly = (task as any)?.work_record_read_only === true
+  const canEditOfflineTask = isOfflineTaskForEdit && canManagerView && !workRecordReadOnly
 
   useEffect(() => {
     if (!offlineEditOpen || !token || !canEditOfflineTask) return
@@ -914,7 +916,16 @@ export default function TaskDetailScreen(props: Props) {
     return operationId
   }
 
-  async function applyMaintenanceExecutorReceipt(receipt: { status?: string; available_actions?: string[] }) {
+  async function applyMaintenanceExecutorReceipt(receipt: {
+    status?: string
+    available_actions?: string[]
+    completed_at?: string | null
+    work_record_visible?: boolean
+    work_record_state?: string | null
+    work_record_date?: string | null
+    work_record_read_only?: boolean
+    counts_as_active_task?: boolean
+  }) {
     if (!task) return
     const status = String(receipt?.status || '').trim()
     if (!status) return
@@ -928,6 +939,13 @@ export default function TaskDetailScreen(props: Props) {
         status,
         available_actions: Array.isArray(receipt?.available_actions) ? receipt.available_actions : [],
       },
+      completed_at: receipt.completed_at ?? null,
+      work_record_visible: receipt.work_record_visible === true,
+      work_record_state: receipt.work_record_state ?? null,
+      work_record_date: receipt.work_record_date ?? null,
+      date: receipt.work_record_date ?? task.date,
+      work_record_read_only: receipt.work_record_read_only === true,
+      counts_as_active_task: receipt.counts_as_active_task !== false,
     } as Partial<WorkTaskItem>)
     void reconcileActiveWorkTasksAfterLocalPatch().catch(() => undefined)
     setShowUnfinished(false)
@@ -982,13 +1000,29 @@ export default function TaskDetailScreen(props: Props) {
         props.navigation.goBack()
         return
       }
-      await markWorkTask(token, String(task.id), {
+      const receipt = await markWorkTask(token, String(task.id), {
         action: 'done',
         photo_url: effectiveMarkPhotoUrls[0] || null,
         photo_urls: effectiveMarkPhotoUrls,
         note,
       })
-      await patchWorkTaskItem(String(task.id), { status: 'done', completion_photo_urls: effectiveMarkPhotoUrls, completion_note: note, completion_reason: null } as any)
+      await patchWorkTaskItem(String(task.id), {
+        status: 'done',
+        completion_photo_urls: effectiveMarkPhotoUrls,
+        completion_note: note,
+        completion_reason: null,
+        ...(receipt?.work_record_visible === true
+          ? {
+              completed_at: receipt?.completed_at ?? null,
+              work_record_visible: true,
+              work_record_state: receipt?.work_record_state ?? 'completed',
+              work_record_date: receipt?.work_record_date ?? null,
+              date: receipt?.work_record_date ?? task.date,
+              work_record_read_only: receipt?.work_record_read_only === true,
+              counts_as_active_task: receipt?.counts_as_active_task !== false,
+            }
+          : {}),
+      } as any)
       Alert.alert(t('common_ok'), '已标记完成')
       props.navigation.goBack()
     } catch (e: any) {
@@ -1196,6 +1230,18 @@ export default function TaskDetailScreen(props: Props) {
   }
 
   const meta = getTaskStatusMeta(task, roleNames, user?.id)
+  const workRecordDate = String(task.work_record_date || '').trim().slice(0, 10)
+  const originalScheduledDate = String(task.original_scheduled_date || (task.work_record_visible ? '' : task.scheduled_date) || '').trim().slice(0, 10)
+  const workRecordDescription = workRecordReadOnly
+    ? [
+        '只读工作记录',
+        workRecordDate ? `记录日期 ${workRecordDate}` : null,
+        originalScheduledDate ? `原计划 ${originalScheduledDate}` : null,
+        ['pending_review', 'completed', 'reassigned'].includes(String(task.work_record_state || '').trim()) && task.completed_by_name
+          ? `执行人 ${task.completed_by_name}`
+          : null,
+      ].filter(Boolean).join(' · ')
+    : ''
   const metaStyles = statusPillStylePair(meta.tone)
   const kind = taskKindLabel(task.task_kind)
   const region = String(task.property?.region || '').trim()
@@ -1272,13 +1318,13 @@ export default function TaskDetailScreen(props: Props) {
   const guestReadyNotification = guestReadyNotificationForActiveRole(task.guest_ready_notification, activeRole)
   const guestReadyOutsideKey = guestReadyOutsideKeyForActiveRole(task.guest_ready_outside_key, activeRole)
   const completionPhotoAppendAction = taskActions.find((action) => action.id === 'append_completion_photo') || null
-  const canAppendCompletionPhotos = !isMaintenanceTask && isAlreadyDone && completionPhotoAppendAction?.enabled === true
-  const canEditTaskHandling = (!isMaintenanceTask && !isAlreadyDone) || maintenanceCanAct
+  const canAppendCompletionPhotos = !workRecordReadOnly && !isMaintenanceTask && isAlreadyDone && completionPhotoAppendAction?.enabled === true
+  const canEditTaskHandling = !workRecordReadOnly && ((!isMaintenanceTask && !isAlreadyDone) || maintenanceCanAct)
   const maintenancePendingReview = isMaintenanceTask && String(maintenanceWorkflow?.status || '').trim() === 'pending_review'
   // The server receipt removes executor actions after submission. Keep the two
   // maintenance actions visible in pending review as disabled status controls;
   // do not infer a new action or locally close the workflow.
-  const showTaskHandlingControls = canEditTaskHandling || maintenancePendingReview
+  const showTaskHandlingControls = !workRecordReadOnly && (canEditTaskHandling || maintenancePendingReview)
   const maintenanceBeforePhotoUrls = isInternalMaintenanceTask
     ? normalizePhotoUrls((task as any).maintenance_before_photo_urls)
     : []
@@ -1380,7 +1426,7 @@ export default function TaskDetailScreen(props: Props) {
   const isDirectCompleteEligible = isCleaningTask && (isSelfCompleteEligible || isStayoverTask)
   const isPendingInspectionDecision = isCleaningTask && !isStayoverTask && inspectionMode === 'pending_decision'
   const showInspectionPlanTag = (isCleaningTask || isInspectionTask) && !isStayoverTask && !isPasswordOnlyInspection
-  const canDeleteKeyPhoto = (roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector')) && isCleaningTask && !!keyPhotoUrl
+  const canDeleteKeyPhoto = !workRecordReadOnly && (roleNames.includes('cleaner') || roleNames.includes('cleaner_inspector')) && isCleaningTask && !!keyPhotoUrl
   const hasCleaningSubmissionSignal = typeof (task as any)?.cleaning_submission_ready === 'boolean'
   const isCleaningSubmitted = isCleaningTask && (hasCleaningSubmissionSignal
     ? (task as any).cleaning_submission_ready === true
@@ -1610,6 +1656,17 @@ export default function TaskDetailScreen(props: Props) {
           </View>
         </View>
 
+        {workRecordDescription ? (
+          <View style={styles.detailPanel}>
+            <Text style={styles.sectionTitle}>工作记录</Text>
+            <Text style={styles.summary}>{workRecordDescription}</Text>
+            {task.work_record_state === 'rescheduled' && task.rescheduled_to_date ? (
+              <Text style={styles.summary}>{`延期至 ${String(task.rescheduled_to_date).slice(0, 10)}`}</Text>
+            ) : null}
+            {task.completion_reason ? <Text style={styles.summary}>{`原因：${task.completion_reason}`}</Text> : null}
+          </View>
+        ) : null}
+
         {isCheckinSiteExecution ? (
           <View style={styles.row}>
             <Ionicons name="person-outline" size={moderateScale(14)} color="#9CA3AF" />
@@ -1838,7 +1895,7 @@ export default function TaskDetailScreen(props: Props) {
             </>
           ) : (
             <View style={styles.markWrap}>
-              <Text style={styles.mutedSmall}>当前任务暂无可用操作，请刷新任务后重试。</Text>
+              <Text style={styles.mutedSmall}>{workRecordReadOnly ? '这是只读工作记录，不提供执行操作。' : '当前任务暂无可用操作，请刷新任务后重试。'}</Text>
             </View>
           )
         ) : (
@@ -1857,10 +1914,10 @@ export default function TaskDetailScreen(props: Props) {
                     <View key={`${url}:${index}`} style={styles.markPhotoCard}>
                       <Pressable
                         testID={`maintenance-before-photo-${index}`}
-                        onPress={() => openPreview(String(url), task.id)}
+                        onPress={() => openPreview(String(url), mediaAccessWorkTaskId)}
                         style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
                       >
-                        <CleaningMediaImage token={token} remoteReference={String(url)} accessWorkTaskId={task.id} style={styles.markPhotoThumb} resizeMode="cover" />
+                        <CleaningMediaImage token={token} remoteReference={String(url)} accessWorkTaskId={mediaAccessWorkTaskId} style={styles.markPhotoThumb} resizeMode="cover" />
                       </Pressable>
                     </View>
                   ))}
@@ -1873,7 +1930,7 @@ export default function TaskDetailScreen(props: Props) {
                 <Text style={styles.mutedSmall}>
                   {taskPhotoUrls.length ? `已添加 ${taskPhotoUrls.length} 张照片，线下执行人可查看` : '可添加现场说明照片给线下执行人查看'}
                 </Text>
-                <View style={styles.compactActionRow}>
+                {!workRecordReadOnly ? <View style={styles.compactActionRow}>
                   <Pressable testID="offline-task-photo-camera" onPress={() => onAppendTaskPhotos('camera')} disabled={taskPhotoSaving} style={({ pressed }) => [styles.compactActionBtn, pressed ? styles.pressed : null, taskPhotoSaving ? styles.compactActionBtnDisabled : null]}>
                     <Ionicons name="camera-outline" size={moderateScale(16)} color={taskPhotoSaving ? '#9CA3AF' : '#2563EB'} />
                     <Text style={[styles.compactActionText, taskPhotoSaving ? styles.compactActionTextDisabled : null]}>{taskPhotoSaving ? '保存中...' : '拍照添加'}</Text>
@@ -1882,20 +1939,22 @@ export default function TaskDetailScreen(props: Props) {
                     <Ionicons name="images-outline" size={moderateScale(16)} color={taskPhotoSaving ? '#9CA3AF' : '#2563EB'} />
                     <Text style={[styles.compactActionText, taskPhotoSaving ? styles.compactActionTextDisabled : null]}>相册添加</Text>
                   </Pressable>
-                </View>
+                </View> : null}
                 {taskPhotoUrls.length ? (
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.markPhotoList}>
                     {taskPhotoUrls.map((url, index) => (
                       <View key={`${url}:${index}`} style={styles.markPhotoCard}>
                         <Pressable
-                          onPress={() => openPreview(String(url), task.id, null, true)}
+                          onPress={() => openPreview(String(url), mediaAccessWorkTaskId, null, true)}
                           style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
                         >
-                          <CleaningMediaImage token={token} remoteReference={url} accessWorkTaskId={task.id} offlineWorkTaskMedia style={styles.markPhotoThumb} resizeMode="cover" />
+                          <CleaningMediaImage token={token} remoteReference={url} accessWorkTaskId={mediaAccessWorkTaskId} offlineWorkTaskMedia style={styles.markPhotoThumb} resizeMode="cover" />
                         </Pressable>
-                        <AppIconButton accessibilityLabel="删除任务照片" onPress={() => removeTaskPhoto(index)} disabled={taskPhotoSaving} style={styles.markPhotoRemoveBtn} visualStyle={styles.markPhotoRemoveVisual}>
-                          <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
-                        </AppIconButton>
+                        {!workRecordReadOnly ? (
+                          <AppIconButton accessibilityLabel="删除任务照片" onPress={() => removeTaskPhoto(index)} disabled={taskPhotoSaving} style={styles.markPhotoRemoveBtn} visualStyle={styles.markPhotoRemoveVisual}>
+                            <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
+                          </AppIconButton>
+                        ) : null}
                       </View>
                     ))}
                   </ScrollView>
@@ -1904,7 +1963,9 @@ export default function TaskDetailScreen(props: Props) {
             ) : null}
             <Text style={styles.sectionTitle}>任务处理</Text>
             <Text style={styles.mutedSmall} numberOfLines={2}>
-              {maintenancePendingReview
+              {workRecordReadOnly
+                ? '该工作记录仅供查看，不可修改或再次提交。'
+                : maintenancePendingReview
                 ? '已提交完成，等待审核'
                 : isMaintenanceTask && !maintenanceCanAct
                   ? '当前维修任务暂无可操作动作，请刷新后重试。'
@@ -1973,10 +2034,10 @@ export default function TaskDetailScreen(props: Props) {
                 ).map((photo, index) => (
                   <View key={`${photo.media_id}:${index}`} style={styles.markPhotoCard}>
                     <Pressable
-                      onPress={() => openPreview(String(photo.remote_reference || ''), task.id, photo.local_uri)}
+                      onPress={() => openPreview(String(photo.remote_reference || ''), mediaAccessWorkTaskId, photo.local_uri)}
                       style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
                     >
-                      <CleaningMediaImage testID={`maintenance-action-photo-${index}`} token={token} localUri={photo.local_uri} remoteReference={String(photo.remote_reference || '')} accessWorkTaskId={task.id} style={styles.markPhotoThumb} resizeMode="cover" />
+                      <CleaningMediaImage testID={`maintenance-action-photo-${index}`} token={token} localUri={photo.local_uri} remoteReference={String(photo.remote_reference || '')} accessWorkTaskId={mediaAccessWorkTaskId} style={styles.markPhotoThumb} resizeMode="cover" />
                     </Pressable>
                     {(!isAlreadyDone && !isMaintenanceTask) || (isMaintenanceTask && maintenanceCanAct && maintenanceCompletionPhotoDrafts.length) ? (
                       <AppIconButton accessibilityLabel="删除标记照片" onPress={() => removeMarkPhoto(index)} style={styles.markPhotoRemoveBtn} visualStyle={styles.markPhotoRemoveVisual}>

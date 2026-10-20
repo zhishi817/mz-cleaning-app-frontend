@@ -135,3 +135,21 @@ test('maintenance executor sees completed after submitting while management sees
   expect(getTaskStatusMeta(task, ['cleaner'], 'executor-1')).toEqual({ text: '已完成', tone: 'success' })
   expect(getTaskStatusMeta(task, ['admin'], 'manager-1')).toEqual({ text: '待审核', tone: 'pending' })
 })
+
+test('server-authorized work records use one status vocabulary for every role', () => {
+  const base = makeTask({
+    source_type: 'property_maintenance',
+    task_kind: 'maintenance',
+    status: 'pending_review',
+    work_record_visible: true,
+    work_record_read_only: true,
+    work_record_date: '2026-10-19',
+    original_scheduled_date: '2026-10-19',
+  } as any)
+
+  expect(getTaskStatusMeta({ ...base, work_record_state: 'pending_review' }, ['cleaner'], 'executor-1')).toEqual({ text: '待审核', tone: 'pending' })
+  expect(getTaskStatusMeta({ ...base, work_record_state: 'completed' }, ['admin'], 'manager-1')).toEqual({ text: '已完成', tone: 'success' })
+  expect(getTaskStatusMeta({ ...base, work_record_state: 'cancelled' }, ['customer_service'], 'cs-1')).toEqual({ text: '已取消', tone: 'neutral' })
+  expect(getTaskStatusMeta({ ...base, work_record_state: 'rescheduled', rescheduled_to_date: '2026-10-22' } as any, ['offline_manager'], 'manager-2')).toEqual({ text: '延期至10-22', tone: 'neutral' })
+  expect(getTaskStatusMeta({ ...base, work_record_state: 'reassigned' }, ['cleaner'], 'former-executor')).toEqual({ text: '已改派', tone: 'neutral' })
+})

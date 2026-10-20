@@ -40,6 +40,22 @@ test('钥匙照片删除后，即使补品已提交也保留重新上传入口',
   }))
 })
 
+test('只读工作记录不复用任何执行或管理动作', () => {
+  const task: any = {
+    id: 'mq801-record',
+    source_type: 'property_maintenance',
+    task_kind: 'maintenance',
+    status: 'pending_review',
+    work_record_visible: true,
+    work_record_read_only: true,
+    available_actions: [
+      { id: 'report_issue', label: '问题反馈', placement: 'primary', enabled: true, target: 'FeedbackForm', intent: 'issue' },
+    ],
+  }
+  expect(availableActionsForTask(task, { roleNames: ['admin'] })).toEqual([])
+  expect(availableActionsForTask(task, { roleNames: ['customer_service'] })).toEqual([])
+})
+
 test('客服、admin 和线下经理的旧任务详情入口保持管理动作一致', () => {
   const task: any = {
     id: 'manager-task',

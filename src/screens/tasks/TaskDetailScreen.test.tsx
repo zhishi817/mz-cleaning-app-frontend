@@ -1319,6 +1319,50 @@ test('completed non-maintenance task saves supplemental completion photos only t
   }
 })
 
+test('reassigned work record previews actor-bound evidence with the canonical work-task id', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const syntheticRecordId = 'work-1::record:reassigned:2026-10-19:executor-a'
+  const canonicalWorkTaskId = 'work-1'
+  const historyPhoto = 'mzapp/history/executor-a-proof.jpg'
+  snapshot.items[0] = {
+    ...previousTask,
+    id: syntheticRecordId,
+    media_access_work_task_id: canonicalWorkTaskId,
+    task_kind: 'maintenance',
+    source_type: 'property_maintenance',
+    source_id: 'maintenance-1',
+    status: 'done',
+    work_record_visible: true,
+    work_record_state: 'reassigned',
+    work_record_read_only: true,
+    work_record_media_attributed: true,
+    completion_photo_urls: [historyPhoto],
+    available_actions: [],
+  }
+
+  try {
+    const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'reassigned-record-media', name: 'TaskDetail', params: { id: syntheticRecordId } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByTestId('maintenance-action-photo-0')).toHaveProp('accessibilityLabel', `${historyPhoto}|${canonicalWorkTaskId}`)
+      expect(ui.queryByText('标记完成')).toBeNull()
+    })
+    fireEvent.press(ui.getByTestId('maintenance-action-photo-0'))
+    await waitFor(() => {
+      expect(ui.getByTestId('cleaning-media-preview')).toHaveProp('accessibilityLabel', `${historyPhoto}|${canonicalWorkTaskId}`)
+    })
+  } finally {
+    snapshot.items[0] = previousTask
+  }
+})
+
 test('completed supplemental-photo append failure persists an uploaded reference and retries the business save without re-uploading', async () => {
   const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {})
   const store = require('../../lib/workTasksStore')

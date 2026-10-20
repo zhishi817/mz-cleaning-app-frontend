@@ -1,5 +1,162 @@
 # Change Release Ledger
 
+## CRL-20261019-004 — MZ053 只读工作记录任务页（mobile）
+
+- **Status:** exact staged candidate selected and independently reviewed GO for local commit on freshly fetched `origin/Dev@adbf3e0390dc0a6a305c9e28830fa78b75ac09d8`; all historical-media, same-source SSE and canonical-readonly refresh P1 findings are fixed and the full repository gate passed; not yet committed, pushed, merged, built, published, or device verified
+- **Repository:** `mobile`
+- **Updated:** 2026-10-19 UTC
+- **Request:** 当天完成的维修、深度清洁、补日用品、线下任务等不能从手机任务页消失；执行人员、admin、客服、线下经理在原有数据范围内看到一致的待审核/已完成等工作记录，且记录不恢复执行动作或重复计数。
+- **Outcome:** 任务页把服务端授权的 `work_record_visible + work_record_read_only` 记录作为独立历史表面展示；活跃执行可见性、动作和统计仍走原通道。卡片与详情显示统一状态、记录日和已知原计划日，跨日完成按记录日分桶；详情、管理员字段、照片增删及主动作全部只读。
+
+### Implementation
+
+- `WorkTask` 增加可选工作记录字段；远端映射优先使用 `work_record_date`，同时保留 `scheduled_date` / `original_scheduled_date`。
+- 新增记录列表可见判断但不改变执行可见判断；记录可留在任务页，且不会进入活跃统计。
+- 待审核、已完成、已取消、延期至 MM-DD、已改派使用统一标签；MQ801 类 `pending_review` 对执行人与管理角色显示一致。
+- `availableActionsForTask`、详情、管理详情、线下任务编辑和媒体写入口对只读记录 fail closed。
+- 完成/维修回执、SSE patch、持久缓存水合和全量刷新都按权威记录日期重算分桶并重新脱敏，避免完成后短暂消失、留错日期或沿用活跃卡敏感数据。
+- 合成历史记录只用 `media_access_work_task_id` 读取受权媒体；`reassigned` 不按 live `source_ids` 回读现执行人的媒体。仅服务端明确标为 actor-bound provenance 的不可变事件照片会保留，缓存/live 当前受派人媒体仍被清空。
+- safe SSE patch 不直接修改 `work_record_read_only` 历史行；同一 source 同时存在 A 的合成改派记录与 B 的活跃卡时，B 完成事件只更新活跃卡，A 保持不可变。若事件 task ID 精确命中 canonical 只读记录（例如维修审批），则强制服务端权威刷新并在瞬时失败后安排一次有界一致性重试，使 `pending_review` 正确演进为 `completed`。
+- 与已合入 Mobile PR57/MZ049 的 API、store、任务页重叠均三方干净应用；保留 MZ049 membership 强制刷新、有界重试、延期 source 隔离和冲突展示，不重复引入 047/048/049。
+
+### Files / Areas
+
+- `src/lib/api.ts`
+- `src/lib/dailyTaskExecutionVisibility.ts`
+- `src/lib/dailyTaskExecutionVisibility.test.ts`
+- `src/lib/taskVisualTheme.ts`
+- `src/lib/taskVisualTheme.test.ts`
+- `src/lib/workTaskActions.ts`
+- `src/lib/workTaskActions.test.ts`
+- `src/lib/workTasksStore.ts`
+- `src/lib/workTasksStore.test.ts`
+- `src/screens/tabs/TasksScreen.tsx`
+- `src/screens/tabs/TasksScreen.test.tsx`
+- `src/screens/tasks/TaskDetailScreen.tsx`
+- `src/screens/tasks/TaskDetailScreen.test.tsx`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx`
+- `docs/change-release-ledger.md`
+
+### Impact / Dependencies
+
+- API: consumes optional Root record fields; Mobile never infers visibility from terminal status alone，必须同时收到服务端记录可见/只读标志。
+- Permissions/navigation/storage: no new role, permission, route, AsyncStorage key, schema, migration or production data operation.
+- Fresh base: fetched `origin/Dev@adbf3e0390dc0a6a305c9e28830fa78b75ac09d8` on 2026-10-19 UTC；该 merge 是 Mobile PR57，已包含 047/048/049。
+- Paired dependency: `root/CRL-20261019-003` on Root base `56b56d47f7e5fc675acc0639853c8cbafaa195ea`；Root API 必须先于或与 Mobile 配对发布。
+- Delivery boundary: local source validation does not prove simulator、physical device、EAS/native build、OTA channel or production behavior.
+
+### Validation
+
+- `npm run typecheck` — PASS.
+- Focused provenance repair Jest — PASS: 2 suites / 65 tests (`workTasksStore`, `TaskDetailScreen`); actor-bound immutable media survives redaction and preview uses the canonical work-task ID, while cached live media remains removed.
+- `npm run lint` — PASS for errors: 0 errors / 664 warnings on the latest integrated candidate.
+- `git diff --cached --check` — PASS.
+- `PYTHONDONTWRITEBYTECODE=1 npm run check:ci` — PASS after all review repairs: ledger auditor 44 tests, ledger coverage 15/15, TypeScript, lint 0 errors / 664 warnings, button-contract audit, fast 8 suites / 71 tests, full 74 suites / 511 tests.
+- First independent paired review — `BLOCKED` with P0=0/P1=3 across Root+Mobile; the Mobile P1 was unconditional removal of Root's actor-bound historical completion media. The explicit provenance contract and canonical-ID preview regression close that finding.
+- Replacement paired review — `BLOCKED` with P0=0/P1=2; the Mobile P1 allowed one B completion SSE patch to update both the active B row and same-source immutable A reassignment row. The read-only patch guard and exact two-row SSE regression close that finding; final independent re-review is pending.
+- Final pre-freeze review — `BLOCKED` with P0=0/P1=1: the first read-only guard also skipped legitimate canonical record state evolution. Exact canonical targeting now requests an immediate authoritative refresh with bounded consistency retry; the regression proves `pending_review` readonly + review-approved SSE becomes `completed` while the A/B synthetic-history regression remains green.
+- Final exact staged independent re-review — `GO` with P0=0/P1=0/P2-code=0 for Root, Mobile and the paired local commit candidates; matched Mobile 15 staged paths / 71 non-ledger hunks / fingerprint `cbc4b9bcbc01d4a6439f2ec2fe5e593f8dc1a4073c3115c6c977d82698393a47` and found no unstaged, untracked, unselected, generated, secret or production-write risk. This does not select or authorize commit, push, PR, OTA or release.
+- Production API/data, simulator, physical devices, EAS/native build and OTA/release — not run and not authorized.
+
+### Staged Commit Scope
+
+- **Repository:** mobile
+- **Status:** `prepared`
+- **Untracked review:** none; only tracked MZ053 source/test paths and this ledger are selected. Ignored dependency links are local validation plumbing and are not staged.
+- `src/lib/api.ts` — SHA-256: `712339cf3c1b75001bc752408d56b96574516739558346a64460021071ba1c25`
+- `src/lib/api.ts` — SHA-256: `e23dc9d10f63c7df20930263083efdaca4dbf83a4ed157af3efd81b30514073f`
+- `src/lib/api.ts` — SHA-256: `f15ed5c4e1af1ce1b8fdad471bc96c81d0dab200fb8c036033c8454907910f9e`
+- `src/lib/dailyTaskExecutionVisibility.test.ts` — SHA-256: `27fb714abb5d2b0deae128355872dc03b35586400922158fb7a97deaf71eca9e`
+- `src/lib/dailyTaskExecutionVisibility.test.ts` — SHA-256: `4447983ff3035231de915ae0713bb36b3ff45cce9506b1f2468321d16bb830d0`
+- `src/lib/dailyTaskExecutionVisibility.test.ts` — SHA-256: `98f573f240bd7c8bf1e3bb9d881933f4726c1bb41c045f0c47cdda69c332caa4`
+- `src/lib/dailyTaskExecutionVisibility.ts` — SHA-256: `5cb753cc96bbe708443aa36947e84c0575e2727d8458aec217817c6ebc044c09`
+- `src/lib/dailyTaskExecutionVisibility.ts` — SHA-256: `62b01eca55442efbbaa531d18d853c7021667b547975702072e6ba9739c09d29`
+- `src/lib/dailyTaskExecutionVisibility.ts` — SHA-256: `7311532710df6c0e17b86e61d00d3ce902b6f11e072d55649d5dde8a5d71dbea`
+- `src/lib/taskVisualTheme.test.ts` — SHA-256: `b5a474476d59f40de171cd4bbecac6abcb9051facec051e03db42f4b2d784213`
+- `src/lib/taskVisualTheme.ts` — SHA-256: `120abc7c44bff2af8662ed4e77979eeba3931f41616ee367fa8e427d7106460e`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `8e8af98de886a2f08868ad461e1b8f02da35d87c794743823f961dc3345b8039`
+- `src/lib/workTaskActions.ts` — SHA-256: `2ebdc87e8825cc079a418d4a4a0f3ae511a98d946d1c6141c78531c7fdd9e04e`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `d9e3a5df48bc4eb1cc499439edc358cd13034a3e25c0eaebc10d8f0cff5963a0`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `e8c7dac6976e144a5732be167cd1f85c439135460107633c5256fdfb5d36899c`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `c0ad60e116ca8443132010579c55c7d6b74c5ac05e90f45eae39cad29c207691`
+- `src/lib/workTasksStore.ts` — SHA-256: `2bf6f4de0ccdead00586f80baf52381e8c8a5c8aaf021e8df5ecd476c371013a`
+- `src/lib/workTasksStore.ts` — SHA-256: `4085b40a5a57f316a3a9f835c54db043697492c084fb79a53326faf061032dc0`
+- `src/lib/workTasksStore.ts` — SHA-256: `54bb21c6ed0724f3ad168450a6101fb97eabe06bfc1a72851c5b070bd0e5069b`
+- `src/lib/workTasksStore.ts` — SHA-256: `580614f2482d39ed501df8ee656592463ae62b7d6a63db3f0ea5be938053adb1`
+- `src/lib/workTasksStore.ts` — SHA-256: `5dedf5e7f42916d99342d8e6cec8bf6267be02c93c44ef76471d2bdc5ddafb15`
+- `src/lib/workTasksStore.ts` — SHA-256: `61d647270c06dc3cd0335dc26eefdd24421491a6528d8710ad3a02e31248f445`
+- `src/lib/workTasksStore.ts` — SHA-256: `10db62c11c9ece2836e14524e6e7ab25e667ee08d76c3eca62f0ec6ad5cd02d9`
+- `src/lib/workTasksStore.ts` — SHA-256: `329344f0f2ffc2b1c44eba8ddb7f12a9544ad3334643294ec9328451bf656cc9`
+- `src/lib/workTasksStore.ts` — SHA-256: `4bf8f1621f43a2a2451391142c5a8062b1a6516cb720ee7e742117c108567423`
+- `src/lib/workTasksStore.ts` — SHA-256: `732efd3366511644a676e12a1691237ff3dccd8a93fbb5dc1b3e942feecbcccd`
+- `src/lib/workTasksStore.ts` — SHA-256: `7c9018bb1881a77fcfa9fab9d50ba9f1b9cd18052cf9cda94670197965dc52cc`
+- `src/lib/workTasksStore.ts` — SHA-256: `7fba349de6073053f8bdaa02800136e43a87fe5d2ae2564a5a924510d8d6c0a5`
+- `src/lib/workTasksStore.ts` — SHA-256: `915a59cabe911b95b190b9c50d335a09af8167338ac859b73686d1d1f9ee8000`
+- `src/lib/workTasksStore.ts` — SHA-256: `dc8347e4a7d9a3f2e5f049d62ff45279c50933ad75c03c9dd292be3a0e08a3d7`
+- `src/lib/workTasksStore.ts` — SHA-256: `e45e75b7700de9234e24b5c909ca1478ddb3302de432ee4473b88d46e752ec7e`
+- `src/lib/workTasksStore.ts` — SHA-256: `7ccd79ba381fc0517d780e058ce30fc6ef38f428c7960901034651f557002ffe`
+- `src/lib/workTasksStore.ts` — SHA-256: `8c4756fce83eb2da8ddb503bdcab756274f9b85d1a392df5dc3f798cea1be55c`
+- `src/lib/workTasksStore.ts` — SHA-256: `95b4eddcdc73921a7a3014f8a6921fecf0f63b2d1e23e809acb1a6fcdd7b3c2c`
+- `src/lib/workTasksStore.ts` — SHA-256: `af17322a9bac725018b344a2d61bc8c0ff519815f16b347107fc77303b38849b`
+- `src/lib/workTasksStore.ts` — SHA-256: `ef87671fdac667952993d79d00d44ce2190507b253fa8bfa2ca336a1f5e5867d`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `e4f2cc00fc198186536d0bf375102568b1caa4443e07ff0280fadf44980761dc`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `13e6241a4d9c4f0c2a6408739de90eafa1b1fd9ecd7fdb0c64911b641df45154`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `5fd3ea32800319595836360cd3092795bccb9c57abfc1d8c62b3dc9e1606c190`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `6f4f4894815335ca22e7a141d74f9bfc1a065b2af341cb86e28a4f120eea1840`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `78e2b6531b60dd6fa38b719cb8e1b24cdb729e92c9dadd39d72abd931e4aa7a8`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `7fb3867762bf5ddae8be5c4a140be34cb1b410e1ff00438c50a02eb6f6afd8df`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `c40093c619709f6ca4e1e9161aece1d711a7c4bd366d07416c3fce72105b4eac`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `c8770f0d8d4a75c74f962b957f2abb426545838a2adcc0d83464f4e4ed1a4d7d`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `cc93dfa7a5e4416bf3f0a2a9845ea73a6afcda08f0dcf5af0b27181d8efbd5af`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `02069534e1aeaf9d87cbe7f79c5b88ea934447dd1a3d857103758a1a98623ca4`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `4469565d7f6cd21c4e6c2dbb8f262d70dca470683d4e87464392d71ed22d0288`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `68ada68544f71efa46831730a3d0c5ae72165a9cc9849b4995ffcaaa1f6b64f9`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `038362bc90632ce816448fdb922aaf89f03eb23a730d46fb924120924bb8a162`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `08f0767dd681f33c856814de0f9b8190396e30431d596ad0182b2f28fe81ee38`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `093f8d9720156ec4c4494821345fe902a5ad8a1684197a3de3dcc0dbd79a1463`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `102fd786793c3f6ce3322e17c59b7ded01c0601956b628eed16bc5620f6f0b9e`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `1fb2c9fa7e26e0961842b66eecb56b56888e00097e7405d0346d5947ff5f739a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `259d054b142b284f1910b1f8f16382bf5c2d1195f18ff1d344344669307b4dd2`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `395c0a69f2e2d853c03c553439e00ca13fe39fdf403bd724b8ac6e4e9f04e83c`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3e80fb07e9696bfe18ceedc9c4786bc3b61752c187f310b45b26f874872ee804`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `4cf52668dd3b37271f59aa1730f7066ff2f29b9542a59eb1dd2716da6b5e1c1f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `4d9d2a8c2e64082363b66fb1f5d8d77e3dcb4b441b699ba242d0f744d2832f05`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `516d91df963371e97efc77f444efdb6c9b3e67535cb773ef4bf59809c4d51197`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `517755bd03e6235b315c2c9849c1d2c78c587f1ab41c84b95a9be0bc4fde6932`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `73f34f6078f5ea206c0985861f19c8c97b31ba186f2f66c8eab9ae2f3443ddbc`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `81310ef8640ad92fe95d4a2331ff42944a6b22d8b9fa1dd91c2f5fd78fe73655`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `87774a04543c796c8338f130b936c90abf14e04a5bcaeeb72060e849fc022002`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `89b04350c273563e3bfc69f4485957e192eb86f56828c575ae37dbd9f488e64d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `8a1364ea4f86f515a26aaff9a9a37c62f64ee41b958102dc8028e90ff935017d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `9ba25c28c1fec983f288bc20dbad3c44e620ed5f875ab476679f415d36acaa69`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `acabb1dd37439d9cb9f2bdad65d4a4d53a7367eb37f8a23cac327bf43380e2ea`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `c0bd189fa288deca2410290c00cf74a1a0a6cb4c0b4ae9da428833d000a7b825`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `d05f241d1772ad48ad6e8be34671676924b12f4755b1a06eb001501db5b20fe1`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `d30fad8f94e1b550f7771545c432f90a64e62c57f902bc829d095a1e081e9377`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `e40f3548a3f81cb77c93bc7faa826cf9d820f7282090154f2b397f05f432cec5`
+
+### Release Attempts
+
+#### RA-20261019-007
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261019-004`
+- Selected CRL identities: `mobile/CRL-20261019-004`
+- Intended action: `commit`
+- Branch: `codex/mz053-release-ready-mobile`
+- Base: `origin/Dev@adbf3e0390dc0a6a305c9e28830fa78b75ac09d8`; fetched at `2026-10-19 UTC`
+- Candidate patch SHA-256: `cbc4b9bcbc01d4a6439f2ec2fe5e593f8dc1a4073c3115c6c977d82698393a47`
+- Commit SHA: `not committed`
+- Dependencies: `root/CRL-20261019-003` on Root `origin/Dev@56b56d47f7e5fc675acc0639853c8cbafaa195ea`.
+- Required validation: `PASS for local commit candidate / release NOT VERIFIED`; full `check:ci`, exact staged gate and independent re-review pass. Device, native/EAS/OTA, production and committed-range evidence remain pending.
+- Shared-hunk review: `PASS`; all MZ049-overlapping files applied cleanly on PR57 merge and preserve the existing deferred-task behaviors.
+- Generated-file review: `PASS`; no generated output, environment file, cache or dependency content is staged.
+- Sensitive / production-write review: `PASS`; no secret-like path or production write was introduced or executed.
+- Technical state: `verified`
+- User authorization: `selected-for-commit`; evidence: on 2026-10-20 UTC the user explicitly replied `提交`, authorizing this exact Mobile MZ053 local candidate only; push, PR, merge, OTA, deployment and production operations remain unauthorized.
+- Independent review: `GO for the exact local commit candidate`; P0=0/P1=0/P2-code=0, with device, governance and release checks retained as non-code gaps.
+- Action conclusion: `GO for this exact local content commit only`; push additionally requires committed exact SHAs, paired range audits and separate explicit push approval.
+
 ## CRL-20261018-001 — MZ-049 延期检查权威归位与冲突展示（mobile）
 
 - **Status:** ready
