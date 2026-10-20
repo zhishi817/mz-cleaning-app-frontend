@@ -157,6 +157,27 @@
 - Independent review: `GO for the exact local commit candidate`; P0=0/P1=0/P2-code=0, with device, governance and release checks retained as non-code gaps.
 - Action conclusion: `LOCAL CONTENT COMMIT COMPLETED / push NOT AUTHORIZED`; this ledger-only freeze receipt may be committed locally under the same explicit bookkeeping authorization. Push still requires paired exact range audits and separate explicit approval.
 
+#### RA-20261020-005
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261019-004`
+- Selected CRL identities: `mobile/CRL-20261019-004`
+- Intended action: `push`
+- Branch: `codex/mz053-release-ready-mobile`
+- Base: `origin/Dev@adbf3e0390dc0a6a305c9e28830fa78b75ac09d8`; fetched at `2026-10-20T01:29:15Z`, when remote feature ref `codex/mz053-release-ready-mobile` still matched prior head `20fa910cc47b2a62f6e9870cc51a0da22ad49466`.
+- Candidate patch SHA-256: `cbc4b9bcbc01d4a6439f2ec2fe5e593f8dc1a4073c3115c6c977d82698393a47`
+- Commit SHA: `cbb4a1429edc6e2761261bb909d5906ef0cc6fb7`; exact reviewed MZ053 content commit. The audit head will be this later ledger-only authorization receipt commit.
+- Dependencies: `root/CRL-20261019-003@27aff6bf923425aa15885a83570906f570a1a003`
+- Cross-repository dependency verification: `NOT VERIFIED by the single-repository auditor`; manual paired evidence confirms Root content commit `27aff6bf923425aa15885a83570906f570a1a003` is an ancestor of frozen Root head `fa79484d2186b8683364b588bc85c1fcd26e421d`, while the Mobile auditor intentionally cannot resolve a Root repository reference. Root must still be released before or with Mobile; this receipt does not claim paired deployment, device, OTA or production acceptance.
+- Required validation: `PASS for unchanged Mobile content / paired release NOT VERIFIED`; evidence: the exact content candidate previously passed `npm run check:ci` with ledger auditor 44 tests, TypeScript, lint with zero errors, button-contract audit, fast 8 suites / 71 tests and full 74 suites / 511 tests; GitHub PR #58's correct Dev-scoped quality rerun completed successfully, and this receipt changes only `docs/change-release-ledger.md`. The new receipt head still requires the ledger-only pre-commit gate, exact range report and PR CI.
+- Shared-hunk review: `PASS`; the 15-file content range and all 71 non-ledger hunks remain byte-identical to `20fa910cc47b2a62f6e9870cc51a0da22ad49466`; this receipt adds no runtime hunk and preserves the MZ049 overlap decisions.
+- Generated-file review: `PASS`; the pending mutation is this Markdown Release Attempt receipt only, with no generated output, dependency, environment, cache, native or build file.
+- Sensitive / production-write review: `PASS`; the receipt contains commit and workflow metadata only, with no secret, credential, private payload, production write or production-data access.
+- Technical state: `committed`; content commit `cbb4a1429edc6e2761261bb909d5906ef0cc6fb7` and prior ledger freeze head `20fa910cc47b2a62f6e9870cc51a0da22ad49466` are already committed and pushed; this attempt records the separately authorized ledger-only recovery head before its ordinary non-force push.
+- User authorization: `approved-for-push`; evidence: after being told the pure empty-commit plan did not satisfy the repository ledger and that the corrected plan would modify only this release ledger, create a ledger-only commit, push it normally to the existing Mobile PR #58 branch and rerun checks without changing business code, the user replied `OKke yi`. The same instruction excludes merge, deployment, OTA, production writes and DNS migration.
+- Independent review: `GO for this exact ledger-only receipt commit and ordinary feature-branch push`; evidence: the independent read-only review found P0=0/P1=0/P2=0 after recording this receipt, confirmed that only this ledger changes, all non-ledger content remains byte-identical to `20fa910cc47b2a62f6e9870cc51a0da22ad49466`, Root content commit `27aff6bf923425aa15885a83570906f570a1a003` is an ancestor of frozen Root head `fa79484d2186b8683364b588bc85c1fcd26e421d`, the single-repository cross-repository audit limitation is disclosed, the remote feature ref can fast-forward, and no secret or production-write risk is present.
+- Action conclusion: `GO for the ledger-only commit and ordinary non-force push to the existing PR #58 feature branch under the explicitly disclosed cross-repository audit exception`; `NOT GO` for merge, release, deployment, OTA, production data, DNS migration or a claim of automated paired-release verification. After commit, run the exact range report and retain its actual result, then require the new PR quality check to reach a successful terminal state before reporting the recovery complete.
+
 ## CRL-20261018-001 — MZ-049 延期检查权威归位与冲突展示（mobile）
 
 - **Status:** ready
