@@ -330,14 +330,14 @@
 - Branch: `codex/mz053-five-fixes-unified`
 - Base: `origin/Dev@c24abbb61b2982a4869ee663f4e337006a0fa1df`; fetched at `2026-10-20 22:38 UTC`
 - Candidate patch SHA-256: `b90a76e409b4ab719ddc701b61fed1a82de417808f8f0af40e1630fda26cc144`, excluding `docs/change-release-ledger.md`
-- Commit SHA: pending the authorized local content commit
+- Commit SHA: `ed7863a791e95370ca8e733b896a92627e8958b4`; exact reviewed content commit, with the final audit head being the later ledger-only receipt commit
 - Dependencies: `root/CRL-20261020-007@b015187b9fa78441a40b502468259aeb5d85aca6`; Root must deploy before Mobile release
 - Required validation: `PASS for staged candidate`; exact clean-worktree `PYTHONDONTWRITEBYTECODE=1 npm run check:ci` passed after the governance-only fast-suite restoration with ledger 44/44, changed-file coverage, TypeScript, strict button contract, lint 0 errors / 747 warnings, broader fast 8 suites / 113 tests and full Jest 76 suites / 584 tests
 - Shared-hunk review: `PASS`; all 254 non-ledger hunks are jointly selected by the two named CRLs, and the candidate retains both the published Build 28 loading repairs and the five MZ053 fixes while preserving Dev's broader fast-test gate
 - Generated-file review: `PASS`; no generated native output, build artifact, cache, dependency directory or environment file is selected
 - Independent review: `GO for local commit`; fresh independent read-only review recomputed the exact fingerprint `b90a76e409b4ab719ddc701b61fed1a82de417808f8f0af40e1630fda26cc144`, verified the restored eight-suite fast gate and complete staged scope, found P0=0 / P1=0 and retained three documented non-blocking loading/queue P2 items
 - User authorization: `approved-for-push`; evidence: user explicitly requested the five fixes plus Web offline-task optional assignee be committed, pushed and opened as two draft PRs, while merge, deployment, OTA and production writes remain excluded
-- Technical state: `candidate`; staged only, not committed, pushed, merged or released
+- Technical state: `committed`; exact content commit `ed7863a791e95370ca8e733b896a92627e8958b4` exists locally, not pushed, merged or released
 - Sensitive-information review: `PASS`; no credential, token, `.env`, production payload, raw media URL or screenshot is selected
 - Release order: paired Root must deploy before Mobile; physical-device validation, native build and non-production DB write integration remain not run
 
