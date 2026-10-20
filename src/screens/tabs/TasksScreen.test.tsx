@@ -220,7 +220,7 @@ test('an explicitly ready current-scope bucket is not hidden by a redundant pend
     snapshot.bucketKey = previousBucketKey
     snapshot.lastFullSyncTimestamp = previousLastFullSyncTimestamp
   }
-})
+}, 15_000)
 
 test('pending notice hydration does not block task-store hydration or the task read', async () => {
   const notices = require('../../lib/noticesStore')

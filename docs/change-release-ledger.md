@@ -1,5 +1,71 @@
 # Change Release Ledger
 
+## CRL-20261020-007 — Mobile CI timing stabilization
+
+- **Status:** exact staged CI-stability candidate selected for authorized commit and normal branch update
+- **Repository:** `mobile`
+- **Updated:** 2026-10-20 UTC
+- **Request:** 修复 MZ-053 Mobile draft PR 质量门禁中唯一失败：`TasksScreen.test.tsx` 的 ready-bucket 回归在 GitHub runner 上连续两次超过 Jest 默认 5 秒；不得改变业务逻辑、断言或生产行为。
+- **Outcome:** 仅把该异步集成测试的显式时限设为 15 秒。测试继续等待并断言同一 ready bucket、离线刷新提示和任务卡可见性；没有删除断言、增加重试、修改运行时代码或放宽整个 Jest 配置。
+
+### Implementation
+
+- Previous behavior: 测试在本地连续五次约 3.7–3.9 秒通过，但 GitHub runner 两次均超过默认 5 秒；同一 CI 中其余 75 suites / 583 tests 通过。
+- New behavior: 该单测保留原等待/清理逻辑与全部断言，仅使用 Jest 单测级 15 秒上限吸收共享 runner 时序差异。
+- Key decisions: 不修改 `TasksScreen` 或 store 实现，不使用全局 timeout，不跳过测试，不以重跑掩盖连续复现的时限问题。
+
+### Files / Areas
+
+- `src/screens/tabs/TasksScreen.test.tsx` — modified: 为 ready-bucket 异步回归增加单测级 15 秒时限。
+- `docs/change-release-ledger.md` — modified: 记录 CI 证据、精确增量候选与授权边界。
+
+### Impact / Dependencies
+
+- Runtime / API / database / permissions: none; test-only change。
+- Dependencies: paired `mobile/CRL-20261020-005` and `mobile/CRL-20261020-006` remain unchanged in runtime content。
+- Delivery: same existing draft PR branch only; no new PR, merge, build, deployment or OTA。
+
+### Validation
+
+- GitHub Actions attempt 1 and failed-job rerun — FAIL only this test by the same 5-second timeout; both runs passed ledger, install, lint, button and fast gates, and the remaining full suite.
+- Local isolated repeat before change — PASS 5/5; observed duration approximately 3.7–3.9 seconds, confirming the default threshold is too narrow rather than an assertion failure.
+- Post-change targeted Jest — PASS; the unchanged assertions completed under the explicit per-test 15-second ceiling.
+- Complete `PYTHONDONTWRITEBYTECODE=1 npm run check:ci` — PASS: release-ledger auditor 44/44, changed-file coverage, TypeScript, lint 0 errors / 747 warnings, strict button contract, fast 8 suites / 113 tests, and full Jest 76 suites / 584 tests.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared on `codex/mz053-five-fixes-unified` after pushed head `b206fab3ab0357e05f9ffa052b8e101d408dfa50`.
+- **Untracked review:** PASS; no untracked path or runtime file is selected.
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `36dab6c350eceabee99c1da9d109d868818b5ba387e8011f648904c733b87341`
+
+### Release Attempts
+
+#### RA-20261020-010
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261020-007`
+- Selected CRL identities: `mobile/CRL-20261020-007`
+- Intended action: `commit`
+- Branch: `codex/mz053-five-fixes-unified`
+- Base: `b206fab3ab0357e05f9ffa052b8e101d408dfa50`; fetched remote branch at `2026-10-20 22:59 UTC`
+- Candidate patch SHA-256: `0fdf54a9c4233a4283d01d4d1a11f8844517b8ddf741169d31b973cb468ea62d`, excluding `docs/change-release-ledger.md`
+- Commit SHA: pending the authorized local CI-stability content commit
+- Dependencies: none
+- Required validation: `PASS`; post-change targeted Jest and the complete `npm run check:ci` passed, including fast 8 suites / 113 tests and full Jest 76 suites / 584 tests
+- Shared-hunk review: `PASS`; the one staged non-ledger hunk belongs only to this test-stability unit
+- Generated-file review: `PASS`; no generated or dependency file is selected
+- Independent review: `GO` for the exact test-only change after staging this validation receipt; P0=0, P1=0, P2=0 for the CI-stability increment. The reviewer independently confirmed that assertions, cleanup, runtime code and global Jest configuration are unchanged.
+- User authorization: `approved-for-push`; evidence: user authorized in-scope CI fixes and normal push updates for the exact MZ-053 draft PR candidates while merge, deployment, OTA and production writes remain excluded
+- Technical state: `candidate`; staged only
+- Sensitive-information review: `PASS`; test-only change contains no secret or production data
+
+### Risks / Release Notes
+
+- Risk: a genuine future assertion failure still fails immediately; only the asynchronous test deadline changes.
+- Rollback: restore the default test timeout; no runtime or data rollback exists.
+- Git state: test-only local candidate; not yet committed or pushed.
+
 ## CRL-20261020-006 — MZ053 task list reconciliation and mobile usability fixes
 
 - **Status:** exact staged candidate selected with `mobile/CRL-20261020-005` for authorized commit, normal push and draft PR; not merged or released
