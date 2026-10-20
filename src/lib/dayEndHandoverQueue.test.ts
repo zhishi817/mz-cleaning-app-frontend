@@ -100,3 +100,43 @@ test('keeps day-end draft when submit fails with retryable timeout', async () =>
   expect(api.uploadDayEndHandover).toHaveBeenCalledWith('token-1', expect.objectContaining({ section: 'key' }))
   expect(await queueMod.getDayEndHandoverDraft('cleaner-1', '2026-06-29')).toBeTruthy()
 })
+
+test('shares one in-flight day-end submission across concurrent maintenance callers', async () => {
+  const api = require('./api') as {
+    uploadDayEndHandover: jest.Mock
+  }
+  let finishSubmit!: (value: { ok: boolean }) => void
+  let markSubmitStarted!: () => void
+  const submitStarted = new Promise<void>((resolve) => {
+    markSubmitStarted = resolve
+  })
+  api.uploadDayEndHandover.mockImplementation(() => new Promise((resolve) => {
+    markSubmitStarted()
+    finishSubmit = resolve
+  }))
+  const queueMod = require('./dayEndHandoverQueue') as typeof import('./dayEndHandoverQueue')
+
+  await queueMod.saveDayEndHandoverDraft({
+    user_id: 'cleaner-shared',
+    date: '2026-06-30',
+    pending_submit: false,
+    key_items: [{ id: 'key-shared', uri: 'file:///local/key-shared.jpg', captured_at: '2026-06-30T01:00:00.000Z', uploaded_url: 'https://cdn.example.com/key-shared.jpg' }],
+    return_wash_items: [],
+    warehouse_key_items: [],
+    consumable_items: [],
+    reject_items: [],
+    updated_at: '2026-06-30T01:00:00.000Z',
+  })
+
+  const first = queueMod.processDayEndHandoverQueue('token-1')
+  const second = queueMod.processDayEndHandoverQueue('token-1')
+
+  expect(second).toBe(first)
+  await submitStarted
+  finishSubmit({ ok: true })
+  await expect(Promise.all([first, second])).resolves.toEqual([
+    { processed: 1, remaining: 0 },
+    { processed: 1, remaining: 0 },
+  ])
+  expect(api.uploadDayEndHandover).toHaveBeenCalledTimes(1)
+})

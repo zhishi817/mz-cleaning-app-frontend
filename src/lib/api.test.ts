@@ -22,6 +22,11 @@ function response(status: number, body: unknown) {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  jest.useRealTimers()
+})
+
+afterEach(() => {
+  jest.useRealTimers()
 })
 
 test('queue request can handle 401 without invalidating the global session', async () => {
@@ -70,4 +75,51 @@ test('mzapp upload exposes the server-owned task-photo reference without replaci
     key: 'mzapp/task-photo.jpg',
     remoteReference: 'r2://bucket-current/mzapp/task-photo.jpg',
   })
+})
+
+test('task-list timeout aborts a fetch that never returns headers', async () => {
+  jest.useFakeTimers()
+  globalThis.fetch = jest.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+    init.signal?.addEventListener('abort', () => {
+      const error = new Error('aborted')
+      error.name = 'AbortError'
+      reject(error)
+    })
+  })) as any
+  const api = require('./api') as typeof import('./api')
+
+  const request = api.listWorkTasks('token', { date_from: '2026-10-20', date_to: '2026-10-20', view: 'mine' })
+  const rejected = expect(request).rejects.toMatchObject({ status: 0, code: 'TIMEOUT', retryable: true })
+  await jest.advanceTimersByTimeAsync(15_000)
+  await rejected
+})
+
+test('task-list timeout also bounds a response body that never finishes', async () => {
+  jest.useFakeTimers()
+  const body = new Promise<string>(() => {})
+  globalThis.fetch = jest.fn(async () => ({
+    ok: true,
+    status: 200,
+    text: jest.fn(() => body),
+  })) as any
+  const api = require('./api') as typeof import('./api')
+
+  const request = api.listWorkTasks('token', { date_from: '2026-10-20', date_to: '2026-10-20', view: 'mine' })
+  const rejected = expect(request).rejects.toMatchObject({ status: 0, code: 'TIMEOUT', retryable: true })
+  await Promise.resolve()
+  await jest.advanceTimersByTimeAsync(15_000)
+  await rejected
+})
+
+test.each([401, 403])('task-list permission status %s fails before reading a pending body', async (status) => {
+  const text = jest.fn(() => new Promise<string>(() => {}))
+  globalThis.fetch = jest.fn(async () => ({ ok: false, status, text })) as any
+  const api = require('./api') as typeof import('./api')
+
+  await expect(api.listWorkTasks('token', {
+    date_from: '2026-10-20',
+    date_to: '2026-10-20',
+    view: 'mine',
+  })).rejects.toMatchObject({ status, code: status === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN', retryable: false })
+  expect(text).not.toHaveBeenCalled()
 })

@@ -70,4 +70,25 @@ describe('cleaningInspection display helpers', () => {
       inspection_mode: 'checked_done',
     })).toBe('same_day')
   })
+
+  test('treats legacy password-only check-in cleaning projections as site execution only', () => {
+    expect(isPasswordOnlyInspectionTask({
+      source_type: 'cleaning_tasks',
+      task_kind: 'cleaning',
+      task_type: 'checkin_clean',
+      inspection_scope: 'password_only',
+    })).toBe(true)
+    expect(isPasswordOnlyInspectionTask({
+      source_type: 'cleaning_tasks',
+      task_kind: 'cleaning',
+      task_type: 'checkin_clean',
+      inspection_scope: 'inspect_and_hang',
+    })).toBe(false)
+    expect(isPasswordOnlyInspectionTask({
+      source_type: 'cleaning_tasks',
+      task_kind: 'cleaning',
+      task_type: 'checkout_clean',
+      inspection_scope: 'password_only',
+    })).toBe(false)
+  })
 })

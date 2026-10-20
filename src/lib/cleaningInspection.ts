@@ -142,10 +142,16 @@ export function isCheckinSiteExecutionTask(task: {
   source_type?: any
   task_kind?: any
   task_type?: any
+  inspection_scope?: any
 }) {
   const sourceType = String(task?.source_type || '').trim().toLowerCase()
   const taskType = String(task?.task_type || '').trim().toLowerCase()
   if (sourceType !== 'cleaning_tasks' || taskType !== 'checkin_clean') return false
+  // A password-only check-in is a site action performed by the generic
+  // assignee, never cleaning work. Older projections may still label it as
+  // `task_kind=cleaning`; prefer the business semantics so those records do
+  // not present the generic executor as a cleaner.
+  if (normalizeInspectionScope(task?.inspection_scope) === 'password_only') return true
   const taskKind = String(task?.task_kind || '').trim().toLowerCase()
   if (taskKind === 'cleaning') return false
   if (taskKind === 'inspection' || taskKind === 'execution') return true

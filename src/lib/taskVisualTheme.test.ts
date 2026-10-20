@@ -1,4 +1,4 @@
-import { getTaskStatusMeta } from './taskVisualTheme'
+import { getKeyHandoverPendingNotice, getTaskStatusMeta } from './taskVisualTheme'
 import type { WorkTaskItem } from './workTasksStore'
 
 function makeTask(patch: Partial<WorkTaskItem>): WorkTaskItem {
@@ -42,6 +42,24 @@ test('pending cleaning task with an executor does not display unassigned', () =>
 test('pending cleaning task without an executor still displays unassigned', () => {
   const meta = getTaskStatusMeta(makeTask({ task_kind: 'cleaning' }), ['admin'])
   expect(meta).toEqual({ text: '未分配', tone: 'pending' })
+})
+
+test('legacy password-only check-in projection uses its assigned execution status', () => {
+  const meta = getTaskStatusMeta(
+    makeTask({
+      task_kind: 'cleaning',
+      task_type: 'checkin_clean',
+      inspection_scope: 'password_only',
+      assignee_id: 'oscar-id',
+      assignee_name: 'Oscar',
+      cleaner_id: null,
+      cleaner_name: 'Oscar',
+      status: 'pending',
+    }),
+    ['cleaner'],
+    'oscar-id',
+  )
+  expect(meta).toEqual({ text: '已分配', tone: 'normal' })
 })
 
 test('inspection task with a checkout marker displays checked out', () => {
@@ -93,6 +111,43 @@ test('inspector lockbox video does not mark unfinished cleaning complete', () =>
     ['cleaner'],
   )
   expect(meta).toEqual({ text: '进行中', tone: 'normal' })
+})
+
+test('explicit current key handover fact outranks unfinished shared workflow state', () => {
+  const task = makeTask({
+    task_kind: 'cleaning',
+    status: 'in_progress',
+    cleaner_id: 'cleaner-1',
+    cleaner_name: '清洁A',
+    cleaning_submission_ready: false,
+    key_handover: {
+      state: 'completed',
+      source_task_id: 'ct-1',
+      completed_at: '2026-10-20T02:32:15.623Z',
+      workflow_finalization_pending: true,
+      missing_requirements: ['cleaning_consumables', 'cleaning_property_photo'],
+    },
+  } as any)
+
+  expect(getTaskStatusMeta(task, ['admin'], 'manager-1')).toEqual({ text: '已挂钥匙', tone: 'success' })
+  expect(getKeyHandoverPendingNotice(task)).toBe('资料待补：补品记录、房源照片')
+})
+
+test('cancelled or tombstoned tasks cannot be promoted by a retained key handover field', () => {
+  const keyHandover = {
+    state: 'completed',
+    source_task_id: 'ct-1',
+    completed_at: '2026-10-20T02:32:15.623Z',
+    workflow_finalization_pending: true,
+    missing_requirements: ['cleaning_consumables'],
+  }
+  const cancelled = makeTask({ status: 'cancelled', key_handover: keyHandover } as any)
+  const tombstoned = makeTask({ status: 'in_progress', key_handover: keyHandover, lifecycle_state: 'tombstone' } as any)
+
+  expect(getTaskStatusMeta(cancelled, ['admin'])).toEqual({ text: '已取消', tone: 'neutral' })
+  expect(getKeyHandoverPendingNotice(cancelled)).toBeNull()
+  expect(getTaskStatusMeta(tombstoned, ['admin'])).toEqual({ text: '进行中', tone: 'normal' })
+  expect(getKeyHandoverPendingNotice(tombstoned)).toBeNull()
 })
 
 test('unfinished cleaning without progress remains assigned after inspection completion', () => {

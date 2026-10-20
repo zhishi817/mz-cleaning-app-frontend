@@ -1,5 +1,5 @@
 import React from 'react'
-import { AppState } from 'react-native'
+import { AppState, RefreshControl } from 'react-native'
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
 import * as Clipboard from 'expo-clipboard'
 import { I18nProvider } from '../../lib/i18n'
@@ -144,6 +144,8 @@ jest.mock('../../lib/workTasksStore', () => {
       },
     ],
     bucketKey: 'bucket',
+    projectionKey: 'projection',
+    ready: true,
     updatedAt: null,
     lastFullSyncTimestamp: null,
   }
@@ -153,6 +155,7 @@ jest.mock('../../lib/workTasksStore', () => {
     getWorkTasksSnapshot: () => snapshot,
     initWorkTasksStore: jest.fn(async () => true),
     makeWorkTasksBucketKey: jest.fn(() => 'bucket'),
+    makeWorkTasksProjectionKey: jest.fn(() => 'projection'),
     patchWorkTaskItem: jest.fn(),
     patchWorkTaskItems: jest.fn(),
     requestWorkTasksRefresh: jest.fn(async () => true),
@@ -164,6 +167,175 @@ jest.mock('../../lib/workTasksStore', () => {
 test('tasks fixtures use the fixed Melbourne business date when UTC is still the previous day', () => {
   expect(mockNow.toISOString().slice(0, 10)).toBe('2026-10-11')
   expect(mockTodayKey).toBe('2026-10-12')
+})
+
+test('an explicitly ready current-scope bucket is not hidden by a redundant pending init call', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const initMock = store.initWorkTasksStore as jest.Mock
+  const refreshMock = store.requestWorkTasksRefresh as jest.Mock
+  const previousBucketKey = snapshot.bucketKey
+  const previousLastFullSyncTimestamp = snapshot.lastFullSyncTimestamp
+  const focusCallbacks: (() => unknown)[] = []
+  let finishHydration!: (value: boolean) => void
+  initMock.mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+    finishHydration = resolve
+  }))
+  snapshot.bucketKey = 'bucket'
+  snapshot.lastFullSyncTimestamp = '2026-10-20T01:56:00.000Z'
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{
+          navigate: jest.fn(),
+          addListener: jest.fn((event: string, listener: () => unknown) => {
+            if (event === 'focus') focusCallbacks.push(listener)
+            return () => {}
+          }),
+        } as any}
+        route={{ key: 'tasks-cache-during-hydration', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByLabelText('task-collapse-w1')).toBeTruthy())
+    expect(ui.queryByText('加载中…')).toBeNull()
+    refreshMock.mockRejectedValueOnce(new Error('offline'))
+    await act(async () => {
+      for (const callback of focusCallbacks) await callback()
+    })
+    await waitFor(() => {
+      expect(ui.getByText('本地缓存')).toBeTruthy()
+      expect(ui.getByLabelText('task-collapse-w1')).toBeTruthy()
+    })
+    expect(ui.queryByText('加载中…')).toBeNull()
+  } finally {
+    ui.unmount()
+    finishHydration(false)
+    initMock.mockImplementation(async () => true)
+    refreshMock.mockImplementation(async () => true)
+    snapshot.bucketKey = previousBucketKey
+    snapshot.lastFullSyncTimestamp = previousLastFullSyncTimestamp
+  }
+})
+
+test('pending notice hydration does not block task-store hydration or the task read', async () => {
+  const notices = require('../../lib/noticesStore')
+  const store = require('../../lib/workTasksStore')
+  const noticesInit = notices.initNoticesStore as jest.Mock
+  const taskInit = store.initWorkTasksStore as jest.Mock
+  const taskRefresh = store.requestWorkTasksRefresh as jest.Mock
+  const initCalls = taskInit.mock.calls.length
+  const refreshCalls = taskRefresh.mock.calls.length
+  let releaseNotices!: () => void
+  noticesInit.mockImplementationOnce(() => new Promise<void>((resolve) => {
+    releaseNotices = resolve
+  }))
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-notices-independent', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(taskInit.mock.calls.length).toBeGreaterThan(initCalls))
+    await waitFor(() => expect(taskRefresh.mock.calls.length).toBeGreaterThan(refreshCalls))
+  } finally {
+    releaseNotices()
+    noticesInit.mockImplementation(async () => {})
+    ui.unmount()
+  }
+})
+
+test('a cached task from a different identity or date scope stays behind the loading gate', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const initMock = store.initWorkTasksStore as jest.Mock
+  const previousBucketKey = snapshot.bucketKey
+  let finishHydration!: (value: boolean) => void
+  initMock.mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+    finishHydration = resolve
+  }))
+  snapshot.bucketKey = 'other-user-or-range-bucket'
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-stale-cache-scope', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByText('加载中…')).toBeTruthy())
+    expect(ui.queryByLabelText('task-collapse-w1')).toBeNull()
+  } finally {
+    ui.unmount()
+    finishHydration(false)
+    initMock.mockImplementation(async () => true)
+    snapshot.bucketKey = previousBucketKey
+  }
+})
+
+test('loading users can open, read and copy the bounded privacy-safe diagnostics', async () => {
+  const store = require('../../lib/workTasksStore')
+  const diagnostics = require('../../lib/taskLoadDiagnostics')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previous = {
+    items: snapshot.items,
+    bucketKey: snapshot.bucketKey,
+    projectionKey: snapshot.projectionKey,
+    ready: snapshot.ready,
+  }
+  snapshot.items = []
+  snapshot.bucketKey = 'bucket'
+  snapshot.projectionKey = 'projection'
+  snapshot.ready = false
+  diagnostics.clearTaskLoadDiagnostics()
+  diagnostics.recordTaskLoadStage('task_fetch.body_timeout', {
+    elapsedMs: 15001,
+    status: 200,
+    errorClass: 'timeout',
+  })
+  ;(Clipboard.setStringAsync as jest.Mock).mockClear()
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-loading-diagnostics', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByLabelText('查看任务加载诊断')).toBeTruthy())
+    fireEvent.press(ui.getByLabelText('查看任务加载诊断'))
+    expect(ui.getByText('任务加载诊断')).toBeTruthy()
+    expect(String(ui.getByTestId('task-load-diagnostics-text').props.children)).toContain('stage=task_fetch.body_timeout')
+
+    fireEvent.press(ui.getByLabelText('复制任务加载诊断'))
+    await waitFor(() => expect(Clipboard.setStringAsync).toHaveBeenCalledWith(expect.stringContaining('stage=task_fetch.body_timeout')))
+    expect(ui.getByText('已复制')).toBeTruthy()
+  } finally {
+    ui.unmount()
+    snapshot.items = previous.items
+    snapshot.bucketKey = previous.bucketKey
+    snapshot.projectionKey = previous.projectionKey
+    snapshot.ready = previous.ready
+    diagnostics.clearTaskLoadDiagnostics()
+  }
 })
 
 test('tasks screen defaults tasks collapsed, shows guest request, and expands details', async () => {
@@ -269,7 +441,9 @@ test('long Wi-Fi name wraps fully on a narrow screen with large text and passwor
 test('tasks screen routes initial, focus and foreground reads through the shared refresh coordinator', async () => {
   const store = require('../../lib/workTasksStore')
   const refreshMock = store.requestWorkTasksRefresh as jest.Mock
+  const foregroundMock = store.setWorkTasksRefreshForeground as jest.Mock
   refreshMock.mockClear()
+  foregroundMock.mockClear()
   const focusCallbacks: (() => unknown)[] = []
   const appStateCallbacks: ((nextState: string) => unknown)[] = []
   const addAppStateListener = jest.spyOn(AppState, 'addEventListener').mockImplementation((event: any, listener: any) => {
@@ -312,8 +486,437 @@ test('tasks screen routes initial, focus and foreground reads through the shared
   await waitFor(() => {
     expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ mode: 'passive', reason: 'tasks_app_active' }))
   })
+
+  refreshMock.mockClear()
+  foregroundMock.mockClear()
+  await act(async () => {
+    for (const callback of appStateCallbacks) await callback('inactive')
+  })
+  expect(foregroundMock).toHaveBeenCalledWith(true)
+  expect(refreshMock).not.toHaveBeenCalled()
+
+  foregroundMock.mockClear()
+  const refreshControl = ui.UNSAFE_getByType(RefreshControl)
+  await act(async () => {
+    refreshControl.props.onRefresh()
+    await Promise.resolve()
+  })
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ mode: 'force', reason: 'tasks_screen_refresh' }))
+  })
+  expect(foregroundMock).toHaveBeenCalledWith(true)
+  expect(foregroundMock.mock.invocationCallOrder[0]).toBeLessThan(refreshMock.mock.invocationCallOrder[0])
   ui.unmount()
   addAppStateListener.mockRestore()
+})
+
+test('manual task refresh does not wait for offline write queues to finish uploading', async () => {
+  const store = require('../../lib/workTasksStore')
+  const keyQueue = require('../../lib/keyUploadQueue').processKeyUploadQueue as jest.Mock
+  const dayEndQueue = require('../../lib/dayEndHandoverQueue').processDayEndHandoverQueue as jest.Mock
+  const refreshMock = store.requestWorkTasksRefresh as jest.Mock
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-upload-queue-refresh', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ reason: 'tasks_initial_load' }))
+  })
+
+  keyQueue.mockImplementationOnce(() => new Promise(() => {}))
+  dayEndQueue.mockImplementationOnce(() => new Promise(() => {}))
+  refreshMock.mockClear()
+
+  await act(async () => {
+    ui.UNSAFE_getByType(RefreshControl).props.onRefresh()
+    await Promise.resolve()
+  })
+
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ reason: 'tasks_screen_refresh' }))
+    expect(ui.UNSAFE_getByType(RefreshControl).props.refreshing).toBe(false)
+  })
+
+  ui.unmount()
+})
+
+test('successful background upload schedules an authoritative refresh even while the other queue remains pending', async () => {
+  const store = require('../../lib/workTasksStore')
+  const keyQueue = require('../../lib/keyUploadQueue').processKeyUploadQueue as jest.Mock
+  const dayEndQueue = require('../../lib/dayEndHandoverQueue').processDayEndHandoverQueue as jest.Mock
+  const refreshMock = store.requestWorkTasksRefresh as jest.Mock
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  let finishKeyQueue!: (value: { processed: number; remaining: number }) => void
+
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-upload-queue-reconcile', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ reason: 'tasks_initial_load' }))
+  })
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  keyQueue.mockImplementationOnce(() => new Promise((resolve) => {
+    finishKeyQueue = resolve
+  }))
+  dayEndQueue.mockImplementationOnce(() => new Promise(() => {}))
+  refreshMock.mockClear()
+
+  await act(async () => {
+    ui.UNSAFE_getByType(RefreshControl).props.onRefresh()
+    await Promise.resolve()
+  })
+
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ reason: 'tasks_screen_refresh', mode: 'force' }))
+    expect(ui.UNSAFE_getByType(RefreshControl).props.refreshing).toBe(false)
+  })
+  expect(refreshMock).not.toHaveBeenCalledWith(expect.objectContaining({ reason: 'offline_queue_reconciled' }))
+
+  await act(async () => {
+    finishKeyQueue({ processed: 1, remaining: 0 })
+    await Promise.resolve()
+  })
+
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'force',
+      reason: 'offline_queue_reconciled',
+    }))
+  })
+  expect(refreshMock.mock.calls.filter(([params]) => params.reason === 'offline_queue_reconciled')).toHaveLength(1)
+  ui.unmount()
+})
+
+test('one rejected background queue does not suppress reconciliation for the other successful queue', async () => {
+  const store = require('../../lib/workTasksStore')
+  const keyQueue = require('../../lib/keyUploadQueue').processKeyUploadQueue as jest.Mock
+  const dayEndQueue = require('../../lib/dayEndHandoverQueue').processDayEndHandoverQueue as jest.Mock
+  const refreshMock = store.requestWorkTasksRefresh as jest.Mock
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-upload-queue-rejection', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ reason: 'tasks_initial_load' }))
+  })
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  keyQueue.mockRejectedValueOnce(new Error('background upload failed'))
+  dayEndQueue.mockResolvedValueOnce({ processed: 1, remaining: 0 })
+  refreshMock.mockClear()
+
+  await act(async () => {
+    ui.UNSAFE_getByType(RefreshControl).props.onRefresh()
+    await Promise.resolve()
+  })
+
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'force',
+      reason: 'offline_queue_reconciled',
+    }))
+  })
+  ui.unmount()
+})
+
+test('failed authoritative refresh schedules one bounded consistency retry after upload success', async () => {
+  const store = require('../../lib/workTasksStore')
+  const keyQueue = require('../../lib/keyUploadQueue').processKeyUploadQueue as jest.Mock
+  const dayEndQueue = require('../../lib/dayEndHandoverQueue').processDayEndHandoverQueue as jest.Mock
+  const refreshMock = store.requestWorkTasksRefresh as jest.Mock
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  let finishKeyQueue!: (value: { processed: number; remaining: number }) => void
+
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-upload-authority-retry', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ reason: 'tasks_initial_load' }))
+  })
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  keyQueue.mockImplementationOnce(() => new Promise((resolve) => {
+    finishKeyQueue = resolve
+  }))
+  dayEndQueue.mockImplementationOnce(() => new Promise(() => {}))
+  refreshMock.mockClear()
+
+  await act(async () => {
+    ui.UNSAFE_getByType(RefreshControl).props.onRefresh()
+    await Promise.resolve()
+  })
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ reason: 'tasks_screen_refresh' }))
+  })
+
+  refreshMock.mockRejectedValueOnce(new Error('authority GET failed'))
+  await act(async () => {
+    finishKeyQueue({ processed: 1, remaining: 0 })
+    await Promise.resolve()
+  })
+
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'force',
+      reason: 'offline_queue_reconciled',
+    }))
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'consistency',
+      reason: 'offline_queue_reconcile_retry',
+    }))
+  })
+  expect(refreshMock.mock.calls.filter(([params]) => params.reason === 'offline_queue_reconcile_retry')).toHaveLength(1)
+  ui.unmount()
+})
+
+test('successful day-end upload invalidates the self handover state and reads submitted status again', async () => {
+  const api = require('../../lib/api')
+  const store = require('../../lib/workTasksStore')
+  const keyQueue = require('../../lib/keyUploadQueue').processKeyUploadQueue as jest.Mock
+  const dayEndQueue = require('../../lib/dayEndHandoverQueue').processDayEndHandoverQueue as jest.Mock
+  const refreshMock = store.requestWorkTasksRefresh as jest.Mock
+  const dayEndReadMock = api.listDayEndHandover as jest.Mock
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  let finishDayEndQueue!: (value: { processed: number; remaining: number }) => void
+
+  dayEndReadMock.mockReset()
+  dayEndReadMock
+    .mockResolvedValueOnce({ submitted_at: null })
+    .mockResolvedValueOnce({ submitted_at: null })
+    .mockResolvedValue({ submitted_at: '2026-10-12T12:00:00.000Z' })
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-day-end-queue-reconcile', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(dayEndReadMock).toHaveBeenCalledTimes(1)
+    expect(ui.getByText('待交接')).toBeTruthy()
+  })
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  keyQueue.mockImplementationOnce(() => new Promise(() => {}))
+  dayEndQueue.mockImplementationOnce(() => new Promise((resolve) => {
+    finishDayEndQueue = resolve
+  }))
+  refreshMock.mockClear()
+
+  await act(async () => {
+    ui.UNSAFE_getByType(RefreshControl).props.onRefresh()
+    await Promise.resolve()
+  })
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ reason: 'tasks_screen_refresh' }))
+    expect(dayEndReadMock).toHaveBeenCalledTimes(2)
+    expect(ui.getByText('待交接')).toBeTruthy()
+  })
+  const readsBeforeCompletion = dayEndReadMock.mock.calls.length
+
+  await act(async () => {
+    finishDayEndQueue({ processed: 1, remaining: 0 })
+    await Promise.resolve()
+  })
+
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'force',
+      reason: 'offline_queue_reconciled',
+    }))
+    expect(dayEndReadMock.mock.calls.length).toBeGreaterThan(readsBeforeCompletion)
+    expect(ui.getByText('已提交')).toBeTruthy()
+  })
+  ui.unmount()
+  dayEndReadMock.mockReset().mockResolvedValue([])
+})
+
+test('background upload completion does not refresh the task scope after component unmount', async () => {
+  const store = require('../../lib/workTasksStore')
+  const keyQueue = require('../../lib/keyUploadQueue').processKeyUploadQueue as jest.Mock
+  const dayEndQueue = require('../../lib/dayEndHandoverQueue').processDayEndHandoverQueue as jest.Mock
+  const refreshMock = store.requestWorkTasksRefresh as jest.Mock
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  let finishKeyQueue!: (value: { processed: number; remaining: number }) => void
+
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-upload-queue-unmount', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ reason: 'tasks_initial_load' }))
+  })
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  keyQueue.mockImplementationOnce(() => new Promise((resolve) => {
+    finishKeyQueue = resolve
+  }))
+  dayEndQueue.mockResolvedValueOnce({ processed: 0, remaining: 0 })
+  refreshMock.mockClear()
+
+  await act(async () => {
+    ui.UNSAFE_getByType(RefreshControl).props.onRefresh()
+    await Promise.resolve()
+  })
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ reason: 'tasks_screen_refresh' }))
+  })
+
+  ui.unmount()
+  await act(async () => {
+    finishKeyQueue({ processed: 1, remaining: 0 })
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  expect(refreshMock).not.toHaveBeenCalledWith(expect.objectContaining({ reason: 'offline_queue_reconciled' }))
+})
+
+test('background upload completion refreshes the latest date scope within the same signed-in session', async () => {
+  const store = require('../../lib/workTasksStore')
+  const keyQueue = require('../../lib/keyUploadQueue').processKeyUploadQueue as jest.Mock
+  const dayEndQueue = require('../../lib/dayEndHandoverQueue').processDayEndHandoverQueue as jest.Mock
+  const refreshMock = store.requestWorkTasksRefresh as jest.Mock
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  let finishKeyQueue!: (value: { processed: number; remaining: number }) => void
+
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-upload-queue-scope-change', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ reason: 'tasks_initial_load' }))
+  })
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  keyQueue.mockImplementationOnce(() => new Promise((resolve) => {
+    finishKeyQueue = resolve
+  }))
+  dayEndQueue.mockImplementationOnce(() => new Promise(() => {}))
+  refreshMock.mockClear()
+
+  await act(async () => {
+    ui.UNSAFE_getByType(RefreshControl).props.onRefresh()
+    await Promise.resolve()
+  })
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({ reason: 'tasks_screen_refresh' }))
+  })
+
+  refreshMock.mockClear()
+  fireEvent.press(ui.getByText('本月'))
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'tasks_initial_load',
+      date_from: '2026-10-01',
+      date_to: '2026-10-31',
+    }))
+  })
+  refreshMock.mockClear()
+
+  await act(async () => {
+    finishKeyQueue({ processed: 1, remaining: 0 })
+    await Promise.resolve()
+  })
+
+  await waitFor(() => {
+    expect(refreshMock).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'force',
+      reason: 'offline_queue_reconciled',
+      date_from: '2026-10-01',
+      date_to: '2026-10-31',
+      view: 'mine',
+    }))
+  })
+  ui.unmount()
+})
+
+test('pending SLA read does not mark an unseen alert read after task screen unmount', async () => {
+  const api = require('../../lib/api')
+  const listAlertsMock = api.listMzappAlerts as jest.Mock
+  const markAlertReadMock = api.markMzappAlertRead as jest.Mock
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  let finishAlerts!: (value: any[]) => void
+
+  listAlertsMock.mockImplementationOnce(() => new Promise((resolve) => {
+    finishAlerts = resolve
+  }))
+  markAlertReadMock.mockClear()
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-sla-unmount', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(listAlertsMock).toHaveBeenCalled())
+  ui.unmount()
+  await act(async () => {
+    finishAlerts([{ id: 'sla-unseen', level: 'warning', payload: { property_code: 'A1201' } }])
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  expect(markAlertReadMock).not.toHaveBeenCalledWith('local:test', 'sla-unseen')
 })
 
 test('周五、周六、周日将日期栏定位到末端，避免今天卡片被裁切', () => {
@@ -668,10 +1271,75 @@ test('key handover execution task shows password-only tag and executor role in l
   })
 
   const rendered = flattenRenderedText(ui.toJSON()).join('\n')
+  expect(rendered).toContain('检查/挂钥匙')
   expect(rendered).toContain('执行\nAngela')
   expect(rendered).not.toContain('清洁\nAngela')
 
   snapshot.items = previousItems
+})
+
+test('legacy password-only check-in card shows generic executor instead of cleaner', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  snapshot.items = [
+    {
+      ...previousItems[0],
+      id: 'eq3401-password-only',
+      task_kind: 'cleaning',
+      execution_role: undefined,
+      execution_semantics: undefined,
+      task_type: 'checkin_clean',
+      inspection_scope: 'password_only',
+      inspection_mode: 'same_day',
+      source_type: 'cleaning_tasks',
+      source_id: 'ct-eq3401',
+      assignee_id: 'u1',
+      assignee_name: 'Oscar',
+      executor_name: null,
+      cleaner_id: null,
+      cleaner_name: 'Oscar',
+      inspector_id: null,
+      inspector_name: null,
+      status: 'pending',
+      start_time: null,
+      end_time: '3pm',
+      property: {
+        ...previousItems[0].property,
+        code: 'EQ3401',
+        region: '',
+      },
+    },
+  ]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-eq3401-password-only', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByLabelText('task-collapse-eq3401-password-only')).toBeTruthy())
+    expandTask(ui, 'eq3401-password-only')
+
+    await waitFor(() => {
+      expect(ui.getByText('检查/挂钥匙')).toBeTruthy()
+      expect(ui.getByText('仅改密码')).toBeTruthy()
+      expect(ui.getByText('已分配')).toBeTruthy()
+      expect(ui.getByText('Oscar')).toBeTruthy()
+    })
+
+    const rendered = flattenRenderedText(ui.toJSON()).join('\n')
+    expect(rendered).toContain('执行\nOscar')
+    expect(rendered).not.toContain('清洁\nOscar')
+    expect(rendered).not.toContain('未分配')
+  } finally {
+    snapshot.items = previousItems
+  }
 })
 
 test('check-in site execution task shows inspection scope and assignee in list', async () => {
@@ -929,6 +1597,65 @@ test('manager keeps MSQ1905E reopened overdue inspection separate from the curre
   mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
 })
 
+test('MQ2212-style pending finalization shows key handover fact and separate missing-material notice', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'manager-1', username: 'Manager', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  snapshot.items = [{
+    ...previousItems[0],
+    id: 'mq2212-current',
+    source_id: 'mq2212-checkout',
+    source_ids: ['mq2212-checkout'],
+    task_kind: 'inspection',
+    task_type: 'checkout_clean',
+    status: 'in_progress',
+    cleaning_status: 'in_progress',
+    inspection_status: 'in_progress',
+    cleaning_submission_ready: false,
+    lockbox_video_url: 'https://example.invalid/mq2212-lockbox.mp4',
+    key_handover: {
+      state: 'completed',
+      source_task_id: 'mq2212-checkout',
+      completed_at: '2026-10-20T02:32:15.623Z',
+      workflow_finalization_pending: true,
+      missing_requirements: ['cleaning_consumables', 'cleaning_property_photo'],
+    },
+    property_id: 'mq2212-property',
+    property: { ...previousItems[0].property, id: 'mq2212-property', code: 'MQ2212', region: 'Southbank' },
+    scheduled_date: mockTodayKey,
+    date: mockTodayKey,
+  }]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-mq2212-key-fact', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => {
+      expect(ui.getByText('已挂钥匙')).toBeTruthy()
+      expect(ui.getByText('挂钥匙已完成')).toBeTruthy()
+      expect(ui.getByText('资料待补：补品记录、房源照片')).toBeTruthy()
+    })
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
 test('manager keeps separate readonly change records for the same property and stable task key', async () => {
   // Match this test file's existing late-bound mocked-module pattern.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -998,6 +1725,291 @@ test('manager keeps separate readonly change records for the same property and s
     mockAuthState.user = previousUser
     mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
     mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('task list keeps the immutable completion record instead of a duplicate live card', async () => {
+  const store = jest.requireMock('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  const base = previousItems[0]
+  const currentId = `cleaning_tasks_cleaner_turnover:${mockTodayKey}:p1:u1`
+  mockAuthState.user = { id: 'admin-history', username: 'admin-history', role: 'admin', roles: ['admin', 'cleaner'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  snapshot.items = [
+    {
+      ...base,
+      id: currentId,
+      source_id: 'checkout-duplicate',
+      source_ids: ['checkout-duplicate', 'checkin-duplicate'],
+      active_source_ids: ['checkout-duplicate', 'checkin-duplicate'],
+      order_id_checkout: 'order-out-duplicate',
+      order_id_checkin: 'order-in-duplicate',
+      task_kind: 'cleaning',
+      execution_role: 'cleaning',
+      execution_list_visible: true,
+      daily_stats_group: 'turnover',
+      daily_stats_key: `turnover:${mockTodayKey}:p1`,
+      scheduled_date: mockTodayKey,
+      status: 'assigned',
+      date: mockTodayKey,
+    },
+    {
+      ...base,
+      id: `${currentId}::record:completed:${mockTodayKey}`,
+      source_id: 'checkout-duplicate',
+      source_ids: ['checkout-duplicate', 'checkin-duplicate'],
+      active_source_ids: ['checkout-duplicate', 'checkin-duplicate'],
+      order_id_checkout: 'order-out-duplicate',
+      order_id_checkin: 'order-in-duplicate',
+      task_kind: 'cleaning',
+      execution_role: 'cleaning',
+      execution_list_visible: false,
+      work_record_visible: true,
+      work_record_read_only: true,
+      work_record_state: 'completed',
+      work_record_date: mockTodayKey,
+      original_scheduled_date: mockTodayKey,
+      counts_as_active_task: false,
+      scheduled_date: mockTodayKey,
+      status: 'completed',
+      date: mockTodayKey,
+    },
+  ]
+
+  const TasksScreen = jest.requireActual('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-terminal-record-reconciliation', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => {
+      expect(ui.queryByLabelText(`task-card-${currentId}`)).toBeNull()
+      expect(ui.getByLabelText(`task-card-${currentId}::record:completed:${mockTodayKey}`)).toBeTruthy()
+      expect(ui.getByText('入住＋退房 0 · 线下 0')).toBeTruthy()
+      expect(ui.getByText('在办 0 · 完成 1')).toBeTruthy()
+    })
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('task list reconciles a prior-day current projection before record-day bucketing', async () => {
+  const store = jest.requireMock('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  const base = previousItems[0]
+  const previousDate = mockTodayKey
+  const completionDate = '2026-10-13'
+  const currentId = `cleaning_tasks_cleaner_turnover:${previousDate}:p1:u1`
+  mockAuthState.user = { id: 'admin-cross-day-history', username: 'admin-cross-day-history', role: 'admin', roles: ['admin', 'cleaner'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  snapshot.items = [
+    {
+      ...base,
+      id: currentId,
+      source_id: 'checkout-cross-day',
+      source_ids: ['checkout-cross-day', 'checkin-cross-day'],
+      active_source_ids: ['checkout-cross-day', 'checkin-cross-day'],
+      task_kind: 'cleaning',
+      execution_role: 'cleaning',
+      execution_list_visible: true,
+      daily_stats_group: 'turnover',
+      daily_stats_key: `turnover:${previousDate}:p1`,
+      scheduled_date: previousDate,
+      status: 'assigned',
+      date: previousDate,
+    },
+    {
+      ...base,
+      id: `${currentId}::record:completed:${completionDate}`,
+      source_id: 'checkout-cross-day',
+      source_ids: ['checkout-cross-day', 'checkin-cross-day'],
+      active_source_ids: ['checkout-cross-day', 'checkin-cross-day'],
+      task_kind: 'cleaning',
+      execution_role: 'cleaning',
+      execution_list_visible: false,
+      work_record_visible: true,
+      work_record_read_only: true,
+      work_record_state: 'completed',
+      work_record_date: completionDate,
+      original_scheduled_date: previousDate,
+      counts_as_active_task: false,
+      scheduled_date: previousDate,
+      status: 'completed',
+      date: completionDate,
+    },
+  ]
+
+  const TasksScreen = jest.requireActual('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-cross-day-terminal-record-reconciliation', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => {
+      expect(ui.queryByLabelText(`task-card-${currentId}`)).toBeNull()
+      expect(ui.queryByLabelText(`task-card-${currentId}::record:completed:${completionDate}`)).toBeNull()
+      expect(ui.getByText('在办 0 · 完成 0')).toBeTruthy()
+    })
+
+    fireEvent.press(ui.getByText('13'))
+
+    await waitFor(() => {
+      expect(ui.queryByLabelText(`task-card-${currentId}`)).toBeNull()
+      expect(ui.getByLabelText(`task-card-${currentId}::record:completed:${completionDate}`)).toBeTruthy()
+      expect(ui.getByText('在办 0 · 完成 1')).toBeTruthy()
+    })
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('manager keeps two 831606 tasks that share a property and order but have different sources', async () => {
+  const store = jest.requireMock('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  const base = previousItems[0]
+  mockAuthState.user = { id: 'admin-831606', username: 'admin-831606', role: 'admin', roles: ['admin', 'cleaner'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  snapshot.items = [
+    {
+      ...base,
+      id: '831606-cleaning-a',
+      source_id: '831606-source-a',
+      source_ids: ['831606-source-a'],
+      order_id_checkout: '831606-shared-order',
+      property_id: 'property-831606',
+      property: { ...base.property, id: 'property-831606', code: '831606' },
+      execution_list_visible: true,
+      daily_stats_group: 'turnover',
+      daily_stats_key: `turnover:${mockTodayKey}:property-831606`,
+      scheduled_date: mockTodayKey,
+      status: 'assigned',
+      date: mockTodayKey,
+    },
+    {
+      ...base,
+      id: '831606-cleaning-b',
+      source_id: '831606-source-b',
+      source_ids: ['831606-source-b'],
+      order_id_checkout: '831606-shared-order',
+      property_id: 'property-831606',
+      property: { ...base.property, id: 'property-831606', code: '831606' },
+      execution_list_visible: true,
+      daily_stats_group: 'turnover',
+      daily_stats_key: `turnover:${mockTodayKey}:property-831606`,
+      scheduled_date: mockTodayKey,
+      status: 'assigned',
+      date: mockTodayKey,
+    },
+  ]
+
+  const TasksScreen = jest.requireActual('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-831606-distinct-sources', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => {
+      expect(ui.getByLabelText('task-card-831606-cleaning-a')).toBeTruthy()
+      expect(ui.getByLabelText('task-card-831606-cleaning-b')).toBeTruthy()
+      expect(ui.getByText('入住＋退房 2 · 线下 0')).toBeTruthy()
+      expect(ui.getByText('在办 2 · 完成 0')).toBeTruthy()
+    })
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('cancelled work history is absent from the mobile task list and totals', async () => {
+  const store = jest.requireMock('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  const base = previousItems[0]
+  snapshot.items = [
+    {
+      ...base,
+      id: 'completed-history',
+      source_id: 'completed-history-source',
+      status: 'completed',
+      scheduled_date: mockTodayKey,
+      date: mockTodayKey,
+    },
+    {
+      ...base,
+      id: 'cancelled-history',
+      source_id: 'cancelled-history-source',
+      status: 'cancelled',
+      work_record_visible: true,
+      work_record_read_only: true,
+      work_record_state: 'cancelled',
+      work_record_date: mockTodayKey,
+      scheduled_date: mockTodayKey,
+      date: mockTodayKey,
+    },
+  ]
+
+  const TasksScreen = jest.requireActual('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-cancelled-history-bottom', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => {
+      expect(ui.getByText('历史 1')).toBeTruthy()
+      expect(ui.getByText('在办 0 · 完成 1')).toBeTruthy()
+      expect(ui.queryByText(/取消历史/)).toBeNull()
+      expect(ui.queryByLabelText('task-card-cancelled-history')).toBeNull()
+    })
+    const taskCardLabels = ui.getAllByRole('button')
+      .map((node) => String(node.props.accessibilityLabel || ''))
+      .filter((label) => label.startsWith('task-card-'))
+    expect(taskCardLabels).toEqual(['task-card-completed-history'])
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
   }
 })
 

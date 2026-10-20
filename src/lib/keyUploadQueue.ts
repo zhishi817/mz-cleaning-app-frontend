@@ -38,7 +38,8 @@ export type KeyPhotoEffectiveState = 'missing' | 'pending_sync' | 'recorded'
 
 const STORAGE_KEY = 'mzstay.key_upload_queue.v2'
 const listeners = new Set<() => void>()
-let processing = false
+type KeyUploadQueueProcessResult = { processed: number; remaining: number }
+let processingPromise: Promise<KeyUploadQueueProcessResult> | null = null
 
 function emit() {
   for (const listener of listeners) {
@@ -234,10 +235,9 @@ export function selectKeyPhotoEffectiveState(params: { key_photo_url?: string | 
   return 'missing'
 }
 
-export async function processKeyUploadQueue(token: string) {
-  if (processing) return { processed: 0, remaining: await getKeyUploadQueueLength() }
-  processing = true
-  try {
+export function processKeyUploadQueue(token: string): Promise<KeyUploadQueueProcessResult> {
+  if (processingPromise) return processingPromise
+  const run = (async () => {
     const queue = await loadQueue()
     let processed = 0
     for (const item of queue) {
@@ -328,7 +328,15 @@ export async function processKeyUploadQueue(token: string) {
       }
     }
     return { processed, remaining: await getKeyUploadQueueLength() }
-  } finally {
-    processing = false
-  }
+  })()
+  processingPromise = run
+  void run.then(
+    () => {
+      if (processingPromise === run) processingPromise = null
+    },
+    () => {
+      if (processingPromise === run) processingPromise = null
+    },
+  )
+  return run
 }
