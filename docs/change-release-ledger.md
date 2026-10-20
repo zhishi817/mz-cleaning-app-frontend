@@ -64,6 +64,8 @@
 - User authorization: `selected-for-commit`; evidence: the user replied `可以` to the exact two-repository scope. Repository policy requires a separately recorded approval after the content commit SHA and branch are known before push.
 - Independent review: `GO for this exact local content commit`; evidence: the reviewer matched branch/base/index, candidate hash `6aa4121b31692c671b1f90e92b72f23b20b0ef19e127e84ba47573c4ac7cdf9f`, three staged files / four non-ledger hunks, clean unstaged/untracked scope, current-Dev API adaptation, MZ049 coordinator compatibility, unchanged permissions and generated/sensitive/production-write exclusions; P0=0 and code P1=0. The initially noted authorization-ledger P1 is resolved by recording `selected-for-commit` here.
 - Action conclusion: `GO`; the exact reviewed content commit was created locally. Push requires the committed exact range report, a new independent push review and explicit approval bound to repository, commit SHA and branch. PR, merge, deployment, EAS build, OTA and production API/database work remain unauthorized.
+- Checked-out Git state: exact committed range clean at audit head `4a0b765ce22764b8c6ac50ac940572d27996eb06`; this Release Attempt receipt is the authoritative post-commit state because ledger-only governance forbids changing the earlier top-level pre-commit summary.
+- Remote branch/SHA: not pushed; read-only `ls-remote` on 2026-10-20 UTC against `https://github.com/zhishi817/mz-cleaning-app-frontend.git` confirmed `Dev@7021aeda7e7336c0a20e99412e7d370e0e12f8c5` unchanged and `codex/mz053-performance-retry-20261020` absent. The local worktree has no configured `origin`, so any later authorized push must use this exact audited destination URL explicitly.
 
 ### Risks / Release Notes
 
