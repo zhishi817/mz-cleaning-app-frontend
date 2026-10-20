@@ -1,5 +1,78 @@
 # Change Release Ledger
 
+## CRL-20261020-003 — MZ053 failed-force retry storm guard
+
+- **Status:** selected Mobile release candidate on freshly fetched `origin/Dev@7021aeda7e7336c0a20e99412e7d370e0e12f8c5`; exact staging and current-base validation passed; exact staged independent review remains pending; not committed, pushed, merged, built or published
+- **Repository:** `mobile`
+- **Updated:** 2026-10-20 UTC
+- **Request:** after a task-list timeout or other failed authority read, prevent force requests queued behind that exact failed request from immediately launching a duplicate request, while preserving MZ049 coordinator behavior, weak-network recovery and the current week-range UI semantics.
+- **Outcome:** a failed foreground refresh rejects the force waiters queued behind that generation and consumes `pendingForce` without starting an immediate duplicate. Later manual refresh remains available; successful coalescing, cooldown consistency retry and background-to-foreground behavior are preserved.
+
+### Implementation
+
+- Previous behavior: a failed request with queued force callers immediately started another full authority read, amplifying a backend timeout into a retry storm.
+- New behavior: queued force waiters receive the same failure and no immediate duplicate starts; a queued consistency request retains the cooldown retry, and background waiters remain pending until foreground.
+- Key decisions: do not change visibility, roles, actions, cache projection, API payload, navigation, uploads or the task-screen date range.
+
+### Files / Areas
+
+- `src/lib/workTasksStore.ts` — modified: reject failed-generation force waiters and preserve bounded consistency/background recovery.
+- `src/lib/workTasksStore.test.ts` — modified: failed-force, consistency and background waiter regressions.
+- `docs/change-release-ledger.md` — modified: this release record and exact attempt evidence.
+
+### Impact / Dependencies
+
+- API / database / permissions: none.
+- Native / dependency / EAS configuration: none.
+- Dependencies: intended to follow the Root MZ053 read optimization `root/CRL-20261020-004` for incident recovery, but this Mobile request-coordination guard is independently safe. OTA remains a later separately authorized delivery action.
+- Rollback: revert this CRL; the previous immediate retry behavior returns and no data rollback is needed.
+
+### Validation
+
+- Prior isolated candidate: focused `workTasksStore` 49/49, fast 73/73, full 76 suites / 552 tests, TypeScript, button audit and lint with zero errors passed; physical devices, weak network and EAS/OTA were not run.
+- Independent source review: P0=0/P1=0 with failure, consistency and background waiter cases covered; fresh current-base staged review remains required before commit.
+- Fresh-current-base regression: focused `workTasksStore` 33/33 passed after removing only one source-branch-only `waitForForeground` test option that is not part of current Dev's API. `PYTHONDONTWRITEBYTECODE=1 npm run check:ci` passed: ledger auditor 44/44, ordinary ledger coverage 3/3, TypeScript, lint with 0 errors / 667 warnings, button audit, fast 8 suites / 74 tests, full 74 suites / 514 tests, and sensitive-pattern scan.
+- Candidate hygiene: `git diff --cached --check` passed; no generated, native, dependency, cache, bundle or sensitive path is selected. Exact staged independent review remains pending.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`.
+- **Untracked review:** `none`; both selected source paths are tracked and no unstaged/untracked path remains.
+- `src/lib/workTasksStore.test.ts` — SHA-256: `e86e25fb0fa12318d3b67c102ee7c60aad08a0d1b49229ccaa0ccf516aac8954`
+- `src/lib/workTasksStore.ts` — SHA-256: `43fa41f1a465ad6c80df176449ad7c7664a429b374695baf141bae600a0c03ad`
+- `src/lib/workTasksStore.ts` — SHA-256: `dd35ddf04b0e667ee0ca3033e094a8dfcd956b20644001017fee4671c4243f10`
+- `src/lib/workTasksStore.ts` — SHA-256: `e11deb3c1a7bc3c4d5bf9b537df926d245d2a93a13e9b15622c45080678c212e`
+
+### Release Attempts
+
+#### RA-20261020-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261020-003`
+- Selected CRL identities: `mobile/CRL-20261020-003`
+- Intended action: `commit`, followed by a separately gated normal non-force `push` of the unchanged exact range.
+- Branch: `codex/mz053-performance-retry-20261020`
+- Base: `origin/Dev@7021aeda7e7336c0a20e99412e7d370e0e12f8c5`; fetched at `2026-10-20T10:48:21Z`.
+- Candidate patch SHA-256: `6aa4121b31692c671b1f90e92b72f23b20b0ef19e127e84ba47573c4ac7cdf9f` excluding `docs/change-release-ledger.md`.
+- Commit SHA: not committed.
+- Dependencies: Root PR #403 / Mobile PR #58 merged work-record baselines; related follow-up `root/CRL-20261020-004` remains a separate repository range.
+- Required validation: `PASS`; evidence: focused 33/33 plus the complete current-base CI gate passed with 74 suites / 514 tests, TypeScript, lint (0 errors), repository governance checks and sensitive-pattern scan.
+- Shared-hunk review: `not applicable`; fresh worktree contains only this selected CRL.
+- Generated-file review: `PASS`; no generated file, bundle, native file, dependency or cache is staged.
+- Technical state: `verified staged candidate`
+- User authorization: `selected-for-commit`; evidence: the user replied `可以` to the exact two-repository scope. Repository policy requires a separately recorded approval after the content commit SHA and branch are known before push.
+- Independent review: `GO for this exact local content commit`; evidence: the reviewer matched branch/base/index, candidate hash `6aa4121b31692c671b1f90e92b72f23b20b0ef19e127e84ba47573c4ac7cdf9f`, three staged files / four non-ledger hunks, clean unstaged/untracked scope, current-Dev API adaptation, MZ049 coordinator compatibility, unchanged permissions and generated/sensitive/production-write exclusions; P0=0 and code P1=0. The initially noted authorization-ledger P1 is resolved by recording `selected-for-commit` here.
+- Action conclusion: `GO` for this exact local content commit only. Push requires the committed exact range report, a new independent push review and explicit approval bound to repository, commit SHA and branch. PR, merge, deployment, EAS build, OTA and production API/database work remain unauthorized.
+
+### Risks / Release Notes
+
+- Local unit tests cannot prove physical-device weak-network behavior; OTA is required later for installed clients to receive this JavaScript change and remains separately gated.
+- Mobile GitHub Actions run only for `Dev/main`; feature-branch push does not invoke EAS, build or OTA commands.
+- Sensitive-information review: no `.env`, tokens, user/task data, device logs, caches, bundles or generated artifacts are included.
+- Git state: uncommitted fresh release worktree; not pushed; no PR; not merged; OTA/build not published; device/production verification not run.
+
+
 ## CRL-20261019-004 — MZ053 只读工作记录任务页（mobile）
 
 - **Status:** exact staged candidate selected and independently reviewed GO for local commit on freshly fetched `origin/Dev@adbf3e0390dc0a6a305c9e28830fa78b75ac09d8`; all historical-media, same-source SSE and canonical-readonly refresh P1 findings are fixed and the full repository gate passed; not yet committed, pushed, merged, built, published, or device verified
