@@ -565,6 +565,107 @@ test('collapses force requests received while a refresh is running into one foll
   expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
 })
 
+test('rejects queued force waiters without an immediate retry when the running refresh fails', async () => {
+  const api = require('./api')
+  const params = refreshParams({ userId: 'failed-force-user' })
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+  let rejectFirstRequest: (error: Error) => void = () => {}
+  const firstRequest = new Promise<WorkTaskItem[]>((_resolve, reject) => {
+    rejectFirstRequest = reject
+  })
+  let releaseManualRetry: (items: WorkTaskItem[]) => void = () => {}
+  const manualRetryRequest = new Promise<WorkTaskItem[]>((resolve) => {
+    releaseManualRetry = resolve
+  })
+  api.listWorkTasks.mockReturnValueOnce(firstRequest).mockReturnValueOnce(manualRetryRequest)
+
+  const initial = requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'initial' })
+  const forceRequests = Array.from({ length: 10 }, () => requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'manual_refresh' }))
+  const outcomes = Promise.allSettled([initial, ...forceRequests])
+  rejectFirstRequest(Object.assign(new Error('request timed out'), { code: 'TIMEOUT' }))
+
+  const settled = await outcomes
+  expect(settled.every((outcome) => outcome.status === 'rejected')).toBe(true)
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+
+  let manualRetrySettled = false
+  const manualRetry = requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'manual_retry' }).then((applied) => {
+    manualRetrySettled = true
+    return applied
+  })
+  await Promise.resolve()
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
+  expect(manualRetrySettled).toBe(false)
+  releaseManualRetry([])
+  await expect(manualRetry).resolves.toBe(true)
+})
+
+test('preserves one cooldown consistency retry when a running refresh and queued force both fail', async () => {
+  jest.useFakeTimers()
+  const api = require('./api')
+  const params = refreshParams({ userId: 'failed-force-consistency-user' })
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+  let rejectFirstRequest: (error: Error) => void = () => {}
+  const firstRequest = new Promise<WorkTaskItem[]>((_resolve, reject) => {
+    rejectFirstRequest = reject
+  })
+  api.listWorkTasks.mockReturnValueOnce(firstRequest).mockResolvedValueOnce([])
+
+  const initial = requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'initial' })
+  const queuedForce = requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'manual_refresh' })
+  await requestWorkTasksRefresh({ ...params, mode: 'consistency', reason: 'sse_during_refresh' })
+  const outcomes = Promise.allSettled([initial, queuedForce])
+  rejectFirstRequest(new Error('request timed out'))
+
+  expect((await outcomes).every((outcome) => outcome.status === 'rejected')).toBe(true)
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+  await jest.advanceTimersByTimeAsync(59_999)
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+  await jest.advanceTimersByTimeAsync(1)
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
+})
+
+test('keeps a backgrounded queued force waiter until foreground after the running refresh fails', async () => {
+  const api = require('./api')
+  const params = refreshParams({ userId: 'backgrounded-failed-force-user' })
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+  let rejectFirstRequest: (error: Error) => void = () => {}
+  const firstRequest = new Promise<WorkTaskItem[]>((_resolve, reject) => {
+    rejectFirstRequest = reject
+  })
+  let releaseForegroundRetry: (items: WorkTaskItem[]) => void = () => {}
+  const foregroundRetry = new Promise<WorkTaskItem[]>((resolve) => {
+    releaseForegroundRetry = resolve
+  })
+  api.listWorkTasks.mockReturnValueOnce(firstRequest).mockReturnValueOnce(foregroundRetry)
+
+  const initial = requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'initial' })
+  setWorkTasksRefreshForeground(false)
+  let queuedSettled = false
+  const queuedForce = requestWorkTasksRefresh({
+    ...params,
+    mode: 'force',
+    reason: 'background_queue',
+  }).then((applied) => {
+    queuedSettled = true
+    return applied
+  })
+  const initialOutcome = expect(initial).rejects.toThrow('request timed out')
+  rejectFirstRequest(new Error('request timed out'))
+
+  await initialOutcome
+  await Promise.resolve()
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+  expect(queuedSettled).toBe(false)
+
+  setWorkTasksRefreshForeground(true)
+  await Promise.resolve()
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
+  expect(queuedSettled).toBe(false)
+  releaseForegroundRetry([])
+  await expect(queuedForce).resolves.toBe(true)
+})
+
 test('clears pending timers on logout so a new account does not inherit its refresh state', async () => {
   jest.useFakeTimers()
   const api = require('./api')

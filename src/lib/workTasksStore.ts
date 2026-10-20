@@ -703,6 +703,11 @@ function settleRefreshWaiters(scope: RefreshCoordinatorScope, generation: number
   }
 }
 
+function rejectPendingRefreshWaiters(scope: RefreshCoordinatorScope, error: unknown) {
+  const pending = scope.waiters.splice(0)
+  for (const waiter of pending) waiter.reject(error)
+}
+
 function waitForRefreshGeneration(scope: RefreshCoordinatorScope, generation: number) {
   if (scope.completedGeneration >= generation) return Promise.resolve(true)
   return new Promise<boolean>((resolve, reject) => {
@@ -738,8 +743,13 @@ function finishCoordinatedRefresh(scopeKey: string, scope: RefreshCoordinatorSco
   if (scope.pendingForce) {
     if (workTasksRefreshForeground) {
       scope.pendingForce = false
-      scope.pendingConsistency = false
       clearRefreshCoordinatorTimer(scope)
+      if (error) {
+        rejectPendingRefreshWaiters(scope, error)
+        armConsistencyRefresh(scopeKey, scope)
+        return
+      }
+      scope.pendingConsistency = false
       startCoordinatedRefresh(scopeKey, scope)
     }
     return
