@@ -331,7 +331,8 @@
 - Base: `origin/Dev@c24abbb61b2982a4869ee663f4e337006a0fa1df`; fetched at `2026-10-20 22:38 UTC`
 - Candidate patch SHA-256: `b90a76e409b4ab719ddc701b61fed1a82de417808f8f0af40e1630fda26cc144`, excluding `docs/change-release-ledger.md`
 - Commit SHA: `ed7863a791e95370ca8e733b896a92627e8958b4`; exact reviewed content commit, with the final audit head being the later ledger-only receipt commit
-- Dependencies: `root/CRL-20261020-007@b015187b9fa78441a40b502468259aeb5d85aca6`; Root must deploy before Mobile release
+- Dependencies: none
+- Cross-repository deployment evidence: paired Root content is `root/CRL-20261020-007@b015187b9fa78441a40b502468259aeb5d85aca6`, whose exact Root release report is GO; this is a production deployment-order constraint, not a Mobile source-ancestry dependency
 - Required validation: `PASS for staged candidate`; exact clean-worktree `PYTHONDONTWRITEBYTECODE=1 npm run check:ci` passed after the governance-only fast-suite restoration with ledger 44/44, changed-file coverage, TypeScript, strict button contract, lint 0 errors / 747 warnings, broader fast 8 suites / 113 tests and full Jest 76 suites / 584 tests
 - Shared-hunk review: `PASS`; all 254 non-ledger hunks are jointly selected by the two named CRLs, and the candidate retains both the published Build 28 loading repairs and the five MZ053 fixes while preserving Dev's broader fast-test gate
 - Generated-file review: `PASS`; no generated native output, build artifact, cache, dependency directory or environment file is selected
