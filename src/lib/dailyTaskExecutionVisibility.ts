@@ -1,5 +1,8 @@
 export type DailyTaskExecutionCandidate = {
   execution_list_visible?: boolean
+  work_record_visible?: boolean
+  work_record_read_only?: boolean
+  work_record_state?: unknown
   source_type?: unknown
   task_kind?: unknown
   task_type?: unknown
@@ -72,6 +75,7 @@ export function isDailyTaskExecutionVisible(
   task: DailyTaskExecutionCandidate,
   options: DailyTaskExecutionVisibilityOptions = {},
 ) {
+  if (task.work_record_visible === true && task.work_record_read_only === true) return false
   if (task.execution_list_visible === false) return false
 
   const source = normalized(task.source_type)
@@ -93,4 +97,28 @@ export function isDailyTaskExecutionVisible(
     return options.includeManagerUnassignedOffline === true && isOrdinaryOfflineDailyTask(task)
   }
   return true
+}
+
+/**
+ * The task page contains both the active execution queue and a separately
+ * authorized history surface. Requiring both record flags fails closed for a
+ * partial or stale payload, while keeping execution counters/actions isolated.
+ */
+export function isDailyTaskListVisible(
+  task: DailyTaskExecutionCandidate,
+  options: DailyTaskExecutionVisibilityOptions = {},
+) {
+  if (task.work_record_visible === true && task.work_record_read_only === true) return true
+  return isDailyTaskExecutionVisible(task, options)
+}
+
+/**
+ * A reassigned record belongs to a former executor. Its source ids still point
+ * at the live task now owned by someone else, so detail screens must use only
+ * the immutable media included in the record payload rather than refetching
+ * mutable source media by those ids.
+ */
+export function canLoadLiveSourceMediaForDailyTask(task: DailyTaskExecutionCandidate | null | undefined) {
+  if (!task) return false
+  return !(task.work_record_read_only === true && normalized(task.work_record_state) === 'reassigned')
 }

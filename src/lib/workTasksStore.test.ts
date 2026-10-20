@@ -157,6 +157,185 @@ test('accepts an explicit server null and never copies a marker to an unrelated 
   expect(Object.prototype.hasOwnProperty.call(mergeRemoteWorkTaskItems(unrelated, previous)[0], 'checked_out_at')).toBe(false)
 })
 
+test('preserves an active task and its read-only transition record as separate server rows', () => {
+  const active = makeTask({
+    id: 'work-task-1',
+    source_type: 'work_tasks',
+    source_id: 'source-1',
+    scheduled_date: '2026-10-22',
+    date: '2026-10-22',
+    status: 'assigned',
+  } as any)
+  const record = makeTask({
+    id: 'work-task-1::rescheduled::event-1',
+    source_type: 'work_tasks',
+    source_id: 'source-1',
+    scheduled_date: '2026-10-19',
+    date: '2026-10-19',
+    status: 'rescheduled',
+    work_record_state: 'rescheduled',
+    work_record_visible: true,
+    work_record_read_only: true,
+    counts_as_active_task: false,
+  } as any)
+
+  const merged = mergeRemoteWorkTaskItems([active, record], [])
+  expect(merged).toHaveLength(2)
+  expect(merged[0]).toMatchObject({ id: 'work-task-1', date: '2026-10-22' })
+  expect(merged[0]?.work_record_read_only).toBeUndefined()
+  expect(merged[1]).toMatchObject({
+    id: 'work-task-1::rescheduled::event-1',
+    date: '2026-10-19',
+    work_record_state: 'rescheduled',
+    work_record_read_only: true,
+    available_actions: [],
+    old_code: null,
+    new_code: null,
+  })
+})
+
+test('scrubs live credentials, guest state and actions when an SSE patch turns an active card into a work record', () => {
+  const active = makeTask({
+    old_code: '1111',
+    new_code: '2222',
+    guest_special_request: '提前入住',
+    guest_request_checkout: '延迟退房',
+    guest_request_checkin: '提前入住',
+    guest_request_summary: '住客要求',
+    guest_luggage: { status: 'pending' },
+    guest_ready_notification: { status: 'not_notified' },
+    guest_ready_outside_key: { required: true },
+    participants: [{ user_id: 'staff-1', role: 'cleaner' }],
+    capabilities: { base_permissions: { finish: true } },
+    available_actions: [{ id: 'complete', label: '完成', enabled: true }],
+    maintenance_workflow: { status: 'assigned', available_actions: ['executor_complete'] },
+    turnover_display: {
+      checkin_time: '3pm',
+      old_code: '1111',
+      new_code: '2222',
+      guest_request_summary: '住客要求',
+      conflicts: [
+        { field: 'old_code', canonical_value: '1111', manual_value: '9999' },
+        { field: 'checkout_time', canonical_value: '10am', manual_value: '11am' },
+      ],
+    },
+    display_conflicts: [
+      { field: 'new_code', canonical_value: '2222', manual_value: '3333' },
+      { field: 'checkout_time', canonical_value: '10am', manual_value: '11am' },
+    ],
+    property: {
+      id: 'property-1',
+      code: 'A1',
+      address: '1 Example St',
+      unit_type: 'unit',
+      access_guide_link: 'https://secret.example/access',
+      wifi_ssid: 'private-network',
+      wifi_password: 'private-password',
+      router_location: 'inside cupboard',
+    },
+  } as any)
+  const event = {
+    event_type: 'TASK_COMPLETED',
+    change_scope: 'list',
+    changed_fields: [
+      'status',
+      'work_record_visible',
+      'work_record_state',
+      'work_record_date',
+      'work_record_read_only',
+      'counts_as_active_task',
+    ],
+    payload: {
+      patch: {
+        status: 'done',
+        work_record_visible: true,
+        work_record_state: 'completed',
+        work_record_date: '2026-07-25',
+        work_record_read_only: true,
+        counts_as_active_task: false,
+      },
+    },
+  } as any
+
+  expect(isSafePatchEvent(event)).toBe(true)
+  expect(mergePatchIntoTask(active, event)).toMatchObject({
+    old_code: null,
+    new_code: null,
+    guest_special_request: null,
+    guest_request_checkout: null,
+    guest_request_checkin: null,
+    guest_request_summary: null,
+    guest_luggage: null,
+    guest_ready_notification: null,
+    guest_ready_outside_key: null,
+    participants: null,
+    capabilities: null,
+    available_actions: [],
+    maintenance_workflow: { status: 'assigned', available_actions: [] },
+    turnover_display: {
+      checkin_time: '3pm',
+      old_code: null,
+      new_code: null,
+      guest_request_summary: null,
+      conflicts: [{ field: 'checkout_time', canonical_value: '10am', manual_value: '11am' }],
+    },
+    display_conflicts: [{ field: 'checkout_time', canonical_value: '10am', manual_value: '11am' }],
+    property: {
+      access_guide_link: null,
+      wifi_ssid: null,
+      wifi_password: null,
+      router_location: null,
+    },
+  })
+})
+
+test('does not retain current-assignee media when a cached card becomes a reassigned record', () => {
+  const record = reconcileExecutionListVisibilityAfterPatch(makeTask({
+    work_record_read_only: true,
+    work_record_visible: true,
+    work_record_state: 'reassigned',
+    photo_urls: ['current/photo.jpg'],
+    completion_photo_urls: ['current/completion.jpg'],
+    key_photo_url: 'current/key.jpg',
+    lockbox_video_url: 'current/lockbox.mp4',
+    living_room_photo_urls: ['current/living.jpg'],
+    living_room_photo_url: 'current/living-single.jpg',
+    restock_items: [{ item_id: 'stock-1', label: '纸巾', qty: 1, note: null, photo_url: 'current/stock.jpg', status: 'low' }],
+  } as any), [])
+
+  expect(record).toMatchObject({
+    photo_urls: [],
+    completion_photo_urls: [],
+    key_photo_url: null,
+    lockbox_video_url: null,
+    living_room_photo_urls: [],
+    living_room_photo_url: null,
+    restock_items: [],
+  })
+})
+
+test('retains only server-attributed immutable event media on a reassigned record', () => {
+  const record = reconcileExecutionListVisibilityAfterPatch(makeTask({
+    work_record_read_only: true,
+    work_record_visible: true,
+    work_record_state: 'reassigned',
+    work_record_media_attributed: true,
+    media_access_work_task_id: 'canonical-work-task-1',
+    photo_urls: ['current/photo.jpg'],
+    completion_photo_urls: ['history/executor-a-proof.jpg'],
+    key_photo_url: 'current/key.jpg',
+    lockbox_video_url: 'current/lockbox.mp4',
+  } as any), [])
+
+  expect(record).toMatchObject({
+    media_access_work_task_id: 'canonical-work-task-1',
+    photo_urls: [],
+    completion_photo_urls: ['history/executor-a-proof.jpg'],
+    key_photo_url: null,
+    lockbox_video_url: null,
+  })
+})
+
 test('keeps a maintenance receipt when a task-list response started before that receipt returns', () => {
   const receiptTask = makeTask({
     id: 'property_maintenance:m1',
@@ -228,6 +407,33 @@ function refreshParams(overrides: Partial<{ token: string; userId: string; date_
     ...overrides,
   }
 }
+
+test('buckets a cross-day work record by the server work-record date, not the planned date', async () => {
+  const api = require('./api')
+  const params = refreshParams({ date_from: '2026-10-20', date_to: '2026-10-20' })
+  api.listWorkTasks.mockResolvedValueOnce([makeTask({
+    id: 'cross-day-record',
+    scheduled_date: '2026-10-19',
+    date: '2026-10-19',
+    original_scheduled_date: '2026-10-19',
+    work_record_date: '2026-10-20',
+    work_record_visible: true,
+    work_record_read_only: true,
+    work_record_state: 'completed',
+    status: 'done',
+    daily_stats_group: null,
+    daily_stats_key: null,
+  } as any)])
+
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'cross_day_record_test' })
+  expect(getWorkTasksSnapshot().items[0]).toMatchObject({
+    id: 'cross-day-record',
+    date: '2026-10-20',
+    scheduled_date: '2026-10-19',
+    original_scheduled_date: '2026-10-19',
+    work_record_read_only: true,
+  })
+})
 
 test('keeps an authorized manager-all unassigned offline card visible after a local status patch', async () => {
   const api = require('./api')
@@ -449,6 +655,128 @@ test('revokes current-account media files before membership, assignment and resy
   await Promise.resolve()
 
   expect(mediaCache.invalidateCleaningMediaCache).toHaveBeenCalledTimes(2)
+})
+
+test('does not patch a same-source immutable reassignment record when the active assignee completes by SSE', async () => {
+  const api = require('./api')
+  const params = refreshParams({ date_from: '2026-10-19', date_to: '2026-10-19', view: 'all' })
+  const active = makeTask({
+    id: 'external_maintenance_orders:order-1',
+    task_kind: 'maintenance',
+    source_type: 'external_maintenance_orders',
+    source_id: 'order-1',
+    status: 'assigned',
+    completion_photo_urls: [],
+  } as any)
+  const immutableRecord = makeTask({
+    id: 'external_maintenance_orders:order-1::reassigned::event-a',
+    task_kind: 'maintenance',
+    source_type: 'external_maintenance_orders',
+    source_id: 'order-1',
+    status: 'reassigned',
+    work_record_visible: true,
+    work_record_read_only: true,
+    work_record_state: 'reassigned',
+    work_record_date: '2026-10-19',
+    work_record_media_attributed: true,
+    media_access_work_task_id: 'external_maintenance_orders:order-1',
+    completion_photo_urls: ['maintenance/executor-a-proof.jpg'],
+    counts_as_active_task: false,
+  } as any)
+  api.listWorkTasks.mockResolvedValueOnce([active, immutableRecord])
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'same_source_history_seed' })
+  await activateWorkTasksRealtime(params)
+
+  mockStreamListeners.work_task_event?.[0]({
+    type: 'work_task_event',
+    data: JSON.stringify({
+      event_id: 'event-b-completed',
+      event_type: 'TASK_COMPLETED',
+      change_scope: 'list',
+      task_id: 'external_maintenance_orders:order-1',
+      source_ref_ids: ['order-1'],
+      changed_fields: ['status', 'completion_photo_urls', 'completed_at'],
+      payload: {
+        patch: {
+          status: 'completed',
+          completion_photo_urls: ['maintenance/executor-b-proof.jpg'],
+          completed_at: '2026-10-19T12:00:00.000Z',
+        },
+      },
+    }),
+  })
+  await Promise.resolve()
+
+  const items = getWorkTasksSnapshot().items
+  expect(items).toHaveLength(2)
+  expect(items.find((item) => item.id === active.id)).toMatchObject({
+    status: 'completed',
+    completion_photo_urls: ['maintenance/executor-b-proof.jpg'],
+  })
+  expect(items.find((item) => item.id === immutableRecord.id)).toMatchObject({
+    status: 'reassigned',
+    work_record_state: 'reassigned',
+    work_record_read_only: true,
+    work_record_media_attributed: true,
+    media_access_work_task_id: 'external_maintenance_orders:order-1',
+    work_record_date: '2026-10-19',
+    completion_photo_urls: ['maintenance/executor-a-proof.jpg'],
+    counts_as_active_task: false,
+  })
+})
+
+test('refreshes a directly targeted canonical read-only record after server-side review approval', async () => {
+  const api = require('./api')
+  const params = refreshParams({ date_from: '2026-10-19', date_to: '2026-10-19', view: 'mine' })
+  const pendingReview = makeTask({
+    id: 'property_maintenance:m-approval',
+    task_kind: 'maintenance',
+    source_type: 'property_maintenance',
+    source_id: 'm-approval',
+    status: 'pending_review',
+    work_record_visible: true,
+    work_record_read_only: true,
+    work_record_state: 'pending_review',
+    work_record_date: '2026-10-19',
+    counts_as_active_task: false,
+  } as any)
+  const approved = {
+    ...pendingReview,
+    status: 'closed',
+    work_record_state: 'completed',
+  } as any
+  api.listWorkTasks.mockResolvedValueOnce([pendingReview])
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'canonical_readonly_seed' })
+  await activateWorkTasksRealtime(params)
+  api.listWorkTasks.mockClear()
+  api.listWorkTasks.mockResolvedValueOnce([approved])
+
+  mockStreamListeners.work_task_event?.[0]({
+    type: 'work_task_event',
+    data: JSON.stringify({
+      event_id: 'event-review-approved',
+      event_type: 'TASK_UPDATED',
+      change_scope: 'list',
+      task_id: 'work_task:property_maintenance:m-approval',
+      source_ref_ids: ['property_maintenance:m-approval', 'm-approval'],
+      changed_fields: ['status', 'work_record_state'],
+      payload: { patch: { status: 'closed', work_record_state: 'completed' } },
+    }),
+  })
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (getWorkTasksSnapshot().items[0]?.work_record_state === 'completed') break
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+  expect(getWorkTasksSnapshot().items).toHaveLength(1)
+  expect(getWorkTasksSnapshot().items[0]).toMatchObject({
+    id: 'property_maintenance:m-approval',
+    status: 'closed',
+    work_record_state: 'completed',
+    work_record_read_only: true,
+    counts_as_active_task: false,
+  })
 })
 
 test('keeps a non-password inspection task pending key video after the realtime inspected event', () => {

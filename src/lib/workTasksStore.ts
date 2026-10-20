@@ -111,6 +111,15 @@ const SAFE_PATCH_FIELDS = new Set([
   'turnover_display',
   'restock_items',
   'completion_photos_ok',
+  'completed_at',
+  'work_record_visible',
+  'work_record_state',
+  'work_record_date',
+  'original_scheduled_date',
+  'work_record_read_only',
+  'counts_as_active_task',
+  'rescheduled_to_date',
+  'rescheduled_at',
   'property.address',
   'property.access_guide_link',
   'property.wifi_ssid',
@@ -130,6 +139,8 @@ const EXECUTION_VISIBILITY_INPUT_FIELDS = new Set([
   'assignee_id',
   'cleaner_id',
   'inspector_id',
+  'work_record_visible',
+  'work_record_read_only',
 ])
 const GUEST_READY_AUTHORITY_FIELDS = new Set([
   'guest_ready_notification',
@@ -233,7 +244,9 @@ function storageKey(bucketKey: string) {
 
 function buildStateFromSaved(saved: Partial<StoreState> | null | undefined, bucketKey: string): StoreState {
   return {
-    items: Array.isArray(saved?.items) ? (saved?.items as WorkTaskItem[]) : [],
+    items: Array.isArray(saved?.items)
+      ? (saved?.items as WorkTaskItem[]).map(redactReadOnlyWorkRecord)
+      : [],
     bucketKey,
     updatedAt: saved?.updatedAt || null,
     lastReceivedEventId: saved?.lastReceivedEventId || null,
@@ -430,33 +443,109 @@ function getPatchValue(patch: Record<string, any>, key: string) {
   return cursor
 }
 
+const WORK_RECORD_SENSITIVE_CONFLICT_FIELDS = new Set(['old_code', 'new_code', 'guest_special_request'])
+
+function redactWorkRecordConflicts(value: any) {
+  return Array.isArray(value)
+    ? value.filter((conflict) => !WORK_RECORD_SENSITIVE_CONFLICT_FIELDS.has(
+        String(conflict?.field || '').trim().toLowerCase(),
+      ))
+    : value
+}
+
+export function redactReadOnlyWorkRecord(task: WorkTaskItem): WorkTaskItem {
+  if (task.work_record_read_only !== true) return task
+  const turnoverDisplay = task.turnover_display && typeof task.turnover_display === 'object'
+    ? {
+        ...task.turnover_display,
+        old_code: null,
+        new_code: null,
+        guest_request_checkout: null,
+        guest_request_checkin: null,
+        guest_request_summary: null,
+        conflicts: redactWorkRecordConflicts(task.turnover_display.conflicts),
+      }
+    : task.turnover_display
+  const maintenanceWorkflow = task.maintenance_workflow && typeof task.maintenance_workflow === 'object'
+    ? { ...task.maintenance_workflow, available_actions: [] }
+    : task.maintenance_workflow
+  const isReassignedRecord = String(task.work_record_state || '').trim().toLowerCase() === 'reassigned'
+  const keepAttributedWorkRecordMedia = isReassignedRecord && task.work_record_media_attributed === true
+  return {
+    ...task,
+    old_code: null,
+    new_code: null,
+    guest_special_request: null,
+    guest_request_checkout: null,
+    guest_request_checkin: null,
+    guest_request_summary: null,
+    guest_luggage: null,
+    guest_ready_notification: null,
+    guest_ready_outside_key: null,
+    participants: null,
+    capabilities: null,
+    available_actions: [],
+    maintenance_workflow: maintenanceWorkflow,
+    turnover_display: turnoverDisplay,
+    display_conflicts: redactWorkRecordConflicts(task.display_conflicts),
+    property: task.property
+      ? {
+          ...task.property,
+          access_guide_link: null,
+          wifi_ssid: null,
+          wifi_password: null,
+          router_location: null,
+        }
+      : null,
+    ...((task as any).order_note !== undefined ? { order_note: null } : {}),
+    ...(isReassignedRecord
+      ? {
+          photo_urls: [],
+          completion_photo_urls: keepAttributedWorkRecordMedia ? task.completion_photo_urls : [],
+          key_photo_url: null,
+          lockbox_video_url: null,
+          living_room_photo_urls: [],
+          living_room_photo_url: null,
+          restock_items: [],
+        }
+      : {}),
+  }
+}
+
 export function reconcileExecutionListVisibilityAfterPatch(
   task: WorkTaskItem,
   changedFields: string[],
   options: DailyTaskExecutionVisibilityOptions = {},
 ) {
+  const redactedTask = redactReadOnlyWorkRecord(task)
   const touchesVisibility = changedFields.some((field) => {
     const root = String(field || '').trim().split('.')[0]
     return EXECUTION_VISIBILITY_INPUT_FIELDS.has(root)
   })
-  if (!touchesVisibility) return task
+  if (!touchesVisibility) return redactedTask
   const fieldRoots = new Set(changedFields.map((field) => String(field || '').trim().split('.')[0]))
-  const source = String(task.source_type || '').trim().toLowerCase()
+  const source = String(redactedTask.source_type || '').trim().toLowerCase()
   const maintenanceWorkflowChanged = fieldRoots.has('status') || fieldRoots.has('maintenance_workflow')
   const isMaintenance = source === 'property_maintenance' || source === 'external_maintenance_orders'
   const workflowStatus = String(
     fieldRoots.has('maintenance_workflow')
-      ? (task.maintenance_workflow?.status || task.status || '')
+      ? (redactedTask.maintenance_workflow?.status || redactedTask.status || '')
       : fieldRoots.has('status')
-        ? (task.status || '')
-        : (task.source_workflow_status || task.maintenance_workflow?.status || task.status || ''),
+        ? (redactedTask.status || '')
+        : (redactedTask.source_workflow_status || redactedTask.maintenance_workflow?.status || redactedTask.status || ''),
   ).trim()
   const next = isMaintenance && maintenanceWorkflowChanged && !fieldRoots.has('source_workflow_status')
-    ? { ...task, source_workflow_status: workflowStatus || null }
-    : task
+    ? { ...redactedTask, source_workflow_status: workflowStatus || null }
+    : redactedTask
   const { execution_list_visible: _staleProjection, ...candidate } = next
+  const projectedDate = String(
+    next.work_record_visible === true
+      ? (next.work_record_date || next.scheduled_date || next.date || '')
+      : (next.scheduled_date || next.date || ''),
+  ).slice(0, 10)
   return {
     ...next,
+    ...(/^\d{4}-\d{2}-\d{2}$/.test(projectedDate) ? { date: projectedDate } : {}),
     execution_list_visible: isDailyTaskExecutionVisible(candidate, options),
   }
 }
@@ -558,6 +647,14 @@ function shouldIgnoreByVersion(task: WorkTaskItem, event: WorkTaskStreamEvent) {
     if (localSequence && nextSequence && nextSequence <= localSequence) return true
   }
   return false
+}
+
+function eventDirectlyTargetsTask(task: WorkTaskItem, event: WorkTaskStreamEvent) {
+  const eventTaskId = String(event.task_id || '').trim()
+  if (!eventTaskId) return false
+  const canonicalEventTaskId = eventTaskId.startsWith('work_task:') ? eventTaskId.slice('work_task:'.length) : eventTaskId
+  const taskId = String(task.id || '').trim()
+  return !!taskId && (taskId === eventTaskId || taskId === canonicalEventTaskId)
 }
 
 function normalizeRefreshParams(params: WorkTasksRefreshParams): WorkTasksRefreshParams | null {
@@ -801,14 +898,24 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
   }
   const items = state.items.slice()
   let changed = false
+  let canonicalReadOnlyTaskChanged = false
   for (const index of indexes) {
     const prev = items[index]
     if (!prev) continue
+    if (prev.work_record_read_only === true) {
+      canonicalReadOnlyTaskChanged = canonicalReadOnlyTaskChanged || eventDirectlyTargetsTask(prev, event)
+      continue
+    }
     if (shouldIgnoreByVersion(prev, event)) continue
     items[index] = mergePatchIntoTask(prev, event, {
       includeManagerUnassignedOffline: activeRealtimeParams?.includeManagerUnassignedOffline === true,
     })
     changed = true
+  }
+  if (canonicalReadOnlyTaskChanged) {
+    void requestActiveWorkTasksRefresh('force', 'readonly_record_authority_changed').catch(() => {
+      void requestActiveWorkTasksRefresh('consistency', 'readonly_record_authority_retry').catch(() => {})
+    })
   }
   if (!changed) return
   state = {
@@ -1065,13 +1172,13 @@ export async function initWorkTasksStore(params: { bucketKey: string; session: {
 }
 
 function mapRemoteTask(t: WorkTask): WorkTaskItem {
-  const date = String(t.scheduled_date || '').slice(0, 10)
-  return {
+  const date = String(t.work_record_date || t.scheduled_date || '').slice(0, 10)
+  return redactReadOnlyWorkRecord({
     ...t,
     date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : 'unknown',
     _taskVersion: Number((t as any)._taskVersion || 0) || undefined,
     _sequenceNo: Number((t as any)._sequenceNo || 0) || undefined,
-  }
+  })
 }
 
 function workTaskIdentityValues(task: Partial<WorkTaskItem> | WorkTask) {
@@ -1136,14 +1243,14 @@ export function mergeRemoteWorkTaskItems(
     const locallyPatchedItem = workTaskIdentityValues(item)
       .map((identity) => retainLocalTaskIds.has(identity) ? previousItemsByIdentity.get(identity) : null)
       .find(Boolean)
-    if (locallyPatchedItem) return locallyPatchedItem
-    if (String((item as any)?.source_type || '').trim() !== 'cleaning_tasks') return item
-    if (Object.prototype.hasOwnProperty.call(item, 'checked_out_at')) return item
+    if (locallyPatchedItem) return redactReadOnlyWorkRecord(locallyPatchedItem)
+    if (String((item as any)?.source_type || '').trim() !== 'cleaning_tasks') return redactReadOnlyWorkRecord(item)
+    if (Object.prototype.hasOwnProperty.call(item, 'checked_out_at')) return redactReadOnlyWorkRecord(item)
     const previousItem = workTaskIdentityValues(item)
       .map((identity) => previousByIdentity.get(identity))
       .find(Boolean)
     const checkedOutAt = String((previousItem as any)?.checked_out_at || '').trim()
-    return checkedOutAt ? { ...item, checked_out_at: checkedOutAt } : item
+    return redactReadOnlyWorkRecord(checkedOutAt ? { ...item, checked_out_at: checkedOutAt } : item)
   })
 }
 

@@ -23,6 +23,7 @@ import {
 } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
+import { canLoadLiveSourceMediaForDailyTask } from '../../lib/dailyTaskExecutionVisibility'
 import { prependNotice } from '../../lib/noticesStore'
 import { hasAnyRole, roleNamesOf } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
@@ -369,8 +370,9 @@ export default function ManagerDailyTaskScreen(props: Props) {
     }
   }, [task, token, user?.id, props.route.params.taskId])
 
-  const inspectionTaskIds = useMemo(() => inspectionPhotoTaskIdsFromTask(task), [task])
-  const cleaningTaskIds = useMemo(() => cleaningTaskIdsFromTask(task), [task])
+  const canLoadLiveSourceMedia = canLoadLiveSourceMediaForDailyTask(task)
+  const inspectionTaskIds = useMemo(() => canLoadLiveSourceMedia ? inspectionPhotoTaskIdsFromTask(task) : [], [canLoadLiveSourceMedia, task])
+  const cleaningTaskIds = useMemo(() => canLoadLiveSourceMedia ? cleaningTaskIdsFromTask(task) : [], [canLoadLiveSourceMedia, task])
   const inspectionTaskIdsKey = inspectionTaskIds.join('|')
   const cleaningTaskIdsKey = cleaningTaskIds.join('|')
 
@@ -740,9 +742,10 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const taskDate = String((task as any)?.scheduled_date || (task as any)?.date || '').trim()
   const isHistoricalTask = isBeforeToday(taskDate)
   const isTodayTask = taskDate.slice(0, 10) === ymd(new Date())
-  const canEditGeneralInfo = canEditManagerFields && !saving && !isHistoricalTask
-  const canEditLuggage = hasAnyRole(user, ['customer_service', 'admin', 'offline_manager']) && isTodayTask
-  const canEditKeysOnly = canEditManagerFields && !saving
+  const workRecordReadOnly = task?.work_record_read_only === true
+  const canEditGeneralInfo = canEditManagerFields && !saving && !isHistoricalTask && !workRecordReadOnly
+  const canEditLuggage = hasAnyRole(user, ['customer_service', 'admin', 'offline_manager']) && isTodayTask && !workRecordReadOnly
+  const canEditKeysOnly = canEditManagerFields && !saving && !workRecordReadOnly
   const luggagePhotoItems = managerGuestLuggagePhotoDisplayItems(
     luggagePhotoUrls,
     luggageLocalPreviewByUrl,

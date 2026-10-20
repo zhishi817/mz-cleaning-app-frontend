@@ -650,6 +650,7 @@ export type GuestReadyOutsideKey = {
 
 export type WorkTask = {
   id: string
+  media_access_work_task_id?: string | null
   task_kind: string
   execution_role?: 'cleaning' | 'inspection' | 'execution' | 'mixed' | 'work' | string | null
   execution_semantics?: 'cleaning_execution' | 'checkin_inspection' | 'inspection_execution' | 'key_or_password_action' | 'mixed_cleaning_inspection' | 'work_task' | string | null
@@ -665,6 +666,18 @@ export type WorkTask = {
   order_id_checkin?: string | null
   order_id_checkout?: string | null
   execution_list_visible?: boolean
+  work_record_visible?: boolean
+  work_record_state?: 'active' | 'pending_review' | 'completed' | 'cancelled' | 'rescheduled' | 'reassigned' | string | null
+  work_record_date?: string | null
+  original_scheduled_date?: string | null
+  work_record_read_only?: boolean
+  work_record_media_attributed?: boolean
+  counts_as_active_task?: boolean
+  completed_at?: string | null
+  completed_by_user_id?: string | null
+  completed_by_name?: string | null
+  rescheduled_to_date?: string | null
+  rescheduled_at?: string | null
   daily_stats_group?: 'turnover' | 'offline' | null
   daily_stats_key?: string | null
   guest_ready_notification?: GuestReadyNotification | null
@@ -3631,6 +3644,12 @@ export async function submitMaintenanceExecutorAction(
     ok: true
     status: string
     available_actions: string[]
+    completed_at?: string | null
+    work_record_visible?: boolean
+    work_record_state?: string | null
+    work_record_date?: string | null
+    work_record_read_only?: boolean
+    counts_as_active_task?: boolean
   }
 }
 

@@ -482,6 +482,39 @@ test('saving order keeps offline tasks in the same cleaning execution sequence',
   snapshot.items = previousItems
 })
 
+test('a day containing only read-only work records does not offer task reordering', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  snapshot.items = [{
+    ...previousItems[0],
+    id: 'completed-record',
+    status: 'done',
+    execution_list_visible: false,
+    work_record_visible: true,
+    work_record_state: 'completed',
+    work_record_date: mockTodayKey,
+    work_record_read_only: true,
+    counts_as_active_task: false,
+    date: mockTodayKey,
+  }]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-read-only-record', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByLabelText('task-card-completed-record')).toBeTruthy())
+  expect(ui.queryByText('排序')).toBeNull()
+  snapshot.items = previousItems
+  ui.unmount()
+})
+
 test('day-end handover stays after ordered offline tasks', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()

@@ -1,4 +1,4 @@
-import { isDailyTaskExecutionVisible, isOrdinaryOfflineDailyTask } from './dailyTaskExecutionVisibility'
+import { canLoadLiveSourceMediaForDailyTask, isDailyTaskExecutionVisible, isDailyTaskListVisible, isOrdinaryOfflineDailyTask } from './dailyTaskExecutionVisibility'
 
 const scheduled = '2026-10-09'
 const cases = [
@@ -74,6 +74,32 @@ describe('daily task execution visibility', () => {
   })
 
   it('uses the server projection as authority and fails closed on explicit hidden items', () => {
+    expect(isDailyTaskListVisible({
+      execution_list_visible: false,
+      work_record_visible: true,
+      work_record_read_only: true,
+      source_type: 'property_maintenance',
+      status: 'pending_review',
+      scheduled_date: '2026-10-19',
+      assignee_id: 'flora',
+    })).toBe(true)
+    expect(isDailyTaskExecutionVisible({
+      execution_list_visible: false,
+      work_record_visible: true,
+      work_record_read_only: true,
+      source_type: 'property_maintenance',
+      status: 'pending_review',
+      scheduled_date: '2026-10-19',
+      assignee_id: 'flora',
+    })).toBe(false)
+    expect(isDailyTaskListVisible({
+      execution_list_visible: false,
+      work_record_visible: true,
+      source_type: 'property_maintenance',
+      status: 'pending_review',
+      scheduled_date: '2026-10-19',
+      assignee_id: 'flora',
+    })).toBe(false)
     expect(isDailyTaskExecutionVisible({
       execution_list_visible: false,
       source_type: 'cleaning_offline_tasks',
@@ -104,5 +130,11 @@ describe('daily task execution visibility', () => {
       scheduled_date: scheduled,
       assignee_id: null,
     }, { includeManagerUnassignedOffline: true })).toBe(true)
+  })
+
+  it('does not refetch current-assignee media for a former executor record', () => {
+    expect(canLoadLiveSourceMediaForDailyTask({ work_record_read_only: true, work_record_state: 'reassigned' })).toBe(false)
+    expect(canLoadLiveSourceMediaForDailyTask({ work_record_read_only: true, work_record_state: 'completed' })).toBe(true)
+    expect(canLoadLiveSourceMediaForDailyTask({ work_record_read_only: false, work_record_state: 'reassigned' })).toBe(true)
   })
 })

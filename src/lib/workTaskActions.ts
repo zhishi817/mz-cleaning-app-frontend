@@ -172,6 +172,7 @@ function legacyAction(params: Omit<WorkTaskAvailableAction, 'enabled'> & { enabl
 
 export function availableActionsForTask(task: WorkTaskItem | null | undefined, options?: { roleNames?: string[]; activeRole?: string | null }): WorkTaskAvailableAction[] {
   if (!task) return []
+  if (task.work_record_read_only === true) return []
   const roleNames = options?.roleNames || []
   const isCleaningSource = task.source_type === 'cleaning_tasks'
   const isCustomerService = options?.activeRole != null
