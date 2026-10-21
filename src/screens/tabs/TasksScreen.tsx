@@ -38,6 +38,7 @@ import {
   isPasswordOnlyInspectionTask,
   isSelfCompleteMode,
   isStayoverTaskType,
+  taskPersonnelPresentation,
 } from '../../lib/cleaningInspection'
 import { canSwitchTaskMode, isTaskManagerUser } from '../../lib/roles'
 import { isDailyTaskListVisible } from '../../lib/dailyTaskExecutionVisibility'
@@ -58,7 +59,7 @@ import {
 } from '../../lib/turnoverDisplay'
 import { getInspectionModeTone, getInspectionScopeTone, getKeyHandoverPendingNotice, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
 import { guestReadyNotificationForActiveRole, guestReadyOperationId, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, primaryActionsForTask } from '../../lib/workTaskActions'
-import { dailyTaskCurrentIdentityKey, dailyTaskGroupCounts, dailyTaskStatusCounts, partitionDailyTasks, reconcileDailyTaskDisplay } from '../../lib/dailyTaskPresentation'
+import { dailyTaskCurrentIdentityKey, dailyTaskGroupCounts, dailyTaskPhaseHistoryLines, dailyTaskStatusCounts, isDailyTaskKeyHandoverStage, partitionDailyTasks, reconcileDailyTaskDisplay } from '../../lib/dailyTaskPresentation'
 import { millisecondsUntilNextTaskBusinessDate, shouldFollowTaskBusinessDate, taskBusinessDateKey } from '../../lib/taskBusinessDate'
 import { formatTaskLoadDiagnosticsText } from '../../lib/taskLoadDiagnostics'
 import {
@@ -208,9 +209,10 @@ function pushUniqueRoom(list: string[], roomCode: string) {
   list.push(roomCode)
 }
 
-function isInspectionWorkSubmitted(status0: any) {
+function isInspectionWorkSubmitted(status0: any, task?: any) {
+  if (task && isDailyTaskKeyHandoverStage(task)) return true
   const s = String(status0 || '').trim().toLowerCase()
-  return isDoneLikeStatus(s)
+  return isDoneLikeStatus(s, task)
 }
 
 function applyDayEndRoleProgress(stats: DayEndRoleStats, status0: any, roomCode: string, isSubmitted: boolean) {
@@ -355,7 +357,7 @@ function buildDayEndOverviewBaseUsers(tasks: Array<{
           entry.roles.add('cleaning')
           if (!entry.userName) entry.userName = String(task.cleaner_name || task.assignee_name || '').trim()
           if (code) entry.roomCodes.add(code)
-          applyDayEndRoleProgress(entry.stats.cleaning, cleaningStatus, code, isCleaningWorkSubmitted(cleaningStatus))
+          applyDayEndRoleProgress(entry.stats.cleaning, cleaningStatus, code, isCleaningWorkSubmitted(cleaningStatus, task))
           map.set(cleanerId, entry)
         }
       }
@@ -377,7 +379,7 @@ function buildDayEndOverviewBaseUsers(tasks: Array<{
       entry.roles.add('inspection')
       if (!entry.userName) entry.userName = String(task.inspector_name || task.assignee_name || '').trim()
       if (code) entry.roomCodes.add(code)
-      applyDayEndRoleProgress(entry.stats.inspection, inspectionStatus, code, isInspectionWorkSubmitted(inspectionStatus))
+      applyDayEndRoleProgress(entry.stats.inspection, inspectionStatus, code, isInspectionWorkSubmitted(inspectionStatus, task))
       map.set(inspectorId, entry)
     }
   }
@@ -396,9 +398,10 @@ function buildDayEndOverviewBaseUsers(tasks: Array<{
     .sort(compareDayEndOverviewUsers)
 }
 
-function isCleaningWorkSubmitted(status0: any) {
+function isCleaningWorkSubmitted(status0: any, task?: any) {
   const s = String(status0 || '').trim().toLowerCase()
-  return ['cleaned', 'restock_pending', 'restocked', 'to_inspect', 'to_hang_keys', 'keys_hung', 'done', 'completed', 'ready'].includes(s)
+  if (s === 'keys_hung') return task ? isDailyTaskKeyHandoverStage(task) : true
+  return ['cleaned', 'restock_pending', 'restocked', 'to_inspect', 'to_hang_keys', 'done', 'completed', 'ready'].includes(s)
 }
 
 function urgencyRank(u: string) {
@@ -439,11 +442,9 @@ function managerRegionRank(region0: string) {
 }
 
 function taskCleanerSortValue(task: WorkTaskItem) {
-  const cleanerName = String((task as any).executor_name || (task as any).cleaner_name || '').trim()
-  const cleanerId = String((task as any).cleaner_id || task.assignee_id || '').trim()
-  const inspectorName = String((task as any).inspector_name || '').trim()
-  const inspectorId = String((task as any).inspector_id || '').trim()
-  return cleanerName || cleanerId || inspectorName || inspectorId
+  const personnel = taskPersonnelPresentation(task as any)
+  if (personnel.mode === 'execution') return personnel.executorName
+  return personnel.cleanerName || personnel.inspectorName
 }
 
 function taskManagerSearchText(task: WorkTaskItem) {
@@ -517,9 +518,11 @@ function statusPillStylePair(tone: TaskTone) {
   return { pill: styles.statusBlue, text: styles.statusTextBlue }
 }
 
-function isDoneLikeStatus(status0: string) {
+function isDoneLikeStatus(status0: string, task?: any) {
+  if (task && isDailyTaskKeyHandoverStage(task)) return true
   const s = String(status0 || '').trim().toLowerCase()
-  return s === 'done' || s === 'completed' || s === 'ready' || s === 'keys_hung' || s === 'cleaned' || s === 'restock_pending' || s === 'restocked' || s === 'inspected'
+  if (s === 'keys_hung') return task ? isDailyTaskKeyHandoverStage(task) : true
+  return s === 'done' || s === 'completed' || s === 'ready' || s === 'cleaned' || s === 'restock_pending' || s === 'restocked' || s === 'inspected'
 }
 
 function stripPhotoLines(text: any) {
@@ -841,7 +844,7 @@ export default function TasksScreen(props: Props) {
     }
     if (canManagerMode && mode === 'manager' && period === 'today') {
       for (const t of list) {
-        if (isInspectionExecutionTask(t) && String(t.status || '').toLowerCase() === 'keys_hung') {
+        if (isInspectionExecutionTask(t) && isDailyTaskKeyHandoverStage(t)) {
           next[`hung:${t.id}`] = true
         }
       }
@@ -1519,8 +1522,8 @@ export default function TasksScreen(props: Props) {
       if (period === 'today') {
         const aStatus = String(a.status || '').trim().toLowerCase()
         const bStatus = String(b.status || '').trim().toLowerCase()
-        const aDone = aStatus === 'done' || aStatus === 'completed' || aStatus === 'keys_hung'
-        const bDone = bStatus === 'done' || bStatus === 'completed' || bStatus === 'keys_hung'
+        const aDone = isDailyTaskKeyHandoverStage(a) || aStatus === 'done' || aStatus === 'completed'
+        const bDone = isDailyTaskKeyHandoverStage(b) || bStatus === 'done' || bStatus === 'completed'
         if (aDone !== bDone) return aDone ? 1 : -1
       }
 
@@ -1857,8 +1860,8 @@ export default function TasksScreen(props: Props) {
     list.sort((a, b) => {
       const aStatus = String(a.status || '').trim().toLowerCase()
       const bStatus = String(b.status || '').trim().toLowerCase()
-      const aDone = aStatus === 'done' || aStatus === 'completed' || aStatus === 'keys_hung'
-      const bDone = bStatus === 'done' || bStatus === 'completed' || bStatus === 'keys_hung'
+      const aDone = isDailyTaskKeyHandoverStage(a) || aStatus === 'done' || aStatus === 'completed'
+      const bDone = isDailyTaskKeyHandoverStage(b) || bStatus === 'done' || bStatus === 'completed'
       if (aDone !== bDone) return aDone ? 1 : -1
       const ad = String(a.scheduled_date || (a as any).date || '')
       const bd = String(b.scheduled_date || (b as any).date || '')
@@ -1889,7 +1892,7 @@ export default function TasksScreen(props: Props) {
       }
       const isDone = (t: WorkTaskItem) => {
         const s = String(t.status || '').trim().toLowerCase()
-        return s === 'done' || s === 'completed' || s === 'keys_hung'
+        return isDailyTaskKeyHandoverStage(t) || s === 'done' || s === 'completed'
       }
       const isCleaningKind = (t: WorkTaskItem) => isCleaningExecutionTask(t)
       const pick = (a: WorkTaskItem, b: WorkTaskItem) => {
@@ -1931,6 +1934,7 @@ export default function TasksScreen(props: Props) {
   const displayTasks = useMemo(() => [
     ...visibleTaskSections.active,
     ...visibleTaskSections.overdue,
+    ...visibleTaskSections.handover,
     ...visibleTaskSections.history,
   ], [visibleTaskSections])
   const taskSectionStarts = useMemo(() => {
@@ -1943,6 +1947,10 @@ export default function TasksScreen(props: Props) {
     if (visibleTaskSections.overdue.length) {
       starts.set(index, { label: '逾期', count: visibleTaskSections.overdue.length, tone: 'danger' })
       index += visibleTaskSections.overdue.length
+    }
+    if (visibleTaskSections.handover.length) {
+      starts.set(index, { label: '已挂钥匙', count: visibleTaskSections.handover.length, tone: 'neutral' })
+      index += visibleTaskSections.handover.length
     }
     if (visibleTaskSections.history.length) {
       starts.set(index, { label: '历史', count: visibleTaskSections.history.length, tone: 'neutral' })
@@ -1968,7 +1976,7 @@ export default function TasksScreen(props: Props) {
         return false
       })
     if (!eligibleIndexes.length) return -1
-    const firstDone = eligibleIndexes.find(({ task }) => isDoneLikeStatus(String(task.status || '')))
+    const firstDone = eligibleIndexes.find(({ task }) => isDoneLikeStatus(String(task.status || ''), task))
     if (firstDone) return firstDone.index
     return eligibleIndexes[eligibleIndexes.length - 1].index + 1
   }, [canManagerMode, displayTasks, isCleanerSelf, isInspectorSelf, isReorderableTask, roleNames, showDayEndCard])
@@ -2358,7 +2366,7 @@ function showBanner(title: string, message: string) {
     if (!taskNoticeArmed) return
     if (!(canManagerMode && mode === 'manager')) return
     if (period !== 'today') return
-    const hung = renderTasks.filter(t => isInspectionExecutionTask(t) && String(t.status || '').toLowerCase() === 'keys_hung')
+    const hung = renderTasks.filter(t => isInspectionExecutionTask(t) && isDailyTaskKeyHandoverStage(t))
     let cancelled = false
     ;(async () => {
       await initNoticesStore().catch(() => null)
@@ -3306,11 +3314,10 @@ function showBanner(title: string, message: string) {
                   </Pressable>
                 )
               }
-              const cleanerName = String((task as any).cleaner_name || '').trim()
-              const inspectorName = String((task as any).inspector_name || '').trim()
-              const executorName = String((task as any).executor_name || (task as any).assignee_name || ((isKeyHandoverTask || isCheckinSiteExecution) ? (cleanerName || inspectorName) : '') || task.assignee_id || '').trim()
-              const cleanerExecName = cleanerName || '-'
-              const inspectorExecName = isDirectCompleteEligible || isPendingInspectionDecision ? '无' : (inspectorName || '-')
+              const personnel = taskPersonnelPresentation(task as any)
+              const executorName = personnel.executorName
+              const cleanerExecName = personnel.cleanerName || '-'
+              const inspectorExecName = isDirectCompleteEligible || isPendingInspectionDecision ? '无' : (personnel.inspectorName || '-')
               const cleanerOrderRaw = (task as any).sort_index_cleaner
               const inspectorOrderRaw = (task as any).sort_index_inspector
               const cleanerOrder = cleanerOrderRaw == null ? null : Number(cleanerOrderRaw)
@@ -3368,6 +3375,7 @@ function showBanner(title: string, message: string) {
                   ].filter(Boolean).join(' · ')
                 : ''
               const keyHandoverPendingNotice = getKeyHandoverPendingNotice(task)
+              const phaseHistoryLines = dailyTaskPhaseHistoryLines(task)
               const title2 = isOfflineTask
                 ? [code || '', offlineTitleSuffix].filter(Boolean).join(' ').trim() || offlineTitleRaw || '-'
                 : isPropertyFollowupTask(task) && followupTitle
@@ -3635,6 +3643,18 @@ function showBanner(title: string, message: string) {
                     </View>
                   ) : null}
 
+                  {!taskCollapsed && phaseHistoryLines.length ? (
+                    <View style={styles.collapsedGuestRequest}>
+                      <Ionicons name="git-branch-outline" size={moderateScale(16)} color="#4B5563" />
+                      <View style={styles.collapsedGuestRequestTextWrap}>
+                        <Text style={styles.collapsedGuestRequestLabel}>阶段记录</Text>
+                        {phaseHistoryLines.map((line, phaseIndex) => (
+                          <Text key={`${task.id}:phase:${phaseIndex}`} style={styles.collapsedGuestRequestText}>{line}</Text>
+                        ))}
+                      </View>
+                    </View>
+                  ) : null}
+
                   {taskCollapsed && guestSpecialRequest ? (
                     <View style={styles.collapsedGuestRequest}>
                       <Ionicons name="chatbubble-ellipses-outline" size={moderateScale(16)} color="#2563EB" />
@@ -3663,7 +3683,7 @@ function showBanner(title: string, message: string) {
                     <>
                       <View style={styles.execCard}>
                         <Text style={styles.execLabel}>执行人员</Text>
-                        {isKeyHandoverTask || isCheckinSiteExecution ? (
+                        {personnel.mode === 'execution' ? (
                           <View style={styles.execPeople}>
                             <View style={styles.execPerson}>
                               <View style={styles.execBadgeExecute}>
@@ -3697,7 +3717,7 @@ function showBanner(title: string, message: string) {
                             </View>
                           </View>
                         )}
-                        {!isKeyHandoverTask && !isCheckinSiteExecution && (isManager || isInspectorUser) ? (
+                        {personnel.mode !== 'execution' && (isManager || isInspectorUser) ? (
                           <View style={styles.execOrderRow}>
                             <Text style={styles.execOrder} numberOfLines={1}>
                               {`清洁顺序：${cleanerOrderN == null ? '-' : String(cleanerOrderN)}`}

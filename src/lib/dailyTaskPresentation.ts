@@ -1,7 +1,8 @@
 import type { WorkTask } from './api'
 import { isDailyTaskExecutionVisible, type DailyTaskExecutionVisibilityOptions } from './dailyTaskExecutionVisibility'
+import { hasAuthoritativeKeyHandoverProjection, hasCompletedKeyHandover } from './taskVisualTheme'
 
-export type DailyTaskSection = 'active' | 'overdue' | 'history' | 'cancelled'
+export type DailyTaskSection = 'active' | 'overdue' | 'handover' | 'history' | 'cancelled'
 
 export type DailyTaskSections<T extends WorkTask = WorkTask> = Record<DailyTaskSection, T[]>
 
@@ -13,6 +14,8 @@ export type DailyTaskStatusCounts = {
   changed: number
 }
 
+export type DailyTaskPhaseHistoryEntry = NonNullable<WorkTask['phase_history']>[number]
+
 function normalizedStatus(value: unknown) {
   return String(value || '').trim().toLowerCase()
 }
@@ -20,6 +23,57 @@ function normalizedStatus(value: unknown) {
 function validDate(value: unknown) {
   const date = String(value || '').trim().slice(0, 10)
   return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : ''
+}
+
+function phaseRoleLabel(role: unknown) {
+  const value = normalizedStatus(role)
+  if (value === 'cleaner' || value === 'cleaning') return '清洁'
+  if (value === 'inspector' || value === 'inspection') return '检查'
+  if (value === 'executor' || value === 'execution') return '执行'
+  return ''
+}
+
+function phaseTaskTypeLabel(taskType0: unknown) {
+  const taskType = normalizedStatus(taskType0)
+  if (taskType === 'checkout_clean') return '退房'
+  if (taskType === 'checkin_clean') return '入住'
+  if (taskType === 'turnover') return '退房入住'
+  if (taskType === 'stayover_clean') return '住中清洁'
+  return String(taskType0 || '').trim()
+}
+
+function phaseStatusLabel(status: unknown, workRecordState0: unknown) {
+  const value = normalizedStatus(status)
+  // Preserve the most specific business fact in the phase trajectory.
+  if (value === 'keys_hung') return '已挂钥匙'
+  const workRecordState = normalizedStatus(workRecordState0)
+  if (workRecordState === 'completed') return '已完成记录'
+  if (workRecordState === 'reassigned') return '已改派'
+  if (workRecordState === 'rescheduled') return '已延期'
+  if (value === 'cleaned') return '清洁已完成'
+  if (value === 'to_inspect') return '待检查'
+  if (value === 'to_hang_keys') return '待挂钥匙'
+  if (value === 'in_progress' || value === 'cleaning') return '进行中'
+  if (value === 'assigned') return '已分配'
+  if (value === 'todo' || value === 'pending' || value === 'unassigned') return '待处理'
+  if (value === 'done' || value === 'completed' || value === 'ready' || value === 'closed') return '已完成'
+  return value
+}
+
+/**
+ * Render only Root-provided canonical phase history. This is a workflow
+ * trajectory, not action audit: missing timestamps/actors stay missing and the
+ * client never synthesizes entries from a room/date match.
+ */
+export function dailyTaskPhaseHistoryLines(task: WorkTask) {
+  const entries = Array.isArray(task.phase_history) ? task.phase_history : []
+  return entries.map((entry) => {
+    const role = phaseRoleLabel(entry?.role)
+    const taskType = phaseTaskTypeLabel(entry?.task_type)
+    const status = phaseStatusLabel(entry?.status, entry?.work_record_state)
+    const date = validDate(entry?.scheduled_date)
+    return [role, taskType, status, date].filter(Boolean).join(' · ')
+  }).filter(Boolean)
 }
 
 function workRecordState(task: WorkTask) {
@@ -30,24 +84,12 @@ function isReadOnlyWorkRecord(task: WorkTask) {
   return task.work_record_visible === true && task.work_record_read_only === true
 }
 
-function normalizedValues(values: unknown) {
-  return Array.from(new Set(
-    (Array.isArray(values) ? values : [])
-      .map((value) => String(value || '').trim())
-      .filter(Boolean),
-  )).sort()
-}
-
-function activeSourceIdentity(task: WorkTask) {
-  const activeIds = normalizedValues(task.active_source_ids)
-  if (activeIds.length) return activeIds.join(',')
-  const sourceIds = normalizedValues(task.source_ids)
-  if (sourceIds.length) return sourceIds.join(',')
-  return String(task.source_id || '').trim()
-}
-
 function taskRoleIdentity(task: WorkTask) {
   return normalizedStatus(task.execution_role) || normalizedStatus(task.task_kind)
+}
+
+function authoritativeBusinessIdentity(task: WorkTask) {
+  return String(task.business_identity || '').trim()
 }
 
 function recordBaseId(task: WorkTask) {
@@ -58,16 +100,23 @@ function recordBaseId(task: WorkTask) {
 
 function businessIdentityKeys(task: WorkTask) {
   const keys = new Set<string>()
+  const businessIdentity = authoritativeBusinessIdentity(task)
   const id = recordBaseId(task)
   const mediaId = String(task.media_access_work_task_id || '').trim()
-  const sources = activeSourceIdentity(task)
+  const sourceId = String(task.source_id || '').trim()
+  if (businessIdentity) keys.add(`business:${businessIdentity}`)
   if (id) keys.add(`id:${id}`)
   if (mediaId) keys.add(`media:${mediaId}`)
-  if (sources) keys.add(`sources:${sources}`)
+  if (sourceId) keys.add(`source:${normalizedStatus(task.source_type)}:${sourceId}`)
   return keys
 }
 
 function isSameBusinessTask(current: WorkTask, record: WorkTask) {
+  const currentBusinessIdentity = authoritativeBusinessIdentity(current)
+  const recordBusinessIdentity = authoritativeBusinessIdentity(record)
+  if (currentBusinessIdentity || recordBusinessIdentity) {
+    return !!currentBusinessIdentity && currentBusinessIdentity === recordBusinessIdentity
+  }
   if (normalizedStatus(current.source_type) !== normalizedStatus(record.source_type)) return false
   if (taskRoleIdentity(current) !== taskRoleIdentity(record)) return false
 
@@ -101,16 +150,24 @@ export function isDailyTaskTombstone(task: WorkTask) {
 }
 
 /**
- * Current manager projections may only be folded when cards share the same
- * strong source or media identity. Property, order and `daily_stats_key` are
- * deliberately excluded: one room can have multiple legitimate tasks.
+ * Root's `business_identity` is the only cross-phase identity. It represents
+ * a canonical turnover relationship (or one independent task), so checkout,
+ * check-in and immutable records can share one business card without guessing
+ * from property/date or an unordered `source_ids` collection. Legacy payloads
+ * fail open to their exact media/source/row identity and are never merged by
+ * room, date, order or `daily_stats_key`.
  */
 export function dailyTaskCurrentIdentityKey(task: WorkTask) {
+  const businessIdentity = authoritativeBusinessIdentity(task)
+  if (businessIdentity) return `business:${businessIdentity}`
   const source = normalizedStatus(task.source_type)
-  const sourceIds = activeSourceIdentity(task)
-  if (source && sourceIds) return `sources:${source}:${sourceIds}`
   const mediaId = String(task.media_access_work_task_id || '').trim()
-  return source && mediaId ? `media:${source}:${mediaId}` : ''
+  if (source && mediaId) return `media:${source}:${mediaId}`
+  const sourceId = String(task.source_id || '').trim()
+  const role = taskRoleIdentity(task)
+  if (source && sourceId) return `source:${source}:${sourceId}:${role || 'unknown'}`
+  const id = String(task.id || '').trim()
+  return id ? `id:${id}` : ''
 }
 
 /**
@@ -168,17 +225,34 @@ export function isDailyTaskCancelled(task: WorkTask) {
   return taskStatuses(task).some((status) => status === 'cancelled' || status === 'canceled')
 }
 
+export function isDailyTaskKeyHandoverStage(task: WorkTask) {
+  if (isDailyTaskCancelled(task) || isDailyTaskTombstone(task)) return false
+  if (isReadOnlyWorkRecord(task)) return false
+  const state = workRecordState(task)
+  if (state === 'rescheduled' || state === 'reassigned') return false
+  if (hasCompletedKeyHandover(task)) return true
+  if (hasAuthoritativeKeyHandoverProjection(task)) return false
+  return [task.status, task.inspection_status]
+    .map(normalizedStatus)
+    .some((status) => status === 'keys_hung')
+}
+
 /**
  * Only verified terminal states belong here. Cleaning phases such as
  * `cleaned`, `restock_pending`, `restocked`, and `inspected` remain active
  * because another business phase may still be required.
  */
 export function isDailyTaskCompleted(task: WorkTask) {
-  const status = normalizedStatus(task.status)
-  const sourceWorkflowStatus = normalizedStatus(task.source_workflow_status)
-  const maintenanceStatus = normalizedStatus(task.maintenance_workflow?.status)
-  const cleaningStatus = normalizedStatus(task.cleaning_status)
-  const inspectionStatus = normalizedStatus(task.inspection_status)
+  const explicitInvalidHandover = hasAuthoritativeKeyHandoverProjection(task) && !hasCompletedKeyHandover(task)
+  const statusOf = (value: unknown) => {
+    const status = normalizedStatus(value)
+    return explicitInvalidHandover && status === 'keys_hung' ? '' : status
+  }
+  const status = statusOf(task.status)
+  const sourceWorkflowStatus = statusOf(task.source_workflow_status)
+  const maintenanceStatus = statusOf(task.maintenance_workflow?.status)
+  const cleaningStatus = statusOf(task.cleaning_status)
+  const inspectionStatus = statusOf(task.inspection_status)
 
   // Top-level restock/review states are current obligations, not historical
   // upstream snapshots, so they remain open even if another phase is done.
@@ -233,9 +307,14 @@ function overdueBasisDate(task: WorkTask) {
 
 export function dailyTaskSection(task: WorkTask, selectedDate: string): DailyTaskSection {
   if (isDailyTaskCancelled(task)) return 'cancelled'
-  if (isDailyTaskCompleted(task) || isDailyTaskChangedRecord(task)) {
+  if (isDailyTaskChangedRecord(task)) {
     return 'history'
   }
+  // A valid key-handover fact is a completed business stage, but pending
+  // materials may keep the overall workflow active. Give it a dedicated
+  // lower section instead of either hiding it or calling the whole task done.
+  if (isDailyTaskKeyHandoverStage(task)) return 'handover'
+  if (isDailyTaskCompleted(task)) return 'history'
 
   // Immutable records stay in the selected day's activity until their
   // business state becomes terminal. Their original plan date is context,
@@ -249,7 +328,7 @@ export function dailyTaskSection(task: WorkTask, selectedDate: string): DailyTas
 }
 
 export function partitionDailyTasks<T extends WorkTask>(tasks: T[], selectedDate: string): DailyTaskSections<T> {
-  const sections: DailyTaskSections<T> = { active: [], overdue: [], history: [], cancelled: [] }
+  const sections: DailyTaskSections<T> = { active: [], overdue: [], handover: [], history: [], cancelled: [] }
   for (const task of Array.isArray(tasks) ? tasks : []) {
     if (isDailyTaskCancelled(task)) continue
     sections[dailyTaskSection(task, selectedDate)].push(task)
@@ -271,7 +350,8 @@ function stableCountKey(task: WorkTask) {
 
 /**
  * Status totals use the same date/permission-scoped task set as the screen.
- * Current projections dedupe only with an exact source/media identity;
+ * Current projections prefer Root's authoritative `business_identity`; legacy
+ * payloads dedupe only with an exact source/media/row identity.
  * `daily_stats_key` is a date/property aggregation key and is not unique.
  * Immutable records dedupe only exact record IDs so separate change events
  * remain visible.
@@ -297,8 +377,8 @@ export function dailyTaskStatusCounts(tasks: WorkTask[], selectedDate: string): 
   for (const group of groups.values()) {
     const current = group.filter((task) => (
       !isDailyTaskCancelled(task)
-      && !isDailyTaskCompleted(task)
       && !isDailyTaskChangedRecord(task)
+      && (!isDailyTaskCompleted(task) || isDailyTaskKeyHandoverStage(task))
     ))
     if (current.length) {
       if (current.some((task) => dailyTaskSection(task, selectedDate) === 'overdue')) counts.overdue += 1
@@ -319,9 +399,10 @@ export function dailyTaskStatusCounts(tasks: WorkTask[], selectedDate: string): 
   return counts
 }
 
-/** Count only the server-authorized execution set and dedupe merged turnover
- * cards with exact source/media identity. Root's `daily_stats_key` is not used
- * because separate tasks at one property/date can legitimately share it.
+/** Count only the server-authorized execution set and dedupe a canonical
+ * turnover with Root's `business_identity`. Root's `daily_stats_key`, room/date
+ * and `source_ids` collections are not task identities; independent tasks may
+ * legitimately share all of them.
  * Search text never participates in this calculation. */
 export function dailyTaskGroupCounts(
   tasks: WorkTask[],

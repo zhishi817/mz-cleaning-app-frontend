@@ -2,6 +2,7 @@ import { isDailyTaskExecutionVisible } from './dailyTaskExecutionVisibility'
 import {
   dailyTaskCurrentIdentityKey,
   dailyTaskGroupCounts,
+  dailyTaskPhaseHistoryLines,
   dailyTaskStatusCounts,
   partitionDailyTasks,
   reconcileDailyTaskDisplay,
@@ -63,6 +64,7 @@ describe('dailyTaskPresentation', () => {
     expect(partitionDailyTasks([active, overdue, completed, cancelled], '2026-10-19')).toEqual({
       active: [active],
       overdue: [overdue],
+      handover: [],
       history: [completed],
       cancelled: [],
     })
@@ -88,7 +90,7 @@ describe('dailyTaskPresentation', () => {
       status: 'completed',
     }
 
-    expect(partitionDailyTasks([record], '2026-10-19')).toEqual({ active: [], overdue: [], history: [record], cancelled: [] })
+    expect(partitionDailyTasks([record], '2026-10-19')).toEqual({ active: [], overdue: [], handover: [], history: [record], cancelled: [] })
   })
 
   it('keeps pending-review records active while terminal and change records stay in history', () => {
@@ -108,6 +110,7 @@ describe('dailyTaskPresentation', () => {
     expect(partitionDailyTasks([pendingReview, reassigned, rescheduled], '2026-10-19')).toEqual({
       active: [pendingReview],
       overdue: [],
+      handover: [],
       history: [reassigned, rescheduled],
       cancelled: [],
     })
@@ -121,8 +124,8 @@ describe('dailyTaskPresentation', () => {
   })
 
   it('dedupes merged current projections but never swallows separate change records', () => {
-    const cleaner = { ...base, id: 'cleaner', scheduled_date: '2026-10-19', daily_stats_key: 'turnover:2026-10-19:p1', status: 'done' }
-    const inspector = { ...base, id: 'inspector', task_kind: 'inspection', scheduled_date: '2026-10-19', daily_stats_key: 'turnover:2026-10-19:p1', status: 'assigned' }
+    const cleaner = { ...base, id: 'cleaner', business_identity: 'turnover:order-out:order-in', scheduled_date: '2026-10-19', daily_stats_key: 'turnover:2026-10-19:p1', status: 'done' }
+    const inspector = { ...base, id: 'inspector', business_identity: 'turnover:order-out:order-in', task_kind: 'inspection', scheduled_date: '2026-10-19', daily_stats_key: 'turnover:2026-10-19:p1', status: 'assigned' }
     const changedBase = {
       ...base,
       source_id: 'same-source',
@@ -167,6 +170,7 @@ describe('dailyTaskPresentation', () => {
     expect(partitionDailyTasks([pendingInspection, pendingRestock], '2026-10-19')).toEqual({
       active: [pendingInspection, pendingRestock],
       overdue: [],
+      handover: [],
       history: [],
       cancelled: [],
     })
@@ -179,7 +183,7 @@ describe('dailyTaskPresentation', () => {
     })
   })
 
-  it('lets terminal downstream inspection override a retained upstream cleaning phase', () => {
+  it('places raw keys_hung in the same handover stage without claiming overall completion', () => {
     const keysHung = {
       ...base,
       id: 'merged-keys-hung',
@@ -190,11 +194,31 @@ describe('dailyTaskPresentation', () => {
       inspection_mode: 'deferred',
     }
 
-    expect(partitionDailyTasks([keysHung], '2026-10-19')).toEqual({ active: [], overdue: [], history: [keysHung], cancelled: [] })
+    expect(partitionDailyTasks([keysHung], '2026-10-19')).toEqual({ active: [], overdue: [], handover: [keysHung], history: [], cancelled: [] })
     expect(dailyTaskStatusCounts([keysHung], '2026-10-19')).toEqual({
-      active: 0,
+      active: 1,
       overdue: 0,
-      completed: 1,
+      completed: 0,
+      cancelled: 0,
+      changed: 0,
+    })
+  })
+
+  it('fails closed when Root explicitly returns no evidence-backed handover fact', () => {
+    const invalidated = {
+      ...base,
+      id: 'reopened-keys-hung',
+      task_kind: 'inspection',
+      status: 'keys_hung',
+      inspection_status: 'keys_hung',
+      key_handover: null,
+    }
+
+    expect(partitionDailyTasks([invalidated], '2026-10-19')).toEqual({ active: [], overdue: [invalidated], handover: [], history: [], cancelled: [] })
+    expect(dailyTaskStatusCounts([invalidated], '2026-10-19')).toEqual({
+      active: 0,
+      overdue: 1,
+      completed: 0,
       cancelled: 0,
       changed: 0,
     })
@@ -355,8 +379,168 @@ describe('dailyTaskPresentation', () => {
     expect(partitionDailyTasks(reconciled, '2026-10-19')).toEqual({
       active: [active],
       overdue: [],
+      handover: [],
       history: [changed, completed],
       cancelled: [],
     })
+  })
+
+  it('places a completed key-handover stage after unfinished and overdue work without calling the whole workflow complete', () => {
+    const active = { ...base, id: 'active-stage', source_id: 'active-stage', status: 'assigned', scheduled_date: '2026-10-19' }
+    const overdue = { ...base, id: 'overdue-stage', source_id: 'overdue-stage', status: 'assigned', scheduled_date: '2026-10-18' }
+    const handedOver = {
+      ...base,
+      id: 'handover-stage',
+      source_id: 'handover-stage',
+      status: 'restock_pending',
+      key_handover: {
+        state: 'completed',
+        source_task_id: 'handover-stage',
+        completed_at: '2026-10-19T10:00:00.000Z',
+        workflow_finalization_pending: true,
+        missing_requirements: ['cleaning_consumables'],
+      },
+    }
+
+    expect(partitionDailyTasks([handedOver, overdue, active], '2026-10-19')).toEqual({
+      active: [active],
+      overdue: [overdue],
+      handover: [handedOver],
+      history: [],
+      cancelled: [],
+    })
+    expect(dailyTaskStatusCounts([handedOver, overdue, active], '2026-10-19')).toEqual({
+      active: 2,
+      overdue: 1,
+      completed: 0,
+      cancelled: 0,
+      changed: 0,
+    })
+  })
+
+  it('uses Root business identity for one canonical turnover while keeping unrelated same-room tasks separate', () => {
+    const checkout = {
+      ...base,
+      id: 'checkout-card',
+      source_id: 'checkout-source',
+      business_identity: 'turnover:checkout-order:checkin-order',
+      task_type: 'turnover',
+      execution_list_visible: true,
+      daily_stats_group: 'turnover' as const,
+    }
+    const checkin = {
+      ...checkout,
+      id: 'checkin-card',
+      source_id: 'checkin-source',
+      task_kind: 'inspection',
+    }
+    const independent = {
+      ...checkout,
+      id: 'independent-card',
+      source_id: 'independent-source',
+      business_identity: 'cleaning_task:independent-source',
+      daily_stats_key: 'turnover:2026-10-04:property-1',
+    }
+
+    expect(dailyTaskCurrentIdentityKey(checkout)).toBe('business:turnover:checkout-order:checkin-order')
+    expect(dailyTaskCurrentIdentityKey(checkin)).toBe(dailyTaskCurrentIdentityKey(checkout))
+    expect(dailyTaskCurrentIdentityKey(independent)).not.toBe(dailyTaskCurrentIdentityKey(checkout))
+    expect(dailyTaskGroupCounts([checkout, checkin, independent])).toEqual({ turnover: 2, offline: 0 })
+    expect(dailyTaskStatusCounts([checkout, checkin, independent], '2026-10-04')).toEqual({
+      active: 2,
+      overdue: 0,
+      completed: 0,
+      cancelled: 0,
+      changed: 0,
+    })
+  })
+
+  it('never treats an unordered source collection as a business identity fallback', () => {
+    const first = {
+      ...base,
+      id: 'source-set-a',
+      source_id: 'source-a',
+      source_ids: ['checkout-source', 'checkin-source'],
+    }
+    const second = {
+      ...first,
+      id: 'source-set-b',
+      source_id: 'source-b',
+      source_ids: ['checkin-source', 'checkout-source'],
+    }
+
+    expect(dailyTaskCurrentIdentityKey(first)).not.toBe(dailyTaskCurrentIdentityKey(second))
+  })
+
+  it('reconciles live and immutable cards by authoritative business identity across role projections', () => {
+    const current = {
+      ...base,
+      id: 'canonical-current',
+      source_id: 'checkout-source',
+      task_kind: 'cleaning',
+      execution_role: 'cleaning',
+      business_identity: 'turnover:checkout-order:checkin-order',
+      status: 'assigned',
+    }
+    const record = {
+      ...base,
+      id: 'canonical-record::record:completed:2026-10-20',
+      source_id: 'checkin-source',
+      task_kind: 'inspection',
+      execution_role: 'inspection',
+      business_identity: 'turnover:checkout-order:checkin-order',
+      status: 'completed',
+      work_record_visible: true,
+      work_record_read_only: true,
+      work_record_state: 'completed',
+      work_record_date: '2026-10-20',
+    }
+
+    expect(reconcileDailyTaskDisplay([current, record])).toEqual([record])
+  })
+
+  it('renders only the canonical phase trajectory supplied by Root', () => {
+    const task = {
+      ...base,
+      phase_history: [
+        {
+          source_id: 'checkout-source',
+          task_type: 'checkout_clean',
+          role: 'cleaner' as const,
+          status: 'cleaned',
+          scheduled_date: '2026-10-19',
+          work_record_state: null,
+          occurred_at: null,
+          actor_user_id: null,
+        },
+        {
+          source_id: 'checkin-source',
+          task_type: 'checkin_clean',
+          role: 'inspector' as const,
+          status: 'keys_hung',
+          scheduled_date: '2026-10-19',
+          work_record_state: 'completed',
+          occurred_at: '2026-10-19T12:00:00Z',
+          actor_user_id: 'inspector-1',
+        },
+        {
+          source_id: 'offline-source',
+          task_type: 'offline',
+          role: 'executor' as const,
+          status: 'completed',
+          scheduled_date: '2026-10-19',
+          work_record_state: 'completed',
+          occurred_at: '2026-10-19T13:00:00Z',
+          actor_user_id: 'executor-1',
+        },
+      ],
+    }
+
+    expect(dailyTaskPhaseHistoryLines(task)).toEqual([
+      '清洁 · 退房 · 清洁已完成 · 2026-10-19',
+      '检查 · 入住 · 已挂钥匙 · 2026-10-19',
+      '执行 · offline · 已完成记录 · 2026-10-19',
+    ])
+    expect(dailyTaskPhaseHistoryLines({ ...base, property_id: 'same-room' })).toEqual([])
   })
 })

@@ -33,6 +33,7 @@ import {
   type InspectionMediaQueueItem,
 } from '../../lib/inspectionMediaQueue'
 import { effectiveInspectionMode } from '../../lib/cleaningInspection'
+import { isDailyTaskKeyHandoverStage } from '../../lib/dailyTaskPresentation'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { findWorkTaskItemByAnyId, subscribeWorkTasks } from '../../lib/workTasksStore'
@@ -211,8 +212,9 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   const cleaningTaskId = String(task?.source_id || '').trim()
   const propertyCode = String(task?.property?.code || '').trim()
   const propertyAddr = String(task?.property?.address || '').trim()
-  const completedSelfCompleteView = ['done', 'completed', 'ready', 'keys_hung', 'cleaned', 'restock_pending', 'restocked', 'inspected']
+  const completedSelfCompleteView = ['done', 'completed', 'ready', 'cleaned', 'restock_pending', 'restocked', 'inspected']
     .includes(String((task as any)?.status || '').trim().toLowerCase())
+    || (!!task && isDailyTaskKeyHandoverStage(task))
   const skipRoomConfirmation = completedSelfCompleteView
   useEffect(() => {
     setRoomConfirmed(skipRoomConfirmation)

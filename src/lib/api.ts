@@ -675,6 +675,17 @@ export type GuestReadyOutsideKey = {
 
 export type WorkTask = {
   id: string
+  business_identity?: string | null
+  phase_history?: {
+    source_id: string
+    task_type: string | null
+    role: 'cleaner' | 'inspector' | 'executor' | 'cleaning' | 'inspection' | 'execution'
+    status: string | null
+    scheduled_date: string | null
+    work_record_state: string | null
+    occurred_at: string | null
+    actor_user_id: string | null
+  }[] | null
   media_access_work_task_id?: string | null
   task_kind: string
   execution_role?: 'cleaning' | 'inspection' | 'execution' | 'mixed' | 'work' | string | null
@@ -715,6 +726,7 @@ export type WorkTask = {
   end_time: string | null
   task_type?: string | null
   assignee_id: string | null
+  executor_id?: string | null
   cleaner_id?: string | null
   inspector_id?: string | null
   inspection_mode?: 'pending_decision' | 'same_day' | 'deferred' | 'self_complete' | 'checked_done' | null

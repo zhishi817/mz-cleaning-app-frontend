@@ -3,10 +3,12 @@ import {
   effectiveInspectionMode,
   inspectionModeLabel,
   inspectionScopeLabel,
+  isCheckinSiteExecutionTask,
   isInspectionModeAllowedForTask,
   isPasswordOnlyInspectionTask,
   normalizeInspectionScope,
   shouldUseDeferredInspectionTitle,
+  taskPersonnelPresentation,
   unlinkedDeferredInspectionDisplayIdentity,
 } from './cleaningInspection'
 
@@ -90,5 +92,47 @@ describe('cleaningInspection display helpers', () => {
       task_type: 'checkout_clean',
       inspection_scope: 'password_only',
     })).toBe(false)
+  })
+
+  test('trusts inspect-and-hang execution semantics ahead of a stale cleaning task kind', () => {
+    const task = {
+      source_type: 'cleaning_tasks',
+      task_kind: 'cleaning',
+      task_type: 'checkin_clean',
+      inspection_scope: 'inspect_and_hang',
+      execution_semantics: 'checkin_inspection',
+      assignee_id: 'oscar-id',
+      assignee_name: 'Oscar',
+      cleaner_id: null,
+      cleaner_name: 'Oscar',
+    }
+
+    expect(isCheckinSiteExecutionTask(task)).toBe(true)
+    expect(taskPersonnelPresentation(task)).toEqual({
+      mode: 'execution',
+      executorName: 'Oscar',
+      cleanerName: 'Oscar',
+      inspectorName: '',
+    })
+  })
+
+  test('never backfills a cleaning role from the generic assignee', () => {
+    expect(taskPersonnelPresentation({
+      source_type: 'cleaning_tasks',
+      task_kind: 'cleaning',
+      task_type: 'checkout_clean',
+      execution_semantics: 'cleaning_execution',
+      assignee_id: 'generic-id',
+      assignee_name: 'Generic Person',
+      cleaner_id: null,
+      cleaner_name: null,
+      inspector_id: 'inspector-id',
+      inspector_name: 'Inspector',
+    })).toEqual({
+      mode: 'cleaning_inspection',
+      executorName: '',
+      cleanerName: '',
+      inspectorName: 'Inspector',
+    })
   })
 })

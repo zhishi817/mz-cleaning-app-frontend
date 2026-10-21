@@ -336,6 +336,50 @@ test('已完成任务从未携带只读参数的入口查看检查与补充时�
   }
 })
 
+test('Root 结构化已挂钥匙跳过房号确认，明确无事实时不信任 raw keys_hung', async () => {
+  const task = mockSnapshot.items[0] as any
+  const previousStatus = task.status
+  const hadKeyHandover = Object.prototype.hasOwnProperty.call(task, 'key_handover')
+  const previousKeyHandover = task.key_handover
+  task.status = 'keys_hung'
+  task.key_handover = {
+    state: 'completed',
+    source_task_id: 'cleaning-1',
+    completed_at: '2026-10-21T01:02:03.000Z',
+  }
+
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn(), goBack: jest.fn() }
+  let completed: ReturnType<typeof render> | null = null
+  let noFact: ReturnType<typeof render> | null = null
+  try {
+    completed = render(
+      <I18nProvider>
+        <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-structured-key-handover', name: 'InspectionPanel', params: { taskId: 'w-inspection' } }} />
+      </I18nProvider>,
+    )
+    await waitFor(() => expect(completed?.getByText('检查与补充')).toBeTruthy())
+    expect(completed.queryByTestId('inspection-room-confirmation')).toBeNull()
+    completed.unmount()
+    completed = null
+
+    task.key_handover = null
+    noFact = render(
+      <I18nProvider>
+        <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-explicit-no-key-handover', name: 'InspectionPanel', params: { taskId: 'w-inspection' } }} />
+      </I18nProvider>,
+    )
+    await waitFor(() => expect(noFact?.getByTestId('inspection-room-confirmation')).toBeTruthy())
+  } finally {
+    completed?.unmount()
+    noFact?.unmount()
+    if (previousStatus === undefined) delete task.status
+    else task.status = previousStatus
+    if (hadKeyHandover) task.key_handover = previousKeyHandover
+    else delete task.key_handover
+  }
+})
+
 test('点击全屏照片内容区域可以关闭预览', async () => {
   const api = require('../../lib/api')
   ;(api.getInspectionPhotos as jest.Mock).mockResolvedValueOnce({
