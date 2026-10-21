@@ -154,15 +154,15 @@
 - Branch: `codex/mz054-061-unified-fixes`
 - Base: `origin/Dev@e77a7a0d0ede31493b5c10a03294460365c7e6eb`; fetched at `2026-10-21 04:49 UTC`
 - Candidate patch SHA-256: `650cba441819fa551ec0e26d9abc706f76e85b1c313ceeb9420212db7635d073`, excluding `docs/change-release-ledger.md`
-- Commit SHA: not committed
+- Commit SHA: `7e8dec413dc8cee437d7d079cfd8d4dc22b7201c`
 - Dependencies: `root/CRL-20261021-002@7f783a37518c5ff0af7b8d318d52da0990ffc40c`
 - Required validation: PASS; clean-worktree `check:ci` 76 suites / 598 tests and paired actual local HTTP/API integration passed; performance/device gates remain explicitly not verified.
 - Shared-hunk review: PASS; all selected paths belong to MZ054–MZ058 presentation and required tests; MZ062 and unrelated paths are absent.
 - Generated-file review: PASS; source, tests and ledger only; no generated, native, dependency or environment file.
-- Technical state: `candidate`
+- Technical state: `committed`
 - User authorization: `approved-for-push`; evidence: user requested “补完以后提交推送创建pr吧”.
 - Independent review: `GO for commit only`; fresh independent review matched fingerprint `650cba441819fa551ec0e26d9abc706f76e85b1c313ceeb9420212db7635d073`, 17 staged paths / 95 non-ledger hunks, Root's exact `cleaner | inspector | executor` contract and the corrected Mobile type/mapping/tests; P0=0 / P1=0. Remaining P2 is normal-pool/device performance under the App 15-second timeout plus simulator/device/EAS validation, already disclosed above. The reviewer could not rerun Jest in its read-only environment because this clean worktree intentionally has no installed `node_modules`; the implementation-thread exact-candidate `check:ci` 76 suites / 598 tests is the validation receipt.
-- Action conclusion: `GO for local content commit only`; normal push and Draft PR still require the committed-range audit. No merge, deploy, OTA or production write is authorized by this conclusion.
+- Action conclusion: `local content commit completed`; normal push and Draft PR remain authorized but require this receipt commit and the exact committed-range audit. No merge, deploy, OTA or production write is authorized by this conclusion.
 
 ### Risks / Rollback
 
