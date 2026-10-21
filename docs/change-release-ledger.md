@@ -162,6 +162,7 @@
 - Candidate patch SHA-256: `90d94ddbc6e2f81ca2aa8cd4bbbbbeaf31a5831cf6556fa090fe5a2c0a7c3e41`
 - Commit SHA: `961c162c054cafe5f322e7e3a5d3671125f77792`
 - Dependencies: `root/CRL-20261021-004@11d81443f1c2b9a8daca62afb0255b86fbefff42`; `root/CRL-20261021-005@11d81443f1c2b9a8daca62afb0255b86fbefff42`; `root/CRL-20261021-006@11d81443f1c2b9a8daca62afb0255b86fbefff42`; `root/CRL-20261021-007@11d81443f1c2b9a8daca62afb0255b86fbefff42`; `root/CRL-20261021-008@11d81443f1c2b9a8daca62afb0255b86fbefff42`; `root/CRL-20261021-010@11d81443f1c2b9a8daca62afb0255b86fbefff42`; `root/CRL-20261021-011@11d81443f1c2b9a8daca62afb0255b86fbefff42`
+- Cross-repository dependency verification: `PASS`; paired Root exact report audited `ad1e7158b9f05ed54a3bcca6828d47b5148e5871...8a97f32507f65e89fe48281f471947422e7975c5`, contains declared content commit `11d81443f1c2b9a8daca62afb0255b86fbefff42`, retained candidate fingerprint `3c1c27b7cd17929d21f5bf0f2401be3f791295f37e18537b9ddfe1f40eac62f4`, and concluded `GO`. Root remains a deployment prerequisite; this is source-pair verification, not migration, deployment, OTA or device evidence.
 - Required validation: `PASS`; evidence: Mobile `check:ci` PASS with 77 suites / 610 tests, typecheck and lint 0 errors; ledger 22/22 and diff checks PASS
 - Shared-hunk review: `PASS`; evidence: complete Mobile candidate independently reviewed as one MZ-063～070 scope, with MZ-062 excluded
 - Generated-file review: `PASS`; evidence: no native build, dependency cache, environment file or generated artifact is included
