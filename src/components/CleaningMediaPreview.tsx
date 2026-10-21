@@ -16,6 +16,8 @@ type Props = {
   thumbnailReference?: string | null
   accessTaskId?: string | null
   accessWorkTaskId?: string | null
+  accessSourceIds?: string[] | null
+  mediaScope?: 'cleaner' | 'inspector' | 'manager' | null
   guestLuggageId?: string | null
   offlineWorkTaskMedia?: boolean
   dayEndUserId?: string | null
@@ -35,7 +37,7 @@ function retryableUnavailableFailure(): CleaningMediaReadFailure {
   return { status: null, message: '照片暂时无法加载，点击重试', retryable: true }
 }
 
-export default function CleaningMediaPreview({ token, reference, localUri, thumbnailReference, accessTaskId, accessWorkTaskId, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate, loadPreview = true, style, resizeMode = 'contain', testID }: Props) {
+export default function CleaningMediaPreview({ token, reference, localUri, thumbnailReference, accessTaskId, accessWorkTaskId, accessSourceIds, mediaScope, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate, loadPreview = true, style, resizeMode = 'contain', testID }: Props) {
   const [previewLoaded, setPreviewLoaded] = useState(false)
   const [previewFailed, setPreviewFailed] = useState(false)
   const [thumbnailFailed, setThumbnailFailed] = useState(false)
@@ -45,8 +47,8 @@ export default function CleaningMediaPreview({ token, reference, localUri, thumb
   const [thumbnailReadFailure, setThumbnailReadFailure] = useState<CleaningMediaReadFailure | null>(null)
   const [previewReadFailure, setPreviewReadFailure] = useState<CleaningMediaReadFailure | null>(null)
   const [cacheEpoch, setCacheEpoch] = useState(getCleaningMediaCacheEpoch)
-  const thumbnailSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || thumbnailReference || reference, 'thumbnail', { accessTaskId, accessWorkTaskId, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }), [accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, localUri, offlineWorkTaskMedia, reference, thumbnailReference, token])
-  const previewSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || reference, 'preview', { accessTaskId, accessWorkTaskId, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }), [accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, localUri, offlineWorkTaskMedia, reference, token])
+  const thumbnailSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || thumbnailReference || reference, 'thumbnail', { accessTaskId, accessWorkTaskId, accessSourceIds, mediaScope, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }), [accessSourceIds, accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, localUri, mediaScope, offlineWorkTaskMedia, reference, thumbnailReference, token])
+  const previewSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || reference, 'preview', { accessTaskId, accessWorkTaskId, accessSourceIds, mediaScope, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }), [accessSourceIds, accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, localUri, mediaScope, offlineWorkTaskMedia, reference, token])
   const thumbnailNeedsCache = isHttpUri(thumbnailSource.uri)
   const previewNeedsCache = loadPreview && isHttpUri(previewSource.uri)
 
@@ -63,7 +65,7 @@ export default function CleaningMediaPreview({ token, reference, localUri, thumb
     setCachedPreviewUri(null)
     setThumbnailReadFailure(null)
     setPreviewReadFailure(null)
-  }, [accessTaskId, accessWorkTaskId, cacheEpoch, dayEndDate, dayEndUserId, guestLuggageId, localUri, loadPreview, offlineWorkTaskMedia, reference, thumbnailReference, token])
+  }, [accessSourceIds, accessTaskId, accessWorkTaskId, cacheEpoch, dayEndDate, dayEndUserId, guestLuggageId, localUri, loadPreview, mediaScope, offlineWorkTaskMedia, reference, thumbnailReference, token])
 
   useEffect(() => {
     if (!thumbnailNeedsCache) return undefined

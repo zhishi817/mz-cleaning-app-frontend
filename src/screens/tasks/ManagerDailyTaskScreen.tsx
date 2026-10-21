@@ -7,6 +7,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { API_BASE_URL } from '../../config/env'
 import { effectiveInspectionMode, inspectionModeLabel, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
+import { checkinTimeDisplayPatch, cleaningSummaryWithCheckinAuthority, hasActualCheckinTask } from '../../lib/cleaningCheckinDisplay'
 import {
   changeGuestReadyNotification,
   deleteGuestLuggageNotice,
@@ -27,7 +28,7 @@ import { canLoadLiveSourceMediaForDailyTask } from '../../lib/dailyTaskExecution
 import { prependNotice } from '../../lib/noticesStore'
 import { hasAnyRole, roleNamesOf } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
-import { getEffectiveTaskStatus, hasAuthoritativeKeyHandoverProjection, hasCompletedKeyHandover, isTaskWorkflowProgressStatus } from '../../lib/taskVisualTheme'
+import { getEffectiveTaskStatus, guestCheckoutCanDriveTaskStatus, hasAuthoritativeKeyHandoverProjection, hasCompletedKeyHandover, isTaskWorkflowProgressStatus } from '../../lib/taskVisualTheme'
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, patchWorkTaskItems, requestWorkTasksRefresh, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
 import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyOperationId, isGuestReadyNotificationAction, mergeGuestReadyNotificationActions } from '../../lib/workTaskActions'
 import { ALL_KITCHEN_SCENE_PHOTOS } from '../../lib/cleaningScenePhotoTemplate'
@@ -127,15 +128,6 @@ function buildDetailFallbackRange(base = new Date()) {
   }
 }
 
-function buildCleaningSummary(checkoutTime: string | null, checkinTime: string | null) {
-  const checkout = String(checkoutTime || '').trim()
-  const checkin = String(checkinTime || '').trim()
-  if (checkout && checkin) return `${checkout}退房 ${checkin}入住`
-  if (checkout) return `${checkout}退房`
-  if (checkin) return `${checkin}入住`
-  return null
-}
-
 function isDoneLikeStatusZh(status0: string) {
   const s = String(status0 || '').trim().toLowerCase()
   return s === 'done' || s === 'completed' || s === 'ready' || s === 'keys_hung' || s === 'cleaned' || s === 'restock_pending' || s === 'restocked' || s === 'inspected'
@@ -151,7 +143,7 @@ function statusLabelZh(status: string, task?: WorkTaskItem | null) {
   if (source === 'cleaning_tasks' && kind === 'inspection') {
     if (s === 'cleaned' || s === 'restock_pending' || s === 'restocked') return '待检查'
     const checkedOutAt = String((task as any)?.checked_out_at || '').trim()
-    if (checkedOutAt && !isTaskWorkflowProgressStatus(s) && !isDoneLikeStatusZh(s) && s !== 'cancelled' && s !== 'canceled') return '已退房'
+    if (guestCheckoutCanDriveTaskStatus(task) && checkedOutAt && !isTaskWorkflowProgressStatus(s) && !isDoneLikeStatusZh(s) && s !== 'cancelled' && s !== 'canceled') return '已退房'
   }
   if (source === 'cleaning_tasks' && kind === 'cleaning') {
     const taskType = String((task as any)?.task_type || '').trim().toLowerCase()
@@ -171,7 +163,7 @@ function statusLabelZh(status: string, task?: WorkTaskItem | null) {
     const checkedOutAt = String((task as any)?.checked_out_at || '').trim()
     if (s === 'in_progress' || s === 'cleaning') return '进行中'
     if (s !== 'cancelled' && s !== 'canceled') {
-      if (checkedOutAt) return '已退房'
+      if (guestCheckoutCanDriveTaskStatus(task) && checkedOutAt) return '已退房'
       return '已分配'
     }
   }
@@ -293,6 +285,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
   }, [])
 
   const task = useMemo(() => findWorkTaskItemByAnyId(props.route.params.taskId), [props.route.params.taskId, storeVersion])
+  const actualCheckinTask = useMemo(() => hasActualCheckinTask(task), [task])
   const roleNames = useMemo(() => roleNamesOf(user), [user])
   const activeRole = String((user as any)?.role || '').trim().toLowerCase()
   const canEditManagerFields = hasAnyRole(user, ['customer_service', 'admin', 'offline_manager'])
@@ -335,7 +328,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     if (syncedTaskIdRef.current === currentTaskId) return
     syncedTaskIdRef.current = currentTaskId
     setCheckoutTime(String((task as any)?.start_time || (task as any)?.checkout_time || '').trim())
-    setCheckinTime(String((task as any)?.end_time || (task as any)?.checkin_time || '').trim())
+    setCheckinTime(String((task as any)?.end_time || (task as any)?.checkin_time_note || (task as any)?.checkin_time || '').trim())
     setOldCode(String((task as any)?.old_code || '').trim())
     setNewCode(String((task as any)?.new_code || '').trim())
     setGuestNote(String((task as any)?.guest_special_request || '').trim())
@@ -503,7 +496,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
         return s ? s : null
       }
       const prevCheckout = toNull((task as any)?.start_time || (task as any)?.checkout_time)
-      const prevCheckin = toNull((task as any)?.end_time || (task as any)?.checkin_time)
+      const prevCheckin = toNull((task as any)?.end_time || (task as any)?.checkin_time_note || (task as any)?.checkin_time)
       const prevOldCode = toNull((task as any)?.old_code)
       const prevNewCode = toNull((task as any)?.new_code)
       const prevGuest = toNull((task as any)?.guest_special_request)
@@ -555,7 +548,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
       if (task?.id) {
         const patch: any = {}
         if (payload.checkout_time !== undefined) patch.start_time = payload.checkout_time
-        if (payload.checkin_time !== undefined) patch.end_time = payload.checkin_time
+        if (payload.checkin_time !== undefined) Object.assign(patch, checkinTimeDisplayPatch(task, payload.checkin_time))
         if (payload.checkout_time !== undefined) patch.checkout_time = payload.checkout_time
         if (payload.checkin_time !== undefined) patch.checkin_time = payload.checkin_time
         if (payload.old_code !== undefined) patch.old_code = payload.old_code
@@ -569,7 +562,11 @@ export default function ManagerDailyTaskScreen(props: Props) {
         }
         const mergedCheckout = payload.checkout_time !== undefined ? payload.checkout_time : prevCheckout
         const mergedCheckin = payload.checkin_time !== undefined ? payload.checkin_time : prevCheckin
-        patch.summary = buildCleaningSummary(mergedCheckout, mergedCheckin)
+        patch.summary = cleaningSummaryWithCheckinAuthority({
+          checkoutTime: mergedCheckout,
+          checkinTime: mergedCheckin,
+          hasCheckinTask: actualCheckinTask,
+        })
         if (payload.checkin_time !== undefined) {
           Object.assign(patch, guestReadyCachePatchAfterCheckinTimeChange(task, mergedCheckin))
         }
@@ -966,7 +963,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
               <TextInput value={checkoutTime} onChangeText={setCheckoutTime} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="例如 11am" placeholderTextColor="#9CA3AF" />
             </View>
             <View style={styles.formHalf}>
-              <Text style={styles.label}>入住时间</Text>
+              <Text style={styles.label}>{actualCheckinTask ? '入住时间' : '入住时间备注（未创建入住任务）'}</Text>
               <TextInput value={checkinTime} onChangeText={setCheckinTime} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="例如 2pm" placeholderTextColor="#9CA3AF" />
             </View>
           </View>

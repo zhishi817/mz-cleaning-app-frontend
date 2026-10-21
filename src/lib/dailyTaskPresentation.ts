@@ -128,6 +128,12 @@ function isSameBusinessTask(current: WorkTask, record: WorkTask) {
   return Array.from(businessIdentityKeys(record)).some((key) => currentKeys.has(key))
 }
 
+function dailyTaskDisplayDate(task: WorkTask) {
+  return isReadOnlyWorkRecord(task)
+    ? validDate(task.work_record_date) || validDate(task.scheduled_date) || validDate((task as any).date)
+    : validDate(task.scheduled_date) || validDate((task as any).date)
+}
+
 /**
  * A deleted source row may briefly remain in a hydrated cache. Treat only
  * explicit deletion/tombstone markers as hidden. Cancellation is also kept
@@ -171,9 +177,11 @@ export function dailyTaskCurrentIdentityKey(task: WorkTask) {
 }
 
 /**
- * Reconcile only a live projection with its immutable terminal record. The
- * terminal record wins because it is the dated work history. Separate change
- * events and distinct tasks at the same property intentionally pass through.
+ * Reconcile only a live projection with its immutable terminal record on the
+ * same display day. A delayed or genuinely later record must never remove the
+ * task from its scheduled business day; Root decides whether queued media is
+ * evidence-backed for that original day. Separate change events and distinct
+ * tasks at the same property intentionally pass through.
  */
 export function reconcileDailyTaskDisplay<T extends WorkTask>(tasks: T[]) {
   const visible = (Array.isArray(tasks) ? tasks : []).filter((task) => (
@@ -186,7 +194,11 @@ export function reconcileDailyTaskDisplay<T extends WorkTask>(tasks: T[]) {
   if (!terminalRecords.length) return visible
   return visible.filter((task) => (
     isReadOnlyWorkRecord(task)
-    || !terminalRecords.some((record) => isSameBusinessTask(task, record))
+    || !terminalRecords.some((record) => (
+      isSameBusinessTask(task, record)
+      && !!dailyTaskDisplayDate(task)
+      && dailyTaskDisplayDate(task) === dailyTaskDisplayDate(record)
+    ))
   ))
 }
 

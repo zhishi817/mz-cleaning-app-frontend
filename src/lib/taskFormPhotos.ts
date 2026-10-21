@@ -136,6 +136,17 @@ export function taskFormPhotoRelationIds(task: any) {
   ])
 }
 
+export function taskFormPhotoReadOnlyRelationIds(task: any) {
+  return uniq([
+    ...(Array.isArray(task?.read_only_views?.media_source_ids) ? task.read_only_views.media_source_ids : []),
+    task?.source_id,
+    ...(Array.isArray(task?.source_ids) ? task.source_ids : []),
+    ...(Array.isArray(task?.active_source_ids) ? task.active_source_ids : []),
+    ...(Array.isArray(task?.cleaning_task_ids) ? task.cleaning_task_ids : []),
+    ...(Array.isArray(task?.inspection_task_ids) ? task.inspection_task_ids : []),
+  ])
+}
+
 function localStatus(queueStatus?: InspectionPanelSubmitQueueItem['status'] | null, hasRemote = false): TaskFormPhotoStatus {
   if (queueStatus === 'syncing') return 'syncing'
   if (queueStatus === 'partial_failed' || queueStatus === 'failed') return 'sync_failed'
@@ -287,8 +298,7 @@ function serverPhoto(photo: WorkTaskFormPhotoRecord): TaskFormPhoto | null {
   }
 }
 
-export async function loadTaskFormLocalPhotos(task: any) {
-  const relationIds = taskFormPhotoRelationIds(task)
+async function loadTaskFormLocalPhotosForRelationIds(relationIds: string[]) {
   if (!relationIds.length) return []
   const [drafts, batches, consumableDrafts] = await Promise.all([
     Promise.all(relationIds.map((id) => getInspectionPanelDraft(id).catch(() => null))),
@@ -310,6 +320,10 @@ export async function loadTaskFormLocalPhotos(task: any) {
     photos.push(...consumableDraftPhotos(taskId, draft))
   }
   return dedupeTaskFormPhotos(photos)
+}
+
+export async function loadTaskFormLocalPhotos(task: any) {
+  return loadTaskFormLocalPhotosForRelationIds(taskFormPhotoRelationIds(task))
 }
 
 export function mergeTaskFormPhotos(serverPhotos: WorkTaskFormPhotoRecord[], localPhotos: TaskFormPhoto[]) {

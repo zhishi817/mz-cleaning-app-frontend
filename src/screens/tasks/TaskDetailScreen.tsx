@@ -22,9 +22,9 @@ import {
 } from '../../lib/keyUploadQueue'
 import { hairline, isCompactWidth, moderateScale } from '../../lib/scale'
 import { layoutTokens } from '../../lib/theme'
-import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, patchWorkTaskItems, reconcileActiveWorkTasksAfterLocalPatch, requestWorkTasksRefresh, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
+import { canViewReadOnlyWorkRecordLockCodes, findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, patchWorkTaskItems, reconcileActiveWorkTasksAfterLocalPatch, requestWorkTasksRefresh, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
-import { appendWorkTaskCompletionPhotos, changeGuestReadyNotification, deleteKeyPhoto, listCleaningAppPropertyCodes, listUsers, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, submitMaintenanceExecutorAction, updateCleaningOfflineTask, updateWorkTaskPhotos, uploadMzappMedia } from '../../lib/api'
+import { appendWorkTaskCompletionPhotos, changeGuestReadyNotification, deleteKeyPhoto, getWorkTaskFormPhotos, listCleaningAppPropertyCodes, listUsers, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, submitMaintenanceExecutorAction, updateCleaningOfflineTask, updateWorkTaskPhotos, uploadMzappMedia } from '../../lib/api'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { isPropertyFollowupTask, propertyFollowupTaskDetail, propertyFollowupTaskTitle } from '../../lib/propertyFollowupTaskDisplay'
@@ -63,6 +63,7 @@ import {
 } from '../../lib/workTaskCompletionPhotoPending'
 import { taskBusinessDateKey } from '../../lib/taskBusinessDate'
 import { dailyTaskPhaseHistoryLines } from '../../lib/dailyTaskPresentation'
+import { mergeTaskFormPhotos, taskFormPhotoReadOnlyRelationIds, type TaskFormPhoto } from '../../lib/taskFormPhotos'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
 type OfflineEditUserOption = { id: string; username?: string | null; display_name?: string | null }
@@ -149,6 +150,16 @@ function photoUrlsFromText(text: any) {
 function normalizePhotoUrls(input: any) {
   const values = Array.isArray(input) ? input : []
   return Array.from(new Set(values.map((item) => String(item || '').trim()).filter(Boolean)))
+}
+
+function taskFormPhotoLabel(photo: TaskFormPhoto, index: number) {
+  const label = String(photo.label || '').trim()
+  if (label) return label
+  const area = String(photo.area || '').trim()
+  if (area) return area
+  if (photo.source === 'inspection') return `检查照片 ${index + 1}`
+  if (photo.source === 'completion') return `清洁照片 ${index + 1}`
+  return `任务照片 ${index + 1}`
 }
 
 function offlineEditUserName(user: OfflineEditUserOption) {
@@ -261,6 +272,8 @@ export default function TaskDetailScreen(props: Props) {
   const [previewWorkTaskId, setPreviewWorkTaskId] = useState<string | null>(null)
   const [previewOfflineWorkTaskMedia, setPreviewOfflineWorkTaskMedia] = useState(false)
   const [previewLocalUri, setPreviewLocalUri] = useState<string | null>(null)
+  const [previewSourceIds, setPreviewSourceIds] = useState<string[]>([])
+  const [previewMediaScope, setPreviewMediaScope] = useState<'cleaner' | 'inspector' | 'manager' | null>(null)
   const [autoUploadKeyDone, setAutoUploadKeyDone] = useState(false)
   const [checkedOutPending, setCheckedOutPending] = useState(false)
   const [guestReadyPending, setGuestReadyPending] = useState(false)
@@ -276,6 +289,9 @@ export default function TaskDetailScreen(props: Props) {
   const [offlineEditProperties, setOfflineEditProperties] = useState<OfflineEditPropertyOption[]>([])
   const [offlineEditAssigneeOpen, setOfflineEditAssigneeOpen] = useState(false)
   const [offlineEditPropertyOpen, setOfflineEditPropertyOpen] = useState(false)
+  const [readOnlyTaskPhotos, setReadOnlyTaskPhotos] = useState<TaskFormPhoto[]>([])
+  const [readOnlyTaskPhotosLoading, setReadOnlyTaskPhotosLoading] = useState(false)
+  const [readOnlyTaskPhotosError, setReadOnlyTaskPhotosError] = useState<string | null>(null)
 
   useEffect(() => {
     setHasInit(true)
@@ -294,10 +310,19 @@ export default function TaskDetailScreen(props: Props) {
   const completionPhotoPendingTaskId = task && String(task.source_type || '').trim() === 'cleaning_offline_tasks' ? String(task.id || '').trim() : ''
   const completionPhotoPendingOwnerId = maintenancePhotoDraftOwnerId
   const taskCompletionPhotoUrlsKey = useMemo(() => JSON.stringify(normalizePhotoUrls((task as any)?.completion_photo_urls)), [task])
-  const openPreview = (url: string, workTaskId?: string | null, localUri?: string | null, offlineWorkTaskMedia = false) => {
+  const openPreview = (
+    url: string,
+    workTaskId?: string | null,
+    localUri?: string | null,
+    offlineWorkTaskMedia = false,
+    sourceIds: string[] = [],
+    mediaScope: 'cleaner' | 'inspector' | 'manager' | null = null,
+  ) => {
     setPreviewWorkTaskId(String(workTaskId || '').trim() || null)
     setPreviewOfflineWorkTaskMedia(offlineWorkTaskMedia)
     setPreviewLocalUri(String(localUri || '').trim() || null)
+    setPreviewSourceIds(sourceIds)
+    setPreviewMediaScope(mediaScope)
     setPreviewUrl(url)
   }
   const closePreview = () => {
@@ -305,6 +330,8 @@ export default function TaskDetailScreen(props: Props) {
     setPreviewWorkTaskId(null)
     setPreviewOfflineWorkTaskMedia(false)
     setPreviewLocalUri(null)
+    setPreviewSourceIds([])
+    setPreviewMediaScope(null)
   }
 
   useEffect(() => {
@@ -378,7 +405,63 @@ export default function TaskDetailScreen(props: Props) {
   const cleaningTaskId = String((task as any)?.source_id || '').trim()
   const isOfflineTaskForEdit = String(task?.task_kind || '').toLowerCase() === 'offline'
   const workRecordReadOnly = (task as any)?.work_record_read_only === true
+  const readOnlyViews = (task as any)?.read_only_views || null
+  const readOnlyMediaScope = String(readOnlyViews?.media_scope || '').trim().toLowerCase() as 'cleaner' | 'inspector' | 'manager' | 'none' | ''
+  const readOnlyPhotoRelationKey = JSON.stringify(taskFormPhotoReadOnlyRelationIds(task))
+  const readOnlyPhotoRelationIds = useMemo(() => JSON.parse(readOnlyPhotoRelationKey) as string[], [readOnlyPhotoRelationKey])
+  const hasProjectedReadOnlyKeyPhoto = !!String((task as any)?.key_photo_url || '').trim()
+  const keyPhotoMediaScope: 'cleaner' | 'inspector' | 'manager' | null = readOnlyMediaScope === 'cleaner' || readOnlyMediaScope === 'inspector' || readOnlyMediaScope === 'manager'
+    ? readOnlyMediaScope
+    : isManagerRole(activeRole)
+      ? 'manager'
+      : ['cleaning_inspector', 'inspector'].includes(activeRole)
+        ? 'inspector'
+        : activeRole === 'cleaner'
+          ? 'cleaner'
+          : null
   const canEditOfflineTask = isOfflineTaskForEdit && canManagerView && !workRecordReadOnly
+
+  useEffect(() => {
+    let cancelled = false
+    setReadOnlyTaskPhotos([])
+    setReadOnlyTaskPhotosError(null)
+    const canLoad = workRecordReadOnly
+      && !!task
+      && String(task.source_type || '').trim() === 'cleaning_tasks'
+      && !!token
+      && ['cleaner', 'inspector', 'manager'].includes(readOnlyMediaScope)
+      && (readOnlyViews?.cleaner_photos === true || readOnlyViews?.inspection_photos === true)
+    if (!canLoad) {
+      setReadOnlyTaskPhotosLoading(false)
+      return () => { cancelled = true }
+    }
+    const relationIds = readOnlyPhotoRelationIds
+    setReadOnlyTaskPhotosLoading(true)
+    void getWorkTaskFormPhotos(
+      token as string,
+      String(task.id || task.source_id || ''),
+      relationIds,
+      readOnlyMediaScope as 'cleaner' | 'inspector' | 'manager',
+    ).then((server) => {
+      if (cancelled) return
+      const allowedSources = readOnlyMediaScope === 'cleaner'
+        ? new Set(['completion', 'consumable', 'restock', 'issue'])
+        : readOnlyMediaScope === 'inspector'
+          ? new Set(['inspection', 'restock', 'issue'])
+          : null
+      setReadOnlyTaskPhotos(mergeTaskFormPhotos(server?.items || [], []).filter((photo) => {
+        if (photo.source === 'key') return readOnlyViews?.guest_key_photo === true && !hasProjectedReadOnlyKeyPhoto
+        return allowedSources == null || allowedSources.has(String(photo.source || '').trim())
+      }))
+    }).catch((error: any) => {
+      if (cancelled) return
+      setReadOnlyTaskPhotos([])
+      setReadOnlyTaskPhotosError(String(error?.message || '照片加载失败'))
+    }).finally(() => {
+      if (!cancelled) setReadOnlyTaskPhotosLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [hasProjectedReadOnlyKeyPhoto, readOnlyMediaScope, readOnlyPhotoRelationIds, readOnlyViews?.cleaner_photos, readOnlyViews?.guest_key_photo, readOnlyViews?.inspection_photos, task?.id, token, workRecordReadOnly])
 
   useEffect(() => {
     if (!offlineEditOpen || !token || !canEditOfflineTask) return
@@ -1243,7 +1326,10 @@ export default function TaskDetailScreen(props: Props) {
           : null,
       ].filter(Boolean).join(' · ')
     : ''
-  const keyHandoverPendingNotice = getKeyHandoverPendingNotice(task)
+  const keyHandoverPendingNotice = getKeyHandoverPendingNotice(task, {
+    activeRole,
+    managerView: isManagerRole(activeRole),
+  })
   const phaseHistoryLines = dailyTaskPhaseHistoryLines(task)
   const metaStyles = statusPillStylePair(meta.tone)
   const kind = taskKindLabel(task.task_kind)
@@ -1260,8 +1346,9 @@ export default function TaskDetailScreen(props: Props) {
   const taskType = String((task as any).task_type || '').trim().toLowerCase()
   const isCheckoutTask = taskType === 'checkout_clean' || !!checkoutTime
   const turnoverDisplay = turnoverDisplayOf(task)
-  const oldCode = String(turnoverDisplay?.old_code || (task as any).old_code || '').trim()
-  const newCode = String(turnoverDisplay?.new_code || (task as any).new_code || '').trim()
+  const canViewLockCodes = canViewReadOnlyWorkRecordLockCodes(task)
+  const oldCode = canViewLockCodes ? String(turnoverDisplay?.old_code || (task as any).old_code || '').trim() : ''
+  const newCode = canViewLockCodes ? String(turnoverDisplay?.new_code || (task as any).new_code || '').trim() : ''
   const guestSpecialRequest = guestRequestForDisplay(task)
   const urgency = urgencyMeta(task.urgency)
   const isCleaningSource = task.source_type === 'cleaning_tasks'
@@ -1862,13 +1949,15 @@ export default function TaskDetailScreen(props: Props) {
             <Text style={styles.summary}>{keyPhotoStatusText}</Text>
             <Pressable
               testID="task-detail-key-photo"
-              onPress={() => openPreview(keyPhotoUrl)}
+              onPress={() => openPreview(keyPhotoUrl, null, null, false, readOnlyPhotoRelationIds, keyPhotoMediaScope)}
               style={({ pressed }) => [styles.photoWrap, pressed ? styles.pressed : null]}
             >
               <CleaningMediaImage
                 token={token}
                 localUri={String(keyPhotoUrl).startsWith('file://') ? keyPhotoUrl : null}
                 remoteReference={keyPhotoUrl}
+                accessSourceIds={readOnlyPhotoRelationIds}
+                mediaScope={keyPhotoMediaScope}
                 style={styles.photo}
                 resizeMode="contain"
               />
@@ -1890,6 +1979,53 @@ export default function TaskDetailScreen(props: Props) {
               </Pressable>
             ) : null}
           </>
+        ) : null}
+
+        {workRecordReadOnly && (readOnlyViews?.cleaner_photos === true || readOnlyViews?.inspection_photos === true) ? (
+          <View testID="task-detail-read-only-photos" style={styles.taskPhotosPanel}>
+            <View style={styles.line} />
+            <Text style={styles.sectionTitle}>
+              {readOnlyMediaScope === 'inspector' ? '本次检查照片' : readOnlyMediaScope === 'cleaner' ? '本次清洁照片' : '本次任务照片'}
+            </Text>
+            <Text style={styles.mutedSmall}>只读查看，不提供删除、重拍或补传操作。</Text>
+            {readOnlyTaskPhotosLoading ? <Text style={styles.mutedSmall}>照片加载中...</Text> : null}
+            {!readOnlyTaskPhotosLoading && readOnlyTaskPhotosError ? (
+              <Text testID="task-detail-read-only-photos-error" style={styles.mutedSmall}>{readOnlyTaskPhotosError}</Text>
+            ) : null}
+            {!readOnlyTaskPhotosLoading && !readOnlyTaskPhotosError && !readOnlyTaskPhotos.length ? (
+              <Text style={styles.mutedSmall}>本次任务暂无可查看照片。</Text>
+            ) : null}
+            {readOnlyTaskPhotos.length ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.markPhotoList}>
+                {readOnlyTaskPhotos.map((photo, index) => {
+                  const remoteReference = String(photo.uploaded_key || photo.uploaded_url || '').trim()
+                  const localUri = String(photo.local_uri || photo.thumbnail_uri || '').trim()
+                  const displayReference = remoteReference || localUri
+                  if (!displayReference) return null
+                  return (
+                    <View key={photo.id || `${displayReference}:${index}`} style={styles.markPhotoCard}>
+                      <Pressable
+                        testID={`task-detail-read-only-photo-${index}`}
+                        onPress={() => openPreview(displayReference, null, localUri || null, false, readOnlyPhotoRelationIds, readOnlyMediaScope as 'cleaner' | 'inspector' | 'manager')}
+                        style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
+                      >
+                        <CleaningMediaImage
+                          token={token}
+                          localUri={localUri || null}
+                          remoteReference={remoteReference || null}
+                          accessSourceIds={readOnlyPhotoRelationIds}
+                          mediaScope={readOnlyMediaScope as 'cleaner' | 'inspector' | 'manager'}
+                          style={styles.markPhotoThumb}
+                          resizeMode="cover"
+                        />
+                      </Pressable>
+                      <Text style={styles.photoCaption} numberOfLines={2}>{taskFormPhotoLabel(photo, index)}</Text>
+                    </View>
+                  )
+                })}
+              </ScrollView>
+            ) : null}
+          </View>
         ) : null}
 
         {canViewLockboxVideo && isCleaningSource && lockboxVideoUrl ? (
@@ -2250,7 +2386,7 @@ export default function TaskDetailScreen(props: Props) {
           >
             {previewUrl ? (
               <View style={{ width: previewSize.width, height: Math.max(240, previewSize.height - insets.top - insets.bottom - 80) }}>
-                <CleaningMediaPreview token={token} reference={previewUrl} localUri={previewLocalUri} accessWorkTaskId={previewWorkTaskId} offlineWorkTaskMedia={previewOfflineWorkTaskMedia} style={{ width: '100%', height: '100%' }} />
+                <CleaningMediaPreview token={token} reference={previewUrl} localUri={previewLocalUri} accessWorkTaskId={previewWorkTaskId} accessSourceIds={previewSourceIds} mediaScope={previewMediaScope} offlineWorkTaskMedia={previewOfflineWorkTaskMedia} style={{ width: '100%', height: '100%' }} />
               </View>
             ) : null}
           </ScrollView>
@@ -2359,6 +2495,7 @@ const styles = StyleSheet.create({
   markPhotoCard: { width: 96, position: 'relative' },
   markPhotoThumbWrap: { borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F3F4F6' },
   markPhotoThumb: { width: '100%', height: 96 },
+  photoCaption: { marginTop: 6, color: '#4B5563', fontSize: 11, lineHeight: 15, fontWeight: '700' },
   markPhotoRemoveBtn: { position: 'absolute', top: 4, right: 4 },
   markPhotoRemoveVisual: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(17,24,39,0.84)' },
   maintenancePhotoRetryBtn: { alignSelf: 'flex-start', marginTop: 10, borderColor: '#BFDBFE', backgroundColor: '#F5F8FF' },

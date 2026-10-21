@@ -708,6 +708,15 @@ export type WorkTask = {
   original_scheduled_date?: string | null
   work_record_read_only?: boolean
   work_record_media_attributed?: boolean
+  read_only_views?: {
+    property_access: boolean
+    lock_codes?: boolean
+    cleaner_photos: boolean
+    inspection_photos: boolean
+    guest_key_photo: boolean
+    media_scope: 'cleaner' | 'inspector' | 'manager' | 'none'
+    media_source_ids?: string[]
+  } | null
   counts_as_active_task?: boolean
   completed_at?: string | null
   completed_by_user_id?: string | null
@@ -721,6 +730,8 @@ export type WorkTask = {
   property_id: string | null
   title: string
   summary: string | null
+  has_checkin_task?: boolean
+  checkin_time_note?: string | null
   scheduled_date: string | null
   start_time: string | null
   end_time: string | null
@@ -893,6 +904,7 @@ export async function createManualCleaningTask(
     keys_required?: 1 | 2 | null
     nights_override?: number | null
     guest_special_request?: string | null
+    linked_checkout_task_id?: string | null
   },
 ) {
   const urls = buildUrlCandidates('cleaning/tasks')
@@ -2096,7 +2108,7 @@ export type InspectionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'ki
 export type WorkTaskFormPhotoRecord = {
   id: string
   task_id: string
-  source: 'inspection' | 'restock' | 'consumable' | 'issue' | string
+  source: 'inspection' | 'completion' | 'key' | 'restock' | 'consumable' | 'issue' | string
   area?: string | null
   item_id?: string | null
   label?: string | null
@@ -2108,10 +2120,16 @@ export type WorkTaskFormPhotoRecord = {
   status?: 'synced' | 'synced_unlabeled' | string
 }
 
-export async function getWorkTaskFormPhotos(token: string, workTaskRef: string, sourceIds: string[] = []) {
+export async function getWorkTaskFormPhotos(
+  token: string,
+  workTaskRef: string,
+  sourceIds: string[] = [],
+  scope?: 'cleaner' | 'inspector' | 'manager',
+) {
   const params = new URLSearchParams()
   const ids = Array.from(new Set(sourceIds.map((item) => String(item || '').trim()).filter(Boolean))).slice(0, 50)
   if (ids.length) params.set('source_ids', ids.join(','))
+  if (scope) params.set('scope', scope)
   const query = params.toString()
   const path = `mzapp/work-tasks/${encodeURIComponent(workTaskRef)}/form-photos${query ? `?${query}` : ''}`
   const urls = buildUrlCandidates(path)
