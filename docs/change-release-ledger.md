@@ -156,6 +156,7 @@
 - Candidate patch SHA-256: `650cba441819fa551ec0e26d9abc706f76e85b1c313ceeb9420212db7635d073`, excluding `docs/change-release-ledger.md`
 - Commit SHA: `7e8dec413dc8cee437d7d079cfd8d4dc22b7201c`
 - Dependencies: `root/CRL-20261021-002@7f783a37518c5ff0af7b8d318d52da0990ffc40c`
+- Cross-repository dependency verification: `PASS`; paired Root exact report audited `65a9d218d803813ed458c25406493aee70189da5...ac8e88e89adecda9cf71753cb527aa4911f9d88b`, contains the declared content commit `7f783a37518c5ff0af7b8d318d52da0990ffc40c`, retained fingerprint `3ab8275c7d62fb9e8b021874a9bac2ffe1dd2a9bf0ace681d5662ad1155abf85`, and concluded `GO`. Root remains a deployment prerequisite; this is source-pair verification, not deployed-backend or device verification.
 - Required validation: PASS; clean-worktree `check:ci` 76 suites / 598 tests and paired actual local HTTP/API integration passed; performance/device gates remain explicitly not verified.
 - Shared-hunk review: PASS; all selected paths belong to MZ054–MZ058 presentation and required tests; MZ062 and unrelated paths are absent.
 - Generated-file review: PASS; source, tests and ledger only; no generated, native, dependency or environment file.
