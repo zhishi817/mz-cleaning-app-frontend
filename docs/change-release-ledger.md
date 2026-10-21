@@ -161,7 +161,7 @@
 - Base: `origin/Dev@d9412d19cc8440d4390845eaf1ed5a5e38cb5703`; fetched at `2026-10-21T11:44:49Z`
 - Candidate patch SHA-256: `90d94ddbc6e2f81ca2aa8cd4bbbbbeaf31a5831cf6556fa090fe5a2c0a7c3e41`
 - Commit SHA: `961c162c054cafe5f322e7e3a5d3671125f77792`
-- Dependencies: paired Root candidate `11d81443f1c2b9a8daca62afb0255b86fbefff42` covering root MZ-063～070 selected CRLs; migration → Root → Mobile deployment order, but deployment, migration execution and OTA are excluded
+- Dependencies: `root/CRL-20261021-004@11d81443f1c2b9a8daca62afb0255b86fbefff42`; `root/CRL-20261021-005@11d81443f1c2b9a8daca62afb0255b86fbefff42`; `root/CRL-20261021-006@11d81443f1c2b9a8daca62afb0255b86fbefff42`; `root/CRL-20261021-007@11d81443f1c2b9a8daca62afb0255b86fbefff42`; `root/CRL-20261021-008@11d81443f1c2b9a8daca62afb0255b86fbefff42`; `root/CRL-20261021-010@11d81443f1c2b9a8daca62afb0255b86fbefff42`; `root/CRL-20261021-011@11d81443f1c2b9a8daca62afb0255b86fbefff42`
 - Required validation: `PASS`; evidence: Mobile `check:ci` PASS with 77 suites / 610 tests, typecheck and lint 0 errors; ledger 22/22 and diff checks PASS
 - Shared-hunk review: `PASS`; evidence: complete Mobile candidate independently reviewed as one MZ-063～070 scope, with MZ-062 excluded
 - Generated-file review: `PASS`; evidence: no native build, dependency cache, environment file or generated artifact is included
