@@ -22,6 +22,8 @@ type Props = Omit<ImageProps, 'source'> & {
   variant?: CleaningMediaImageVariant
   accessTaskId?: string | null
   accessWorkTaskId?: string | null
+  accessSourceIds?: string[] | null
+  mediaScope?: 'cleaner' | 'inspector' | 'manager' | null
   guestLuggageId?: string | null
   offlineWorkTaskMedia?: boolean
   dayEndUserId?: string | null
@@ -37,6 +39,8 @@ export default function CleaningMediaImage({
   variant = 'thumbnail',
   accessTaskId,
   accessWorkTaskId,
+  accessSourceIds,
+  mediaScope,
   guestLuggageId,
   offlineWorkTaskMedia,
   dayEndUserId,
@@ -71,8 +75,8 @@ export default function CleaningMediaImage({
     thumbnailFailed,
   })
   const selectedSource = useMemo(
-    () => buildCleaningMediaImageSource(token, selected.reference, variant, { accessTaskId, accessWorkTaskId, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }),
-    [accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, offlineWorkTaskMedia, selected.reference, token, variant],
+    () => buildCleaningMediaImageSource(token, selected.reference, variant, { accessTaskId, accessWorkTaskId, accessSourceIds, mediaScope, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }),
+    [accessSourceIds, accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, mediaScope, offlineWorkTaskMedia, selected.reference, token, variant],
   )
   const shouldUsePrivateFile = /^https?:\/\//i.test(String(selectedSource.uri || ''))
   const hasLocalThumbnailFallback = /^file:/i.test(String(thumbnailUri || '').trim())

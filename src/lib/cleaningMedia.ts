@@ -44,6 +44,8 @@ export type CleaningMediaImageVariant = 'original' | 'thumbnail' | 'preview'
 export type CleaningMediaAccessOptions = {
   accessTaskId?: string | null
   accessWorkTaskId?: string | null
+  accessSourceIds?: string[] | null
+  mediaScope?: 'cleaner' | 'inspector' | 'manager' | null
   guestLuggageId?: string | null
   offlineWorkTaskMedia?: boolean
   dayEndUserId?: string | null
@@ -61,6 +63,13 @@ function cleaningMediaProxyUrl(reference: string, variant: CleaningMediaImageVar
   const taskQuery = taskId ? `&source_task_id=${encodeURIComponent(taskId)}` : ''
   const workTaskId = cleanText(options?.accessWorkTaskId)
   const workTaskQuery = workTaskId ? `&work_task_id=${encodeURIComponent(workTaskId)}` : ''
+  const sourceIds = Array.from(new Set((Array.isArray(options?.accessSourceIds) ? options?.accessSourceIds : [])
+    .map(cleanText)
+    .filter(Boolean)))
+    .slice(0, 2)
+  const sourceIdsQuery = sourceIds.length ? `&source_ids=${encodeURIComponent(sourceIds.join(','))}` : ''
+  const mediaScope = cleanText(options?.mediaScope).toLowerCase()
+  const mediaScopeQuery = ['cleaner', 'inspector', 'manager'].includes(mediaScope) ? `&media_scope=${encodeURIComponent(mediaScope)}` : ''
   const guestLuggage = cleanText(options?.guestLuggageId)
   const guestLuggageQuery = guestLuggage ? `&guest_luggage_id=${encodeURIComponent(guestLuggage)}` : ''
   const dayEndUserId = cleanText(options?.dayEndUserId)
@@ -68,7 +77,7 @@ function cleaningMediaProxyUrl(reference: string, variant: CleaningMediaImageVar
   const dayEndQuery = dayEndUserId && dayEndDate
     ? `&day_end_user_id=${encodeURIComponent(dayEndUserId)}&day_end_date=${encodeURIComponent(dayEndDate)}`
     : ''
-  return `${apiRoot}/cleaning-app/media/image?${query}${variantQuery}${taskQuery}${workTaskQuery}${guestLuggageQuery}${dayEndQuery}`
+  return `${apiRoot}/cleaning-app/media/image?${query}${variantQuery}${taskQuery}${workTaskQuery}${sourceIdsQuery}${mediaScopeQuery}${guestLuggageQuery}${dayEndQuery}`
 }
 
 function isLegacyPrivateR2Url(value: string) {

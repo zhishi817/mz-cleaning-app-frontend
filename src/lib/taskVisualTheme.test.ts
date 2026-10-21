@@ -70,6 +70,32 @@ test('inspection task with a checkout marker displays checked out', () => {
   expect(meta).toEqual({ text: '已退房', tone: 'special' })
 })
 
+test('incoming task status is not overwritten by that booking later checking out', () => {
+  const unassigned = getTaskStatusMeta(
+    makeTask({
+      task_kind: 'cleaning',
+      task_type: 'checkin_clean',
+      status: 'pending',
+      checked_out_at: '2026-10-15T00:00:00.000Z',
+    }),
+    ['admin'],
+  )
+  expect(unassigned).toEqual({ text: '未分配', tone: 'pending' })
+
+  const assigned = getTaskStatusMeta(
+    makeTask({
+      task_kind: 'cleaning',
+      task_type: 'checkin_clean',
+      status: 'assigned',
+      assignee_id: 'inspector-1',
+      assignee_name: 'Angela',
+      checked_out_at: '2026-10-15T00:00:00.000Z',
+    }),
+    ['admin'],
+  )
+  expect(assigned).toEqual({ text: '已分配', tone: 'normal' })
+})
+
 test('merged inspection task keeps cleaning progress ahead of checkout marker', () => {
   const meta = getTaskStatusMeta(
     makeTask({
@@ -133,6 +159,36 @@ test('explicit current key handover fact outranks unfinished shared workflow sta
     expect(getTaskStatusMeta(task, roles, 'viewer-1')).toEqual({ text: '已挂钥匙', tone: 'success' })
   }
   expect(getKeyHandoverPendingNotice(task)).toBe('资料待补：补品记录、房源照片')
+})
+
+test('pending handover notice only shows responsibilities for the active role', () => {
+  const task = makeTask({
+    status: 'in_progress',
+    key_handover: {
+      state: 'completed',
+      source_task_id: 'ct-1',
+      completed_at: '2026-10-20T02:32:15.623Z',
+      workflow_finalization_pending: true,
+      missing_requirements: ['cleaning_consumables', 'cleaning_property_photo', 'inspection_photos'],
+    },
+  } as any)
+
+  expect(getKeyHandoverPendingNotice(task, { activeRole: 'cleaner' })).toBe('资料待补：补品记录、房源照片')
+  expect(getKeyHandoverPendingNotice(task, { activeRole: 'cleaning_inspector' })).toBe('资料待补：检查照片')
+  expect(getKeyHandoverPendingNotice(task, { activeRole: 'admin', managerView: true })).toBe('资料待补：补品记录、房源照片、检查照片')
+})
+
+test('cleaner does not see an inspection-only pending notice', () => {
+  const task = makeTask({
+    key_handover: {
+      state: 'completed',
+      source_task_id: 'ct-1',
+      completed_at: '2026-10-20T02:32:15.623Z',
+      workflow_finalization_pending: true,
+      missing_requirements: ['inspection_photos'],
+    },
+  } as any)
+  expect(getKeyHandoverPendingNotice(task, { activeRole: 'cleaner' })).toBeNull()
 })
 
 test('cancelled or tombstoned tasks cannot be promoted by a retained key handover field', () => {

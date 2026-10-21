@@ -75,6 +75,8 @@ const SAFE_PATCH_FIELDS = new Set([
   'end_time',
   'checkout_time',
   'checkin_time',
+  'checkin_time_note',
+  'has_checkin_task',
   'urgency',
   'title',
   'summary',
@@ -587,6 +589,14 @@ function getPatchValue(patch: Record<string, any>, key: string) {
 }
 
 const WORK_RECORD_SENSITIVE_CONFLICT_FIELDS = new Set(['old_code', 'new_code', 'guest_special_request'])
+const WORK_RECORD_BLOCKING_EXECUTION_STATES = new Set([
+  'cancelled',
+  'canceled',
+  'deleted',
+  'removed',
+  'superseded',
+  'tombstone',
+])
 
 function redactWorkRecordConflicts(value: any) {
   return Array.isArray(value)
@@ -596,13 +606,26 @@ function redactWorkRecordConflicts(value: any) {
     : value
 }
 
+export function canViewReadOnlyWorkRecordLockCodes(task: WorkTaskItem): boolean {
+  if (task.work_record_read_only !== true) return true
+  const recordState = String(task.work_record_state || '').trim().toLowerCase()
+  const executionState = String((task as any).execution_state || '').trim().toLowerCase()
+  const status = String(task.status || '').trim().toLowerCase()
+  return task.source_type === 'cleaning_tasks'
+    && task.read_only_views?.lock_codes === true
+    && ['completed', 'reassigned'].includes(recordState)
+    && !['cancelled', 'canceled'].includes(status)
+    && !WORK_RECORD_BLOCKING_EXECUTION_STATES.has(executionState)
+}
+
 export function redactReadOnlyWorkRecord(task: WorkTaskItem): WorkTaskItem {
   if (task.work_record_read_only !== true) return task
+  const canReadLockCodes = canViewReadOnlyWorkRecordLockCodes(task)
   const turnoverDisplay = task.turnover_display && typeof task.turnover_display === 'object'
     ? {
         ...task.turnover_display,
-        old_code: null,
-        new_code: null,
+        old_code: canReadLockCodes ? task.turnover_display.old_code ?? null : null,
+        new_code: canReadLockCodes ? task.turnover_display.new_code ?? null : null,
         guest_request_checkout: null,
         guest_request_checkin: null,
         guest_request_summary: null,
@@ -616,8 +639,8 @@ export function redactReadOnlyWorkRecord(task: WorkTaskItem): WorkTaskItem {
   const keepAttributedWorkRecordMedia = isReassignedRecord && task.work_record_media_attributed === true
   return {
     ...task,
-    old_code: null,
-    new_code: null,
+    old_code: canReadLockCodes ? task.old_code ?? null : null,
+    new_code: canReadLockCodes ? task.new_code ?? null : null,
     guest_special_request: null,
     guest_request_checkout: null,
     guest_request_checkin: null,
@@ -653,6 +676,48 @@ export function redactReadOnlyWorkRecord(task: WorkTaskItem): WorkTaskItem {
         }
       : {}),
   }
+}
+
+function revokeCachedReadOnlyLockCodesForEvent(event: WorkTaskStreamEvent, revokeAllWhenUnscoped: boolean) {
+  const matchedIndexes = findTaskIndexesForEvent(event)
+  const indexes = matchedIndexes.length
+    ? matchedIndexes
+    : revokeAllWhenUnscoped
+      ? state.items.map((task, index) => (task.work_record_read_only === true ? index : -1)).filter((index) => index >= 0)
+      : []
+  if (!indexes.length) return false
+  const items = state.items.slice()
+  let changed = false
+  for (const index of indexes) {
+    const task = items[index]
+    if (!task || task.work_record_read_only !== true) continue
+    const revoked = redactReadOnlyWorkRecord({
+      ...task,
+      read_only_views: {
+        ...(task.read_only_views || {}),
+        lock_codes: false,
+      },
+    } as WorkTaskItem)
+    if (
+      task.read_only_views?.lock_codes !== false
+      || task.old_code != null
+      || task.new_code != null
+      || task.turnover_display?.old_code != null
+      || task.turnover_display?.new_code != null
+    ) {
+      items[index] = revoked
+      changed = true
+    }
+  }
+  if (!changed) return false
+  state = {
+    ...state,
+    items,
+    updatedAt: new Date().toISOString(),
+  }
+  void persist()
+  emit()
+  return true
 }
 
 export function reconcileExecutionListVisibilityAfterPatch(
@@ -1045,6 +1110,10 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
   if (scope === 'membership' || eventType === 'TASK_REMOVED' || eventType === 'TASK_ASSIGNMENT_CHANGED') {
     void invalidateCleaningMediaCache()
   }
+  // Server authority events can revoke a historical record or replace one of
+  // its exact sources. Remove cached lock codes before any network refresh so
+  // an offline/failed refresh cannot leave stale physical-access data visible.
+  revokeCachedReadOnlyLockCodesForEvent(event, membershipChanged)
   if (eventRequiresGuestReadyAuthorityRefresh(event)) {
     // Early-arrival qualification and outside-key state are server-authoritative
     // and coupled to role-scoped actions. Never combine a partial time/event

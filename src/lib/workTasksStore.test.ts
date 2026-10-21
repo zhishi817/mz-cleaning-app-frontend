@@ -1,5 +1,6 @@
 import {
   activateWorkTasksRealtime,
+  canViewReadOnlyWorkRecordLockCodes,
   deactivateWorkTasksRealtime,
   establishWorkTasksSession,
   eventRequiresGuestReadyAuthorityRefresh,
@@ -14,6 +15,7 @@ import {
   mergeRemoteWorkTaskItems,
   patchWorkTaskItem,
   projectCleaningStatusForTask,
+  redactReadOnlyWorkRecord,
   reconcileExecutionListVisibilityAfterPatch,
   requestWorkTasksRefresh,
   setWorkTasksRefreshForeground,
@@ -318,6 +320,118 @@ test('scrubs live credentials, guest state and actions when an SSE patch turns a
       router_location: null,
     },
   })
+})
+
+test('keeps synthetic lock codes only for an authorized immutable cleaning record capability', () => {
+  const completed = makeTask({
+    work_record_read_only: true,
+    work_record_visible: true,
+    work_record_state: 'completed',
+    status: 'done',
+    old_code: '1357',
+    new_code: '2468',
+    read_only_views: {
+      property_access: true,
+      lock_codes: true,
+      cleaner_photos: true,
+      inspection_photos: false,
+      guest_key_photo: true,
+      media_scope: 'cleaner',
+    },
+    turnover_display: {
+      old_code: '1357',
+      new_code: '2468',
+      guest_request_summary: 'must remain hidden',
+    },
+  } as any)
+
+  expect(redactReadOnlyWorkRecord(completed)).toMatchObject({
+    old_code: '1357',
+    new_code: '2468',
+    guest_special_request: null,
+    available_actions: [],
+    turnover_display: {
+      old_code: '1357',
+      new_code: '2468',
+      guest_request_summary: null,
+    },
+  })
+  expect(canViewReadOnlyWorkRecordLockCodes(completed)).toBe(true)
+  expect(redactReadOnlyWorkRecord({ ...completed, work_record_state: 'reassigned', status: 'assigned' } as any)).toMatchObject({
+    old_code: '1357',
+    new_code: '2468',
+  })
+
+  for (const denied of [
+    { read_only_views: { ...completed.read_only_views, lock_codes: false } },
+    { work_record_state: 'cancelled', status: 'cancelled' },
+    { work_record_state: 'rescheduled', status: 'assigned' },
+    { execution_state: 'deleted' },
+    { execution_state: 'superseded' },
+  ]) {
+    expect(redactReadOnlyWorkRecord({ ...completed, ...denied } as any)).toMatchObject({
+      old_code: null,
+      new_code: null,
+      turnover_display: { old_code: null, new_code: null },
+    })
+    expect(canViewReadOnlyWorkRecordLockCodes({ ...completed, ...denied } as any)).toBe(false)
+  }
+})
+
+test('revokes cached lock codes before a membership refresh that fails', async () => {
+  const api = require('./api')
+  const params = refreshParams({ date_from: '2026-10-19', date_to: '2026-10-19', view: 'all' })
+  const record = makeTask({
+    id: 'cleaning_tasks_cleaner:checkout-sensitive::record:completed:2026-10-19',
+    source_id: 'checkout-sensitive',
+    source_ids: ['checkout-sensitive'],
+    all_related_source_ids: ['checkout-sensitive'],
+    work_record_read_only: true,
+    work_record_visible: true,
+    work_record_state: 'completed',
+    status: 'done',
+    old_code: '1357',
+    new_code: '2468',
+    read_only_views: {
+      property_access: true,
+      lock_codes: true,
+      cleaner_photos: true,
+      inspection_photos: false,
+      guest_key_photo: true,
+      media_scope: 'cleaner',
+    },
+    turnover_display: { old_code: '1357', new_code: '2468' },
+  } as any)
+  api.listWorkTasks.mockResolvedValueOnce([record])
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'seed_sensitive_record' })
+  await activateWorkTasksRealtime(params)
+  api.listWorkTasks.mockReset()
+  api.listWorkTasks.mockRejectedValue(new Error('offline during revocation refresh'))
+
+  mockStreamListeners.work_task_event?.[0]({
+    type: 'work_task_event',
+    data: JSON.stringify({
+      event_id: 'evt-sensitive-source-removed',
+      event_type: 'TASK_REMOVED',
+      change_scope: 'membership',
+      task_id: 'cleaning_task:checkout-sensitive',
+      source_ref_ids: ['checkout-sensitive'],
+      changed_fields: ['execution_state'],
+      payload: { patch: { execution_state: 'superseded' } },
+    }),
+  })
+  await Promise.resolve()
+  await Promise.resolve()
+
+  const cached = findWorkTaskItemByAnyId('checkout-sensitive') as any
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+  expect(cached).toMatchObject({
+    old_code: null,
+    new_code: null,
+    read_only_views: { lock_codes: false },
+    turnover_display: { old_code: null, new_code: null },
+  })
+  expect(canViewReadOnlyWorkRecordLockCodes(cached)).toBe(false)
 })
 
 test('does not retain current-assignee media when a cached card becomes a reassigned record', () => {

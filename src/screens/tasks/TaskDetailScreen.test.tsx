@@ -81,6 +81,13 @@ jest.mock('../../lib/workTasksStore', () => {
     updatedAt: null,
   }
   return {
+    canViewReadOnlyWorkRecordLockCodes: (task: any) => task?.work_record_read_only !== true || (
+      task?.source_type === 'cleaning_tasks'
+      && task?.read_only_views?.lock_codes === true
+      && ['completed', 'reassigned'].includes(String(task?.work_record_state || '').toLowerCase())
+      && !['cancelled', 'canceled'].includes(String(task?.status || '').toLowerCase())
+      && !['cancelled', 'canceled', 'deleted', 'removed', 'superseded', 'tombstone'].includes(String(task?.execution_state || '').toLowerCase())
+    ),
     subscribeWorkTasks: (listener: () => void) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -239,6 +246,123 @@ test('task detail does not load the supplies photo endpoint', async () => {
   expect(api.getWorkTaskFormPhotos).not.toHaveBeenCalled()
   expect(ui.queryByText('补品填报 / 房间照片')).toBeNull()
   expect(ui.queryByText('照片加载中...')).toBeNull()
+})
+
+test('cleaner completed record keeps property access and shows only cleaner photo categories read-only', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = { ...mockAuthState.user }
+  const api = require('../../lib/api')
+  mockAuthState.user = { id: 'u1', username: 'tester', role: 'cleaner' }
+  snapshot.items[0] = {
+    ...previousTask,
+    work_record_read_only: true,
+    work_record_visible: true,
+    work_record_state: 'completed',
+    completed_by_user_id: 'u1',
+    execution_role: 'cleaning',
+    old_code: '1357',
+    new_code: '2468',
+    source_ids: ['ct1'],
+    active_source_ids: ['ct1'],
+    available_actions: [],
+    read_only_views: {
+      property_access: true,
+      lock_codes: true,
+      cleaner_photos: true,
+      inspection_photos: false,
+      guest_key_photo: true,
+      media_scope: 'cleaner',
+    },
+    property: {
+      ...previousTask.property,
+      access_guide_link: 'https://example.com/guide',
+      wifi_ssid: 'Guest WiFi',
+      wifi_password: 'secret',
+    },
+  }
+  api.getWorkTaskFormPhotos.mockResolvedValueOnce({
+    items: [
+      { id: 'completion-1', task_id: 'ct1', source: 'completion', area: 'bedroom', url: 'mzapp/completion-1.jpg' },
+      { id: 'inspection-1', task_id: 'ct1', source: 'inspection', area: 'living', url: 'mzapp/inspection-1.jpg' },
+    ],
+  })
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'completed-cleaner', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(api.getWorkTaskFormPhotos).toHaveBeenCalledWith('t1', 'w1', ['ct1'], 'cleaner')
+      expect(ui.getByTestId('task-detail-read-only-photos')).toBeTruthy()
+      expect(ui.getByTestId('task-detail-read-only-photo-0')).toBeTruthy()
+      expect(ui.queryByTestId('task-detail-read-only-photo-1')).toBeNull()
+      expect(ui.getByText(/Guest WiFi/)).toBeTruthy()
+      expect(ui.getByText('查看入住指南')).toBeTruthy()
+      expect(ui.getByText('旧密码：1357  新密码：2468')).toBeTruthy()
+      expect(ui.getByText('只读查看，不提供删除、重拍或补传操作。')).toBeTruthy()
+      expect(ui.queryByText(/上传钥匙/i)).toBeNull()
+    })
+  } finally {
+    snapshot.items[0] = previousTask
+    mockAuthState.user = previousUser
+  }
+})
+
+test('inspector completed record can view inspection photos and the exact-task guest key photo without edit controls', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = { ...mockAuthState.user }
+  const api = require('../../lib/api')
+  mockAuthState.user = { id: 'u1', username: 'tester', role: 'cleaning_inspector' }
+  snapshot.items[0] = {
+    ...previousTask,
+    work_record_read_only: true,
+    work_record_visible: true,
+    work_record_state: 'completed',
+    completed_by_user_id: 'u1',
+    execution_role: 'inspection',
+    source_ids: ['ct1'],
+    active_source_ids: ['ct1'],
+    key_photo_url: 'mzapp/key-photo.jpg',
+    available_actions: [],
+    read_only_views: {
+      property_access: true,
+      lock_codes: true,
+      cleaner_photos: false,
+      inspection_photos: true,
+      guest_key_photo: true,
+      media_scope: 'inspector',
+      media_source_ids: ['checkout-ct', 'ct1'],
+    },
+  }
+  api.getWorkTaskFormPhotos.mockResolvedValueOnce({
+    items: [{ id: 'inspection-1', task_id: 'ct1', source: 'inspection', area: 'living', url: 'mzapp/inspection-1.jpg' }],
+  })
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'completed-inspector', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+    await waitFor(() => {
+      expect(api.getWorkTaskFormPhotos).toHaveBeenCalledWith('t1', 'w1', ['checkout-ct', 'ct1'], 'inspector')
+      expect(ui.getByTestId('task-detail-key-photo')).toBeTruthy()
+      expect(ui.getByTestId('task-detail-read-only-photo-0')).toBeTruthy()
+      expect(ui.queryByTestId('task-detail-delete-key-photo')).toBeNull()
+    })
+  } finally {
+    snapshot.items[0] = previousTask
+    mockAuthState.user = previousUser
+  }
 })
 
 test('cleaning task with empty server actions does not fall back to generic mark flow', async () => {

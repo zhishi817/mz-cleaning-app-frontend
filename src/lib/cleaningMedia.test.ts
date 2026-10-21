@@ -43,6 +43,16 @@ test('binds feedback-media reads to the current task source', () => {
   })
 })
 
+test('binds a read-only key photo to exact source ids and viewer scope', () => {
+  expect(buildCleaningMediaImageSource('token-1', 'cleaning/key.jpg', 'thumbnail', {
+    accessSourceIds: ['checkout-task', 'checkin-task', 'ignored-third-task'],
+    mediaScope: 'inspector',
+  })).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fkey.jpg&variant=thumbnail&source_ids=checkout-task%2Ccheckin-task&media_scope=inspector',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+})
+
 test('binds maintenance feedback-media reads to the current work task', () => {
   expect(buildCleaningMediaImageSource('token-1', 'mzapp/photo-1.jpg', 'thumbnail', { accessWorkTaskId: 'property_maintenance:record-1' })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?key=mzapp%2Fphoto-1.jpg&variant=thumbnail&work_task_id=property_maintenance%3Arecord-1',

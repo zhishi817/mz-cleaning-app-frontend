@@ -176,6 +176,39 @@ test('manager status obeys authoritative key-handover completion and explicit ab
   }
 })
 
+test('manager check-in card keeps its work status after the guest later checks out', () => {
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const before = {
+    task_kind: mockTask.task_kind,
+    task_type: mockTask.task_type,
+    status: mockTask.status,
+    checked_out_at: mockTask.checked_out_at,
+    assignee_id: mockTask.assignee_id,
+    assignee_name: mockTask.assignee_name,
+  }
+  try {
+    mockTask.task_kind = 'cleaning'
+    mockTask.task_type = 'checkin_clean'
+    mockTask.status = 'assigned'
+    mockTask.checked_out_at = '2026-10-15T00:00:00.000Z'
+    mockTask.assignee_id = 'inspector-1'
+    mockTask.assignee_name = 'Angela'
+    const ui = render(
+      <I18nProvider>
+        <ManagerDailyTaskScreen
+          navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+          route={{ key: 'manager-checkin-later-checkout', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+        />
+      </I18nProvider>,
+    )
+    expect(ui.getByText('已分配')).toBeTruthy()
+    expect(ui.queryByText('已退房')).toBeNull()
+    ui.unmount()
+  } finally {
+    Object.assign(mockTask, before)
+  }
+})
+
 test('customer-service guest-ready actions coexist with the original editor and media order', async () => {
   const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
   const ui = render(

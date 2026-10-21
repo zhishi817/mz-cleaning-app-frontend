@@ -23,6 +23,7 @@ import {
   selectKeyPhotoEffectiveState,
   subscribeKeyUploadQueue,
 } from '../../lib/keyUploadQueue'
+import { checkinTimeNoteLabel } from '../../lib/cleaningCheckinDisplay'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import { getNoticesSnapshot, initNoticesStore, prependNotice, subscribeNotices } from '../../lib/noticesStore'
 import { getProfile, PROFILE_DOCUMENT_PRESENT, profileDocumentPresence, setProfile, type Profile } from '../../lib/profileStore'
@@ -64,6 +65,7 @@ import { millisecondsUntilNextTaskBusinessDate, shouldFollowTaskBusinessDate, ta
 import { formatTaskLoadDiagnosticsText } from '../../lib/taskLoadDiagnostics'
 import {
   activateWorkTasksRealtime,
+  canViewReadOnlyWorkRecordLockCodes,
   deactivateWorkTasksRealtime,
   getWorkTasksSnapshot,
   initWorkTasksStore,
@@ -676,6 +678,7 @@ export default function TasksScreen(props: Props) {
   const [quickCreateNewCode, setQuickCreateNewCode] = useState('')
   const [quickCreateNights, setQuickCreateNights] = useState('')
   const [quickCreateGuestNote, setQuickCreateGuestNote] = useState('')
+  const [quickCreateLinkedCheckoutTaskId, setQuickCreateLinkedCheckoutTaskId] = useState<string | null>(null)
   const [quickCreateOfflineTitle, setQuickCreateOfflineTitle] = useState('')
   const [quickCreateOfflineContent, setQuickCreateOfflineContent] = useState('')
   const [quickCreateOfflineTaskType, setQuickCreateOfflineTaskType] = useState<QuickCreateOfflineTaskType>('other')
@@ -1281,6 +1284,33 @@ export default function TasksScreen(props: Props) {
   // immutable completion record belongs to the actual work-record date, so a
   // per-day reconciliation cannot see both sides of a cross-day completion.
   const reconciledItems = useMemo(() => reconcileDailyTaskDisplay(items), [items])
+  const quickCreateCheckoutCandidates = useMemo(() => {
+    const propertyKey = String(quickCreateProperty || '').trim().toUpperCase()
+    const bySourceId = new Map<string, { id: string; label: string }>()
+    if (!propertyKey || quickCreateMode !== 'checkin') return []
+    for (const task of reconciledItems) {
+      if (task.source_type !== 'cleaning_tasks' || task.work_record_read_only === true) continue
+      if (String(task.task_type || '').trim().toLowerCase() !== 'checkout_clean') continue
+      if (task.has_checkin_task === true) continue
+      if (String(task.scheduled_date || task.date || '').slice(0, 10) !== quickCreateDate) continue
+      const taskPropertyId = String(task.property_id || task.property?.id || '').trim()
+      const taskPropertyCode = String(task.property?.code || '').trim()
+      if (![taskPropertyId, taskPropertyCode].some((value) => value.toUpperCase() === propertyKey)) continue
+      const sourceIds = Array.from(new Set((task.source_ids?.length ? task.source_ids : [task.source_id]).map((value) => String(value || '').trim()).filter(Boolean)))
+      if (sourceIds.length !== 1) continue
+      const sourceId = sourceIds[0]
+      bySourceId.set(sourceId, {
+        id: sourceId,
+        label: `${taskPropertyCode || taskPropertyId} · ${String(task.start_time || '10am')}退房`,
+      })
+    }
+    return Array.from(bySourceId.values())
+  }, [quickCreateDate, quickCreateMode, quickCreateProperty, reconciledItems])
+  useEffect(() => {
+    if (!quickCreateLinkedCheckoutTaskId) return
+    if (quickCreateCheckoutCandidates.some((candidate) => candidate.id === quickCreateLinkedCheckoutTaskId)) return
+    setQuickCreateLinkedCheckoutTaskId(null)
+  }, [quickCreateCheckoutCandidates, quickCreateLinkedCheckoutTaskId])
   const tasksByDate = useMemo(() => {
     const map = new Map<string, WorkTaskItem[]>()
     for (const task of reconciledItems) {
@@ -2109,6 +2139,7 @@ function showBanner(title: string, message: string) {
     setQuickCreateNewCode('')
     setQuickCreateNights('')
     setQuickCreateGuestNote('')
+    setQuickCreateLinkedCheckoutTaskId(null)
     setQuickCreateOfflineTitle('')
     setQuickCreateOfflineContent('')
     setQuickCreateOfflineTaskType('other')
@@ -2184,6 +2215,7 @@ function showBanner(title: string, message: string) {
           checkin_time: quickCreateMode === 'checkin' ? time : null,
           nights_override: quickCreateMode === 'checkin' ? nights : null,
           guest_special_request: String(quickCreateGuestNote || '').trim() || null,
+          linked_checkout_task_id: quickCreateMode === 'checkin' ? quickCreateLinkedCheckoutTaskId : null,
         })
       }
       setQuickCreateOpen(false)
@@ -2962,6 +2994,7 @@ function showBanner(title: string, message: string) {
                       const mode0 = item.key as QuickCreateMode
                       setQuickCreateMode(mode0)
                       setQuickCreateTime(mode0 === 'checkout' ? '10am' : '3pm')
+                      setQuickCreateLinkedCheckoutTaskId(null)
                     }}
                     style={({ pressed }) => [styles.createModeBtn, quickCreateMode === item.key ? styles.createModeBtnOn : null, pressed ? styles.segmentPressed : null]}
                   >
@@ -3096,10 +3129,37 @@ function showBanner(title: string, message: string) {
                       <TextInput value={quickCreateMode === 'checkout' ? quickCreateOldCode : quickCreateNewCode} onChangeText={quickCreateMode === 'checkout' ? setQuickCreateOldCode : setQuickCreateNewCode} editable={!quickCreateBusy} style={styles.createInput} placeholder={quickCreateMode === 'checkout' ? '旧密码' : '新密码'} placeholderTextColor="#9CA3AF" />
                     </View>
                     {quickCreateMode === 'checkin' ? (
-                      <View style={styles.createField}>
-                        <Text style={styles.createLabel}>入住天数（可选）</Text>
-                        <TextInput value={quickCreateNights} onChangeText={setQuickCreateNights} editable={!quickCreateBusy} style={styles.createInput} keyboardType="number-pad" placeholder="例如 3" placeholderTextColor="#9CA3AF" />
-                      </View>
+                      <>
+                        <View style={styles.createField}>
+                          <Text style={styles.createLabel}>关联退房任务（可选）</Text>
+                          <View style={styles.createAssigneeList}>
+                            <Pressable
+                              disabled={quickCreateBusy}
+                              onPress={() => setQuickCreateLinkedCheckoutTaskId(null)}
+                              style={({ pressed }) => [styles.createAssigneeItem, !quickCreateLinkedCheckoutTaskId ? styles.createAssigneeItemOn : null, pressed ? styles.segmentPressed : null]}
+                            >
+                              <Text style={styles.createAssigneeName}>独立入住任务</Text>
+                              {!quickCreateLinkedCheckoutTaskId ? <Ionicons name="checkmark" size={moderateScale(16)} color="#2563EB" /> : null}
+                            </Pressable>
+                            {quickCreateCheckoutCandidates.map((candidate) => (
+                              <Pressable
+                                key={candidate.id}
+                                disabled={quickCreateBusy}
+                                onPress={() => setQuickCreateLinkedCheckoutTaskId(candidate.id)}
+                                style={({ pressed }) => [styles.createAssigneeItem, quickCreateLinkedCheckoutTaskId === candidate.id ? styles.createAssigneeItemOn : null, pressed ? styles.segmentPressed : null]}
+                              >
+                                <Text style={styles.createAssigneeName}>{candidate.label}</Text>
+                                {quickCreateLinkedCheckoutTaskId === candidate.id ? <Ionicons name="checkmark" size={moderateScale(16)} color="#2563EB" /> : null}
+                              </Pressable>
+                            ))}
+                          </View>
+                          <Text style={styles.createHint}>只有明确选择的退房任务才会合并显示；不会按房号和日期自动关联。</Text>
+                        </View>
+                        <View style={styles.createField}>
+                          <Text style={styles.createLabel}>入住天数（可选）</Text>
+                          <TextInput value={quickCreateNights} onChangeText={setQuickCreateNights} editable={!quickCreateBusy} style={styles.createInput} keyboardType="number-pad" placeholder="例如 3" placeholderTextColor="#9CA3AF" />
+                        </View>
+                      </>
                     ) : null}
                     <View style={styles.createField}>
                       <Text style={styles.createLabel}>客人需求</Text>
@@ -3210,8 +3270,9 @@ function showBanner(title: string, message: string) {
               const wifiPassword = String(task.property?.wifi_password || '').trim()
               const hasWifiInfo = !!(wifiSsid || wifiPassword)
               const turnoverDisplay = turnoverDisplayOf(task)
-              const oldCode = String(turnoverDisplay?.old_code || (task as any).old_code || '').trim()
-              const newCode = String(turnoverDisplay?.new_code || (task as any).new_code || '').trim()
+              const canViewLockCodes = canViewReadOnlyWorkRecordLockCodes(task)
+              const oldCode = canViewLockCodes ? String(turnoverDisplay?.old_code || (task as any).old_code || '').trim() : ''
+              const newCode = canViewLockCodes ? String(turnoverDisplay?.new_code || (task as any).new_code || '').trim() : ''
               const guestSpecialRequest = guestRequestForDisplay(task)
               const guestLuggage = (task as any).guest_luggage || null
               const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
@@ -3351,6 +3412,7 @@ function showBanner(title: string, message: string) {
                 if (parts.length <= 3) return head
                 return `${head} 等${parts.length}项`
               })()
+              const checkinTimeNote = checkinTimeNoteLabel(task as any)
               const hasCheckout = !!checkoutTime
               const hasCheckin = !!checkinTime
               const isLateCheckout = hasCheckout && isLateCheckoutDisplay(task, checkoutTime)
@@ -3374,7 +3436,10 @@ function showBanner(title: string, message: string) {
                     originalScheduledDate ? `原计划 ${originalScheduledDate}` : null,
                   ].filter(Boolean).join(' · ')
                 : ''
-              const keyHandoverPendingNotice = getKeyHandoverPendingNotice(task)
+              const keyHandoverPendingNotice = getKeyHandoverPendingNotice(task, {
+                activeRole,
+                managerView: canManagerMode && mode === 'manager',
+              })
               const phaseHistoryLines = dailyTaskPhaseHistoryLines(task)
               const title2 = isOfflineTask
                 ? [code || '', offlineTitleSuffix].filter(Boolean).join(' ').trim() || offlineTitleRaw || '-'
@@ -4060,6 +4125,13 @@ function showBanner(title: string, message: string) {
                       ) : null}
                     </>
                   )}
+
+                  {checkinTimeNote ? (
+                    <View style={styles.row}>
+                      <Ionicons name="time-outline" size={moderateScale(14)} color="#9CA3AF" />
+                      <Text style={styles.addr} numberOfLines={2}>{checkinTimeNote}</Text>
+                    </View>
+                  ) : null}
 
                   {!taskCollapsed && restockSummary ? (
                     <View style={styles.row}>

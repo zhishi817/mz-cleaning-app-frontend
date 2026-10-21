@@ -56,6 +56,14 @@ export function isTaskWorkflowProgressStatus(status0: string) {
   return s === 'in_progress' || s === 'to_inspect' || s === 'to_hang_keys' || s === 'to_complete'
 }
 
+/** `checked_out_at` on an incoming-only task describes that booking's later
+ * departure. It is useful order context, but it must not replace the current
+ * check-in work status. Checkout/turnover cards may still use it as their
+ * primary departure signal. */
+export function guestCheckoutCanDriveTaskStatus(task: Partial<WorkTaskItem> | null | undefined) {
+  return String((task as any)?.task_type || '').trim().toLowerCase() !== 'checkin_clean'
+}
+
 export function getEffectiveTaskStatus(task: Partial<WorkTaskItem> | null | undefined, status0?: string) {
   const status = String(status0 ?? task?.status ?? '').trim().toLowerCase()
   const source = String(task?.source_type || '').trim().toLowerCase()
@@ -139,16 +147,32 @@ const KEY_HANDOVER_REQUIREMENT_LABELS: Record<string, string> = {
   inspection_photos: '检查照片',
 }
 
-export function getKeyHandoverPendingNotice(task: Partial<WorkTaskItem> | null | undefined) {
+export function getKeyHandoverPendingNotice(
+  task: Partial<WorkTaskItem> | null | undefined,
+  context: { activeRole?: string | null; managerView?: boolean } = {},
+) {
   if (!hasCompletedKeyHandover(task)) return null
   const keyHandover = (task as any)?.key_handover
   if (keyHandover?.workflow_finalization_pending !== true) return null
+  const activeRole = String(context.activeRole || '').trim().toLowerCase()
+  const allowedRequirements = context.managerView === true || ['admin', 'offline_manager', 'customer_service'].includes(activeRole)
+    ? null
+    : activeRole === 'cleaner'
+      ? new Set(['cleaning_consumables', 'cleaning_property_photo'])
+      : ['cleaning_inspector', 'inspector'].includes(activeRole)
+        ? new Set(['inspection_photos'])
+        : activeRole === 'cleaner_inspector'
+          ? new Set(Object.keys(KEY_HANDOVER_REQUIREMENT_LABELS))
+          : null
   const labels = Array.from(new Set(
     (Array.isArray(keyHandover?.missing_requirements) ? keyHandover.missing_requirements : [])
-      .map((requirement: unknown) => KEY_HANDOVER_REQUIREMENT_LABELS[String(requirement || '').trim().toLowerCase()] || '')
+      .map((requirement: unknown) => String(requirement || '').trim().toLowerCase())
+      .filter((requirement: string) => allowedRequirements == null || allowedRequirements.has(requirement))
+      .map((requirement: string) => KEY_HANDOVER_REQUIREMENT_LABELS[requirement] || '')
       .filter(Boolean),
   ))
-  return labels.length ? `资料待补：${labels.join('、')}` : '资料待补'
+  if (!labels.length) return allowedRequirements == null ? '资料待补' : null
+  return `资料待补：${labels.join('、')}`
 }
 
 export function getTaskStatusMeta(
@@ -216,7 +240,7 @@ export function getTaskStatusMeta(
     )
     if (s === 'keys_hung' || inspectionStatus === 'keys_hung') return { text: '已挂钥匙', tone: 'success' as const }
     if (s === 'cleaned' || s === 'restock_pending' || s === 'restocked') return { text: '待检查', tone: 'pending' as const }
-    if (checkedOutAt && !isTaskWorkflowProgressStatus(s) && !isDoneLikeStatus(s) && s !== 'cancelled' && s !== 'canceled') return { text: '已退房', tone: 'special' as const }
+    if (guestCheckoutCanDriveTaskStatus(task) && checkedOutAt && !isTaskWorkflowProgressStatus(s) && !isDoneLikeStatus(s) && s !== 'cancelled' && s !== 'canceled') return { text: '已退房', tone: 'special' as const }
     if ((s === 'todo' || s === 'pending' || s === 'unassigned') && hasInspector) return { text: '已分配', tone: 'normal' as const }
     return meta
   }
@@ -247,9 +271,9 @@ export function getTaskStatusMeta(
 
     const checkedOutAt = String((task as any).checked_out_at || '').trim()
     if (s === 'in_progress' || s === 'cleaning') return { text: '进行中', tone: 'normal' as const }
-    if (!hasExecutor && !checkedOutAt) return { text: '未分配', tone: 'pending' as const }
+    if (!hasExecutor && (!checkedOutAt || !guestCheckoutCanDriveTaskStatus(task))) return { text: '未分配', tone: 'pending' as const }
     if (s !== 'cancelled' && s !== 'canceled') {
-      if (checkedOutAt) return { text: '已退房', tone: 'special' as const }
+      if (guestCheckoutCanDriveTaskStatus(task) && checkedOutAt) return { text: '已退房', tone: 'special' as const }
       return { text: '已分配', tone: 'normal' as const }
     }
   }

@@ -327,7 +327,7 @@ describe('dailyTaskPresentation', () => {
     })
   })
 
-  it('reconciles a cross-day current projection with the exact later completion record', () => {
+  it('keeps an original-day task when a genuinely later work record has a different display date', () => {
     const current = {
       ...base,
       id: 'turnover-cross-day',
@@ -347,7 +347,15 @@ describe('dailyTaskPresentation', () => {
       original_scheduled_date: '2026-10-19',
     }
 
-    expect(reconcileDailyTaskDisplay([current, record])).toEqual([record])
+    const reconciled = reconcileDailyTaskDisplay([current, record])
+    expect(reconciled).toEqual([current, record])
+    expect(dailyTaskStatusCounts(reconciled, '2026-10-20')).toEqual({
+      active: 0,
+      overdue: 1,
+      completed: 1,
+      cancelled: 0,
+      changed: 0,
+    })
   })
 
   it('keeps changed and completed records while hiding tombstones and cancellations', () => {
@@ -480,6 +488,7 @@ describe('dailyTaskPresentation', () => {
       task_kind: 'cleaning',
       execution_role: 'cleaning',
       business_identity: 'turnover:checkout-order:checkin-order',
+      scheduled_date: '2026-10-19',
       status: 'assigned',
     }
     const record = {
@@ -489,11 +498,12 @@ describe('dailyTaskPresentation', () => {
       task_kind: 'inspection',
       execution_role: 'inspection',
       business_identity: 'turnover:checkout-order:checkin-order',
+      scheduled_date: '2026-10-19',
       status: 'completed',
       work_record_visible: true,
       work_record_read_only: true,
       work_record_state: 'completed',
-      work_record_date: '2026-10-20',
+      work_record_date: '2026-10-19',
     }
 
     expect(reconcileDailyTaskDisplay([current, record])).toEqual([record])

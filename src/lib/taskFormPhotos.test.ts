@@ -1,5 +1,6 @@
 import {
   dedupeTaskFormPhotos,
+  taskFormPhotoReadOnlyRelationIds,
   taskFormPhotoRelationIds,
   taskFormPhotoRemoteIdentity,
   type TaskFormPhoto,
@@ -26,6 +27,18 @@ test('uses uploaded key or canonical remote URL as the remote identity', () => {
   expect(taskFormPhotoRemoteIdentity(photo({ uploaded_key: 'cleaning/a/b.jpg' }))).toBe('key:cleaning/a/b.jpg')
   expect(taskFormPhotoRemoteIdentity(photo({ uploaded_url: 'https://cdn.example.com/cleaning/a/b.jpg?signature=one' }))).toBe('key:cleaning/a/b.jpg')
   expect(taskFormPhotoRemoteIdentity(photo({ uploaded_url: 'https://cdn.example.com/a/b.jpg?signature=one' }))).toBe('url:https://cdn.example.com/a/b.jpg')
+})
+
+test('read-only media relation excludes display ids and superseded same-property candidates', () => {
+  expect(taskFormPhotoReadOnlyRelationIds({
+    id: 'cleaning_tasks_merged:2026-07-24:RM-1001',
+    source_id: 'checkin-1',
+    source_ids: ['checkin-1'],
+    active_source_ids: ['checkin-1'],
+    read_only_views: { media_source_ids: ['cleaning-1', 'checkin-1'] },
+    all_related_source_ids: ['cleaning-1', 'checkin-1', 'cancelled-old-task'],
+    superseded_source_ids: ['cancelled-old-task'],
+  })).toEqual(['cleaning-1', 'checkin-1'])
 })
 
 test('server photo wins when the same photo exists in local draft and remote records', () => {

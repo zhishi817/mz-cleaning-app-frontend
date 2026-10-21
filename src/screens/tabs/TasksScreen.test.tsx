@@ -151,6 +151,13 @@ jest.mock('../../lib/workTasksStore', () => {
   }
   return {
     activateWorkTasksRealtime: jest.fn(async () => true),
+    canViewReadOnlyWorkRecordLockCodes: (task: any) => task?.work_record_read_only !== true || (
+      task?.source_type === 'cleaning_tasks'
+      && task?.read_only_views?.lock_codes === true
+      && ['completed', 'reassigned'].includes(String(task?.work_record_state || '').toLowerCase())
+      && !['cancelled', 'canceled'].includes(String(task?.status || '').toLowerCase())
+      && !['cancelled', 'canceled', 'deleted', 'removed', 'superseded', 'tombstone'].includes(String(task?.execution_state || '').toLowerCase())
+    ),
     deactivateWorkTasksRealtime: jest.fn(),
     getWorkTasksSnapshot: () => snapshot,
     initWorkTasksStore: jest.fn(async () => true),
@@ -1098,6 +1105,17 @@ test('a day containing only read-only work records does not offer task reorderin
     work_record_state: 'completed',
     work_record_date: mockTodayKey,
     work_record_read_only: true,
+    source_type: 'cleaning_tasks',
+    old_code: '1357',
+    new_code: '2468',
+    read_only_views: {
+      property_access: true,
+      lock_codes: true,
+      cleaner_photos: true,
+      inspection_photos: false,
+      guest_key_photo: true,
+      media_scope: 'cleaner',
+    },
     counts_as_active_task: false,
     date: mockTodayKey,
   }]
@@ -1112,10 +1130,16 @@ test('a day containing only read-only work records does not offer task reorderin
     </I18nProvider>,
   )
 
-  await waitFor(() => expect(ui.getByLabelText('task-card-completed-record')).toBeTruthy())
-  expect(ui.queryByText('排序')).toBeNull()
-  snapshot.items = previousItems
-  ui.unmount()
+  try {
+    await waitFor(() => expect(ui.getByLabelText('task-card-completed-record')).toBeTruthy())
+    expandTask(ui, 'completed-record')
+    expect(ui.getByText('1357')).toBeTruthy()
+    expect(ui.getByText('2468')).toBeTruthy()
+    expect(ui.queryByText('排序')).toBeNull()
+  } finally {
+    snapshot.items = previousItems
+    ui.unmount()
+  }
 })
 
 test('day-end handover stays after ordered offline tasks', async () => {
@@ -1948,7 +1972,7 @@ test('task list keeps the immutable completion record instead of a duplicate liv
   }
 })
 
-test('task list reconciles a prior-day current projection before record-day bucketing', async () => {
+test('task list preserves a prior-day current projection while bucketing a genuine later record separately', async () => {
   const store = jest.requireMock('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
   const previousItems = snapshot.items.slice()
@@ -2010,9 +2034,9 @@ test('task list reconciles a prior-day current projection before record-day buck
 
   try {
     await waitFor(() => {
-      expect(ui.queryByLabelText(`task-card-${currentId}`)).toBeNull()
+      expect(ui.getByLabelText(`task-card-${currentId}`)).toBeTruthy()
       expect(ui.queryByLabelText(`task-card-${currentId}::record:completed:${completionDate}`)).toBeNull()
-      expect(ui.getByText('在办 0 · 完成 0')).toBeTruthy()
+      expect(ui.getByText('在办 1 · 完成 0')).toBeTruthy()
     })
 
     fireEvent.press(ui.getByText('13'))
