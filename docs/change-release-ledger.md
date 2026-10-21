@@ -156,19 +156,19 @@
 - Repository: `mobile`
 - Selected CRLs: `CRL-20261021-004`, `CRL-20261021-005`, `CRL-20261021-006`, `CRL-20261021-007`, `CRL-20261021-008`, `CRL-20261021-009`, `CRL-20261021-011`
 - Selected CRL identities: `mobile/CRL-20261021-004`, `mobile/CRL-20261021-005`, `mobile/CRL-20261021-006`, `mobile/CRL-20261021-007`, `mobile/CRL-20261021-008`, `mobile/CRL-20261021-009`, `mobile/CRL-20261021-011`
-- Intended action: `commit`
+- Intended action: `push`
 - Branch: `codex/mz063-work-record-access`
 - Base: `origin/Dev@d9412d19cc8440d4390845eaf1ed5a5e38cb5703`; fetched at `2026-10-21T11:44:49Z`
 - Candidate patch SHA-256: `90d94ddbc6e2f81ca2aa8cd4bbbbbeaf31a5831cf6556fa090fe5a2c0a7c3e41`
-- Commit SHA: `not committed`
-- Dependencies: paired Root selected CRLs on branch `codex/mz063-work-record-access`; migration → Root → Mobile deployment order, but deployment, migration execution and OTA are excluded
+- Commit SHA: `961c162c054cafe5f322e7e3a5d3671125f77792`
+- Dependencies: paired Root candidate `11d81443f1c2b9a8daca62afb0255b86fbefff42` covering root MZ-063～070 selected CRLs; migration → Root → Mobile deployment order, but deployment, migration execution and OTA are excluded
 - Required validation: `PASS`; evidence: Mobile `check:ci` PASS with 77 suites / 610 tests, typecheck and lint 0 errors; ledger 22/22 and diff checks PASS
 - Shared-hunk review: `PASS`; evidence: complete Mobile candidate independently reviewed as one MZ-063～070 scope, with MZ-062 excluded
 - Generated-file review: `PASS`; evidence: no native build, dependency cache, environment file or generated artifact is included
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `approved-for-push`; evidence: user explicitly requested committing, pushing and creating PRs for MZ-063～070 together
 - Independent review: `GO`; evidence: final exact-scope read-only review found P0=0, P1=0, P2=0 after immediate cached lock-code revocation and final display repairs
-- Action conclusion: `GO`; blockers: none for the local content commit; push remains conditional on exact committed-range audit
+- Action conclusion: `GO`; blockers: none after the content commit preserved the reviewed candidate fingerprint; exact committed-range audit is the immediate push gate
 
 ### Risks / Release Notes
 
