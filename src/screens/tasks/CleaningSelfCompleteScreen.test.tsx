@@ -130,6 +130,7 @@ const mockSuppliesCatalogState = {
 beforeEach(() => {
   mockSnapshot.items[0].task_type = 'stayover_clean'
   delete (mockSnapshot.items[0] as any).status
+  delete (mockSnapshot.items[0] as any).key_handover
   const imagePicker = require('expo-image-picker')
   imagePicker.requestCameraPermissionsAsync.mockResolvedValue({ granted: true })
   imagePicker.launchCameraAsync.mockResolvedValue({ canceled: true, assets: [] })
@@ -199,6 +200,36 @@ test('自完成未结束任务先确认房号，已结束任务直接查看', as
     </I18nProvider>,
   )
   await waitFor(() => expect(completed.queryByTestId('self-complete-room-confirmation')).toBeNull())
+})
+
+test('Root 结构化已挂钥匙跳过房号确认，明确无事实时不信任 raw keys_hung', async () => {
+  const task = mockSnapshot.items[0] as any
+  task.task_type = 'turnover_clean'
+  task.status = 'keys_hung'
+  task.key_handover = {
+    state: 'completed',
+    source_task_id: 'cleaning-1',
+    completed_at: '2026-10-21T01:02:03.000Z',
+  }
+  const CleaningSelfCompleteScreen = require('./CleaningSelfCompleteScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }
+
+  const completed = render(
+    <I18nProvider>
+      <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'self-complete-structured-key-handover', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning' } }} />
+    </I18nProvider>,
+  )
+  await waitFor(() => expect(completed.queryByTestId('self-complete-room-confirmation')).toBeNull())
+  completed.unmount()
+
+  task.key_handover = null
+  const noFact = render(
+    <I18nProvider>
+      <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'self-complete-explicit-no-key-handover', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning' } }} />
+    </I18nProvider>,
+  )
+  await waitFor(() => expect(noFact.getByTestId('self-complete-room-confirmation')).toBeTruthy())
+  noFact.unmount()
 })
 
 test('完成照片读取失败时保留已经显示的照片', async () => {

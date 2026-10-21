@@ -36,6 +36,7 @@ import {
   type InspectionPanelSubmitQueueItem,
 } from '../../lib/inspectionPanelSubmitQueue'
 import { inspectionScopeLabel, isPasswordOnlyInspectionTask } from '../../lib/cleaningInspection'
+import { isDailyTaskKeyHandoverStage } from '../../lib/dailyTaskPresentation'
 import { compressImageForUpload } from '../../lib/imageCompression'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
@@ -425,7 +426,8 @@ export default function InspectionPanelScreen(props: Props) {
   const task = getWorkTasksSnapshot().items.find((x) => x.id === props.route.params.taskId) || null
   const cleaningTaskId = cleanText(props.route.params.sourceId) || cleanText(task?.source_id)
   const readOnly = props.route.params.readOnly === true
-  const completedInspectionView = ['done', 'completed', 'ready', 'keys_hung'].includes(cleanText(task?.status).toLowerCase())
+  const completedInspectionView = ['done', 'completed', 'ready'].includes(cleanText(task?.status).toLowerCase())
+    || (!!task && isDailyTaskKeyHandoverStage(task))
   const skipRoomConfirmation = readOnly || completedInspectionView
   useEffect(() => {
     setRoomConfirmed(skipRoomConfirmation)

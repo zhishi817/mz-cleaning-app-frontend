@@ -27,7 +27,7 @@ import { canLoadLiveSourceMediaForDailyTask } from '../../lib/dailyTaskExecution
 import { prependNotice } from '../../lib/noticesStore'
 import { hasAnyRole, roleNamesOf } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
-import { getEffectiveTaskStatus, isTaskWorkflowProgressStatus } from '../../lib/taskVisualTheme'
+import { getEffectiveTaskStatus, hasAuthoritativeKeyHandoverProjection, hasCompletedKeyHandover, isTaskWorkflowProgressStatus } from '../../lib/taskVisualTheme'
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, patchWorkTaskItems, requestWorkTasksRefresh, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
 import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyOperationId, isGuestReadyNotificationAction, mergeGuestReadyNotificationActions } from '../../lib/workTaskActions'
 import { ALL_KITCHEN_SCENE_PHOTOS } from '../../lib/cleaningScenePhotoTemplate'
@@ -142,7 +142,10 @@ function isDoneLikeStatusZh(status0: string) {
 }
 
 function statusLabelZh(status: string, task?: WorkTaskItem | null) {
-  const s = getEffectiveTaskStatus(task, status)
+  if (hasCompletedKeyHandover(task)) return '已挂钥匙'
+  const authoritativeHandoverWasInvalidated = hasAuthoritativeKeyHandoverProjection(task) && !hasCompletedKeyHandover(task)
+  const effectiveStatus = getEffectiveTaskStatus(task, status)
+  const s = authoritativeHandoverWasInvalidated && effectiveStatus === 'keys_hung' ? 'assigned' : effectiveStatus
   const source = String(task?.source_type || '').trim().toLowerCase()
   const kind = String(task?.task_kind || '').trim().toLowerCase()
   if (source === 'cleaning_tasks' && kind === 'inspection') {
@@ -153,7 +156,8 @@ function statusLabelZh(status: string, task?: WorkTaskItem | null) {
   if (source === 'cleaning_tasks' && kind === 'cleaning') {
     const taskType = String((task as any)?.task_type || '').trim().toLowerCase()
     const isStayoverTask = isStayoverTaskType(taskType)
-    const inspectionStatus = String((task as any)?.inspection_status || '').trim().toLowerCase()
+    const inspectionStatus0 = String((task as any)?.inspection_status || '').trim().toLowerCase()
+    const inspectionStatus = authoritativeHandoverWasInvalidated && inspectionStatus0 === 'keys_hung' ? '' : inspectionStatus0
     const hasInspection = Array.isArray((task as any)?.inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
     const inspectionMode = effectiveInspectionMode(task as any)
     if (isDoneLikeStatusZh(s)) {
@@ -162,7 +166,7 @@ function statusLabelZh(status: string, task?: WorkTaskItem | null) {
         if (inspectionStatus === 'keys_hung' || inspectionStatus === 'done' || inspectionStatus === 'completed') return '已挂钥匙'
         return '待检查'
       }
-      return '已挂钥匙'
+      return authoritativeHandoverWasInvalidated ? '已完成' : '已挂钥匙'
     }
     const checkedOutAt = String((task as any)?.checked_out_at || '').trim()
     if (s === 'in_progress' || s === 'cleaning') return '进行中'

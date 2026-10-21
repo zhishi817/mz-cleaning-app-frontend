@@ -8,7 +8,7 @@ import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { API_BASE_URL } from '../../config/env'
 import { useAuth } from '../../lib/auth'
-import { cleaningTaskTitleSuffix, effectiveInspectionMode, inspectionModeLabel, inspectionScopeLabel, isCheckinSiteExecutionTask, isKeyHandoverExecutionTask, isPasswordOnlyInspectionTask, isSelfCompleteMode, isStayoverTaskType } from '../../lib/cleaningInspection'
+import { cleaningTaskTitleSuffix, effectiveInspectionMode, inspectionModeLabel, inspectionScopeLabel, isCheckinSiteExecutionTask, isKeyHandoverExecutionTask, isPasswordOnlyInspectionTask, isSelfCompleteMode, isStayoverTaskType, taskPersonnelPresentation } from '../../lib/cleaningInspection'
 import { useI18n } from '../../lib/i18n'
 import {
   discardKeyUpload,
@@ -62,6 +62,7 @@ import {
   setPendingWorkTaskCompletionPhotoReferences,
 } from '../../lib/workTaskCompletionPhotoPending'
 import { taskBusinessDateKey } from '../../lib/taskBusinessDate'
+import { dailyTaskPhaseHistoryLines } from '../../lib/dailyTaskPresentation'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
 type OfflineEditUserOption = { id: string; username?: string | null; display_name?: string | null }
@@ -1243,6 +1244,7 @@ export default function TaskDetailScreen(props: Props) {
       ].filter(Boolean).join(' · ')
     : ''
   const keyHandoverPendingNotice = getKeyHandoverPendingNotice(task)
+  const phaseHistoryLines = dailyTaskPhaseHistoryLines(task)
   const metaStyles = statusPillStylePair(meta.tone)
   const kind = taskKindLabel(task.task_kind)
   const region = String(task.property?.region || '').trim()
@@ -1266,6 +1268,7 @@ export default function TaskDetailScreen(props: Props) {
   const isKeyHandoverTask = isKeyHandoverExecutionTask(task as any)
   const isStayoverTask = isCleaningSource && isStayoverTaskType(taskType)
   const isCheckinSiteExecution = isCheckinSiteExecutionTask(task as any)
+  const personnel = taskPersonnelPresentation(task as any)
   const isCleaningOrInspection = isCleaningSource && (String(task.task_kind || '').toLowerCase() === 'cleaning' || String(task.task_kind || '').toLowerCase() === 'inspection' || isKeyHandoverTask || isCheckinSiteExecution)
   const wifiSsid = String((task as any)?.property?.wifi_ssid || '').trim()
   const wifiPassword = String((task as any)?.property?.wifi_password || '').trim()
@@ -1677,10 +1680,19 @@ export default function TaskDetailScreen(props: Props) {
           </View>
         ) : null}
 
-        {isCheckinSiteExecution ? (
+        {phaseHistoryLines.length ? (
+          <View style={styles.detailPanel}>
+            <Text style={styles.sectionTitle}>阶段记录</Text>
+            {phaseHistoryLines.map((line, phaseIndex) => (
+              <Text key={`${task.id}:phase:${phaseIndex}`} style={styles.summary}>{line}</Text>
+            ))}
+          </View>
+        ) : null}
+
+        {personnel.mode === 'execution' ? (
           <View style={styles.row}>
             <Ionicons name="person-outline" size={moderateScale(14)} color="#9CA3AF" />
-            <Text style={styles.rowText}>执行人员：{String((task as any).executor_name || (task as any).assignee_name || (task as any).cleaner_name || (task as any).inspector_name || task.assignee_id || '').trim() || '-'}</Text>
+            <Text style={styles.rowText}>执行人员：{personnel.executorName || '-'}</Text>
           </View>
         ) : isDirectCompleteEligible || isPendingInspectionDecision ? (
           <View style={styles.row}>

@@ -129,7 +129,9 @@ test('explicit current key handover fact outranks unfinished shared workflow sta
     },
   } as any)
 
-  expect(getTaskStatusMeta(task, ['admin'], 'manager-1')).toEqual({ text: '已挂钥匙', tone: 'success' })
+  for (const roles of [['admin'], ['customer_service'], ['offline_manager'], ['cleaner'], ['cleaning_inspector']]) {
+    expect(getTaskStatusMeta(task, roles, 'viewer-1')).toEqual({ text: '已挂钥匙', tone: 'success' })
+  }
   expect(getKeyHandoverPendingNotice(task)).toBe('资料待补：补品记录、房源照片')
 })
 
@@ -148,6 +150,18 @@ test('cancelled or tombstoned tasks cannot be promoted by a retained key handove
   expect(getKeyHandoverPendingNotice(cancelled)).toBeNull()
   expect(getTaskStatusMeta(tombstoned, ['admin'])).toEqual({ text: '进行中', tone: 'normal' })
   expect(getKeyHandoverPendingNotice(tombstoned)).toBeNull()
+})
+
+test('explicit null key handover blocks legacy raw keys_hung from manufacturing a missing Root fact', () => {
+  const task = makeTask({
+    task_kind: 'inspection',
+    status: 'keys_hung',
+    inspection_status: 'keys_hung',
+    inspector_id: 'inspector-1',
+    key_handover: null,
+  } as any)
+
+  expect(getTaskStatusMeta(task, ['admin'])).toEqual({ text: '已分配', tone: 'normal' })
 })
 
 test('unfinished cleaning without progress remains assigned after inspection completion', () => {

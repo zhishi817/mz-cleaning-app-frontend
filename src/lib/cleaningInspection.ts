@@ -147,6 +147,12 @@ export function isCheckinSiteExecutionTask(task: {
   const sourceType = String(task?.source_type || '').trim().toLowerCase()
   const taskType = String(task?.task_type || '').trim().toLowerCase()
   if (sourceType !== 'cleaning_tasks' || taskType !== 'checkin_clean') return false
+  const semantics = normalizeTaskExecutionSemantics(task?.execution_semantics)
+  // Explicit Root semantics outrank legacy `task_kind`. This prevents an
+  // inspect-and-hang/check-password assignee from being presented as a cleaner
+  // merely because an older projection still says `task_kind=cleaning`.
+  if (semantics === 'key_or_password_action' || semantics === 'checkin_inspection' || semantics === 'inspection_execution') return true
+  if (semantics === 'cleaning_execution' || semantics === 'mixed_cleaning_inspection') return false
   // A password-only check-in is a site action performed by the generic
   // assignee, never cleaning work. Older projections may still label it as
   // `task_kind=cleaning`; prefer the business semantics so those records do
@@ -157,6 +163,46 @@ export function isCheckinSiteExecutionTask(task: {
   if (taskKind === 'inspection' || taskKind === 'execution') return true
   const role = taskExecutionRole(task)
   return role === 'inspection' || role === 'execution'
+}
+
+export type TaskPersonnelPresentation = {
+  mode: 'execution' | 'cleaning_inspection'
+  executorName: string
+  cleanerName: string
+  inspectorName: string
+}
+
+/**
+ * Keep personnel labels tied to authoritative roles. `assignee_*` is a generic
+ * executor and may only populate the execution row; it never backfills the
+ * cleaner row. Root's dedicated cleaner/inspector fields remain authoritative.
+ */
+export function taskPersonnelPresentation(task: {
+  execution_role?: any
+  execution_semantics?: any
+  source_type?: any
+  task_kind?: any
+  task_type?: any
+  inspection_scope?: any
+  executor_id?: any
+  executor_name?: any
+  assignee_id?: any
+  assignee_name?: any
+  cleaner_id?: any
+  cleaner_name?: any
+  inspector_id?: any
+  inspector_name?: any
+}): TaskPersonnelPresentation {
+  const executionMode = isKeyHandoverExecutionTask(task) || isCheckinSiteExecutionTask(task)
+  const executorName = executionMode
+    ? String(task?.executor_name || task?.assignee_name || task?.executor_id || task?.assignee_id || '').trim()
+    : ''
+  return {
+    mode: executionMode ? 'execution' : 'cleaning_inspection',
+    executorName,
+    cleanerName: String(task?.cleaner_name || task?.cleaner_id || '').trim(),
+    inspectorName: String(task?.inspector_name || task?.inspector_id || '').trim(),
+  }
 }
 
 export function isPasswordOnlyInspectionTask(task: {

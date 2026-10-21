@@ -1217,6 +1217,85 @@ test('day-end handover stays after ordered offline tasks', async () => {
   snapshot.items = previousItems
 })
 
+test('day-end statistics and insertion distinguish structured handover from explicit no-fact raw keys_hung', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  const base = previousItems[0]
+  snapshot.items = [
+    {
+      ...base,
+      id: 'active-cleaning',
+      source_id: 'active-cleaning-source',
+      title: 'A 未完成清洁',
+      status: 'assigned',
+      cleaner_id: 'u1',
+      sort_index: 1,
+      sort_index_cleaner: 1,
+      property: { ...base.property, id: 'active-property', code: 'ACTIVE1001' },
+    },
+    {
+      ...base,
+      id: 'explicit-no-handover',
+      source_id: 'explicit-no-handover-source',
+      title: 'B 明确无挂钥匙事实',
+      status: 'keys_hung',
+      cleaner_id: 'u1',
+      sort_index: 2,
+      sort_index_cleaner: 2,
+      key_handover: null,
+      property: { ...base.property, id: 'no-fact-property', code: 'NOFACT1002' },
+    },
+    {
+      ...base,
+      id: 'structured-handover',
+      source_id: 'structured-handover-source',
+      title: 'C 结构化已挂钥匙',
+      status: 'in_progress',
+      cleaner_id: 'u1',
+      sort_index: 3,
+      sort_index_cleaner: 3,
+      key_handover: {
+        state: 'completed',
+        source_task_id: 'structured-handover-source',
+        completed_at: '2026-10-21T01:02:03.000Z',
+      },
+      property: { ...base.property, id: 'handover-property', code: 'HANDOVER1003' },
+    },
+  ]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-day-end-structured-key-handover', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => {
+      expect(ui.getByText('在办 3 · 完成 0')).toBeTruthy()
+      expect(ui.getByText('日终交接')).toBeTruthy()
+      expect(ui.getByLabelText('task-card-structured-handover')).toBeTruthy()
+    })
+
+    const rendered = flattenRenderedText(ui.toJSON()).join('\n')
+    const activeIndex = rendered.indexOf('ACTIVE1001')
+    const explicitNoFactIndex = rendered.indexOf('NOFACT1002')
+    const dayEndIndex = rendered.indexOf('日终交接')
+    const structuredIndex = rendered.indexOf('HANDOVER1003')
+    expect(activeIndex).toBeGreaterThanOrEqual(0)
+    expect(explicitNoFactIndex).toBeGreaterThan(activeIndex)
+    expect(dayEndIndex).toBeGreaterThan(explicitNoFactIndex)
+    expect(structuredIndex).toBeGreaterThan(dayEndIndex)
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+  }
+})
+
 test('key handover execution task shows password-only tag and executor role in list', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
@@ -1337,6 +1416,69 @@ test('legacy password-only check-in card shows generic executor instead of clean
     expect(rendered).toContain('执行\nOscar')
     expect(rendered).not.toContain('清洁\nOscar')
     expect(rendered).not.toContain('未分配')
+  } finally {
+    snapshot.items = previousItems
+  }
+})
+
+test('inspect-and-hang semantics never show a generic assignee as cleaning staff', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  snapshot.items = [
+    {
+      ...previousItems[0],
+      id: 'inspect-and-hang-generic-executor',
+      task_kind: 'cleaning',
+      execution_role: undefined,
+      execution_semantics: 'checkin_inspection',
+      task_type: 'checkin_clean',
+      inspection_scope: 'inspect_and_hang',
+      inspection_mode: 'same_day',
+      source_type: 'cleaning_tasks',
+      source_id: 'ct-inspect-and-hang',
+      assignee_id: 'oscar-id',
+      assignee_name: 'Oscar',
+      executor_id: 'oscar-id',
+      executor_name: 'Oscar',
+      cleaner_id: null,
+      cleaner_name: 'Oscar',
+      inspector_id: null,
+      inspector_name: null,
+      status: 'pending',
+      start_time: null,
+      end_time: '3pm',
+      property: {
+        ...previousItems[0].property,
+        code: 'INSPECT1402',
+        region: '',
+      },
+    },
+  ]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-inspect-and-hang-generic-executor', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByLabelText('task-collapse-inspect-and-hang-generic-executor')).toBeTruthy())
+    expandTask(ui, 'inspect-and-hang-generic-executor')
+
+    await waitFor(() => {
+      expect(ui.getByText('检查/挂钥匙')).toBeTruthy()
+      expect(ui.getByText('检查后挂钥匙')).toBeTruthy()
+      expect(ui.getByText('Oscar')).toBeTruthy()
+    })
+
+    const rendered = flattenRenderedText(ui.toJSON()).join('\n')
+    expect(rendered).toContain('执行\nOscar')
+    expect(rendered).not.toContain('清洁\nOscar')
   } finally {
     snapshot.items = previousItems
   }

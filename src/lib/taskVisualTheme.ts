@@ -122,6 +122,17 @@ export function hasCompletedKeyHandover(task: Partial<WorkTaskItem> | null | und
   return String((task as any)?.key_handover?.state || '').trim().toLowerCase() === 'completed'
 }
 
+/**
+ * New Root payloads include `key_handover`, using `null` when Root has no
+ * evidence-backed handover fact for this exact source task. In that case a
+ * legacy raw status is not allowed to manufacture one on the client.
+ * Only payloads that omit the property entirely may use the legacy raw-status
+ * compatibility path.
+ */
+export function hasAuthoritativeKeyHandoverProjection(task: Partial<WorkTaskItem> | null | undefined) {
+  return !!task && Object.prototype.hasOwnProperty.call(task, 'key_handover')
+}
+
 const KEY_HANDOVER_REQUIREMENT_LABELS: Record<string, string> = {
   cleaning_consumables: '补品记录',
   cleaning_property_photo: '房源照片',
@@ -159,7 +170,14 @@ export function getTaskStatusMeta(
     if (state === 'reassigned') return { text: '已改派', tone: 'neutral' as const }
   }
   if (hasCompletedKeyHandover(task)) return { text: '已挂钥匙', tone: 'success' as const }
-  const s = getEffectiveTaskStatus(task)
+  const authoritativeHandoverWasInvalidated = hasAuthoritativeKeyHandoverProjection(task)
+    && String((task as any)?.key_handover?.state || '').trim().toLowerCase() !== 'completed'
+  const effectiveStatus = getEffectiveTaskStatus(task)
+  // A present-but-null projection is an explicit Root decision. Do not let a
+  // raw `keys_hung` value manufacture a fact Root did not return.
+  const s = authoritativeHandoverWasInvalidated && effectiveStatus === 'keys_hung'
+    ? 'assigned'
+    : effectiveStatus
   const meta = baseStatusMeta(s)
   const source = String(task.source_type || '').trim().toLowerCase()
   const kind = String(task.task_kind || '').trim().toLowerCase()
@@ -187,7 +205,10 @@ export function getTaskStatusMeta(
 
   if (source === 'cleaning_tasks' && kind === 'inspection') {
     const checkedOutAt = String((task as any).checked_out_at || '').trim()
-    const inspectionStatus = String((task as any).inspection_status || '').trim().toLowerCase()
+    const inspectionStatus0 = String((task as any).inspection_status || '').trim().toLowerCase()
+    const inspectionStatus = authoritativeHandoverWasInvalidated && inspectionStatus0 === 'keys_hung'
+      ? ''
+      : inspectionStatus0
     const hasInspector = !!(
       String((task as any).inspector_id || '').trim()
       || String((task as any).inspector_name || '').trim()
@@ -205,7 +226,10 @@ export function getTaskStatusMeta(
     const cleanerName = String((task as any).cleaner_name || '').trim()
     const inspectorName = String((task as any).inspector_name || '').trim()
     const hasExecutor = !!(cleanerName || inspectorName || String((task as any).cleaner_id || '').trim() || String((task as any).assignee_id || '').trim() || String((task as any).inspector_id || '').trim())
-    const inspectionStatus = String((task as any).inspection_status || '').trim().toLowerCase()
+    const inspectionStatus0 = String((task as any).inspection_status || '').trim().toLowerCase()
+    const inspectionStatus = authoritativeHandoverWasInvalidated && inspectionStatus0 === 'keys_hung'
+      ? ''
+      : inspectionStatus0
     const hasInspection = Array.isArray((task as any).inspection_task_ids) ? (task as any).inspection_task_ids.length > 0 : false
     const inspectionMode = effectiveInspectionMode(task as any)
 

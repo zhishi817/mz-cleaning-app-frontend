@@ -131,6 +131,51 @@ beforeEach(() => {
   mockConsumablesResponse = defaultConsumablesResponse
 })
 
+test('manager status obeys authoritative key-handover completion and explicit absence', () => {
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const originalStatus = mockTask.status
+  const hadProjection = Object.prototype.hasOwnProperty.call(mockTask, 'key_handover')
+  const originalProjection = mockTask.key_handover
+  try {
+    mockTask.status = 'in_progress'
+    mockTask.key_handover = {
+      state: 'completed',
+      source_task_id: 'cleaning-1',
+      completed_at: '2026-10-21T02:21:00.000Z',
+      workflow_finalization_pending: true,
+      missing_requirements: ['cleaning_consumables'],
+    }
+    const completed = render(
+      <I18nProvider>
+        <ManagerDailyTaskScreen
+          navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+          route={{ key: 'manager-handover-completed', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+        />
+      </I18nProvider>,
+    )
+    expect(completed.getByText('已挂钥匙')).toBeTruthy()
+    completed.unmount()
+
+    mockTask.status = 'keys_hung'
+    mockTask.key_handover = null
+    const invalidated = render(
+      <I18nProvider>
+        <ManagerDailyTaskScreen
+          navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+          route={{ key: 'manager-handover-invalidated', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+        />
+      </I18nProvider>,
+    )
+    expect(invalidated.queryByText('已挂钥匙')).toBeNull()
+    expect(invalidated.getByText('已分配')).toBeTruthy()
+    invalidated.unmount()
+  } finally {
+    mockTask.status = originalStatus
+    if (hadProjection) mockTask.key_handover = originalProjection
+    else delete mockTask.key_handover
+  }
+})
+
 test('customer-service guest-ready actions coexist with the original editor and media order', async () => {
   const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
   const ui = render(
