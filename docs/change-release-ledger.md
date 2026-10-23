@@ -15095,7 +15095,7 @@
 - Base: `origin/Dev@293f394819993326e291a4a1419d356f3b9cd4d4`; fetched at `2026-10-23T13:42:39Z`
 - Candidate patch SHA-256: `7b8b960a4b872a8eda45211f92ee0d1a593f8de3f743b4e71c09350c8c80df80`
 - Commit SHA: `3895374be73c912748b1cf98258f2f0f11ac452e`; MZ-067 UI and MZ-071 are integrated into this same reviewed candidate rather than carried as a separate dependency commit
-- Dependencies: `root/CRL-20261023-001@c2f1d8d37a3620d3c65fda2ccf92863f3ff660ca`
+- Dependencies: `none`
 - Required validation: `PASS`; clean-candidate `npm run check:ci` passed on 2026-10-23 (77 suites, 654 tests; typecheck, lint with 0 errors, button contract and ledger checks passed)
 - Shared-hunk review: `PASS`; selected role/media/access fixes intentionally share screens and stores; clean source diff matched the reviewed worktree before attempt metadata
 - Generated-file review: `PASS`; no preview output, HTML serializer, cache, native build or secret is selected
@@ -15114,7 +15114,7 @@
 - Base: `origin/Dev@293f394819993326e291a4a1419d356f3b9cd4d4`; fetched at `2026-10-23T13:42:39Z`
 - Candidate patch SHA-256: `7b8b960a4b872a8eda45211f92ee0d1a593f8de3f743b4e71c09350c8c80df80`, excluding `docs/change-release-ledger.md`
 - Commit SHA: `3895374be73c912748b1cf98258f2f0f11ac452e`; exact reviewed bundled content commit recorded by `RA-20261023-001`
-- Dependencies: `root/CRL-20261023-001@c2f1d8d37a3620d3c65fda2ccf92863f3ff660ca`
+- Dependencies: `none`
 - Required validation: `PASS`; clean-candidate `check:ci` and exact nine-CRL staged gate passed
 - Shared-hunk review: `PASS`; this receipt changes ledger evidence only
 - Generated-file review: `PASS`; no generated, native, secret, runtime or deployment file is selected
