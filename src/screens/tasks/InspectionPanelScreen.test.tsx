@@ -37,6 +37,11 @@ jest.mock('expo-image-picker', () => ({
   launchCameraAsync: jest.fn(async () => ({ canceled: true, assets: [] })),
   launchImageLibraryAsync: jest.fn(async () => ({ canceled: true, assets: [] })),
 }))
+jest.mock('expo-av', () => {
+  const mockReact = require('react')
+  const { View } = require('react-native')
+  return { ResizeMode: { CONTAIN: 'contain' }, Video: (props: any) => mockReact.createElement(View, props) }
+})
 
 jest.mock('../../lib/auth', () => ({ useAuth: () => ({ token: 'test-token', user: { id: 'inspector-1', role: 'cleaning_inspector' } }) }))
 jest.mock('../../lib/inspectionPanelFeedbackDraft', () => ({ getInspectionPanelFeedbackDraft: jest.fn(async () => null) }))
@@ -89,6 +94,7 @@ jest.mock('../../lib/api', () => ({
   appendInspectionIssuePhotos: jest.fn(async () => ({ ok: true, appended: 1 })),
   getCleaningConsumables: jest.fn(async () => null),
   getInspectionPhotos: jest.fn(async () => ({ items: [] })),
+  getWorkTaskFormPhotos: jest.fn(async () => ({ items: [] })),
   uploadCleaningMedia: jest.fn(async () => ({ url: 'https://example.test/inspection-issue.jpg' })),
 }))
 jest.mock('../../components/GuestLuggageCard', () => () => null)
@@ -143,6 +149,40 @@ test('检查人员可打开检查与补充页面并看到四个核心步骤', as
     expect(ui.getByTestId('inspection-sync-status-card')).toBeTruthy()
   }, { timeout: 5_000 })
 }, 10_000)
+
+test('历史检查记录的问题反馈入口位于照片区域之前', async () => {
+  const previousTask = { ...mockSnapshot.items[0] }
+  mockSnapshot.items[0] = {
+    ...previousTask,
+    status: 'done',
+    work_record_read_only: true,
+    available_actions: [{
+      id: 'report_issue',
+      label: '问题反馈与报修记录',
+      enabled: true,
+      target: 'FeedbackForm',
+      source_type: 'cleaning_tasks',
+      source_id: 'cleaning-1',
+    }],
+  } as any
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-history-feedback', name: 'InspectionPanel', params: { taskId: 'w-inspection', readOnly: true } }} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(ui.getByTestId('inspection-feedback-before-photos')).toBeTruthy())
+    const rendered = JSON.stringify(ui.toJSON())
+    expect(rendered.indexOf('inspection-feedback-before-photos')).toBeGreaterThanOrEqual(0)
+    expect(rendered.indexOf('inspection-feedback-before-photos')).toBeLessThan(rendered.indexOf('4. 房间检查照片'))
+  } finally {
+    mockSnapshot.items[0] = previousTask
+  }
+})
 
 test('检查人员可区分添加其他补充项和下次退房补充项', async () => {
   const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
@@ -289,11 +329,21 @@ test('浴室整体照片最多可以拍摄三张', async () => {
 
 test('完成任务仍可只读查看已同步检查照片，且不显示修改或提交入口', async () => {
   const api = require('../../lib/api')
-  ;(api.getInspectionPhotos as jest.Mock).mockResolvedValueOnce({
+  const storage = require('../../lib/storage')
+  const draft = require('../../lib/inspectionPanelDraft')
+  const feedbackDraft = require('../../lib/inspectionPanelFeedbackDraft')
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  draft.getInspectionPanelDraft.mockClear()
+  feedbackDraft.getInspectionPanelFeedbackDraft.mockClear()
+  queue.getInspectionPanelBatch.mockClear()
+  queue.subscribeInspectionPanelSubmitQueue.mockClear()
+  storage.getJson.mockClear()
+  api.getCleaningConsumables.mockClear()
+  ;(api.getWorkTaskFormPhotos as jest.Mock).mockResolvedValueOnce({
     items: [
-      { area: 'living', url: 'https://example.com/living.jpg', captured_at: '2026-07-25T01:00:00.000Z' },
-      { area: 'sofa', url: 'https://example.com/sofa.jpg', captured_at: '2026-07-25T01:01:00.000Z' },
-      { area: 'bathroom', url: 'https://example.com/bathroom.jpg', captured_at: '2026-07-25T01:02:00.000Z' },
+      { id: 'inspection-living', task_id: 'cleaning-1', source: 'inspection', area: 'living', url: 'https://example.com/living.jpg', captured_at: '2026-07-25T01:00:00.000Z' },
+      { id: 'inspection-sofa', task_id: 'cleaning-1', source: 'inspection', area: 'sofa', url: 'https://example.com/sofa.jpg', captured_at: '2026-07-25T01:01:00.000Z' },
+      { id: 'inspection-bathroom', task_id: 'cleaning-1', source: 'inspection', area: 'bathroom', url: 'https://example.com/bathroom.jpg', captured_at: '2026-07-25T01:02:00.000Z' },
     ],
   })
   const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
@@ -305,7 +355,7 @@ test('完成任务仍可只读查看已同步检查照片，且不显示修改�
   )
 
   await waitFor(() => {
-    expect(api.getInspectionPhotos).toHaveBeenCalledWith('test-token', 'cleaning-1')
+    expect(api.getWorkTaskFormPhotos).toHaveBeenCalledWith('test-token', 'w-inspection', ['cleaning-1'], 'inspector', { includeVideos: true })
     expect(ui.getByTestId('inspection-read-only-banner')).toBeTruthy()
     expect(ui.getByTestId('inspection-read-only-complete-hint')).toBeTruthy()
     expect(ui.getAllByText('1/3')).toHaveLength(2)
@@ -313,7 +363,44 @@ test('完成任务仍可只读查看已同步检查照片，且不显示修改�
     expect(ui.queryByText('保存照片')).toBeNull()
     expect(ui.queryByText('提交本页检查与补充')).toBeNull()
     expect(ui.queryByText('添加')).toBeNull()
+    expect(ui.queryByTestId('inspection-sync-status-card')).toBeNull()
+    expect(draft.getInspectionPanelDraft).not.toHaveBeenCalled()
+    expect(feedbackDraft.getInspectionPanelFeedbackDraft).not.toHaveBeenCalled()
+    expect(queue.getInspectionPanelBatch).not.toHaveBeenCalled()
+    expect(queue.subscribeInspectionPanelSubmitQueue).not.toHaveBeenCalled()
+    expect(storage.getJson).not.toHaveBeenCalledWith('mzstay.inspection_post_submit_issue_draft.v1:w-inspection')
+    expect(api.getCleaningConsumables).not.toHaveBeenCalled()
   })
+})
+
+test('只读工作记录缺少精确媒体来源时关闭图库且不回退旧接口', async () => {
+  const before = { ...mockSnapshot.items[0] }
+  mockSnapshot.items[0] = {
+    ...before,
+    status: 'done',
+    work_record_read_only: true,
+    read_only_views: { media_scope: 'inspector', media_source_ids: [] },
+  } as any
+  const api = require('../../lib/api')
+  api.getWorkTaskFormPhotos.mockClear()
+  api.getCleaningConsumables.mockClear()
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-read-only-no-source', name: 'InspectionPanel', params: { taskId: 'w-inspection', readOnly: true } }} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(ui.getByTestId('inspection-read-only-banner')).toBeTruthy())
+    expect(api.getWorkTaskFormPhotos).not.toHaveBeenCalled()
+    expect(api.getCleaningConsumables).not.toHaveBeenCalled()
+    expect(ui.queryByTestId('inspection-read-only-key-media')).toBeNull()
+  } finally {
+    mockSnapshot.items[0] = before
+  }
 })
 
 test('已完成任务从未携带只读参数的入口查看检查与补充时不再确认房号', async () => {
@@ -333,6 +420,43 @@ test('已完成任务从未携带只读参数的入口查看检查与补充时�
     ui.unmount()
   } finally {
     ;(mockSnapshot.items[0] as any).status = previousStatus
+  }
+})
+
+test('历史工作记录即使旧入口漏传只读参数也不能恢复草稿队列或写操作', async () => {
+  const before = { ...mockSnapshot.items[0] }
+  mockSnapshot.items[0] = {
+    ...before,
+    status: 'done',
+    work_record_read_only: true,
+    read_only_views: { media_scope: 'inspector', media_source_ids: ['cleaning-1'] },
+  } as any
+  const draft = require('../../lib/inspectionPanelDraft')
+  const feedbackDraft = require('../../lib/inspectionPanelFeedbackDraft')
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  draft.getInspectionPanelDraft.mockClear()
+  feedbackDraft.getInspectionPanelFeedbackDraft.mockClear()
+  queue.getInspectionPanelBatch.mockClear()
+  queue.subscribeInspectionPanelSubmitQueue.mockClear()
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn(), goBack: jest.fn() }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-history-legacy-route', name: 'InspectionPanel', params: { taskId: 'w-inspection' } }} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(ui.getByTestId('inspection-read-only-banner')).toBeTruthy())
+    expect(draft.getInspectionPanelDraft).not.toHaveBeenCalled()
+    expect(feedbackDraft.getInspectionPanelFeedbackDraft).not.toHaveBeenCalled()
+    expect(queue.getInspectionPanelBatch).not.toHaveBeenCalled()
+    expect(queue.subscribeInspectionPanelSubmitQueue).not.toHaveBeenCalled()
+    expect(ui.queryByText('保存照片')).toBeNull()
+    expect(ui.queryByText('提交本页检查与补充')).toBeNull()
+  } finally {
+    mockSnapshot.items[0] = before
   }
 })
 
@@ -382,8 +506,8 @@ test('Root 结构化已挂钥匙跳过房号确认，明确无事实时不信任
 
 test('点击全屏照片内容区域可以关闭预览', async () => {
   const api = require('../../lib/api')
-  ;(api.getInspectionPhotos as jest.Mock).mockResolvedValueOnce({
-    items: [{ area: 'living', url: 'https://example.com/living.jpg', captured_at: '2026-07-25T01:00:00.000Z' }],
+  ;(api.getWorkTaskFormPhotos as jest.Mock).mockResolvedValueOnce({
+    items: [{ id: 'inspection-living', task_id: 'cleaning-1', source: 'inspection', area: 'living', url: 'https://example.com/living.jpg', captured_at: '2026-07-25T01:00:00.000Z' }],
   })
   const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
   const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }

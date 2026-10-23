@@ -3,18 +3,18 @@ import { StyleSheet } from 'react-native'
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 
-const mockSnapshot = {
-  items: [{
-    id: 'w-cleaning',
-    task_kind: 'cleaning',
-    source_type: 'cleaning_tasks',
-    source_id: 'cleaning-1',
-    task_type: 'stayover_clean',
-    title: '测试房源清洁',
-    property: { id: 'property-1', code: 'TEST-1', address: '测试地址' },
-    available_actions: [{ id: 'self_complete', enabled: true, target: 'CleaningSelfComplete' }],
-  }],
+const baseMockTask = {
+  id: 'w-cleaning',
+  task_kind: 'cleaning',
+  source_type: 'cleaning_tasks',
+  source_id: 'cleaning-1',
+  task_type: 'stayover_clean',
+  title: '测试房源清洁',
+  property: { id: 'property-1', code: 'TEST-1', address: '测试地址' },
+  available_actions: [{ id: 'self_complete', enabled: true, target: 'CleaningSelfComplete' }],
 }
+
+const mockSnapshot = { items: [{ ...baseMockTask }] }
 
 let mockLockboxQueueItems: any[] = []
 
@@ -86,6 +86,7 @@ jest.mock('../../lib/api', () => ({
   getCompletionPhotos: jest.fn(async () => ({ items: [] })),
   getCleaningConsumables: jest.fn(async () => ({ items: [] })),
   getRestockProof: jest.fn(async () => ({ items: [] })),
+  getWorkTaskFormPhotos: jest.fn(async () => ({ items: [] })),
   isRetryableApiError: jest.fn(() => false),
   saveCompletionPhotos: jest.fn(async () => ({})),
   selfCompleteCleaningTask: jest.fn(async () => ({})),
@@ -128,9 +129,11 @@ const mockSuppliesCatalogState = {
 }
 
 beforeEach(() => {
-  mockSnapshot.items[0].task_type = 'stayover_clean'
-  delete (mockSnapshot.items[0] as any).status
-  delete (mockSnapshot.items[0] as any).key_handover
+  mockSnapshot.items = [{
+    ...baseMockTask,
+    property: { ...baseMockTask.property },
+    available_actions: baseMockTask.available_actions.map((action) => ({ ...action })),
+  }]
   const imagePicker = require('expo-image-picker')
   imagePicker.requestCameraPermissionsAsync.mockResolvedValue({ granted: true })
   imagePicker.launchCameraAsync.mockResolvedValue({ canceled: true, assets: [] })
@@ -139,6 +142,13 @@ beforeEach(() => {
   draft.getCleaningConsumablesDraft.mockClear()
   draft.setCleaningConsumablesDraft.mockClear()
   draft.getCleaningConsumablesDraft.mockResolvedValue(null)
+  const queue = require('../../lib/inspectionMediaQueue')
+  queue.listInspectionMediaQueueItemsForTask.mockClear()
+  queue.processInspectionMediaQueue.mockClear()
+  queue.subscribeInspectionMediaQueue.mockClear()
+  const api = require('../../lib/api')
+  api.getWorkTaskFormPhotos.mockReset()
+  api.getWorkTaskFormPhotos.mockResolvedValue({ items: [] })
   mockLockboxQueueItems = []
 })
 
@@ -318,6 +328,384 @@ test('自完成挂钥匙视频会恢复队列状态，而不是误显示为已�
     expect(ui.getByTestId('self-complete-lockbox-sync-hint').props.children).toContain('任务保存超时')
     expect(ui.getByText('重试同步')).toBeTruthy()
   })
+})
+
+test('清洁历史记录恢复原页面顺序，只读取准确来源并禁止重做原任务', async () => {
+  const previousTask = { ...mockSnapshot.items[0] }
+  mockSnapshot.items[0] = {
+    ...previousTask,
+    task_type: 'turnover_clean',
+    status: 'done',
+    work_record_read_only: true,
+    property: {
+      ...previousTask.property,
+      wifi_ssid: 'SYNTHETIC-WIFI',
+      wifi_password: 'synthetic-only',
+      router_location: '客厅电视柜',
+      access_guide_link: 'https://example.invalid/synthetic-guide',
+    },
+    read_only_views: {
+      media_scope: 'cleaner',
+      media_source_ids: ['cleaning-1'],
+      property_access: true,
+      guest_context: true,
+      lock_codes: true,
+    },
+    available_actions: [{
+      id: 'report_issue',
+      label: '问题反馈与报修记录',
+      enabled: true,
+      target: 'FeedbackForm',
+      source_type: 'cleaning_tasks',
+      source_id: 'cleaning-1',
+    }],
+  } as any
+  const api = require('../../lib/api')
+  const queue = require('../../lib/inspectionMediaQueue')
+  api.getCleaningConsumables.mockClear()
+  api.getRestockProof.mockClear()
+  const historicalMedia = {
+    items: [
+      { id: 'completion-living', task_id: 'cleaning-1', source: 'completion', area: 'living', url: 'cleaning/media/completion-living.jpg' },
+      { id: 'lockbox-video', task_id: 'cleaning-1', source: 'lockbox_video', url: 'cleaning/media/lockbox-video.mov' },
+      { id: 'consumable-shampoo', task_id: 'cleaning-1', source: 'consumable', item_id: 'shampoo', label: '洗发水', url: 'cleaning/media/consumable-shampoo.jpg' },
+      { id: 'restock-shampoo', task_id: 'cleaning-1', source: 'restock', item_id: 'shampoo', label: '洗发水', url: 'cleaning/media/restock-shampoo.jpg' },
+    ],
+  }
+  api.getWorkTaskFormPhotos.mockResolvedValue(historicalMedia)
+  const CleaningSelfCompleteScreen = require('./CleaningSelfCompleteScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'cleaning-history', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning', readOnly: true } }} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(api.getWorkTaskFormPhotos).toHaveBeenCalledWith('test-token', 'w-cleaning', ['cleaning-1'], 'cleaner', { includeVideos: true })
+      expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(1)
+      expect(ui.getByTestId('self-complete-feedback-before-photos')).toBeTruthy()
+      expect(ui.getByText('本次清洁已保存的照片可点击查看大图。')).toBeTruthy()
+      expect(ui.getAllByText('挂钥匙视频').length).toBeGreaterThan(0)
+      expect(ui.getByText('路由器位置：客厅电视柜')).toBeTruthy()
+      expect(ui.queryByText('拍照')).toBeNull()
+      expect(ui.queryByText('重试同步')).toBeNull()
+      expect(queue.listInspectionMediaQueueItemsForTask).not.toHaveBeenCalled()
+      expect(queue.processInspectionMediaQueue).not.toHaveBeenCalled()
+      expect(queue.subscribeInspectionMediaQueue).not.toHaveBeenCalled()
+      expect(api.getCleaningConsumables).not.toHaveBeenCalled()
+      expect(api.getRestockProof).not.toHaveBeenCalled()
+    })
+
+    const rendered = JSON.stringify(ui.toJSON())
+    expect(rendered.indexOf('消耗品补充')).toBeLessThan(rendered.indexOf('房源问题反馈'))
+    expect(rendered.indexOf('房源问题反馈')).toBeLessThan(rendered.indexOf('房间完成照片'))
+    expect(rendered.indexOf('房间完成照片')).toBeLessThan(rendered.indexOf('标记已完成'))
+  } finally {
+    mockSnapshot.items[0] = previousTask
+  }
+})
+
+test('清洁历史记录返回页面时会刷新一次，不会并发重复读取同一来源', async () => {
+  const previousTask = { ...mockSnapshot.items[0] }
+  mockSnapshot.items[0] = {
+    ...previousTask,
+    task_type: 'turnover_clean',
+    status: 'done',
+    work_record_read_only: true,
+    read_only_views: { media_scope: 'cleaner', media_source_ids: ['cleaning-1'] },
+  } as any
+  const api = require('../../lib/api')
+  api.getWorkTaskFormPhotos
+    .mockResolvedValueOnce({ items: [{ id: 'first', task_id: 'cleaning-1', source: 'completion', area: 'living', url: 'cleaning/media/first.jpg' }] })
+    .mockResolvedValueOnce({ items: [{ id: 'second', task_id: 'cleaning-1', source: 'completion', area: 'sofa', url: 'cleaning/media/second.jpg' }] })
+  const focusRef: { current: (() => void) | null } = { current: null }
+  const CleaningSelfCompleteScreen = require('./CleaningSelfCompleteScreen').default as React.ComponentType<any>
+  const navigation = {
+    navigate: jest.fn(),
+    goBack: jest.fn(),
+    setOptions: jest.fn(),
+    addListener: jest.fn((_event: string, callback: () => void) => {
+      focusRef.current = callback
+      return () => {}
+    }),
+  }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'cleaning-history-focus', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning', readOnly: true } }} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(1)
+      expect(ui.getByTestId('completion-photo-living-0')).toBeTruthy()
+    })
+    await act(async () => {
+      focusRef.current?.()
+    })
+    await waitFor(() => {
+      expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(2)
+      expect(ui.getByTestId('completion-photo-sofa-0')).toBeTruthy()
+      expect(ui.queryByTestId('completion-photo-living-0')).toBeNull()
+    })
+  } finally {
+    mockSnapshot.items[0] = previousTask
+  }
+})
+
+test('清洁历史照片首次读取失败后可在返回页面时重试', async () => {
+  const previousTask = { ...mockSnapshot.items[0] }
+  mockSnapshot.items[0] = {
+    ...previousTask,
+    task_type: 'turnover_clean',
+    status: 'done',
+    work_record_read_only: true,
+    read_only_views: { media_scope: 'cleaner', media_source_ids: ['cleaning-1'] },
+  } as any
+  const api = require('../../lib/api')
+  api.getWorkTaskFormPhotos
+    .mockRejectedValueOnce(new Error('temporary network failure'))
+    .mockResolvedValueOnce({ items: [{ id: 'retry', task_id: 'cleaning-1', source: 'completion', area: 'living', url: 'cleaning/media/retry.jpg' }] })
+  const focusRef: { current: (() => void) | null } = { current: null }
+  const CleaningSelfCompleteScreen = require('./CleaningSelfCompleteScreen').default as React.ComponentType<any>
+  const navigation = {
+    navigate: jest.fn(),
+    goBack: jest.fn(),
+    setOptions: jest.fn(),
+    addListener: jest.fn((_event: string, callback: () => void) => {
+      focusRef.current = callback
+      return () => {}
+    }),
+  }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'cleaning-history-retry', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning', readOnly: true } }} />
+      </I18nProvider>,
+    )
+    await waitFor(() => expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      focusRef.current?.()
+    })
+    await waitFor(() => {
+      expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(2)
+      expect(ui.getByTestId('completion-photo-living-0')).toBeTruthy()
+    })
+  } finally {
+    mockSnapshot.items[0] = previousTask
+  }
+})
+
+test('切换清洁历史任务时丢弃旧请求结果并按新来源刷新', async () => {
+  const taskA = {
+    ...baseMockTask,
+    id: 'w-cleaning-a',
+    source_id: 'cleaning-a',
+    task_type: 'turnover_clean',
+    status: 'done',
+    work_record_read_only: true,
+    read_only_views: { media_scope: 'cleaner', media_source_ids: ['cleaning-a'] },
+  }
+  const taskB = {
+    ...baseMockTask,
+    id: 'w-cleaning-b',
+    source_id: 'cleaning-b',
+    task_type: 'turnover_clean',
+    status: 'done',
+    work_record_read_only: true,
+    read_only_views: { media_scope: 'cleaner', media_source_ids: ['cleaning-b'] },
+  }
+  mockSnapshot.items = [taskA, taskB] as any
+  const api = require('../../lib/api')
+  let resolveTaskA!: (value: any) => void
+  api.getWorkTaskFormPhotos
+    .mockImplementationOnce(() => new Promise((resolve) => { resolveTaskA = resolve }))
+    .mockResolvedValueOnce({ items: [{ id: 'task-b', task_id: 'cleaning-b', source: 'completion', area: 'sofa', url: 'cleaning/media/task-b.jpg' }] })
+  const CleaningSelfCompleteScreen = require('./CleaningSelfCompleteScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }
+
+  const ui = render(
+    <I18nProvider>
+      <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'cleaning-history-switch', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning-a', readOnly: true } }} />
+    </I18nProvider>,
+  )
+  await waitFor(() => expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(1))
+  ui.rerender(
+    <I18nProvider>
+      <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'cleaning-history-switch', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning-b', readOnly: true } }} />
+    </I18nProvider>,
+  )
+  await waitFor(() => {
+    expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(2)
+    expect(ui.getByTestId('completion-photo-sofa-0')).toBeTruthy()
+  })
+  await act(async () => {
+    resolveTaskA({ items: [{ id: 'task-a', task_id: 'cleaning-a', source: 'completion', area: 'living', url: 'cleaning/media/task-a.jpg' }] })
+  })
+  await waitFor(() => {
+    expect(ui.getByTestId('completion-photo-sofa-0')).toBeTruthy()
+    expect(ui.queryByTestId('completion-photo-living-0')).toBeNull()
+  })
+})
+
+test('已显示历史照片后切换任务会在新请求完成前同步隐藏旧任务媒体', async () => {
+  const taskA = {
+    ...baseMockTask,
+    id: 'w-cleaning-a',
+    source_id: 'cleaning-a',
+    task_type: 'turnover_clean',
+    status: 'done',
+    work_record_read_only: true,
+    read_only_views: { media_scope: 'cleaner', media_source_ids: ['cleaning-a'] },
+  }
+  const taskB = {
+    ...baseMockTask,
+    id: 'w-cleaning-b',
+    source_id: 'cleaning-b',
+    task_type: 'turnover_clean',
+    status: 'done',
+    work_record_read_only: true,
+    read_only_views: { media_scope: 'cleaner', media_source_ids: ['cleaning-b'] },
+  }
+  mockSnapshot.items = [taskA, taskB] as any
+  const api = require('../../lib/api')
+  let resolveTaskB!: (value: any) => void
+  api.getWorkTaskFormPhotos
+    .mockResolvedValueOnce({ items: [{ id: 'task-a', task_id: 'cleaning-a', source: 'completion', area: 'living', url: 'cleaning/media/task-a.jpg' }] })
+    .mockImplementationOnce(() => new Promise((resolve) => { resolveTaskB = resolve }))
+    .mockResolvedValueOnce({ items: [{ id: 'task-a-return', task_id: 'cleaning-a', source: 'completion', area: 'bedroom', url: 'cleaning/media/task-a-return.jpg' }] })
+  const CleaningSelfCompleteScreen = require('./CleaningSelfCompleteScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }
+  const ui = render(
+    <I18nProvider>
+      <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'cleaning-history-switch-visible', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning-a', readOnly: true } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByTestId('completion-photo-living-0')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('completion-photo-living-0'))
+  await waitFor(() => expect(ui.getByTestId('self-complete-photo-viewer-mask')).toBeTruthy())
+  ui.rerender(
+    <I18nProvider>
+      <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'cleaning-history-switch-visible', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning-b', readOnly: true } }} />
+    </I18nProvider>,
+  )
+  expect(ui.queryByTestId('completion-photo-living-0')).toBeNull()
+  expect(ui.queryByTestId('self-complete-photo-viewer-mask')).toBeNull()
+  await waitFor(() => expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(2))
+
+  await act(async () => {
+    resolveTaskB({ items: [{ id: 'task-b', task_id: 'cleaning-b', source: 'completion', area: 'sofa', url: 'cleaning/media/task-b.jpg' }] })
+  })
+  await waitFor(() => expect(ui.getByTestId('completion-photo-sofa-0')).toBeTruthy())
+  ui.rerender(
+    <I18nProvider>
+      <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'cleaning-history-switch-visible', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning-a', readOnly: true } }} />
+    </I18nProvider>,
+  )
+  expect(ui.queryByTestId('self-complete-photo-viewer-mask')).toBeNull()
+  await waitFor(() => {
+    expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(3)
+    expect(ui.getByTestId('completion-photo-bedroom-0')).toBeTruthy()
+    expect(ui.queryByTestId('self-complete-photo-viewer-mask')).toBeNull()
+  })
+})
+
+test('A 到 B 再回 A 时较早的 A 响应不能覆盖较新的 A 响应', async () => {
+  const taskA = {
+    ...baseMockTask,
+    id: 'w-cleaning-a',
+    source_id: 'cleaning-a',
+    task_type: 'turnover_clean',
+    status: 'done',
+    work_record_read_only: true,
+    read_only_views: { media_scope: 'cleaner', media_source_ids: ['cleaning-a'] },
+  }
+  const taskB = {
+    ...baseMockTask,
+    id: 'w-cleaning-b',
+    source_id: 'cleaning-b',
+    task_type: 'turnover_clean',
+    status: 'done',
+    work_record_read_only: true,
+    read_only_views: { media_scope: 'cleaner', media_source_ids: ['cleaning-b'] },
+  }
+  mockSnapshot.items = [taskA, taskB] as any
+  const api = require('../../lib/api')
+  let resolveFirstTaskA!: (value: any) => void
+  let resolveSecondTaskA!: (value: any) => void
+  api.getWorkTaskFormPhotos
+    .mockImplementationOnce(() => new Promise((resolve) => { resolveFirstTaskA = resolve }))
+    .mockResolvedValueOnce({ items: [{ id: 'task-b', task_id: 'cleaning-b', source: 'completion', area: 'sofa', url: 'cleaning/media/task-b.jpg' }] })
+    .mockImplementationOnce(() => new Promise((resolve) => { resolveSecondTaskA = resolve }))
+  const CleaningSelfCompleteScreen = require('./CleaningSelfCompleteScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }
+  const renderScreen = (taskId: string) => (
+    <I18nProvider>
+      <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'cleaning-history-switch-back', name: 'CleaningSelfComplete', params: { taskId, readOnly: true } }} />
+    </I18nProvider>
+  )
+  const ui = render(renderScreen('w-cleaning-a'))
+
+  await waitFor(() => expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(1))
+  ui.rerender(renderScreen('w-cleaning-b'))
+  await waitFor(() => {
+    expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(2)
+    expect(ui.getByTestId('completion-photo-sofa-0')).toBeTruthy()
+  })
+  ui.rerender(renderScreen('w-cleaning-a'))
+  await waitFor(() => expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(3))
+
+  await act(async () => {
+    resolveSecondTaskA({ items: [{ id: 'task-a-new', task_id: 'cleaning-a', source: 'completion', area: 'bedroom', url: 'cleaning/media/task-a-new.jpg' }] })
+  })
+  await waitFor(() => expect(ui.getByTestId('completion-photo-bedroom-0')).toBeTruthy())
+
+  await act(async () => {
+    resolveFirstTaskA({ items: [{ id: 'task-a-old', task_id: 'cleaning-a', source: 'completion', area: 'living', url: 'cleaning/media/task-a-old.jpg' }] })
+  })
+  await waitFor(() => {
+    expect(ui.getByTestId('completion-photo-bedroom-0')).toBeTruthy()
+    expect(ui.queryByTestId('completion-photo-living-0')).toBeNull()
+  })
+})
+
+test('清洁只读工作记录缺少精确媒体来源时关闭图库和视频且不回退任务字段', async () => {
+  const previousTask = { ...mockSnapshot.items[0] }
+  mockSnapshot.items[0] = {
+    ...previousTask,
+    status: 'done',
+    work_record_read_only: true,
+    lockbox_video_url: 'cleaning/media/must-not-fallback.mov',
+    read_only_views: { media_scope: 'cleaner', media_source_ids: [] },
+  } as any
+  const api = require('../../lib/api')
+  api.getWorkTaskFormPhotos.mockClear()
+  api.getCleaningConsumables.mockClear()
+  api.getRestockProof.mockClear()
+  const CleaningSelfCompleteScreen = require('./CleaningSelfCompleteScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'cleaning-history-no-source', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning', readOnly: true } }} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(ui.getByText('本次清洁已保存的照片可点击查看大图。')).toBeTruthy())
+    expect(api.getWorkTaskFormPhotos).not.toHaveBeenCalled()
+    expect(api.getCleaningConsumables).not.toHaveBeenCalled()
+    expect(api.getRestockProof).not.toHaveBeenCalled()
+    expect(JSON.stringify(ui.toJSON())).not.toContain('must-not-fallback.mov')
+  } finally {
+    mockSnapshot.items[0] = previousTask
+  }
 })
 
 test('本地完成照片打开大图时显示同一水印，并可重拍单一遥控器照片', async () => {

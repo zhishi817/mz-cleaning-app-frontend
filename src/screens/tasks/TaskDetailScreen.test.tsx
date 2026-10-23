@@ -269,17 +269,35 @@ test('cleaner completed record keeps property access and shows only cleaner phot
     available_actions: [],
     read_only_views: {
       property_access: true,
+      guest_context: true,
       lock_codes: true,
       cleaner_photos: true,
       inspection_photos: false,
       guest_key_photo: true,
       media_scope: 'cleaner',
+      media_source_ids: ['ct1'],
     },
     property: {
       ...previousTask.property,
       access_guide_link: 'https://example.com/guide',
       wifi_ssid: 'Guest WiFi',
       wifi_password: 'secret',
+    },
+    guest_special_request: 'Please leave luggage inside',
+    order_note: 'Call before entry',
+    guest_luggage: {
+      id: 'notice-1',
+      note: 'Leave luggage inside',
+      photo_urls: [],
+      current_user_acknowledged: false,
+      acknowledgements: { cleaners: [], inspectors: [] },
+    },
+    guest_ready_notification: {
+      order_id: 'order-1',
+      status: 'notified',
+      notified_at: '2026-10-21T01:00:00.000Z',
+      notified_by_name: 'Support',
+      version: 1,
     },
   }
   api.getWorkTaskFormPhotos.mockResolvedValueOnce({
@@ -304,6 +322,11 @@ test('cleaner completed record keeps property access and shows only cleaner phot
       expect(ui.queryByTestId('task-detail-read-only-photo-1')).toBeNull()
       expect(ui.getByText(/Guest WiFi/)).toBeTruthy()
       expect(ui.getByText('查看入住指南')).toBeTruthy()
+      expect(ui.getByText('客人需求：Please leave luggage inside')).toBeTruthy()
+      expect(ui.getByText('订单备注：Call before entry')).toBeTruthy()
+      expect(ui.getByText('Leave luggage inside')).toBeTruthy()
+      expect(ui.queryByText('我已知晓')).toBeNull()
+      expect(ui.getByText(/客人入住通知：已由 Support/)).toBeTruthy()
       expect(ui.getByText('旧密码：1357  新密码：2468')).toBeTruthy()
       expect(ui.getByText('只读查看，不提供删除、重拍或补传操作。')).toBeTruthy()
       expect(ui.queryByText(/上传钥匙/i)).toBeNull()
@@ -335,6 +358,7 @@ test('inspector completed record can view inspection photos and the exact-task g
     read_only_views: {
       property_access: true,
       lock_codes: true,
+      lockbox_video: true,
       cleaner_photos: false,
       inspection_photos: true,
       guest_key_photo: true,
@@ -343,7 +367,10 @@ test('inspector completed record can view inspection photos and the exact-task g
     },
   }
   api.getWorkTaskFormPhotos.mockResolvedValueOnce({
-    items: [{ id: 'inspection-1', task_id: 'ct1', source: 'inspection', area: 'living', url: 'mzapp/inspection-1.jpg' }],
+    items: [
+      { id: 'inspection-1', task_id: 'ct1', source: 'inspection', area: 'living', url: 'mzapp/inspection-1.jpg' },
+      { id: 'inspection-video', task_id: 'ct1', source: 'lockbox_video', area: 'key_handover', url: 'cleaning/inspection-lockbox.mp4' },
+    ],
   })
   const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
 
@@ -354,9 +381,10 @@ test('inspector completed record can view inspection photos and the exact-task g
       </I18nProvider>,
     )
     await waitFor(() => {
-      expect(api.getWorkTaskFormPhotos).toHaveBeenCalledWith('t1', 'w1', ['checkout-ct', 'ct1'], 'inspector')
+      expect(api.getWorkTaskFormPhotos).toHaveBeenCalledWith('t1', 'w1', ['checkout-ct', 'ct1'], 'inspector', { includeVideos: true })
       expect(ui.getByTestId('task-detail-key-photo')).toBeTruthy()
       expect(ui.getByTestId('task-detail-read-only-photo-0')).toBeTruthy()
+      expect(ui.getByTestId('task-detail-lockbox-video')).toBeTruthy()
       expect(ui.queryByTestId('task-detail-delete-key-photo')).toBeNull()
     })
   } finally {
@@ -633,6 +661,80 @@ test('ordinary cleaner cannot see lockbox video in task detail', async () => {
   }
 })
 
+test('self-complete cleaner can replay only the exact-source historical lockbox video', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = mockAuthState.user
+  const api = require('../../lib/api')
+  mockAuthState.user = { id: 'cleaner-1', username: 'cleaner', role: 'cleaner', roles: ['cleaner'] }
+  api.getWorkTaskFormPhotos.mockResolvedValueOnce({
+    items: [
+      {
+        id: 'self-lockbox-video',
+        task_id: 'self-complete-source',
+        source: 'lockbox_video',
+        area: 'key_handover',
+        label: '挂钥匙视频',
+        url: 'cleaning/self-complete-lockbox.mp4',
+      },
+    ],
+  })
+  snapshot.items[0] = {
+    ...previousTask,
+    id: 'self-complete-history',
+    source_type: 'cleaning_tasks',
+    source_id: 'self-complete-source',
+    task_kind: 'cleaning',
+    task_type: 'checkout_clean',
+    status: 'done',
+    inspection_mode: 'self_complete',
+    work_record_visible: true,
+    work_record_state: 'completed',
+    work_record_read_only: true,
+    read_only_views: {
+      property_access: true,
+      guest_context: true,
+      lock_codes: true,
+      lockbox_video: true,
+      cleaner_photos: true,
+      inspection_photos: false,
+      guest_key_photo: true,
+      media_scope: 'cleaner',
+      media_source_ids: ['self-complete-source'],
+    },
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'self-complete-history-video', name: 'TaskDetail', params: { id: 'self-complete-history' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(ui.getByTestId('task-detail-lockbox-video')).toBeTruthy())
+    expect(api.getWorkTaskFormPhotos).toHaveBeenCalledWith(
+      't1',
+      'self-complete-history',
+      ['self-complete-source'],
+      'cleaner',
+      { includeVideos: true },
+    )
+    const video = ui.getByTestId('task-detail-lockbox-video').findByType(require('expo-av').Video)
+    expect(video.props.source).toEqual({
+      uri: expect.stringContaining('variant=source'),
+      headers: { Authorization: 'Bearer t1' },
+    })
+    expect(String(video.props.source.uri)).toContain('source_task_id=self-complete-source')
+    expect(String(video.props.source.uri)).toContain('media_scope=cleaner')
+    expect(ui.queryByTestId('task-detail-read-only-photo-0')).toBeNull()
+  } finally {
+    snapshot.items[0] = previousTask
+    mockAuthState.user = previousUser
+  }
+})
+
 test('completed supplies action is gray, uses one label, and opens read-only photo view', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
@@ -664,6 +766,54 @@ test('completed supplies action is gray, uses one label, and opens read-only pho
 
     fireEvent.press(ui.getByTestId('task-detail-action-w1-fill_supplies'))
     expect(navigation.navigate).toHaveBeenCalledWith('SuppliesForm', { taskId: 'w1', readOnly: true })
+  } finally {
+    snapshot.items[0] = previousTask
+  }
+})
+
+test('self-complete cleaned task keeps exact-source key handover and read-only supplies actions', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() }
+  snapshot.items[0] = {
+    ...previousTask,
+    source_id: 'cleaning-la910',
+    source_type: 'cleaning_tasks',
+    task_kind: 'cleaning',
+    task_type: 'checkout_clean',
+    status: 'to_hang_keys',
+    inspection_mode: 'self_complete',
+    cleaning_submission_ready: true,
+    work_record_read_only: false,
+    available_actions: [
+      { id: 'fill_supplies', label: '补品记录', placement: 'primary', enabled: false, disabled_reason: 'task_completed', read_only: true, target: 'SuppliesForm', intent: 'cleaning', source_type: 'cleaning_tasks', source_id: 'cleaning-la910' },
+      { id: 'upload_access_video', label: '挂钥匙并完成', placement: 'primary', enabled: true, target: 'InspectionComplete', intent: 'site_action', source_type: 'cleaning_tasks', source_id: 'cleaning-la910' },
+      { id: 'report_issue', label: '问题反馈与报修记录', placement: 'more', enabled: true, target: 'FeedbackForm', intent: 'issue', source_type: 'cleaning_tasks', source_id: 'cleaning-la910' },
+    ],
+  }
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={navigation as any} route={{ key: 'k-self-complete-handover', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByText('补品已记录')).toBeTruthy()
+      expect(ui.getByText('挂钥匙并完成')).toBeTruthy()
+      expect(ui.getByText('问题反馈与报修记录')).toBeTruthy()
+    })
+    fireEvent.press(ui.getByTestId('task-detail-action-w1-fill_supplies'))
+    expect(navigation.navigate).toHaveBeenCalledWith('SuppliesForm', { taskId: 'w1', readOnly: true })
+    fireEvent.press(ui.getByTestId('task-detail-action-w1-upload_access_video'))
+    expect(navigation.navigate).toHaveBeenCalledWith('InspectionComplete', {
+      taskId: 'w1',
+      sourceId: 'cleaning-la910',
+      skipInspectionPhotos: true,
+    })
   } finally {
     snapshot.items[0] = previousTask
   }
@@ -1542,6 +1692,73 @@ test('reassigned work record previews actor-bound evidence with the canonical wo
     await waitFor(() => {
       expect(ui.getByTestId('cleaning-media-preview')).toHaveProp('accessibilityLabel', `${historyPhoto}|${canonicalWorkTaskId}`)
     })
+  } finally {
+    snapshot.items[0] = previousTask
+  }
+})
+
+test('历史清洁记录只显示服务端签发的任务级问题反馈入口', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const api = require('../../lib/api')
+  api.getWorkTaskFormPhotos.mockResolvedValueOnce({
+    items: Array.from({ length: 6 }, (_, index) => ({
+      id: `completion-${index + 1}`,
+      task_id: 'cleaning-source-1',
+      source: 'completion',
+      area: index % 2 === 0 ? 'bedroom' : 'living',
+      url: `mzapp/completion-${index + 1}.jpg`,
+    })),
+  })
+  snapshot.items[0] = {
+    ...previousTask,
+    id: 'historical-cleaning-record',
+    source_type: 'cleaning_tasks',
+    source_id: 'cleaning-source-1',
+    task_kind: 'cleaning',
+    status: 'done',
+    work_record_visible: true,
+    work_record_state: 'completed',
+    work_record_read_only: true,
+    read_only_views: {
+      cleaner_photos: true,
+      inspection_photos: false,
+      media_scope: 'cleaner',
+      media_source_ids: ['cleaning-source-1'],
+    },
+    available_actions: [{
+      id: 'report_issue',
+      label: '问题反馈与报修记录',
+      placement: 'more',
+      enabled: true,
+      read_only: false,
+      target: 'FeedbackForm',
+      intent: 'issue',
+      source_type: 'cleaning_tasks',
+      source_id: 'cleaning-source-1',
+    }],
+  }
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setParams: jest.fn() }
+
+  try {
+    const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={navigation as any} route={{ key: 'historical-feedback', name: 'TaskDetail', params: { id: 'historical-cleaning-record' } } as any} />
+      </I18nProvider>,
+    )
+    const button = await ui.findByTestId('task-detail-action-historical-cleaning-record-report_issue')
+    await ui.findByTestId('task-detail-read-only-photo-5')
+    const rendered = JSON.stringify(ui.toJSON())
+    expect(rendered.indexOf('task-detail-feedback-before-photos')).toBeGreaterThanOrEqual(0)
+    expect(rendered.indexOf('task-detail-feedback-before-photos')).toBeLessThan(rendered.indexOf('task-detail-read-only-photos'))
+    fireEvent.press(button)
+    expect(navigation.navigate).toHaveBeenCalledWith('FeedbackForm', {
+      taskId: 'historical-cleaning-record',
+      sourceTaskId: 'cleaning-source-1',
+    })
+    expect(ui.queryByText('标记完成')).toBeNull()
   } finally {
     snapshot.items[0] = previousTask
   }

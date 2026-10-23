@@ -618,52 +618,72 @@ export function canViewReadOnlyWorkRecordLockCodes(task: WorkTaskItem): boolean 
     && !WORK_RECORD_BLOCKING_EXECUTION_STATES.has(executionState)
 }
 
+function canViewReadOnlyWorkRecordContext(task: WorkTaskItem, capability: 'property_access' | 'guest_context'): boolean {
+  if (task.work_record_read_only !== true) return true
+  const recordState = String(task.work_record_state || '').trim().toLowerCase()
+  const executionState = String((task as any).execution_state || '').trim().toLowerCase()
+  const status = String(task.status || '').trim().toLowerCase()
+  return task.read_only_views?.[capability] === true
+    && ['completed', 'pending_review', 'reassigned'].includes(recordState)
+    && !['cancelled', 'canceled'].includes(status)
+    && !WORK_RECORD_BLOCKING_EXECUTION_STATES.has(executionState)
+}
+
 export function redactReadOnlyWorkRecord(task: WorkTaskItem): WorkTaskItem {
   if (task.work_record_read_only !== true) return task
   const canReadLockCodes = canViewReadOnlyWorkRecordLockCodes(task)
+  const canReadPropertyAccess = canViewReadOnlyWorkRecordContext(task, 'property_access')
+  const canReadGuestContext = canViewReadOnlyWorkRecordContext(task, 'guest_context')
   const turnoverDisplay = task.turnover_display && typeof task.turnover_display === 'object'
     ? {
         ...task.turnover_display,
         old_code: canReadLockCodes ? task.turnover_display.old_code ?? null : null,
         new_code: canReadLockCodes ? task.turnover_display.new_code ?? null : null,
-        guest_request_checkout: null,
-        guest_request_checkin: null,
-        guest_request_summary: null,
+        guest_request_checkout: canReadGuestContext ? task.turnover_display.guest_request_checkout ?? null : null,
+        guest_request_checkin: canReadGuestContext ? task.turnover_display.guest_request_checkin ?? null : null,
+        guest_request_summary: canReadGuestContext ? task.turnover_display.guest_request_summary ?? null : null,
         conflicts: redactWorkRecordConflicts(task.turnover_display.conflicts),
       }
     : task.turnover_display
   const maintenanceWorkflow = task.maintenance_workflow && typeof task.maintenance_workflow === 'object'
     ? { ...task.maintenance_workflow, available_actions: [] }
     : task.maintenance_workflow
+  const feedbackActions = (Array.isArray(task.available_actions) ? task.available_actions : [])
+    .filter((action) => (
+      action?.id === 'report_issue'
+      && action.enabled === true
+      && String(action.source_type || '').trim() === 'cleaning_tasks'
+      && Boolean(String(action.source_id || '').trim())
+    ))
   const isReassignedRecord = String(task.work_record_state || '').trim().toLowerCase() === 'reassigned'
   const keepAttributedWorkRecordMedia = isReassignedRecord && task.work_record_media_attributed === true
   return {
     ...task,
     old_code: canReadLockCodes ? task.old_code ?? null : null,
     new_code: canReadLockCodes ? task.new_code ?? null : null,
-    guest_special_request: null,
-    guest_request_checkout: null,
-    guest_request_checkin: null,
-    guest_request_summary: null,
-    guest_luggage: null,
-    guest_ready_notification: null,
-    guest_ready_outside_key: null,
+    guest_special_request: canReadGuestContext ? task.guest_special_request ?? null : null,
+    guest_request_checkout: canReadGuestContext ? task.guest_request_checkout ?? null : null,
+    guest_request_checkin: canReadGuestContext ? task.guest_request_checkin ?? null : null,
+    guest_request_summary: canReadGuestContext ? task.guest_request_summary ?? null : null,
+    guest_luggage: canReadGuestContext ? task.guest_luggage ?? null : null,
+    guest_ready_notification: canReadGuestContext ? task.guest_ready_notification ?? null : null,
+    guest_ready_outside_key: canReadGuestContext ? task.guest_ready_outside_key ?? null : null,
     participants: null,
     capabilities: null,
-    available_actions: [],
+    available_actions: feedbackActions,
     maintenance_workflow: maintenanceWorkflow,
     turnover_display: turnoverDisplay,
     display_conflicts: redactWorkRecordConflicts(task.display_conflicts),
     property: task.property
       ? {
           ...task.property,
-          access_guide_link: null,
-          wifi_ssid: null,
-          wifi_password: null,
-          router_location: null,
+          access_guide_link: canReadPropertyAccess ? task.property.access_guide_link ?? null : null,
+          wifi_ssid: canReadPropertyAccess ? task.property.wifi_ssid ?? null : null,
+          wifi_password: canReadPropertyAccess ? task.property.wifi_password ?? null : null,
+          router_location: canReadPropertyAccess ? task.property.router_location ?? null : null,
         }
       : null,
-    ...((task as any).order_note !== undefined ? { order_note: null } : {}),
+    ...((task as any).order_note !== undefined ? { order_note: canReadGuestContext ? (task as any).order_note ?? null : null } : {}),
     ...(isReassignedRecord
       ? {
           photo_urls: [],
@@ -678,7 +698,7 @@ export function redactReadOnlyWorkRecord(task: WorkTaskItem): WorkTaskItem {
   }
 }
 
-function revokeCachedReadOnlyLockCodesForEvent(event: WorkTaskStreamEvent, revokeAllWhenUnscoped: boolean) {
+function revokeCachedReadOnlyCapabilitiesForEvent(event: WorkTaskStreamEvent, revokeAllWhenUnscoped: boolean) {
   const matchedIndexes = findTaskIndexesForEvent(event)
   const indexes = matchedIndexes.length
     ? matchedIndexes
@@ -696,10 +716,14 @@ function revokeCachedReadOnlyLockCodesForEvent(event: WorkTaskStreamEvent, revok
       read_only_views: {
         ...(task.read_only_views || {}),
         lock_codes: false,
+        property_access: false,
+        guest_context: false,
       },
     } as WorkTaskItem)
     if (
       task.read_only_views?.lock_codes !== false
+      || task.read_only_views?.property_access !== false
+      || task.read_only_views?.guest_context !== false
       || task.old_code != null
       || task.new_code != null
       || task.turnover_display?.old_code != null
@@ -1110,10 +1134,16 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
   if (scope === 'membership' || eventType === 'TASK_REMOVED' || eventType === 'TASK_ASSIGNMENT_CHANGED') {
     void invalidateCleaningMediaCache()
   }
+  const exactSourceTargetsSyntheticCleaningRecord = findTaskIndexesForEvent(event).some((index) => {
+    const task = state.items[index]
+    return task?.work_record_read_only === true
+      && String(task.source_type || '').trim() === 'cleaning_tasks'
+      && !eventDirectlyTargetsTask(task, event)
+  })
   // Server authority events can revoke a historical record or replace one of
-  // its exact sources. Remove cached lock codes before any network refresh so
+  // its exact sources. Remove cached read-only capabilities before any network refresh so
   // an offline/failed refresh cannot leave stale physical-access data visible.
-  revokeCachedReadOnlyLockCodesForEvent(event, membershipChanged)
+  const readOnlyCapabilitiesRevoked = revokeCachedReadOnlyCapabilitiesForEvent(event, membershipChanged)
   if (eventRequiresGuestReadyAuthorityRefresh(event)) {
     // Early-arrival qualification and outside-key state are server-authoritative
     // and coupled to role-scoped actions. Never combine a partial time/event
@@ -1134,12 +1164,23 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
     })
     return
   }
-  if (membershipChanged) {
-    void requestActiveWorkTasksRefresh('force', eventType || 'membership').catch(() => {
-      // Membership changes can move a task across day/week/month buckets.
-      // Retry once through the bounded coordinator after a transient failure.
-      void requestActiveWorkTasksRefresh('consistency', 'membership_authority_retry').catch(() => {})
+  const readOnlySourceAuthorityRefresh = readOnlyCapabilitiesRevoked && exactSourceTargetsSyntheticCleaningRecord
+  if (readOnlySourceAuthorityRefresh) {
+    // A safe source-task patch can still change whether a synthetic historical
+    // record is authorized. Refresh the canonical projection after revoking
+    // cached secrets instead of leaving the record redacted until screen focus.
+    void requestActiveWorkTasksRefresh('force', 'readonly_source_authority_changed').catch(() => {
+      void requestActiveWorkTasksRefresh('consistency', 'readonly_source_authority_retry').catch(() => {})
     })
+  }
+  if (membershipChanged) {
+    if (!readOnlySourceAuthorityRefresh) {
+      void requestActiveWorkTasksRefresh('force', eventType || 'membership').catch(() => {
+        // Membership changes can move a task across day/week/month buckets.
+        // Retry once through the bounded coordinator after a transient failure.
+        void requestActiveWorkTasksRefresh('consistency', 'membership_authority_retry').catch(() => {})
+      })
+    }
     return
   }
   if (!isSafePatchEvent(event)) {

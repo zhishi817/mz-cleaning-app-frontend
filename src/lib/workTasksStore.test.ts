@@ -332,6 +332,7 @@ test('keeps synthetic lock codes only for an authorized immutable cleaning recor
     new_code: '2468',
     read_only_views: {
       property_access: true,
+      guest_context: true,
       lock_codes: true,
       cleaner_photos: true,
       inspection_photos: false,
@@ -341,19 +342,47 @@ test('keeps synthetic lock codes only for an authorized immutable cleaning recor
     turnover_display: {
       old_code: '1357',
       new_code: '2468',
-      guest_request_summary: 'must remain hidden',
+      guest_request_summary: 'late arrival',
+    },
+    guest_special_request: 'leave luggage first',
+    order_note: 'call before entry',
+    guest_luggage: { id: 'luggage-1', note: 'two bags' },
+    guest_ready_notification: { status: 'notified', order_id: 'order-1', version: 1 },
+    available_actions: [
+      { id: 'complete', label: '完成', enabled: true },
+      { id: 'report_issue', label: '问题反馈与报修记录', enabled: true, source_type: 'cleaning_tasks', source_id: 'cleaning-1' },
+      { id: 'report_issue', label: '错误来源', enabled: true, source_type: 'work_tasks', source_id: 'work-1' },
+    ],
+    property: {
+      id: 'property-1',
+      code: 'A1',
+      access_guide_link: 'https://example.test/guide',
+      wifi_ssid: 'Guest Network',
+      wifi_password: 'synthetic-password',
+      router_location: 'hall cupboard',
     },
   } as any)
 
   expect(redactReadOnlyWorkRecord(completed)).toMatchObject({
     old_code: '1357',
     new_code: '2468',
-    guest_special_request: null,
-    available_actions: [],
+    guest_special_request: 'leave luggage first',
+    order_note: 'call before entry',
+    guest_luggage: { id: 'luggage-1', note: 'two bags' },
+    guest_ready_notification: { status: 'notified', order_id: 'order-1', version: 1 },
+    property: {
+      access_guide_link: 'https://example.test/guide',
+      wifi_ssid: 'Guest Network',
+      wifi_password: 'synthetic-password',
+      router_location: 'hall cupboard',
+    },
+    available_actions: [
+      { id: 'report_issue', label: '问题反馈与报修记录', enabled: true, source_type: 'cleaning_tasks', source_id: 'cleaning-1' },
+    ],
     turnover_display: {
       old_code: '1357',
       new_code: '2468',
-      guest_request_summary: null,
+      guest_request_summary: 'late arrival',
     },
   })
   expect(canViewReadOnlyWorkRecordLockCodes(completed)).toBe(true)
@@ -363,7 +392,7 @@ test('keeps synthetic lock codes only for an authorized immutable cleaning recor
   })
 
   for (const denied of [
-    { read_only_views: { ...completed.read_only_views, lock_codes: false } },
+    { read_only_views: { ...completed.read_only_views, lock_codes: false, property_access: false, guest_context: false } },
     { work_record_state: 'cancelled', status: 'cancelled' },
     { work_record_state: 'rescheduled', status: 'assigned' },
     { execution_state: 'deleted' },
@@ -372,13 +401,16 @@ test('keeps synthetic lock codes only for an authorized immutable cleaning recor
     expect(redactReadOnlyWorkRecord({ ...completed, ...denied } as any)).toMatchObject({
       old_code: null,
       new_code: null,
+      guest_special_request: null,
+      order_note: null,
+      property: { wifi_ssid: null, wifi_password: null },
       turnover_display: { old_code: null, new_code: null },
     })
     expect(canViewReadOnlyWorkRecordLockCodes({ ...completed, ...denied } as any)).toBe(false)
   }
 })
 
-test('revokes cached lock codes before a membership refresh that fails', async () => {
+test('revokes cached read-only capabilities before a membership refresh that fails', async () => {
   const api = require('./api')
   const params = refreshParams({ date_from: '2026-10-19', date_to: '2026-10-19', view: 'all' })
   const record = makeTask({
@@ -392,8 +424,19 @@ test('revokes cached lock codes before a membership refresh that fails', async (
     status: 'done',
     old_code: '1357',
     new_code: '2468',
+    guest_special_request: 'late arrival',
+    order_note: 'call before entry',
+    guest_luggage: { id: 'luggage-1', note: 'two bags' },
+    property: {
+      id: 'property-1',
+      code: 'A1',
+      wifi_ssid: 'Guest Network',
+      wifi_password: 'synthetic-password',
+      access_guide_link: 'https://example.test/guide',
+    },
     read_only_views: {
       property_access: true,
+      guest_context: true,
       lock_codes: true,
       cleaner_photos: true,
       inspection_photos: false,
@@ -428,10 +471,82 @@ test('revokes cached lock codes before a membership refresh that fails', async (
   expect(cached).toMatchObject({
     old_code: null,
     new_code: null,
-    read_only_views: { lock_codes: false },
+    guest_special_request: null,
+    order_note: null,
+    guest_luggage: null,
+    property: { wifi_ssid: null, wifi_password: null, access_guide_link: null },
+    read_only_views: { lock_codes: false, property_access: false, guest_context: false },
     turnover_display: { old_code: null, new_code: null },
   })
   expect(canViewReadOnlyWorkRecordLockCodes(cached)).toBe(false)
+})
+
+test('keeps authorized read-only property and guest context through cache hydration, refresh and safe patches', async () => {
+  const storage = require('./storage')
+  const api = require('./api')
+  const params = refreshParams({ date_from: '2026-10-21', date_to: '2026-10-21' })
+  const bucketKey = makeWorkTasksBucketKey(params)
+  const projectionKey = 'unscoped-v1:mine'
+  const record = makeTask({
+    id: 'cleaning_tasks_cleaner:cache-record::record:completed:2026-10-21',
+    source_id: 'cache-record',
+    source_ids: ['cache-record'],
+    work_record_read_only: true,
+    work_record_visible: true,
+    work_record_state: 'completed',
+    status: 'done',
+    guest_special_request: 'late arrival',
+    order_note: 'call before entry',
+    property: {
+      id: 'property-1',
+      code: 'A1',
+      wifi_ssid: 'Guest Network',
+      wifi_password: 'synthetic-password',
+      access_guide_link: 'https://example.test/guide',
+    },
+    read_only_views: {
+      property_access: true,
+      guest_context: true,
+      lock_codes: false,
+      cleaner_photos: true,
+      inspection_photos: false,
+      guest_key_photo: true,
+      media_scope: 'cleaner',
+      media_source_ids: ['cache-record'],
+    },
+  } as any)
+  storage.getJson.mockResolvedValueOnce({
+    items: [record],
+    projectionKey,
+    ready: true,
+  })
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+  await initWorkTasksStore({ bucketKey, projectionKey, session: params })
+  expect(getWorkTasksSnapshot().items[0]).toMatchObject({
+    guest_special_request: 'late arrival',
+    order_note: 'call before entry',
+    property: { wifi_ssid: 'Guest Network', access_guide_link: 'https://example.test/guide' },
+  })
+
+  api.listWorkTasks.mockResolvedValueOnce([record])
+  await requestWorkTasksRefresh({ ...params, projectionKey, mode: 'force', reason: 'readonly_context_refresh' })
+  expect(getWorkTasksSnapshot().items[0]).toMatchObject({
+    guest_special_request: 'late arrival',
+    order_note: 'call before entry',
+    property: { wifi_ssid: 'Guest Network', access_guide_link: 'https://example.test/guide' },
+  })
+
+  const patched = mergePatchIntoTask(getWorkTasksSnapshot().items[0], {
+    event_type: 'TASK_UPDATED',
+    change_scope: 'list',
+    changed_fields: ['status'],
+    payload: { patch: { status: 'done' } },
+  } as any)
+  expect(patched).toMatchObject({
+    guest_special_request: 'late arrival',
+    order_note: 'call before entry',
+    property: { wifi_ssid: 'Guest Network', access_guide_link: 'https://example.test/guide' },
+  })
 })
 
 test('does not retain current-assignee media when a cached card becomes a reassigned record', () => {
@@ -1058,6 +1173,68 @@ test('refreshes a directly targeted canonical read-only record after server-side
     work_record_state: 'completed',
     work_record_read_only: true,
     counts_as_active_task: false,
+  })
+})
+
+test('refreshes a synthetic read-only record after an exact-source guest-luggage event revokes cached capabilities', async () => {
+  const api = require('./api')
+  const params = refreshParams({ date_from: '2026-10-19', date_to: '2026-10-19', view: 'mine' })
+  const record = makeTask({
+    id: 'cleaning_tasks_cleaner:source-authority::record:completed:2026-10-19',
+    source_id: 'source-authority',
+    source_ids: ['source-authority'],
+    all_related_source_ids: ['source-authority'],
+    work_record_read_only: true,
+    work_record_visible: true,
+    work_record_state: 'completed',
+    status: 'done',
+    property: {
+      id: 'property-1',
+      code: 'A1',
+      wifi_ssid: 'Guest Network',
+      wifi_password: 'synthetic-password',
+      access_guide_link: 'https://example.test/guide',
+    },
+    guest_special_request: 'leave luggage inside',
+    read_only_views: {
+      property_access: true,
+      guest_context: true,
+      lock_codes: false,
+      cleaner_photos: true,
+      inspection_photos: false,
+      guest_key_photo: true,
+      media_scope: 'cleaner',
+      media_source_ids: ['source-authority'],
+    },
+  } as any)
+  api.listWorkTasks.mockResolvedValueOnce([record])
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'source_authority_seed' })
+  await activateWorkTasksRealtime(params)
+  api.listWorkTasks.mockClear()
+  api.listWorkTasks.mockResolvedValueOnce([record])
+
+  mockStreamListeners.work_task_event?.[0]({
+    type: 'work_task_event',
+    data: JSON.stringify({
+      event_id: 'event-source-authority-changed',
+      event_type: 'TASK_UPDATED',
+      change_scope: 'list',
+      task_id: 'source-authority',
+      source_ref_ids: ['source-authority'],
+      changed_fields: ['guest_luggage'],
+      payload: { patch: { guest_luggage: { id: 'notice-2', note: 'updated notice' } } },
+    }),
+  })
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (api.listWorkTasks.mock.calls.length > 0) break
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+  expect(findWorkTaskItemByAnyId('source-authority')).toMatchObject({
+    read_only_views: { property_access: true, guest_context: true },
+    guest_special_request: 'leave luggage inside',
+    property: { wifi_ssid: 'Guest Network', access_guide_link: 'https://example.test/guide' },
   })
 })
 

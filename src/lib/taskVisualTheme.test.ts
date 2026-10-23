@@ -161,6 +161,29 @@ test('explicit current key handover fact outranks unfinished shared workflow sta
   expect(getKeyHandoverPendingNotice(task)).toBe('资料待补：补品记录、房源照片')
 })
 
+test('self-complete label ignores a related phase handover until the exact source is completed', () => {
+  const relatedOnly = makeTask({
+    task_kind: 'cleaning',
+    status: 'to_hang_keys',
+    inspection_mode: 'self_complete',
+    cleaner_id: 'cleaner-1',
+    cleaner_name: '清洁A',
+    source_key_handover_completed: false,
+    key_handover: {
+      state: 'completed',
+      source_task_id: 'related-checkin',
+      completed_at: '2026-10-22T01:00:00.000Z',
+      workflow_finalization_pending: false,
+      missing_requirements: [],
+    },
+  } as any)
+  expect(getTaskStatusMeta(relatedOnly, ['cleaner'])).toEqual({ text: '待挂钥匙', tone: 'pending' })
+  expect(getKeyHandoverPendingNotice(relatedOnly, { activeRole: 'cleaner' })).toBeNull()
+
+  const exactSourceDone = { ...relatedOnly, source_key_handover_completed: true }
+  expect(getTaskStatusMeta(exactSourceDone as any, ['cleaner'])).toEqual({ text: '已挂钥匙', tone: 'success' })
+})
+
 test('pending handover notice only shows responsibilities for the active role', () => {
   const task = makeTask({
     status: 'in_progress',

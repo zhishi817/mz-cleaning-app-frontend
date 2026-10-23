@@ -1,4 +1,5 @@
 import { cleaningExecutionTaskIdsFromTask, inspectionExecutionTaskIdsFromTask, uniqueTextList } from './turnoverDisplay'
+import type { WorkTaskFormPhotoRecord } from './api'
 
 export type ManagerDailyTaskPhotoSource = 'consumables' | 'completion' | 'inspection' | 'restock' | 'unknown'
 
@@ -16,6 +17,62 @@ export type ManagerGuestLuggagePhotoDisplayItem = {
   remoteReference: string
   localUri: string | null
   guestLuggageId: string | null
+}
+
+const BLOCKED_HISTORICAL_EXECUTION_STATES = new Set([
+  'cancelled',
+  'canceled',
+  'deleted',
+  'removed',
+  'superseded',
+  'tombstone',
+])
+
+function historicalMediaSourceIds(task: any) {
+  return uniqueTextList(Array.isArray(task?.read_only_views?.media_source_ids)
+    ? task.read_only_views.media_source_ids
+    : [])
+}
+
+/**
+ * Manager roles may read all media for an authorised source task, but a
+ * reassigned work-record card represents the former worker's immutable
+ * record. Keep that card bound to Root-issued source ids and the recorded
+ * actor so media uploaded later by the replacement worker cannot appear in
+ * the former worker's history.
+ */
+export function managerHistoricalMediaRecords(
+  task: any,
+  records0: WorkTaskFormPhotoRecord[] | null | undefined,
+): WorkTaskFormPhotoRecord[] {
+  if (task?.work_record_read_only !== true) return []
+  const status = String(task?.status || '').trim().toLowerCase()
+  const executionState = String(task?.execution_state || '').trim().toLowerCase()
+  if (status === 'cancelled' || status === 'canceled' || BLOCKED_HISTORICAL_EXECUTION_STATES.has(executionState)) return []
+
+  const sourceIds = historicalMediaSourceIds(task)
+  if (!sourceIds.length || String(task?.read_only_views?.media_scope || '').trim() !== 'manager') return []
+  const sourceIdSet = new Set(sourceIds)
+  const exactRecords = (Array.isArray(records0) ? records0 : []).filter((record) => (
+    !!String(record?.url || '').trim()
+    && sourceIdSet.has(String(record?.task_id || '').trim())
+  ))
+  if (String(task?.work_record_state || '').trim().toLowerCase() !== 'reassigned') return exactRecords
+
+  const actorId = String(task?.completed_by_user_id || '').trim()
+  if (!actorId) return []
+  const feedbackSourceId = String(task?.read_only_views?.feedback_source_id || '').trim()
+  if (!feedbackSourceId || !sourceIdSet.has(feedbackSourceId)) return []
+  const hasExactActorBinding = (Array.isArray(task?.phase_history) ? task.phase_history : []).some((phase: any) => (
+    String(phase?.source_id || '').trim() === feedbackSourceId
+    && String(phase?.actor_user_id || '').trim() === actorId
+  ))
+  if (!hasExactActorBinding) return []
+
+  return exactRecords.filter((record) => (
+    String(record?.task_id || '').trim() === feedbackSourceId
+    && String(record?.uploader_id || '').trim() === actorId
+  ))
 }
 
 const PHOTO_SOURCE_LABEL: Record<ManagerDailyTaskPhotoSource, string> = {

@@ -224,6 +224,37 @@ describe('dailyTaskPresentation', () => {
     })
   })
 
+  it('keeps self-complete active when only a related canonical phase has a handover video', () => {
+    const relatedOnly = {
+      ...base,
+      id: 'self-complete-related-video',
+      task_kind: 'cleaning',
+      status: 'to_hang_keys',
+      scheduled_date: '2026-10-19',
+      inspection_mode: 'self_complete',
+      source_key_handover_completed: false,
+      key_handover: {
+        state: 'completed',
+        source_task_id: 'related-checkin',
+        completed_at: '2026-10-19T10:00:00.000Z',
+        workflow_finalization_pending: false,
+        missing_requirements: [],
+      },
+    }
+
+    expect(partitionDailyTasks([relatedOnly], '2026-10-19')).toEqual({ active: [relatedOnly], overdue: [], handover: [], history: [], cancelled: [] })
+    expect(dailyTaskStatusCounts([relatedOnly], '2026-10-19')).toEqual({
+      active: 1,
+      overdue: 0,
+      completed: 0,
+      cancelled: 0,
+      changed: 0,
+    })
+
+    const exactSourceDone = { ...relatedOnly, source_key_handover_completed: true }
+    expect(partitionDailyTasks([exactSourceDone], '2026-10-19')).toEqual({ active: [], overdue: [], handover: [exactSourceDone], history: [], cancelled: [] })
+  })
+
   it('keeps one immutable terminal record instead of a duplicate live projection', () => {
     const current = {
       ...base,

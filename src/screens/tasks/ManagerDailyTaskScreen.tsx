@@ -15,6 +15,7 @@ import {
   getCompletionPhotos,
   getInspectionPhotos,
   getRestockProof,
+  getWorkTaskFormPhotos,
   markGuestCheckedOutByOrder,
   markGuestCheckedOutByTasks,
   saveGuestLuggageNotice,
@@ -30,7 +31,8 @@ import { hasAnyRole, roleNamesOf } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getEffectiveTaskStatus, guestCheckoutCanDriveTaskStatus, hasAuthoritativeKeyHandoverProjection, hasCompletedKeyHandover, isTaskWorkflowProgressStatus } from '../../lib/taskVisualTheme'
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, patchWorkTaskItems, requestWorkTasksRefresh, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
-import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyOperationId, isGuestReadyNotificationAction, mergeGuestReadyNotificationActions } from '../../lib/workTaskActions'
+import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyOperationId, isGuestReadyNotificationAction, mergeGuestReadyNotificationActions, navigationForWorkTaskAction } from '../../lib/workTaskActions'
+import { buildCleaningMediaVideoSource } from '../../lib/cleaningMedia'
 import { ALL_KITCHEN_SCENE_PHOTOS } from '../../lib/cleaningScenePhotoTemplate'
 import {
   completionPhotoTaskIdsFromTask,
@@ -39,6 +41,7 @@ import {
   mergeManagerCompletionPhotoItems,
   mergeManagerLivingRoomPhotoUrls,
   managerDailyTaskPhotoLoadIssue,
+  managerHistoricalMediaRecords,
   type ManagerDailyTaskPhotoLoadIssue,
   type ManagerDailyTaskPhotoSource,
 } from '../../lib/managerDailyTaskPhotos'
@@ -47,6 +50,7 @@ import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import CleaningMediaImage from '../../components/CleaningMediaImage'
 import CleaningMediaPreview from '../../components/CleaningMediaPreview'
+import WorkRecordReadOnlyInfo from '../../components/WorkRecordReadOnlyInfo'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'ManagerDailyTask'>
 
@@ -312,6 +316,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const [completionItems, setCompletionItems] = useState<Array<{ area: string; url: string; note?: string | null }>>([])
   const [inspectionItems, setInspectionItems] = useState<Array<{ area: string; url: string; note?: string | null }>>([])
   const [restockProofs, setRestockProofs] = useState<Array<{ item_id: string; proof_url: string; proof_urls?: string[]; note?: string | null; status?: string | null }>>([])
+  const [historicalKeyPhotoUrl, setHistoricalKeyPhotoUrl] = useState<string | null>(null)
+  const [historicalLockboxVideo, setHistoricalLockboxVideo] = useState<{ url: string; taskId: string } | null>(null)
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const syncedTaskIdRef = useRef<string>('')
@@ -367,7 +373,17 @@ export default function ManagerDailyTaskScreen(props: Props) {
     }
   }, [task, token, user?.id, props.route.params.taskId])
 
-  const canLoadLiveSourceMedia = canLoadLiveSourceMediaForDailyTask(task)
+  const workRecordReadOnly = task?.work_record_read_only === true
+  const historicalMediaSourceIds = useMemo(() => workRecordReadOnly
+    ? uniqueTextList(Array.isArray((task as any)?.read_only_views?.media_source_ids)
+      ? (task as any).read_only_views.media_source_ids
+      : [])
+    : [], [task, workRecordReadOnly])
+  const historicalMediaSourceIdsKey = historicalMediaSourceIds.join('|')
+  const canLoadHistoricalManagerMedia = workRecordReadOnly
+    && String((task as any)?.read_only_views?.media_scope || '').trim() === 'manager'
+    && historicalMediaSourceIds.length > 0
+  const canLoadLiveSourceMedia = !workRecordReadOnly && canLoadLiveSourceMediaForDailyTask(task)
   const inspectionTaskIds = useMemo(() => canLoadLiveSourceMedia ? inspectionPhotoTaskIdsFromTask(task) : [], [canLoadLiveSourceMedia, task])
   const cleaningTaskIds = useMemo(() => canLoadLiveSourceMedia ? cleaningTaskIdsFromTask(task) : [], [canLoadLiveSourceMedia, task])
   const inspectionTaskIdsKey = inspectionTaskIds.join('|')
@@ -375,12 +391,80 @@ export default function ManagerDailyTaskScreen(props: Props) {
 
   const loadTaskPhotos = useCallback(async (opts?: { reuseRecent?: boolean }) => {
     if (!token) return
-    const loadKey = `${String(user?.id || '')}|${cleaningTaskIdsKey}|${inspectionTaskIdsKey}`
+    const loadKey = `${String(user?.id || '')}|${workRecordReadOnly ? `history:${historicalMediaSourceIdsKey}` : `live:${cleaningTaskIdsKey}|${inspectionTaskIdsKey}`}`
     const lastLoad = lastPhotoLoadRef.current
     if (opts?.reuseRecent && lastLoad?.key === loadKey && Date.now() - lastLoad.at < PHOTO_LOAD_FOCUS_REUSE_MS) return
     if (photoLoadInFlightPromiseRef.current && photoLoadInFlightKeyRef.current === loadKey) return photoLoadInFlightPromiseRef.current
     const cleaningIds = cleaningTaskIdsKey ? cleaningTaskIdsKey.split('|').filter(Boolean) : []
     const inspectionIds = inspectionTaskIdsKey ? inspectionTaskIdsKey.split('|').filter(Boolean) : []
+    if (workRecordReadOnly && canLoadHistoricalManagerMedia) {
+      let run: Promise<void> | undefined = undefined
+      run = (async () => {
+        setPhotosLoading(true)
+        setPhotoLoadIssues([])
+        try {
+          const response = await getWorkTaskFormPhotos(
+            token,
+            String(task?.id || ''),
+            historicalMediaSourceIds,
+            'manager',
+            { includeVideos: true },
+          )
+          const records = managerHistoricalMediaRecords(task, response?.items)
+          const urls = (source: string, area?: string) => records
+            .filter((record) => record.source === source && (!area || record.area === area))
+            .map((record) => String(record.url || '').trim())
+            .filter(Boolean)
+          setLivingRoomPhotoUrls(urls('consumable', 'living'))
+          setConsumableItems(records
+            .filter((record) => record.source === 'consumable' && record.area !== 'living')
+            .map((record) => ({
+              item_id: String(record.item_id || record.area || '').trim(),
+              item_label: record.label || null,
+              photo_url: record.url,
+              photo_urls: [record.url],
+            })))
+          setCompletionItems(records
+            .filter((record) => record.source === 'completion')
+            .map((record) => ({ area: String(record.area || '').trim(), url: record.url })))
+          setInspectionItems(records
+            .filter((record) => record.source === 'inspection')
+            .map((record) => ({ area: String(record.area || '').trim(), url: record.url })))
+          setRestockProofs(records
+            .filter((record) => record.source === 'restock')
+            .map((record) => ({
+              item_id: String(record.item_id || '').trim(),
+              proof_url: record.url,
+              proof_urls: [record.url],
+            })))
+          setHistoricalKeyPhotoUrl(urls('key')[0] || null)
+          const lockboxVideoRecord = records.find((record) => record.source === 'lockbox_video')
+          setHistoricalLockboxVideo(lockboxVideoRecord
+            ? { url: String(lockboxVideoRecord.url || '').trim(), taskId: String(lockboxVideoRecord.task_id || '').trim() }
+            : null)
+          lastPhotoLoadRef.current = { key: loadKey, at: Date.now() }
+        } catch (error) {
+          setPhotoLoadIssues([managerDailyTaskPhotoLoadIssue('unknown', historicalMediaSourceIds[0] || '-', error)])
+          setConsumableItems([])
+          setLivingRoomPhotoUrls([])
+          setCompletionItems([])
+          setInspectionItems([])
+          setRestockProofs([])
+          setHistoricalKeyPhotoUrl(null)
+          setHistoricalLockboxVideo(null)
+          lastPhotoLoadRef.current = null
+        } finally {
+          if (run && photoLoadInFlightPromiseRef.current === run) {
+            photoLoadInFlightPromiseRef.current = null
+            photoLoadInFlightKeyRef.current = ''
+            setPhotosLoading(false)
+          }
+        }
+      })()
+      photoLoadInFlightKeyRef.current = loadKey
+      photoLoadInFlightPromiseRef.current = run
+      return run
+    }
     if (!inspectionIds.length && !cleaningIds.length) {
       setPhotoLoadIssues([])
       setConsumableItems([])
@@ -388,6 +472,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
       setCompletionItems([])
       setInspectionItems([])
       setRestockProofs([])
+      setHistoricalKeyPhotoUrl(null)
+      setHistoricalLockboxVideo(null)
       return
     }
 
@@ -469,7 +555,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     photoLoadInFlightKeyRef.current = loadKey
     photoLoadInFlightPromiseRef.current = run
     return run
-  }, [cleaningTaskIdsKey, inspectionTaskIdsKey, token, user?.id])
+  }, [canLoadHistoricalManagerMedia, cleaningTaskIdsKey, historicalMediaSourceIdsKey, inspectionTaskIdsKey, task, token, user?.id, workRecordReadOnly])
 
   useEffect(() => {
     void loadTaskPhotos()
@@ -485,7 +571,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
   async function onSave() {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!task) return
-    if (!canEditManagerFields) return
+    if (!canEditManagerFields || workRecordReadOnly) return
     const taskIds = executionTaskIdsForRole(task, task.task_kind)
     try {
       setSaving(true)
@@ -732,8 +818,23 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const cleaningStatus = String((task as any)?.cleaning_status || '')
   const inspectionStatus = String((task as any)?.inspection_status || '')
   const checkedOutAt = String((task as any)?.checked_out_at || '').trim()
-  const hasKeyPhoto = !!String((task as any)?.key_photo_url || '').trim()
-  const lockboxUrl = String((task as any)?.lockbox_video_url || '').trim()
+  const keyPhotoUrl = workRecordReadOnly
+    ? historicalKeyPhotoUrl
+    : String((task as any)?.key_photo_url || '').trim() || null
+  const hasKeyPhoto = !!keyPhotoUrl
+  const lockboxUrl = workRecordReadOnly
+    ? String(historicalLockboxVideo?.url || '').trim()
+    : String((task as any)?.lockbox_video_url || '').trim()
+  const lockboxVideoSource = workRecordReadOnly && historicalLockboxVideo
+    ? buildCleaningMediaVideoSource(token, historicalLockboxVideo.url, {
+        accessTaskId: historicalLockboxVideo.taskId,
+        accessSourceIds: historicalMediaSourceIds,
+        mediaScope: 'manager',
+      })
+    : { uri: toAbsoluteUrl(lockboxUrl) }
+  const historicalMediaAccess = workRecordReadOnly
+    ? { accessSourceIds: historicalMediaSourceIds, mediaScope: 'manager' as const }
+    : {}
   const taskType = String((task as any)?.task_type || '').trim().toLowerCase()
   const isStayoverTask = isStayoverTaskType(taskType)
   const isCheckoutLike = taskType === 'checkout_clean' || taskType === 'turnover' || !!String((task as any)?.start_time || '').trim()
@@ -743,7 +844,6 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const taskDate = String((task as any)?.scheduled_date || (task as any)?.date || '').trim()
   const isHistoricalTask = isBeforeToday(taskDate)
   const isTodayTask = taskDate.slice(0, 10) === ymd(new Date())
-  const workRecordReadOnly = task?.work_record_read_only === true
   const canEditGeneralInfo = canEditManagerFields && !saving && !isHistoricalTask && !workRecordReadOnly
   const canEditLuggage = hasAnyRole(user, ['customer_service', 'admin', 'offline_manager']) && isTodayTask && !workRecordReadOnly
   const canEditKeysOnly = canEditManagerFields && !saving && !workRecordReadOnly
@@ -753,6 +853,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     (task as any)?.guest_luggage?.id,
   )
   const guestReadyActions = availableActionsForTask(task, { roleNames, activeRole }).filter(isGuestReadyNotificationAction)
+  const feedbackAction = availableActionsForTask(task, { roleNames, activeRole }).find((action) => action.id === 'report_issue') || null
 
   const uncleanPhotos = inspectionItems.filter((x) => x.area === 'unclean')
   const roomPhotoAreas = ['living', 'sofa', 'bedroom', 'kitchen'] as const
@@ -932,6 +1033,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
           </View>
         </View>
 
+        <WorkRecordReadOnlyInfo task={task} token={token} />
+
         {photoLoadIssues.length ? (
           <View testID="manager-photo-load-issues" style={styles.photoIssueCard}>
             <Text style={styles.photoIssueTitle}>照片读取失败，不能判定为“没有照片”</Text>
@@ -963,8 +1066,9 @@ export default function ManagerDailyTaskScreen(props: Props) {
               <TextInput value={checkoutTime} onChangeText={setCheckoutTime} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="例如 11am" placeholderTextColor="#9CA3AF" />
             </View>
             <View style={styles.formHalf}>
-              <Text style={styles.label}>{actualCheckinTask ? '入住时间' : '入住时间备注（未创建入住任务）'}</Text>
-              <TextInput value={checkinTime} onChangeText={setCheckinTime} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="例如 2pm" placeholderTextColor="#9CA3AF" />
+              <Text style={styles.label}>{actualCheckinTask ? '入住时间' : '入住时间备注'}</Text>
+              <TextInput testID="manager-checkin-time" value={checkinTime} onChangeText={setCheckinTime} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="例如 2pm" placeholderTextColor="#9CA3AF" />
+              {!actualCheckinTask ? <Text style={styles.fieldHint}>仅记录时间，不会创建入住任务</Text> : null}
             </View>
           </View>
           <View style={styles.row2Compact}>
@@ -1045,13 +1149,15 @@ export default function ManagerDailyTaskScreen(props: Props) {
               ) : null}
             </View>
           ) : null}
-          <Pressable
-            onPress={onSave}
-            disabled={!canEditManagerFields || saving}
-            style={({ pressed }) => [styles.primaryBtnFull, !canEditManagerFields || saving ? styles.primaryBtnDisabled : null, pressed ? styles.pressed : null]}
-          >
-            <Text style={styles.primaryText}>{saving ? t('common_loading') : '保存修改'}</Text>
-          </Pressable>
+          {!workRecordReadOnly ? (
+            <Pressable
+              onPress={onSave}
+              disabled={!canEditManagerFields || saving}
+              style={({ pressed }) => [styles.primaryBtnFull, !canEditManagerFields || saving ? styles.primaryBtnDisabled : null, pressed ? styles.pressed : null]}
+            >
+              <Text style={styles.primaryText}>{saving ? t('common_loading') : '保存修改'}</Text>
+            </Pressable>
+          ) : null}
           {guestReadyActions.map((action) => (
             <Pressable
               key={action.id}
@@ -1069,12 +1175,18 @@ export default function ManagerDailyTaskScreen(props: Props) {
               <Text style={styles.grayText}>{guestReadyPending ? '保存中...' : action.label}</Text>
             </Pressable>
           ))}
-          <Pressable
-            onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
-            style={({ pressed }) => [styles.grayBtnFull, pressed ? styles.pressed : null]}
-          >
-            <Text style={styles.grayText}>房源问题反馈</Text>
-          </Pressable>
+          {feedbackAction ? (
+            <Pressable
+              testID="manager-feedback-action"
+              onPress={() => {
+                const route = navigationForWorkTaskAction(task, feedbackAction)
+                if (route) props.navigation.navigate(route.screen as any, route.params as any)
+              }}
+              style={({ pressed }) => [styles.grayBtnFull, pressed ? styles.pressed : null]}
+            >
+              <Text style={styles.grayText}>{feedbackAction.label}</Text>
+            </Pressable>
+          ) : null}
         </View>
 
         <View style={styles.card}>
@@ -1177,18 +1289,18 @@ export default function ManagerDailyTaskScreen(props: Props) {
           {hasKeyPhoto ? (
             <Pressable
               onPress={() => {
-                setViewerUrl(String((task as any)?.key_photo_url))
+                setViewerUrl(String(keyPhotoUrl))
                 setViewerOpen(true)
               }}
               style={({ pressed }) => [styles.mediaThumbWrap, pressed ? styles.pressed : null]}
             >
-              <CleaningMediaImage token={token} remoteReference={(task as any)?.key_photo_url} style={styles.mediaThumb} resizeMode="contain" />
+              <CleaningMediaImage token={token} remoteReference={String(keyPhotoUrl)} {...historicalMediaAccess} style={styles.mediaThumb} resizeMode="contain" />
               <Text style={styles.mediaLabel}>钥匙照片</Text>
             </Pressable>
           ) : null}
-          {lockboxUrl ? (
+          {lockboxUrl && lockboxVideoSource.uri ? (
             <View style={styles.videoWrap}>
-              <Video source={{ uri: toAbsoluteUrl(lockboxUrl) }} style={styles.video} resizeMode={ResizeMode.CONTAIN} shouldPlay={false} useNativeControls />
+              <Video source={lockboxVideoSource} style={styles.video} resizeMode={ResizeMode.CONTAIN} shouldPlay={false} useNativeControls />
               <Text style={styles.mediaLabel}>挂钥匙视频</Text>
             </View>
           ) : null}
@@ -1211,7 +1323,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                     }}
                     style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                   >
-                    <CleaningMediaImage token={token} remoteReference={x.url} style={styles.gridImg} />
+                    <CleaningMediaImage token={token} remoteReference={x.url} {...historicalMediaAccess} style={styles.gridImg} />
                   </Pressable>
                 ))}
               </View>
@@ -1238,7 +1350,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <CleaningMediaImage token={token} remoteReference={url} style={styles.gridImg} />
+                      <CleaningMediaImage token={token} remoteReference={url} {...historicalMediaAccess} style={styles.gridImg} />
                     </Pressable>
                   ))}
                 </View>
@@ -1258,7 +1370,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <CleaningMediaImage token={token} remoteReference={remoteTvPhotoUrl} style={styles.gridImg} />
+                      <CleaningMediaImage token={token} remoteReference={remoteTvPhotoUrl} {...historicalMediaAccess} style={styles.gridImg} />
                       <Text style={styles.mediaLabel}>电视遥控器</Text>
                     </Pressable>
                   ) : null}
@@ -1270,7 +1382,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                      <CleaningMediaImage token={token} remoteReference={remoteAcPhotoUrl} style={styles.gridImg} />
+                      <CleaningMediaImage token={token} remoteReference={remoteAcPhotoUrl} {...historicalMediaAccess} style={styles.gridImg} />
                       <Text style={styles.mediaLabel}>空调遥控器</Text>
                     </Pressable>
                   ) : null}
@@ -1296,7 +1408,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                   }}
                   style={({ pressed }) => [styles.gridItem, styles.completionPhotoItem, pressed ? styles.pressed : null]}
                 >
-                  <CleaningMediaImage token={token} remoteReference={url} style={styles.gridImg} />
+                  <CleaningMediaImage token={token} remoteReference={url} {...historicalMediaAccess} style={styles.gridImg} />
                   <Text style={styles.photoGalleryLabel} numberOfLines={2}>{g.label}</Text>
                 </Pressable>
               )))}
@@ -1323,7 +1435,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                       }}
                       style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                     >
-                  <CleaningMediaImage token={token} remoteReference={x.url} style={styles.gridImg} />
+                  <CleaningMediaImage token={token} remoteReference={x.url} {...historicalMediaAccess} style={styles.gridImg} />
                     </Pressable>
                   ))}
                 </View>
@@ -1357,7 +1469,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                               }}
                               style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                             >
-                              <CleaningMediaImage token={token} remoteReference={photoUrl} style={styles.gridImg} />
+                              <CleaningMediaImage token={token} remoteReference={photoUrl} {...historicalMediaAccess} style={styles.gridImg} />
                             </Pressable>
                           ))}
                         </View>
@@ -1378,7 +1490,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
                               }}
                               style={({ pressed }) => [styles.gridItem, pressed ? styles.pressed : null]}
                             >
-                              <CleaningMediaImage token={token} remoteReference={photoUrl} style={styles.gridImg} />
+                              <CleaningMediaImage token={token} remoteReference={photoUrl} {...historicalMediaAccess} style={styles.gridImg} />
                             </Pressable>
                           ))}
                         </View>
@@ -1417,7 +1529,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
             <Text style={styles.viewerCloseText}>点击任意位置关闭</Text>
           </View>
           {viewerUrl ? (
-            <CleaningMediaPreview token={token} reference={viewerUrl} style={styles.viewerImg} />
+            <CleaningMediaPreview token={token} reference={viewerUrl} {...historicalMediaAccess} style={styles.viewerImg} />
           ) : null}
         </Pressable>
       </Modal>
@@ -1454,6 +1566,7 @@ const styles = StyleSheet.create({
   field: { marginTop: 10 },
   fieldCompact: { marginTop: 8 },
   label: { color: '#111827', fontWeight: '900', marginBottom: 8 },
+  fieldHint: { marginTop: 6, color: '#6B7280', fontWeight: '700', fontSize: 12, lineHeight: 18 },
   input: { height: 44, borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, fontWeight: '800', color: '#111827' },
   inputDisabled: { backgroundColor: '#F3F4F6', color: '#9CA3AF' },
   textarea: { height: 84, paddingTop: 12, textAlignVertical: 'top' },

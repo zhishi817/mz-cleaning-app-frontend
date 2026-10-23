@@ -26,7 +26,7 @@ import {
   updateInspectionMediaItem,
   type InspectionMediaQueueItem,
 } from '../../lib/inspectionMediaQueue'
-import { inspectionScopeLabel, isPasswordOnlyInspectionTask } from '../../lib/cleaningInspection'
+import { inspectionScopeLabel, isPasswordOnlyInspectionTask, isSelfCompleteMode } from '../../lib/cleaningInspection'
 import { inspectionLockboxUiStatus } from '../../lib/inspectionLockboxStatus'
 import { hairline, isCompactWidth, moderateScale } from '../../lib/scale'
 import { isEarlyCheckinTime } from '../../lib/taskTime'
@@ -117,14 +117,26 @@ export default function InspectionCompleteScreen(props: Props) {
   const actionSourceId = cleanText(accessVideoAction?.source_id)
   const inspectionPanelSourceId = cleanText(submitInspectionAction?.source_id) || cleanText(props.route.params.sourceId) || actionSourceId || cleanText(task?.source_id)
   const cleaningTaskId = cleanText(props.route.params.sourceId) || actionSourceId || cleanText(task?.source_id)
+  const routeSkipInspectionPhotos = props.route.params.skipInspectionPhotos === true
+  const isSelfCompleteKeyHandover = routeSkipInspectionPhotos
+    && String((task as any)?.task_kind || '').trim().toLowerCase() === 'cleaning'
+    && isSelfCompleteMode(task as any)
   const [lockboxDeleted, setLockboxDeleted] = useState(false)
-  const lockboxFromTask = lockboxDeleted ? '' : String((task as any)?.lockbox_video_url || '').trim()
+  // A merged turnover may expose a related phase's video URL. Self-complete
+  // handover must only accept evidence confirmed for this exact action source.
+  const acceptsProjectedLockbox = !isSelfCompleteKeyHandover
+    || (task as any)?.source_key_handover_completed === true
+  const lockboxFromTask = lockboxDeleted || !acceptsProjectedLockbox
+    ? ''
+    : String((task as any)?.lockbox_video_url || '').trim()
   const effectiveLockboxUrl = String(lockboxItem?.uploaded_url || lockboxItem?.local_uri || lockboxFromTask || '').trim() || null
   const lockboxSaved = !!lockboxItem?.business_saved || !!lockboxFromTask
   const checkinTime = String((task as any)?.end_time || (task as any)?.checkin_time || '').trim()
-  const routeSkipInspectionPhotos = props.route.params.skipInspectionPhotos === true
-  const isEarlyCheckinSkipAttempt = routeSkipInspectionPhotos && isEarlyCheckinTime(checkinTime)
+  const isEarlyCheckinSkipAttempt = routeSkipInspectionPhotos
+    && !isSelfCompleteKeyHandover
+    && isEarlyCheckinTime(checkinTime)
   const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
+  const skipInspectionPhotos = isPasswordOnlyInspection || isSelfCompleteKeyHandover
   const inspectionScopeNoticeStyles = noticeToneStylePair(getInspectionScopeTone(isPasswordOnlyInspection))
   const oldCode = String((task as any)?.old_code || '').trim()
   const newCode = String((task as any)?.new_code || '').trim()
@@ -133,7 +145,7 @@ export default function InspectionCompleteScreen(props: Props) {
       ? ''
       : actionDisabledReasonText(accessVideoAction?.disabled_reason || '当前任务没有可提交的访问凭证操作')
     : ''
-  const canOpenInspectionPanel = !isPasswordOnlyInspection && (!serverActions || submitInspectionAction?.enabled === true)
+  const canOpenInspectionPanel = !skipInspectionPhotos && (!serverActions || submitInspectionAction?.enabled === true)
 
   const reloadLockboxItem = useCallback(async () => {
     if (!cleaningTaskId) {
@@ -154,7 +166,7 @@ export default function InspectionCompleteScreen(props: Props) {
         setValidationReady(false)
       }
       const needs: string[] = []
-      if (!isPasswordOnlyInspection && inspectionPanelSourceId) {
+      if (!skipInspectionPhotos && inspectionPanelSourceId) {
         await bindInspectionPanelCleaningTaskId({
           task_id: props.route.params.taskId,
           cleaning_task_id: inspectionPanelSourceId,
@@ -162,22 +174,22 @@ export default function InspectionCompleteScreen(props: Props) {
           property_code: cleanText((task as any)?.property?.code),
         })
       }
-      const batch = isPasswordOnlyInspection ? null : await getInspectionPanelBatch(props.route.params.taskId)
+      const batch = skipInspectionPhotos ? null : await getInspectionPanelBatch(props.route.params.taskId)
       const status = batch?.status || null
-      const videoReadiness = isPasswordOnlyInspection
+      const videoReadiness = skipInspectionPhotos
         ? { ready: true, reason: null, skipInspectionPhotos: true }
         : getInspectionPanelVideoReadiness(batch)
       if (generation !== refreshGenerationRef.current) return
       setPanelBatchStatus(status)
       setPanelBatchError(batch?.last_error || null)
       setPanelVideoReadiness(videoReadiness)
-      if (!isPasswordOnlyInspection && !videoReadiness.ready) needs.push(videoReadiness.reason || '检查与补充照片尚未完成本机保存')
+      if (!skipInspectionPhotos && !videoReadiness.ready) needs.push(videoReadiness.reason || '检查与补充照片尚未完成本机保存')
       setMissing(needs)
       setValidationReady(true)
     } finally {
       if (blocking) setLoading(false)
     }
-  }, [cleaningTaskId, inspectionPanelSourceId, isPasswordOnlyInspection, props.route.params.taskId, task])
+  }, [cleaningTaskId, inspectionPanelSourceId, props.route.params.taskId, skipInspectionPhotos, task])
 
   useEffect(() => {
     void refresh({ blocking: true })
@@ -222,7 +234,7 @@ export default function InspectionCompleteScreen(props: Props) {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!cleaningTaskId) return Alert.alert(t('common_error'), '缺少任务信息')
     if (accessVideoDeniedReason) return Alert.alert('暂不可操作', accessVideoDeniedReason)
-    if (!isPasswordOnlyInspection && !panelVideoReadiness.ready) {
+    if (!skipInspectionPhotos && !panelVideoReadiness.ready) {
       if (canOpenInspectionPanel) {
         props.navigation.navigate('InspectionPanel', { taskId: task?.id || props.route.params.taskId, ...(inspectionPanelSourceId ? { sourceId: inspectionPanelSourceId } : {}) })
       }
@@ -276,8 +288,8 @@ export default function InspectionCompleteScreen(props: Props) {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!cleaningTaskId) return Alert.alert(t('common_error'), '缺少任务信息')
     if (accessVideoDeniedReason) return Alert.alert('暂不可操作', accessVideoDeniedReason)
-    if (!isPasswordOnlyInspection && !panelVideoReadiness.ready) return Alert.alert('请先完成检查与补充', panelVideoReadiness.reason || '请先完成检查与补充照片。')
-    const inspectionPhotosPending = !isPasswordOnlyInspection && panelBatchStatus !== 'synced'
+    if (!skipInspectionPhotos && !panelVideoReadiness.ready) return Alert.alert('请先完成检查与补充', panelVideoReadiness.reason || '请先完成检查与补充照片。')
+    const inspectionPhotosPending = !skipInspectionPhotos && panelBatchStatus !== 'synced'
     if (lockboxSaved) {
       Alert.alert(t('common_ok'), inspectionPhotosPending ? '视频已保存，检查照片待同步，任务尚未完成。' : '挂钥匙视频已同步完成')
       props.navigation.goBack()
@@ -323,7 +335,7 @@ export default function InspectionCompleteScreen(props: Props) {
       const serverFinalizationPending = latest.meta?.business_finalization_pending === true
       Alert.alert(
         t('common_ok'),
-        !isPasswordOnlyInspection && (inspectionPhotosPending || serverFinalizationPending)
+        !skipInspectionPhotos && (inspectionPhotosPending || serverFinalizationPending)
           ? '视频已提交，检查照片待同步，任务尚未完成。'
           : '视频已提交，任务已完成',
       )
@@ -382,12 +394,12 @@ export default function InspectionCompleteScreen(props: Props) {
   }
 
   const canComplete = !accessVideoDeniedReason
-    && (isPasswordOnlyInspection || panelVideoReadiness.ready)
+    && (skipInspectionPhotos || panelVideoReadiness.ready)
     && !!lockboxItem
     && !submitting
     && !deleting
     && !lockboxSaved
-  const inspectionPhotosPending = !isPasswordOnlyInspection && panelBatchStatus !== 'synced'
+  const inspectionPhotosPending = !skipInspectionPhotos && panelBatchStatus !== 'synced'
   const lockboxUploadStale = staleQueueUpload(lockboxItem)
   const lockboxUiStatus = inspectionLockboxUiStatus(lockboxItem, { serverUrl: lockboxFromTask, stale: lockboxUploadStale })
   const canRetryLockboxUpload = !!lockboxItem && !lockboxSaved && !submitting && !deleting && (lockboxUploadStale || lockboxItem.upload_status === 'failed_retryable')
@@ -396,7 +408,7 @@ export default function InspectionCompleteScreen(props: Props) {
     || submitting
     || !!accessVideoDeniedReason
     || !validationReady
-    || (!isPasswordOnlyInspection && !panelVideoReadiness.ready)
+    || (!skipInspectionPhotos && !panelVideoReadiness.ready)
   const uploadHint = lockboxUiStatus.hint
 
   if (!task) {
@@ -426,15 +438,19 @@ export default function InspectionCompleteScreen(props: Props) {
           <Text style={styles.muted}>正在校验检查与补充状态...</Text>
         ) : missing.length ? (
           <Text style={styles.pending}>{`${missing.join('、')}；请先返回检查与补充完成本机保存后再拍视频。`}</Text>
-        ) : isPasswordOnlyInspection ? (
+        ) : skipInspectionPhotos ? (
           <View style={[styles.noticeCard, inspectionScopeNoticeStyles.card]}>
-            <Ionicons name="flash-outline" size={moderateScale(16)} color={inspectionScopeNoticeStyles.icon} />
-            <Text style={[styles.noticeCardText, inspectionScopeNoticeStyles.text]}>此任务为{inspectionScopeLabel((task as any)?.inspection_scope)}，无需重复检查照片或消耗品确认。</Text>
+            <Ionicons name={isSelfCompleteKeyHandover ? 'key-outline' : 'flash-outline'} size={moderateScale(16)} color={inspectionScopeNoticeStyles.icon} />
+            <Text style={[styles.noticeCardText, inspectionScopeNoticeStyles.text]}>
+              {isSelfCompleteKeyHandover
+                ? '这是自完成任务的挂钥匙步骤；补品和清洁资料已单独保存，无需重复检查照片。'
+                : `此任务为${inspectionScopeLabel((task as any)?.inspection_scope)}，无需重复检查照片或消耗品确认。`}
+            </Text>
           </View>
         ) : (
           <Text style={panelBatchStatus === 'synced' ? styles.ok : styles.pending}>检查与补充照片已完整保存到本机，可继续拍摄视频</Text>
         )}
-        {!isPasswordOnlyInspection && inspectionBatchStatusHint(panelBatchStatus, panelBatchError) ? (
+        {!skipInspectionPhotos && inspectionBatchStatusHint(panelBatchStatus, panelBatchError) ? (
           <Text style={panelBatchStatus === 'failed' || panelBatchStatus === 'partial_failed' ? styles.warn : styles.muted}>
             {inspectionBatchStatusHint(panelBatchStatus, panelBatchError)}
           </Text>
@@ -459,7 +475,9 @@ export default function InspectionCompleteScreen(props: Props) {
           </View>
         </View>
         <Text style={styles.mutedSmall}>
-          {isPasswordOnlyInspection
+          {isSelfCompleteKeyHandover
+            ? '请拍摄本任务的挂钥匙视频留存；视频会先安全保存在本机，再自动上传并保存到本任务。'
+            : isPasswordOnlyInspection
             ? '此任务只需修改密码并拍视频留存；如果现场发现异常，再返回上一页补充问题反馈。视频会先保存到本机，再自动上传并保存；如保存失败会显示具体原因。'
             : '请先完成检查与补充照片并保存到本机，再修改密码盒密码并拍视频；如果是直接把钥匙给客人，也需要拍视频留存。视频会先保存到本机，再自动上传并保存；如保存失败会显示具体原因。'}
         </Text>
@@ -529,9 +547,9 @@ export default function InspectionCompleteScreen(props: Props) {
           testID="inspection-complete-submit"
           label={lockboxSaved
             ? '已同步完成'
-            : !isPasswordOnlyInspection && !panelVideoReadiness.ready
+            : !skipInspectionPhotos && !panelVideoReadiness.ready
               ? '先完成检查与补充'
-              : (isPasswordOnlyInspection ? '改密码完成' : inspectionPhotosPending ? '提交视频（任务待完成）' : '点击完成')}
+              : (isSelfCompleteKeyHandover ? '挂钥匙完成' : isPasswordOnlyInspection ? '改密码完成' : inspectionPhotosPending ? '提交视频（任务待完成）' : '点击完成')}
           onPress={onSubmitComplete}
           disabled={!canComplete}
           loading={submitting}
