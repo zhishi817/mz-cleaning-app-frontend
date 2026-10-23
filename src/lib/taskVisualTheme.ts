@@ -127,6 +127,11 @@ export function hasCompletedKeyHandover(task: Partial<WorkTaskItem> | null | und
   const lifecycleState = String((task as any)?.lifecycle_state || '').trim().toLowerCase()
   if (status === 'cancelled' || status === 'canceled' || ['cancelled', 'rescheduled', 'reassigned'].includes(workRecordState)) return false
   if (['deleted', 'removed', 'tombstone', 'superseded'].includes(lifecycleState)) return false
+  // Self-complete requires the cleaner to hang the keys for this exact source.
+  // A canonical turnover projection may retain a related phase's video, but
+  // Root's exact-source flag must win for both the label and list section.
+  if (String((task as any)?.inspection_mode || '').trim().toLowerCase() === 'self_complete'
+    && (task as any)?.source_key_handover_completed === false) return false
   return String((task as any)?.key_handover?.state || '').trim().toLowerCase() === 'completed'
 }
 
@@ -271,6 +276,7 @@ export function getTaskStatusMeta(
 
     const checkedOutAt = String((task as any).checked_out_at || '').trim()
     if (s === 'in_progress' || s === 'cleaning') return { text: '进行中', tone: 'normal' as const }
+    if (isTaskWorkflowProgressStatus(s)) return meta
     if (!hasExecutor && (!checkedOutAt || !guestCheckoutCanDriveTaskStatus(task))) return { text: '未分配', tone: 'pending' as const }
     if (s !== 'cancelled' && s !== 'canceled') {
       if (guestCheckoutCanDriveTaskStatus(task) && checkedOutAt) return { text: '已退房', tone: 'special' as const }

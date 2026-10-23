@@ -111,9 +111,10 @@ const DAILY_OPTIONS_CACHE_KEY = 'feedback_daily_necessity_options_v1'
 const FEEDBACK_HISTORY_CACHE_TTL_MS = 3 * 60 * 1000
 const FEEDBACK_DRAFT_CACHE_VERSION = 1
 const FEEDBACK_HISTORY_LOAD_ERROR = '历史反馈暂时无法加载，请稍后重试。'
-function feedbackHistoryCacheKey(propertyId: string, propertyCode: string, userId: string) {
+function feedbackHistoryCacheKey(propertyId: string, propertyCode: string, userId: string, sourceTaskId: string) {
   const owner = String(userId || '').trim() || 'anon'
-  return `feedback_history_open_${owner}_${String(propertyId || '').trim()}_${String(propertyCode || '').trim()}`
+  const source = String(sourceTaskId || '').trim() || 'property'
+  return `feedback_history_open_${owner}_${String(propertyId || '').trim()}_${String(propertyCode || '').trim()}_${source}`
 }
 
 function feedbackDraftCacheKey(propertyId: string, propertyCode: string, taskId: string, userId: string) {
@@ -121,6 +122,20 @@ function feedbackDraftCacheKey(propertyId: string, propertyCode: string, taskId:
   const taskKey = String(taskId || '').trim() || 'no-task'
   const propertyKey = String(propertyId || propertyCode || '').trim() || 'no-property'
   return `feedback_form_draft_v${FEEDBACK_DRAFT_CACHE_VERSION}_${owner}_${propertyKey}_${taskKey}`
+}
+
+export function feedbackHistoryItemForMode(item: PropertyFeedback, readOnly: boolean): PropertyFeedback {
+  if (!readOnly) return item
+  return {
+    ...item,
+    capabilities: {
+      can_edit_content: false,
+      can_edit_completion_content: false,
+      can_correct_completion: false,
+      can_delete: false,
+      can_move_category: false,
+    },
+  }
 }
 
 type FeedbackHistoryCache = {
@@ -596,7 +611,8 @@ export default function FeedbackFormScreen(props: Props) {
   const propertyId = String(task?.property_id || task?.property?.id || '').trim()
   const propertyCode = String(task?.property?.code || '').trim()
   const taskId = String(task?.id || props.route.params.taskId || '').trim()
-  const feedbackSourceTaskId = String((task as any)?.source_id || task?.id || '').trim()
+  const feedbackSourceTaskId = String(props.route.params.sourceTaskId || (task as any)?.read_only_views?.feedback_source_id || (task as any)?.source_id || task?.id || '').trim()
+  const feedbackReadOnly = props.route.params.readOnly === true
   const isInspectionPanelBatchMode = props.route.params.source === 'inspection_panel_batch'
   const userKey = String((user as any)?.id || (user as any)?.username || (user as any)?.email || '').trim()
   const draftCacheKey = useMemo(() => feedbackDraftCacheKey(propertyId, propertyCode, taskId, userKey), [propertyId, propertyCode, taskId, userKey])
@@ -780,18 +796,18 @@ export default function FeedbackFormScreen(props: Props) {
     let cancelled = false
     ;(async () => {
       try {
-        const cached = await getJson<FeedbackHistoryCache | PropertyFeedback[]>(feedbackHistoryCacheKey(propertyId, propertyCode, userKey))
+        const cached = await getJson<FeedbackHistoryCache | PropertyFeedback[]>(feedbackHistoryCacheKey(propertyId, propertyCode, userKey, feedbackSourceTaskId))
         if (cancelled || !cached) return
         if (Array.isArray(cached)) {
-          const normalized = { pending: uniqFeedbacks(cached), resolved: [], updated_at: 0 }
+          const normalized = { pending: uniqFeedbacks(cached.map((item) => feedbackHistoryItemForMode(item, feedbackReadOnly))), resolved: [], updated_at: 0 }
           historyCacheRef.current = normalized
           if (!normalized.pending.length) return
           setPending(normalized.pending)
           return
         }
         const normalized = {
-          pending: uniqFeedbacks(Array.isArray(cached.pending) ? cached.pending : []),
-          resolved: uniqFeedbacks(Array.isArray(cached.resolved) ? cached.resolved : []),
+          pending: uniqFeedbacks((Array.isArray(cached.pending) ? cached.pending : []).map((item) => feedbackHistoryItemForMode(item, feedbackReadOnly))),
+          resolved: uniqFeedbacks((Array.isArray(cached.resolved) ? cached.resolved : []).map((item) => feedbackHistoryItemForMode(item, feedbackReadOnly))),
           updated_at: Number(cached.updated_at || 0) || 0,
         }
         historyCacheRef.current = normalized
@@ -803,7 +819,7 @@ export default function FeedbackFormScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [propertyId, propertyCode, userKey])
+  }, [propertyId, propertyCode, userKey, feedbackSourceTaskId, feedbackReadOnly])
 
   async function refreshLists(options?: { force?: boolean; silent?: boolean }) {
     if (!token || (!propertyId && !propertyCode) || !feedbackSourceTaskId) return
@@ -823,28 +839,29 @@ export default function FeedbackFormScreen(props: Props) {
       setListError(null)
       try {
         const [openList, dailyList, resolvedList] = await Promise.all([
-          listPropertyFeedbacks(token, { property_id: propertyId || undefined, property_code: propertyCode || undefined, status: ['open', 'in_progress'], limit: 50 }),
-          listPropertyFeedbacks(token, { property_id: propertyId || undefined, property_code: propertyCode || undefined, status: ['need_replace', 'replaced', 'no_action'], limit: 50 }),
-          listPropertyFeedbacks(token, { property_id: propertyId || undefined, property_code: propertyCode || undefined, status: ['resolved'], limit: 50 }),
+          listPropertyFeedbacks(token, { property_id: propertyId || undefined, property_code: propertyCode || undefined, source_task_id: feedbackSourceTaskId, status: ['open', 'in_progress'], limit: 50 }),
+          listPropertyFeedbacks(token, { property_id: propertyId || undefined, property_code: propertyCode || undefined, source_task_id: feedbackSourceTaskId, status: ['need_replace', 'replaced', 'no_action'], limit: 50 }),
+          listPropertyFeedbacks(token, { property_id: propertyId || undefined, property_code: propertyCode || undefined, source_task_id: feedbackSourceTaskId, status: ['resolved'], limit: 50 }),
         ])
+        const historyItem = (item: PropertyFeedback) => feedbackHistoryItemForMode(item, feedbackReadOnly)
         const nextPending = uniqFeedbacks(
           [...(Array.isArray(openList) ? openList : []), ...(Array.isArray(dailyList) ? dailyList : [])].filter((item) => {
             const status = String(item?.status || '').trim()
             return status !== 'resolved' && status !== 'replaced' && status !== 'no_action'
-          }),
+          }).map(historyItem),
         )
         const nextResolved = uniqFeedbacks([
-          ...(Array.isArray(resolvedList) ? resolvedList : []).filter((x) => x.kind !== 'daily_necessities'),
+          ...(Array.isArray(resolvedList) ? resolvedList : []).filter((x) => x.kind !== 'daily_necessities').map(historyItem),
           ...(Array.isArray(dailyList) ? dailyList : []).filter((x) => {
             const status = String(x?.status || '').trim()
             return status === 'replaced' || status === 'no_action'
-          }),
+          }).map(historyItem),
         ])
         setPending(nextPending)
         setResolved(nextResolved)
         const nextCache = { pending: nextPending, resolved: nextResolved, updated_at: Date.now() }
         historyCacheRef.current = nextCache
-        void setJson(feedbackHistoryCacheKey(propertyId, propertyCode, userKey), nextCache)
+        void setJson(feedbackHistoryCacheKey(propertyId, propertyCode, userKey, feedbackSourceTaskId), nextCache)
       } catch {
         setListError(FEEDBACK_HISTORY_LOAD_ERROR)
         if (!cache?.pending.length) setPending([])
@@ -2194,6 +2211,16 @@ export default function FeedbackFormScreen(props: Props) {
           <Text style={styles.muted}>{t('common_loading')}</Text>
         ) : (
           <View style={styles.pageStack}>
+            {feedbackReadOnly ? (
+              <View style={styles.historyReadOnlyBanner} testID="feedback-history-read-only-banner">
+                <Ionicons name="eye-outline" size={20} color="#1D4ED8" />
+                <View style={styles.historyReadOnlyTextWrap}>
+                  <Text style={styles.historyReadOnlyTitle}>只读查看报修记录</Text>
+                  <Text style={styles.historyReadOnlyText}>当前入口只能查看这条任务关联的记录，不能新增、编辑或删除报修。</Text>
+                </View>
+              </View>
+            ) : (
+              <>
             <StepCard
               step="1"
               title="选择反馈类型"
@@ -2441,12 +2468,14 @@ export default function FeedbackFormScreen(props: Props) {
                 </Pressable>
               </View>
             </StepCard>
+              </>
+            )}
 
             <View style={styles.historyCard}>
               <View style={styles.historyHeader}>
                 <View style={styles.historyTitleWrap}>
-                  <Text style={styles.historyTitle}>本房源历史反馈</Text>
-                  <Text style={styles.historySubtitle}>先查看已报问题；相同问题无需重复提交。处理中反馈默认展开，待复核记录可按需查看。</Text>
+                  <Text style={styles.historyTitle}>本任务报修记录</Text>
+                  <Text style={styles.historySubtitle}>仅显示与当前任务准确关联的记录，避免混入同房源其他日期或后续任务。</Text>
                 </View>
                 <Pressable onPress={() => setExpanded((v) => !v)} style={({ pressed }) => [styles.historyToggle, pressed ? styles.pressed : null]}>
                   <Text style={styles.historyToggleText}>{expanded ? '收起' : '展开'}</Text>
@@ -3117,6 +3146,10 @@ const styles = StyleSheet.create({
   emptyKindCard: { marginTop: 12, borderRadius: 16, borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', padding: 16, alignItems: 'flex-start', gap: 6 },
   emptyKindTitle: { color: '#1D4ED8', fontSize: 15, fontWeight: '900' },
   emptyKindText: { color: '#475569', fontSize: 13, fontWeight: '700', lineHeight: 19 },
+  historyReadOnlyBanner: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 14, borderRadius: 16, borderWidth: hairline(), borderColor: '#BFDBFE', backgroundColor: '#EFF6FF' },
+  historyReadOnlyTextWrap: { flex: 1, minWidth: 0 },
+  historyReadOnlyTitle: { color: '#1D4ED8', fontSize: 15, fontWeight: '900' },
+  historyReadOnlyText: { marginTop: 4, color: '#475569', fontSize: 13, fontWeight: '600', lineHeight: 19 },
   suggestList: { marginTop: 8, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E2E8F0', overflow: 'hidden' },
   suggestItem: { paddingHorizontal: 12, paddingVertical: 11, borderBottomWidth: hairline(), borderBottomColor: '#E5E7EB' },
   suggestItemTitle: { color: '#111827', fontWeight: '800' },

@@ -39,8 +39,8 @@ export type WorkTaskActionRoute =
   | { screen: 'SuppliesForm'; params: { taskId: string; readOnly?: boolean } }
   | { screen: 'InspectionPanel'; params: { taskId: string; sourceId?: string; readOnly?: boolean } }
   | { screen: 'InspectionComplete'; params: { taskId: string; sourceId?: string; skipInspectionPhotos?: boolean } }
-  | { screen: 'CleaningSelfComplete'; params: { taskId: string } }
-  | { screen: 'FeedbackForm'; params: { taskId: string; source?: 'inspection_panel_batch' } }
+  | { screen: 'CleaningSelfComplete'; params: { taskId: string; readOnly?: boolean } }
+  | { screen: 'FeedbackForm'; params: { taskId: string; source?: 'inspection_panel_batch'; sourceTaskId?: string; readOnly?: boolean } }
 
 export function mergeGuestReadyNotificationActions(
   current0: WorkTaskAvailableAction[] | null | undefined,
@@ -173,7 +173,17 @@ function legacyAction(params: Omit<WorkTaskAvailableAction, 'enabled'> & { enabl
 
 export function availableActionsForTask(task: WorkTaskItem | null | undefined, options?: { roleNames?: string[]; activeRole?: string | null }): WorkTaskAvailableAction[] {
   if (!task) return []
-  if (task.work_record_read_only === true) return []
+  if (task.work_record_read_only === true) {
+    return (Array.isArray((task as any).available_actions) ? (task as any).available_actions : [])
+      .filter((action: WorkTaskAvailableAction) => (
+        ((action?.id === 'report_issue' && action.enabled === true)
+          || (action?.id === 'fill_supplies'
+            && action.read_only === true
+            && action.disabled_reason === 'task_completed'))
+        && cleanText(action.source_type) === 'cleaning_tasks'
+        && !!cleanText(action.source_id)
+      ))
+  }
   const roleNames = options?.roleNames || []
   const isCleaningSource = task.source_type === 'cleaning_tasks'
   const isCustomerService = options?.activeRole != null
@@ -344,11 +354,23 @@ export function navigationForWorkTaskAction(task: WorkTaskItem, action: WorkTask
       params: {
         taskId: task.id,
         ...(actionSourceId ? { sourceId: actionSourceId } : {}),
-        skipInspectionPhotos: isPasswordOnlyInspectionTask(task as any) || isKeyHandoverExecutionTask(task as any) || lower(task.task_kind) === 'execution',
+        skipInspectionPhotos: isPasswordOnlyInspectionTask(task as any)
+          || isKeyHandoverExecutionTask(task as any)
+          || isSelfCompleteMode(task as any)
+          || lower(task.task_kind) === 'execution',
       },
     }
   }
-  if (action.id === 'report_issue') return { screen: 'FeedbackForm', params: { taskId: task.id } }
+  if (action.id === 'report_issue') {
+    return {
+      screen: 'FeedbackForm',
+      params: {
+        taskId: task.id,
+        ...(actionSourceId ? { sourceTaskId: actionSourceId } : {}),
+        ...(action.read_only ? { readOnly: true } : {}),
+      },
+    }
+  }
   return null
 }
 
@@ -380,6 +402,60 @@ export function preferredNoticeActionForTask(task: WorkTaskItem | null | undefin
 
 export type WorkTaskEntryRoute = WorkTaskActionRoute | { screen: 'ManagerDailyTask'; params: { taskId: string } }
 
+function workRecordExecutionRole(task: WorkTaskItem) {
+  const scope = lower((task as any)?.read_only_views?.media_scope)
+  if (scope === 'cleaner') return 'cleaning'
+  if (scope === 'inspector') return 'inspection'
+  if (scope === 'manager') return 'manager'
+  return lower((task as any)?.execution_role || task.task_kind)
+}
+
+export function navigationForWorkTaskRolePage(params: {
+  task: WorkTaskItem | null | undefined
+  fallbackTaskId: unknown
+  roleNames?: string[]
+  isTaskManager?: boolean
+  isTaskInspector?: boolean
+}): WorkTaskEntryRoute | null {
+  const task = params.task
+  const taskId = cleanText(task?.id || params.fallbackTaskId)
+  if (!taskId) return null
+  const isCleaningSource = lower(task?.source_type) === 'cleaning_tasks'
+  if (!task || !isCleaningSource) return { screen: 'TaskDetail', params: { id: taskId } }
+  if (params.isTaskManager) return { screen: 'ManagerDailyTask', params: { taskId } }
+
+  if ((task as any).work_record_read_only === true) {
+    const role = workRecordExecutionRole(task)
+    if (role === 'inspection') {
+      return { screen: 'InspectionPanel', params: { taskId, readOnly: true } }
+    }
+    if (role === 'cleaning') {
+      return { screen: 'CleaningSelfComplete', params: { taskId, readOnly: true } }
+    }
+    return { screen: 'TaskDetail', params: { id: taskId } }
+  }
+
+  const roleNames = params.roleNames || []
+  const isInspector = params.isTaskInspector
+    || roleNames.includes('cleaning_inspector')
+    || roleNames.includes('cleaner_inspector')
+  if (isInspector && isKeyHandoverExecutionTask(task as any)) {
+    const sourceId = cleanText(task.source_id)
+    return {
+      screen: 'InspectionComplete',
+      params: { taskId, ...(sourceId ? { sourceId } : {}), skipInspectionPhotos: true },
+    }
+  }
+  if (isInspector && lower(task.task_kind) === 'inspection') {
+    const sourceId = cleanText(task.source_id)
+    return { screen: 'InspectionPanel', params: { taskId, ...(sourceId ? { sourceId } : {}) } }
+  }
+  if (lower(task.task_kind) === 'cleaning' && isSelfCompleteMode(task as any)) {
+    return { screen: 'CleaningSelfComplete', params: { taskId } }
+  }
+  return { screen: 'TaskDetail', params: { id: taskId } }
+}
+
 export function navigationForWorkTaskEntry(params: {
   task: WorkTaskItem | null | undefined
   fallbackTaskId: unknown
@@ -393,6 +469,10 @@ export function navigationForWorkTaskEntry(params: {
   if (!taskId) return null
   const isCleaningTask = lower(params.task?.source_type) === 'cleaning_tasks'
   if (params.isTaskManager && isCleaningTask) return { screen: 'ManagerDailyTask', params: { taskId } }
+  if (!params.noticeData || !preferredActionIdsForNotice(params.noticeData).length) {
+    const rolePage = navigationForWorkTaskRolePage(params)
+    if (rolePage && rolePage.screen !== 'TaskDetail') return rolePage
+  }
   if (params.task && Array.isArray((params.task as any).available_actions)) {
     const action = preferredNoticeActionForTask(params.task, params.noticeData || {}, {
       roleNames: params.roleNames,

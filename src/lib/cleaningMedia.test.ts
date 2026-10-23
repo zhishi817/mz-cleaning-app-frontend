@@ -1,5 +1,6 @@
 import {
   buildCleaningMediaImageSource,
+  buildCleaningMediaVideoSource,
   cleaningMediaReference,
   normalizeCleaningTaskNoticeId,
   normalizeGuestLuggageNoticeId,
@@ -51,6 +52,22 @@ test('binds a read-only key photo to exact source ids and viewer scope', () => {
     uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fkey.jpg&variant=thumbnail&source_ids=checkout-task%2Ccheckin-task&media_scope=inspector',
     headers: { Authorization: 'Bearer token-1' },
   })
+})
+
+test('builds an authenticated exact-source video stream and rejects an unbound source', () => {
+  expect(buildCleaningMediaVideoSource('token-1', 'cleaning/lockbox.mp4', {
+    accessTaskId: 'checkout-task',
+    accessSourceIds: ['checkout-task', 'checkin-task'],
+    mediaScope: 'manager',
+  })).toEqual({
+    uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Flockbox.mp4&variant=source&source_task_id=checkout-task&source_ids=checkout-task%2Ccheckin-task&media_scope=manager',
+    headers: { Authorization: 'Bearer token-1' },
+  })
+  expect(buildCleaningMediaVideoSource('token-1', 'cleaning/lockbox.mp4', {
+    accessTaskId: 'unrelated-task',
+    accessSourceIds: ['checkout-task'],
+    mediaScope: 'manager',
+  })).toEqual({ uri: '' })
 })
 
 test('binds maintenance feedback-media reads to the current work task', () => {

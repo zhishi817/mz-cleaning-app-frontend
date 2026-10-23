@@ -40,6 +40,7 @@ export function normalizeCleaningTaskNoticeId(value: unknown): string | null {
 }
 
 export type CleaningMediaImageVariant = 'original' | 'thumbnail' | 'preview'
+type CleaningMediaProxyVariant = CleaningMediaImageVariant | 'source'
 
 export type CleaningMediaAccessOptions = {
   accessTaskId?: string | null
@@ -52,7 +53,7 @@ export type CleaningMediaAccessOptions = {
   dayEndDate?: string | null
 }
 
-function cleaningMediaProxyUrl(reference: string, variant: CleaningMediaImageVariant = 'original', options?: CleaningMediaAccessOptions) {
+function cleaningMediaProxyUrl(reference: string, variant: CleaningMediaProxyVariant = 'original', options?: CleaningMediaAccessOptions) {
   const base = normalizeBase(API_BASE_URL)
   const apiRoot = base.replace(/\/auth\/?$/g, '')
   if (!apiRoot) return ''
@@ -129,6 +130,25 @@ export function buildCleaningMediaImageSource(
   }
   if (reference.startsWith('file:')) return { uri: reference }
   return { uri: '' }
+}
+
+export function buildCleaningMediaVideoSource(
+  token: string | null | undefined,
+  rawReference: any,
+  options: CleaningMediaAccessOptions & { accessTaskId: string; accessSourceIds: string[]; mediaScope: 'cleaner' | 'inspector' | 'manager' },
+) {
+  const reference = cleanText(rawReference)
+  const accessTaskId = cleanText(options?.accessTaskId)
+  const accessSourceIds = Array.from(new Set((Array.isArray(options?.accessSourceIds) ? options.accessSourceIds : [])
+    .map(cleanText)
+    .filter(Boolean)))
+  if (!reference || !accessTaskId || !accessSourceIds.includes(accessTaskId)) return { uri: '' }
+  const key = normalizePrivateFeedbackObjectKey(reference)
+  if (!isAuthenticatedCleaningMediaReference(reference)) return { uri: '' }
+  return {
+    uri: cleaningMediaProxyUrl(key || reference, 'source', options),
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  }
 }
 
 export function selectCleaningMediaReference(params: {

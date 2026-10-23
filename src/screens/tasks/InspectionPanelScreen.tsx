@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
+import { ResizeMode, Video } from 'expo-av'
 import { useNetInfo } from '@react-native-community/netinfo'
 import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -47,8 +48,10 @@ import { checkinTimeForDisplay, cleaningExecutionTaskIdsFromTask, guestRequestFo
 import { consumableRestockStandard } from '../../lib/consumableRestockStandards'
 import { ensureSuppliesCatalogLoaded, retrySuppliesCatalog, useSuppliesCatalogStore } from '../../lib/useSuppliesCatalogStore'
 import { getWorkTasksSnapshot, patchWorkTaskItem, subscribeWorkTasks } from '../../lib/workTasksStore'
-import { appendInspectionIssuePhotos, getCleaningConsumables, getInspectionPhotos, uploadCleaningMedia } from '../../lib/api'
-import { cleaningMediaReference } from '../../lib/cleaningMedia'
+import { appendInspectionIssuePhotos, getCleaningConsumables, getWorkTaskFormPhotos, uploadCleaningMedia } from '../../lib/api'
+import { buildCleaningMediaVideoSource, cleaningMediaReference } from '../../lib/cleaningMedia'
+import { taskFormPhotoReadOnlyRelationIds } from '../../lib/taskFormPhotos'
+import { availableActionsForTask, navigationForWorkTaskAction } from '../../lib/workTaskActions'
 import { getJson, remove as removeStorage, setJson } from '../../lib/storage'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
@@ -58,6 +61,7 @@ import AppButton from '../../components/ui/AppButton'
 import AppTextInput from '../../components/ui/AppTextInput'
 import ResponsiveImageGrid from '../../components/ui/ResponsiveImageGrid'
 import SafeAreaBottomBar from '../../components/ui/SafeAreaBottomBar'
+import WorkRecordReadOnlyInfo from '../../components/WorkRecordReadOnlyInfo'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'InspectionPanel'>
 
@@ -92,14 +96,14 @@ function buildRemoteInspectionPhotoState(items: any[]) {
   const roomPhotos = baseRoomPhotos()
   const cleaningIssue: InspectionPanelBatchMedia[] = []
   for (const [index, item] of (Array.isArray(items) ? items : []).entries()) {
-    const url = cleanText(item?.url)
+    const url = cleanText(item?.uploaded_key || item?.url)
     const area = cleanText(item?.area).toLowerCase()
     if (!url || (!Object.prototype.hasOwnProperty.call(roomPhotos, area) && area !== 'unclean')) continue
     const media: InspectionPanelBatchMedia = {
       id: `remote-inspection-${area}-${index}`,
       local_uri: null,
       thumbnail_uri: null,
-      uploaded_key: null,
+      uploaded_key: cleanText(item?.uploaded_key) || null,
       uploaded_url: url,
       name: `已同步${area}检查照片`,
       mime_type: 'image/jpeg',
@@ -275,6 +279,31 @@ function buildRestockFromConsumables(responses: any[]) {
   return out
 }
 
+function buildRestockFromWorkTaskMedia(items: any[]) {
+  const byItem = new Map<string, RestockState>()
+  for (const item of items) {
+    const source = cleanText(item?.source)
+    if (source !== 'restock' && source !== 'consumable') continue
+    const itemId = cleanText(item?.item_id || item?.area)
+    const reference = cleanText(item?.uploaded_key || item?.url)
+    if (!itemId || !reference) continue
+    const current = byItem.get(itemId)
+    if (!current) {
+      byItem.set(itemId, {
+        item_id: itemId,
+        label: cleanText(item?.label) || itemId,
+        qty: null,
+        status: null,
+        source_photo_url: reference,
+        proof_media: [],
+        note: '',
+        origin: 'task',
+      })
+    }
+  }
+  return Array.from(byItem.values())
+}
+
 function mergeRestockItems(base: RestockState[], incoming: RestockState[]) {
   const out = base.map(cloneRestockItem)
   const byId = new Map(out.map((item, index) => [item.item_id, index]))
@@ -366,6 +395,8 @@ export default function InspectionPanelScreen(props: Props) {
   const roomPhotosRef = useRef<RoomPhotoMap>(baseRoomPhotos())
   const [cleaningIssue, setCleaningIssue] = useState<InspectionPanelBatchMedia[]>([])
   const [feedbackDraft, setFeedbackDraft] = useState<InspectionPanelFeedbackDraftState | null>(null)
+  const [historicalKeyPhoto, setHistoricalKeyPhoto] = useState<{ reference: string; taskId: string } | null>(null)
+  const [historicalLockboxVideo, setHistoricalLockboxVideo] = useState<{ reference: string; taskId: string } | null>(null)
   const [batchItem, setBatchItem] = useState<InspectionPanelSubmitQueueItem | null>(null)
   const [roomConfirmed, setRoomConfirmed] = useState(false)
   const [postSubmitIssueDraft, setPostSubmitIssueDraft] = useState<PostSubmitIssueDraft | null>(null)
@@ -383,6 +414,8 @@ export default function InspectionPanelScreen(props: Props) {
     propertyIssue: true,
     photos: true,
   })
+  const task = getWorkTasksSnapshot().items.find((x) => x.id === props.route.params.taskId) || null
+  const readOnly = props.route.params.readOnly === true || task?.work_record_read_only === true
 
   const commitRoomPhotos = useCallback((nextRoomPhotos: RoomPhotoMap) => {
     const next = cloneRoomPhotos(nextRoomPhotos)
@@ -400,6 +433,7 @@ export default function InspectionPanelScreen(props: Props) {
   useEffect(() => {
     let cancelled = false
     setPostSubmitIssueDraft(null)
+    if (readOnly) return
     const taskId = cleanText(props.route.params.taskId)
     if (!taskId) return
     void getJson<PostSubmitIssueDraft>(postSubmitIssueDraftKey(taskId)).then((saved) => {
@@ -414,7 +448,7 @@ export default function InspectionPanelScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [props.route.params.taskId])
+  }, [props.route.params.taskId, readOnly])
 
   useEffect(() => {
     const unsubscribe = subscribeWorkTasks(() => bumpTasksVersion((value) => value + 1))
@@ -423,9 +457,21 @@ export default function InspectionPanelScreen(props: Props) {
     }
   }, [])
 
-  const task = getWorkTasksSnapshot().items.find((x) => x.id === props.route.params.taskId) || null
   const cleaningTaskId = cleanText(props.route.params.sourceId) || cleanText(task?.source_id)
-  const readOnly = props.route.params.readOnly === true
+  const historicalSourceIds = readOnly ? taskFormPhotoReadOnlyRelationIds(task) : []
+  const historicalSourceIdsKey = historicalSourceIds.join('|')
+  const historicalMediaAccess = readOnly
+    ? { accessWorkTaskId: cleanText(task?.id), accessSourceIds: historicalSourceIds, mediaScope: 'inspector' as const }
+    : {}
+  const historicalLockboxVideoSource = readOnly && historicalLockboxVideo
+    ? buildCleaningMediaVideoSource(token, historicalLockboxVideo.reference, {
+        accessTaskId: historicalLockboxVideo.taskId,
+        accessWorkTaskId: cleanText(task?.id),
+        accessSourceIds: historicalSourceIds,
+        mediaScope: 'inspector',
+      })
+    : { uri: '' }
+  const feedbackAction = availableActionsForTask(task).find((action) => action.id === 'report_issue') || null
   const completedInspectionView = ['done', 'completed', 'ready'].includes(cleanText(task?.status).toLowerCase())
     || (!!task && isDailyTaskKeyHandoverStage(task))
   const skipRoomConfirmation = readOnly || completedInspectionView
@@ -497,7 +543,7 @@ export default function InspectionPanelScreen(props: Props) {
     setRestockLoading(true)
     setRestockLoadError(false)
     try {
-      if (cleaningTaskId) {
+      if (!readOnly && cleaningTaskId) {
         await bindInspectionPanelCleaningTaskId({
           task_id: task.id,
           cleaning_task_id: cleaningTaskId,
@@ -505,23 +551,46 @@ export default function InspectionPanelScreen(props: Props) {
           property_code: propertyCode,
         })
       }
-      const consumableSourceIds = consumableSourceIdsKey ? consumableSourceIdsKey.split('|').filter(Boolean) : []
+      const consumableSourceIds0 = consumableSourceIdsKey ? consumableSourceIdsKey.split('|').filter(Boolean) : []
+      const consumableSourceIds = readOnly
+        ? consumableSourceIds0.filter((id) => historicalSourceIds.includes(id))
+        : consumableSourceIds0
       const [batch, draft, feedback, consumableResults, remoteInspectionPhotos] = await Promise.all([
-        getInspectionPanelBatch(task.id),
-        getInspectionPanelDraft(task.id),
-        getInspectionPanelFeedbackDraft(task.id),
-        token && consumableSourceIds.length
+        readOnly ? Promise.resolve(null) : getInspectionPanelBatch(task.id),
+        readOnly ? Promise.resolve(null) : getInspectionPanelDraft(task.id),
+        readOnly ? Promise.resolve(null) : getInspectionPanelFeedbackDraft(task.id),
+        !readOnly && token && consumableSourceIds.length
           ? Promise.allSettled(consumableSourceIds.map((id) => getCleaningConsumables(token, id)))
           : Promise.resolve([]),
-        readOnly && token && cleaningTaskId
-          ? getInspectionPhotos(token, cleaningTaskId).then((result) => result?.items || []).catch(() => [])
+        readOnly && token && task?.id && historicalSourceIds.length
+          ? getWorkTaskFormPhotos(token, cleanText(task.id), historicalSourceIds, 'inspector', { includeVideos: true })
+              .then((result) => result?.items || [])
+              .catch(() => [])
           : Promise.resolve([]),
       ])
       if (localStateLoadVersionRef.current !== loadVersion) return
       const consumablesResponses = consumableResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])
-      const consumableLoadFailed = consumableSourceIds.length > 0 && (!token || consumableResults.some((result) => result.status === 'rejected'))
-      const remoteRestockItems = buildRestockFromConsumables(consumablesResponses)
-      const remotePhotoState = readOnly ? buildRemoteInspectionPhotoState(remoteInspectionPhotos) : null
+      const remoteMediaItems: any[] = Array.isArray(remoteInspectionPhotos) ? remoteInspectionPhotos : []
+      const consumableLoadFailed = !readOnly && consumableSourceIds.length > 0 && (!token || consumableResults.some((result) => result.status === 'rejected'))
+      const remoteRestockItems = readOnly
+        ? buildRestockFromWorkTaskMedia(remoteMediaItems)
+        : buildRestockFromConsumables(consumablesResponses)
+      const remotePhotoState = readOnly ? buildRemoteInspectionPhotoState(remoteMediaItems) : null
+      if (readOnly) {
+        const keyPhoto = remoteMediaItems.find((item: any) => cleanText(item?.source) === 'key')
+        const video = remoteMediaItems.find((item: any) => cleanText(item?.source) === 'lockbox_video')
+        setHistoricalKeyPhoto(keyPhoto ? {
+          reference: cleanText(keyPhoto.uploaded_key || keyPhoto.url),
+          taskId: cleanText(keyPhoto.task_id),
+        } : null)
+        setHistoricalLockboxVideo(video ? {
+          reference: cleanText(video.uploaded_key || video.url),
+          taskId: cleanText(video.task_id),
+        } : null)
+      } else {
+        setHistoricalKeyPhoto(null)
+        setHistoricalLockboxVideo(null)
+      }
       const sourceSnapshot = batch && batch.status !== 'draft' ? batch.snapshot : null
       setBatchItem(batch)
       setFeedbackDraft(sourceSnapshot?.feedback || feedback || null)
@@ -568,7 +637,7 @@ export default function InspectionPanelScreen(props: Props) {
         if (showSpinner) setLoading(false)
       }
     }
-  }, [cleaningTaskId, commitRoomPhotos, consumableSourceIdsKey, initialRestockItems, propertyCode, propertyId, readOnly, task, token])
+  }, [cleaningTaskId, commitRoomPhotos, consumableSourceIdsKey, historicalSourceIdsKey, initialRestockItems, propertyCode, propertyId, readOnly, task, token])
 
   const loadLocalStateRef = useRef(loadLocalState)
   useEffect(() => {
@@ -582,7 +651,7 @@ export default function InspectionPanelScreen(props: Props) {
 
   useEffect(() => {
     const taskId = task?.id
-    if (!taskId) return
+    if (!taskId || readOnly) return
     const unsubscribe = subscribeInspectionPanelSubmitQueue(() => {
       void getInspectionPanelBatch(taskId)
         .then((batch) => {
@@ -591,7 +660,7 @@ export default function InspectionPanelScreen(props: Props) {
         .catch(() => null)
     })
     return unsubscribe
-  }, [task?.id])
+  }, [readOnly, task?.id])
 
   useEffect(() => {
     if (!restockPickerOpen || !token) return
@@ -599,6 +668,7 @@ export default function InspectionPanelScreen(props: Props) {
   }, [restockPickerOpen, token])
 
   useEffect(() => {
+    if (readOnly) return
     const nav: any = props.navigation as any
     if (!nav || typeof nav.addListener !== 'function') return
     const unsub = nav.addListener('focus', () => {
@@ -607,7 +677,7 @@ export default function InspectionPanelScreen(props: Props) {
       })
     })
     return unsub
-  }, [props.navigation, props.route.params.taskId])
+  }, [props.navigation, props.route.params.taskId, readOnly])
 
   const persistDraft = useCallback(async (
     nextRestock = restock,
@@ -1174,12 +1244,44 @@ export default function InspectionPanelScreen(props: Props) {
             ) : null}
           </View>
 
-          <GuestLuggageCard
+          <WorkRecordReadOnlyInfo task={task} token={token} />
+
+          {!readOnly ? <GuestLuggageCard
             notice={(task as any).guest_luggage || null}
             token={token}
             showAcknowledge={!readOnly}
             onChanged={readOnly ? undefined : (notice) => patchWorkTaskItem(task.id, { guest_luggage: notice } as any)}
-          />
+          /> : null}
+
+          {readOnly && (historicalKeyPhoto?.reference || historicalLockboxVideoSource.uri) ? (
+            <View testID="inspection-read-only-key-media" style={styles.card}>
+              <Text style={styles.readOnlyMediaTitle}>本次任务钥匙资料</Text>
+              <Text style={styles.mutedSmall}>仅展示服务端与本工作记录明确关联的钥匙照片和挂钥匙视频。</Text>
+              <View style={styles.readOnlyMediaRow}>
+                {historicalKeyPhoto?.reference ? (
+                  <Pressable
+                    testID="inspection-read-only-key-photo"
+                    onPress={() => setViewerTarget({ remoteReference: historicalKeyPhoto.reference })}
+                    style={({ pressed }) => [styles.readOnlyMediaItem, pressed ? styles.pressed : null]}
+                  >
+                    <CleaningMediaImage
+                      token={token}
+                      remoteReference={historicalKeyPhoto.reference}
+                      {...historicalMediaAccess}
+                      style={styles.readOnlyMediaImage}
+                    />
+                    <Text style={styles.proofHint}>清洁人员拍摄的客人钥匙照片</Text>
+                  </Pressable>
+                ) : null}
+                {historicalLockboxVideoSource.uri ? (
+                  <View testID="inspection-read-only-lockbox-video" style={styles.readOnlyMediaItem}>
+                    <Video source={historicalLockboxVideoSource} style={styles.readOnlyMediaVideo} resizeMode={ResizeMode.CONTAIN} shouldPlay={false} useNativeControls />
+                    <Text style={styles.proofHint}>本次任务挂钥匙视频</Text>
+                  </View>
+                ) : null}
+              </View>
+            </View>
+          ) : null}
 
           <View
             style={[styles.card, draftValidationIssue?.section === 'restock' ? styles.validationCard : null]}
@@ -1254,7 +1356,7 @@ export default function InspectionPanelScreen(props: Props) {
                         <View style={styles.restockProofGallery}>
                           {cleanText(item.source_photo_url) ? (
                             <Pressable onPress={() => setViewerTarget({ remoteReference: cleanText(item.source_photo_url) })} style={({ pressed }) => [styles.proofThumbWrap, pressed ? styles.pressed : null]}>
-                              <CleaningMediaImage token={token} isOnline={isOnline} remoteReference={item.source_photo_url} style={styles.proofThumb} />
+                              <CleaningMediaImage token={token} isOnline={isOnline} remoteReference={item.source_photo_url} {...historicalMediaAccess} style={styles.proofThumb} />
                               <Text style={styles.proofHint}>清洁员补货照片</Text>
                             </Pressable>
                           ) : null}
@@ -1267,6 +1369,7 @@ export default function InspectionPanelScreen(props: Props) {
                                   localUri={proof.local_uri}
                                   thumbnailUri={proof.thumbnail_uri}
                                   remoteReference={mediaRemoteReference(proof)}
+                                  {...historicalMediaAccess}
                                   style={styles.proofThumb}
                                 />
                                 <Text style={styles.proofHint}>本地草稿照片</Text>
@@ -1358,6 +1461,7 @@ export default function InspectionPanelScreen(props: Props) {
                           localUri={item.local_uri}
                           thumbnailUri={item.thumbnail_uri}
                           remoteReference={mediaRemoteReference(item)}
+                          {...historicalMediaAccess}
                           style={styles.uncleanThumb}
                         />
                       </Pressable>
@@ -1415,14 +1519,22 @@ export default function InspectionPanelScreen(props: Props) {
             {expanded.propertyIssue ? (
               <View style={styles.block}>
                 <Text style={styles.mutedSmall}>{feedbackSummary(feedbackDraft)}</Text>
-                {readOnly ? (
-                  <Text style={styles.mutedSmall}>当前为只读查看，不能新增房源问题反馈。</Text>
+                {readOnly && !feedbackAction ? (
+                  <Text style={styles.mutedSmall}>当前记录没有可用的问题反馈权限。</Text>
                 ) : (
                   <Pressable
-                    onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id, source: 'inspection_panel_batch' })}
+                    testID="inspection-feedback-before-photos"
+                    onPress={() => {
+                      if (feedbackAction) {
+                        const route = navigationForWorkTaskAction(task, feedbackAction)
+                        if (route) props.navigation.navigate(route.screen as any, route.params as any)
+                        return
+                      }
+                      props.navigation.navigate('FeedbackForm', { taskId: task.id, source: 'inspection_panel_batch' })
+                    }}
                     style={({ pressed }) => [styles.primaryBtn, { marginTop: 12 }, pressed ? styles.pressed : null]}
                   >
-                    <Text style={styles.primaryText}>进入问题反馈</Text>
+                    <Text style={styles.primaryText}>{feedbackAction?.label || '进入问题反馈'}</Text>
                   </Pressable>
                 )}
               </View>
@@ -1471,6 +1583,7 @@ export default function InspectionPanelScreen(props: Props) {
                                 localUri={photo.local_uri}
                                 thumbnailUri={photo.thumbnail_uri}
                                 remoteReference={mediaRemoteReference(photo)}
+                                {...historicalMediaAccess}
                                 style={styles.thumbMini}
                               />
                             </Pressable>
@@ -1563,7 +1676,7 @@ export default function InspectionPanelScreen(props: Props) {
             </View>
           </View>
 
-          <View testID="inspection-sync-status-card" style={styles.card}>
+          {!readOnly ? <View testID="inspection-sync-status-card" style={styles.card}>
             <View style={styles.block}>
               <Text style={styles.mutedSmall}>{`当前状态：${batchStatusLabel(batchStatus)}`}</Text>
               <Text style={batchStatus === 'failed' || batchStatus === 'partial_failed' || batchValidationError ? styles.warnSmall : styles.mutedSmall}>
@@ -1586,7 +1699,7 @@ export default function InspectionPanelScreen(props: Props) {
                 <Text style={styles.mutedSmall}>当前批次已保存并冻结，不能继续编辑本次 snapshot。</Text>
               ) : null}
             </View>
-          </View>
+          </View> : null}
 
           {loading ? <Text style={styles.muted}>{t('common_loading')}</Text> : null}
         </ScrollView>
@@ -1690,6 +1803,7 @@ export default function InspectionPanelScreen(props: Props) {
               token={token}
               reference={viewerTarget.remoteReference || viewerTarget.localUri || viewerTarget.thumbnailUri}
               thumbnailReference={viewerTarget.localUri || viewerTarget.thumbnailUri || viewerTarget.remoteReference}
+              {...historicalMediaAccess}
               style={styles.viewerImg}
             />
           ) : null}
@@ -1731,6 +1845,11 @@ const styles = StyleSheet.create({
   badgeText: { color: '#2563EB', fontWeight: '900', flexShrink: 1 },
   sub: { marginTop: 8, color: '#6B7280', fontWeight: '700' },
   readOnlyBanner: { marginTop: 10, paddingHorizontal: 10, paddingVertical: 9, borderRadius: 10, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', color: '#1D4ED8', fontWeight: '900', lineHeight: 18 },
+  readOnlyMediaTitle: { color: '#111827', fontWeight: '900', fontSize: 15 },
+  readOnlyMediaRow: { marginTop: 10, flexDirection: 'row', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' },
+  readOnlyMediaItem: { flexGrow: 1, flexBasis: 150, minWidth: 150, overflow: 'hidden', borderRadius: 12, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F8FAFC' },
+  readOnlyMediaImage: { width: '100%', height: 148 },
+  readOnlyMediaVideo: { width: '100%', height: 180, backgroundColor: '#111827' },
   muted: { marginTop: 6, color: '#6B7280', fontWeight: '700' },
   mutedSmall: { marginTop: 8, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   warnSmall: { marginTop: 8, color: '#B45309', fontWeight: '900', fontSize: 12 },

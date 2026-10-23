@@ -33,6 +33,8 @@ function AckGroup(props: { label: string; items: GuestLuggageNotice['acknowledge
 export default function GuestLuggageCard(props: {
   notice?: GuestLuggageNotice | null
   token?: string | null
+  accessWorkTaskId?: string | null
+  accessSourceIds?: string[] | null
   showAcknowledge?: boolean
   showAcknowledgementSummary?: boolean
   compact?: boolean
@@ -81,6 +83,8 @@ export default function GuestLuggageCard(props: {
                   localUri={String(url).startsWith('file://') ? url : null}
                   remoteReference={url}
                   guestLuggageId={notice.id}
+                  accessWorkTaskId={props.accessWorkTaskId}
+                  accessSourceIds={props.accessSourceIds}
                   style={styles.photo}
                 />
               </Pressable>
@@ -116,7 +120,7 @@ export default function GuestLuggageCard(props: {
 
       <Modal visible={!!previewUrl} transparent animationType="fade" onRequestClose={() => setPreviewUrl(null)}>
         <Pressable style={styles.previewBackdrop} onPress={() => setPreviewUrl(null)}>
-          {previewUrl ? <CleaningMediaPreview token={props.token} reference={previewUrl} guestLuggageId={notice.id} style={styles.previewImage} /> : null}
+          {previewUrl ? <CleaningMediaPreview token={props.token} reference={previewUrl} guestLuggageId={notice.id} accessWorkTaskId={props.accessWorkTaskId} accessSourceIds={props.accessSourceIds} style={styles.previewImage} /> : null}
         </Pressable>
       </Modal>
     </>

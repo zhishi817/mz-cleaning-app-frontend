@@ -19,11 +19,14 @@ test('uses the same saved notice context for thumbnail and preview', () => {
     photo_urls: ['mzapp/notice-photo-1.jpg'],
     acknowledgements: { cleaners: [], inspectors: [] },
   } as any
-  const ui = render(<GuestLuggageCard notice={notice} token="token-1" />)
+  const ui = render(<GuestLuggageCard notice={notice} token="token-1" accessWorkTaskId="cleaning_tasks_cleaner:source-1::record:completed:2026-10-21" accessSourceIds={['source-1']} />)
 
   expect(ui.getByTestId('guest-luggage-thumbnail').props.guestLuggageId).toBe('4a0dbea0-cbaf-4eef-87ec-2f4bb038703e')
   expect(ui.getByTestId('guest-luggage-thumbnail').props.token).toBe('token-1')
+  expect(ui.getByTestId('guest-luggage-thumbnail').props.accessWorkTaskId).toContain('::record:')
+  expect(ui.getByTestId('guest-luggage-thumbnail').props.accessSourceIds).toEqual(['source-1'])
   fireEvent.press(ui.getByTestId('guest-luggage-photo-0'))
   expect(ui.getByTestId('guest-luggage-preview').props.guestLuggageId).toBe('4a0dbea0-cbaf-4eef-87ec-2f4bb038703e')
   expect(ui.getByTestId('guest-luggage-preview').props.token).toBe('token-1')
+  expect(ui.getByTestId('guest-luggage-preview').props.accessSourceIds).toEqual(['source-1'])
 })

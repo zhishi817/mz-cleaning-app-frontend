@@ -710,12 +710,17 @@ export type WorkTask = {
   work_record_media_attributed?: boolean
   read_only_views?: {
     property_access: boolean
+    guest_context?: boolean
     lock_codes?: boolean
+    lockbox_video?: boolean
     cleaner_photos: boolean
     inspection_photos: boolean
     guest_key_photo: boolean
     media_scope: 'cleaner' | 'inspector' | 'manager' | 'none'
     media_source_ids?: string[]
+    feedback_history?: boolean
+    feedback_report?: boolean
+    feedback_source_id?: string | null
   } | null
   counts_as_active_task?: boolean
   completed_at?: string | null
@@ -1320,11 +1325,12 @@ export async function listDailyNecessityOptions(token: string, params?: { keywor
 
 export async function listPropertyFeedbacks(
   token: string,
-  params: { property_id?: string; property_code?: string; status?: string[]; limit?: number },
+  params: { property_id?: string; property_code?: string; source_task_id?: string; status?: string[]; limit?: number },
 ) {
   const sp = new URLSearchParams()
   if (params.property_id) sp.set('property_id', params.property_id)
   if (params.property_code) sp.set('property_code', params.property_code)
+  if (params.source_task_id) sp.set('source_task_id', params.source_task_id)
   if (params.status?.length) sp.set('status', params.status.join(','))
   if (params.limit) sp.set('limit', String(params.limit))
   const urls = buildUrlCandidates(`mzapp/property-feedbacks?${sp.toString()}`)
@@ -2108,7 +2114,7 @@ export type InspectionPhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'ki
 export type WorkTaskFormPhotoRecord = {
   id: string
   task_id: string
-  source: 'inspection' | 'completion' | 'key' | 'restock' | 'consumable' | 'issue' | string
+  source: 'inspection' | 'completion' | 'key' | 'lockbox_video' | 'restock' | 'consumable' | 'issue' | string
   area?: string | null
   item_id?: string | null
   label?: string | null
@@ -2125,11 +2131,13 @@ export async function getWorkTaskFormPhotos(
   workTaskRef: string,
   sourceIds: string[] = [],
   scope?: 'cleaner' | 'inspector' | 'manager',
+  options?: { includeVideos?: boolean },
 ) {
   const params = new URLSearchParams()
   const ids = Array.from(new Set(sourceIds.map((item) => String(item || '').trim()).filter(Boolean))).slice(0, 50)
   if (ids.length) params.set('source_ids', ids.join(','))
   if (scope) params.set('scope', scope)
+  if (options?.includeVideos) params.set('include_videos', '1')
   const query = params.toString()
   const path = `mzapp/work-tasks/${encodeURIComponent(workTaskRef)}/form-photos${query ? `?${query}` : ''}`
   const urls = buildUrlCandidates(path)

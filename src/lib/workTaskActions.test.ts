@@ -1,4 +1,60 @@
-import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyNotificationForActiveRole, guestReadyOperationId, guestReadyOutsideKeyForActiveRole, isGuestReadyNotificationAction, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, navigationForWorkTaskEntry, preferredNoticeActionForTask } from './workTaskActions'
+import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyNotificationForActiveRole, guestReadyOperationId, guestReadyOutsideKeyForActiveRole, isGuestReadyNotificationAction, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, navigationForWorkTaskEntry, navigationForWorkTaskRolePage, preferredNoticeActionForTask } from './workTaskActions'
+
+test('任务卡恢复进入各角色原页面，历史记录保持只读', () => {
+  const base = {
+    id: 'work-record-1',
+    source_type: 'cleaning_tasks',
+    source_id: 'cleaning-1',
+    work_record_read_only: true,
+    read_only_views: { media_source_ids: ['cleaning-1'] },
+  } as any
+
+  expect(navigationForWorkTaskRolePage({
+    task: { ...base, task_kind: 'cleaning', read_only_views: { ...base.read_only_views, media_scope: 'cleaner' } },
+    fallbackTaskId: base.id,
+  })).toEqual({ screen: 'CleaningSelfComplete', params: { taskId: base.id, readOnly: true } })
+
+  expect(navigationForWorkTaskRolePage({
+    task: { ...base, task_kind: 'inspection', read_only_views: { ...base.read_only_views, media_scope: 'inspector' } },
+    fallbackTaskId: base.id,
+    isTaskInspector: true,
+  })).toEqual({ screen: 'InspectionPanel', params: { taskId: base.id, readOnly: true } })
+
+  expect(navigationForWorkTaskRolePage({
+    task: { ...base, task_kind: 'cleaning' },
+    fallbackTaskId: base.id,
+    isTaskManager: true,
+  })).toEqual({ screen: 'ManagerDailyTask', params: { taskId: base.id } })
+})
+
+test('活动中的自完成、检查和挂钥匙仍进入各自执行页', () => {
+  expect(navigationForWorkTaskRolePage({
+    task: {
+      id: 'self-complete-1', source_type: 'cleaning_tasks', source_id: 'cleaning-1', task_kind: 'cleaning',
+      task_type: 'checkout_clean', inspection_mode: 'self_complete',
+    } as any,
+    fallbackTaskId: 'self-complete-1',
+    roleNames: ['cleaner'],
+  })).toEqual({ screen: 'CleaningSelfComplete', params: { taskId: 'self-complete-1' } })
+
+  expect(navigationForWorkTaskRolePage({
+    task: { id: 'inspection-1', source_type: 'cleaning_tasks', source_id: 'cleaning-1', task_kind: 'inspection' } as any,
+    fallbackTaskId: 'inspection-1',
+    isTaskInspector: true,
+  })).toEqual({ screen: 'InspectionPanel', params: { taskId: 'inspection-1', sourceId: 'cleaning-1' } })
+
+  expect(navigationForWorkTaskRolePage({
+    task: {
+      id: 'handover-1', source_type: 'cleaning_tasks', source_id: 'cleaning-1', task_kind: 'inspection',
+      inspection_scope: 'password_only', execution_role: 'execution', execution_semantics: 'key_or_password_action',
+    } as any,
+    fallbackTaskId: 'handover-1',
+    isTaskInspector: true,
+  })).toEqual({
+    screen: 'InspectionComplete',
+    params: { taskId: 'handover-1', sourceId: 'cleaning-1', skipInspectionPhotos: true },
+  })
+})
 
 test('清洁未提交时，即使共享任务状态已进入 inspected，补品入口仍可编辑', () => {
   const task: any = {
@@ -40,20 +96,61 @@ test('钥匙照片删除后，即使补品已提交也保留重新上传入口',
   }))
 })
 
-test('只读工作记录不复用任何执行或管理动作', () => {
+test('只读工作记录只接受服务端绑定准确源任务的报修和补品查看入口', () => {
   const task: any = {
     id: 'mq801-record',
-    source_type: 'property_maintenance',
-    task_kind: 'maintenance',
+    source_type: 'cleaning_tasks',
+    source_id: 'cleaning-task-1',
+    task_kind: 'cleaning',
     status: 'pending_review',
     work_record_visible: true,
     work_record_read_only: true,
     available_actions: [
-      { id: 'report_issue', label: '问题反馈', placement: 'primary', enabled: true, target: 'FeedbackForm', intent: 'issue' },
+      { id: 'fill_supplies', label: '补品记录', placement: 'primary', enabled: false, disabled_reason: 'task_completed', read_only: true, target: 'SuppliesForm', intent: 'cleaning', source_type: 'cleaning_tasks', source_id: 'cleaning-task-1' },
+      { id: 'report_issue', label: '问题反馈与报修记录', placement: 'more', enabled: true, read_only: false, target: 'FeedbackForm', intent: 'issue', source_type: 'cleaning_tasks', source_id: 'cleaning-task-1' },
+      { id: 'complete_cleaning', label: '完成', placement: 'primary', enabled: true, target: 'CleaningSelfComplete', intent: 'completion' },
     ],
   }
-  expect(availableActionsForTask(task, { roleNames: ['admin'] })).toEqual([])
-  expect(availableActionsForTask(task, { roleNames: ['customer_service'] })).toEqual([])
+  expect(availableActionsForTask(task, { roleNames: ['admin'] }).map((action) => action.id)).toEqual(['fill_supplies', 'report_issue'])
+  expect(navigationForWorkTaskAction(task, availableActionsForTask(task)[0])).toEqual({
+    screen: 'SuppliesForm',
+    params: { taskId: 'mq801-record', readOnly: true },
+  })
+  expect(navigationForWorkTaskAction(task, availableActionsForTask(task)[1])).toEqual({
+    screen: 'FeedbackForm',
+    params: { taskId: 'mq801-record', sourceTaskId: 'cleaning-task-1' },
+  })
+  expect(navigationForWorkTaskAction(task, { ...task.available_actions[1], read_only: true })).toEqual({
+    screen: 'FeedbackForm',
+    params: { taskId: 'mq801-record', sourceTaskId: 'cleaning-task-1', readOnly: true },
+  })
+  expect(availableActionsForTask({
+    ...task,
+    available_actions: [{ ...task.available_actions[1], source_id: null }],
+  }, { roleNames: ['customer_service'] })).toEqual([])
+})
+
+test('自完成挂钥匙动作直接进入视频页且跳过检查照片', () => {
+  const task: any = {
+    id: 'la910-self-complete',
+    source_type: 'cleaning_tasks',
+    source_id: 'cleaning-la910',
+    task_kind: 'cleaning',
+    task_type: 'checkout_clean',
+    inspection_mode: 'self_complete',
+  }
+  expect(navigationForWorkTaskAction(task, {
+    id: 'upload_access_video',
+    label: '挂钥匙并完成',
+    placement: 'primary',
+    enabled: true,
+    target: 'InspectionComplete',
+    intent: 'site_action',
+    source_id: 'cleaning-la910',
+  })).toEqual({
+    screen: 'InspectionComplete',
+    params: { taskId: 'la910-self-complete', sourceId: 'cleaning-la910', skipInspectionPhotos: true },
+  })
 })
 
 test('客服、admin 和线下经理的旧任务详情入口保持管理动作一致', () => {

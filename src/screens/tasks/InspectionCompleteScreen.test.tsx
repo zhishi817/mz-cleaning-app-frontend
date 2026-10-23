@@ -140,7 +140,12 @@ beforeEach(() => {
 	  ]
 	mockSnapshot.items[0].source_id = 'ct1'
   mockSnapshot.items[0].title = 'X 仅改密码'
+	mockSnapshot.items[0].task_kind = 'inspection'
+	mockSnapshot.items[0].task_type = 'checkin_clean'
+	mockSnapshot.items[0].inspection_mode = 'same_day'
   mockSnapshot.items[0].inspection_scope = 'password_only'
+	delete mockSnapshot.items[0].source_key_handover_completed
+	delete mockSnapshot.items[0].lockbox_video_url
 	  mockSnapshot.items[0].available_actions = [
     {
       id: 'upload_access_video',
@@ -152,6 +157,48 @@ beforeEach(() => {
     },
 	  ]
 	})
+
+test('self-complete cleaner can record this task key handover without inspection batch', async () => {
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  mockQueueItems = []
+  mockSnapshot.items[0] = {
+    ...mockSnapshot.items[0],
+    title: 'LA910 自完成',
+    task_kind: 'cleaning',
+    task_type: 'checkout_clean',
+    inspection_mode: 'self_complete',
+    inspection_scope: 'inspect_and_hang',
+    source_key_handover_completed: false,
+    lockbox_video_url: 'https://example.invalid/related-task-lockbox.mp4',
+    available_actions: [{
+      id: 'upload_access_video',
+      label: '挂钥匙并完成',
+      placement: 'primary',
+      enabled: true,
+      target: 'InspectionComplete',
+      intent: 'site_action',
+      source_id: 'ct1',
+    }],
+  }
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
+  const InspectionCompleteScreen = require('./InspectionCompleteScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <InspectionCompleteScreen
+        navigation={navigation as any}
+        route={{ key: 'self-complete-key-handover', name: 'InspectionComplete', params: { taskId: 'w1', sourceId: 'ct1', skipInspectionPhotos: true } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByText('这是自完成任务的挂钥匙步骤；补品和清洁资料已单独保存，无需重复检查照片。')).toBeTruthy())
+  expect(queue.getInspectionPanelBatch).not.toHaveBeenCalled()
+  expect(ui.getByTestId('inspection-complete-upload-video').props.disabled).not.toBe(true)
+  expect(ui.getByText('拍视频并上传')).toBeTruthy()
+  expect(ui.queryByText('视频已同步')).toBeNull()
+  expect(ui.queryByText('进入检查与补充')).toBeNull()
+})
 
 function mockNextQueueProcessingAsSaved(finalizationPending = false) {
   const mediaQueue = require('../../lib/inspectionMediaQueue')

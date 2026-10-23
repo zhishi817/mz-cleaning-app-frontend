@@ -95,10 +95,10 @@ export type TasksStackParamList = {
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
   InspectionPanel: { taskId: string; sourceId?: string; readOnly?: boolean }
   InspectionComplete: { taskId: string; sourceId?: string; skipInspectionPhotos?: boolean }
-  CleaningSelfComplete: { taskId: string }
+  CleaningSelfComplete: { taskId: string; readOnly?: boolean }
   ManagerDailyTask: { taskId: string }
   DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; targetRoles?: DayEndTargetRole[]; overviewMode?: boolean; overviewUsers?: DayEndOverviewUser[] }
-  FeedbackForm: { taskId: string; source?: 'inspection_panel_batch' }
+  FeedbackForm: { taskId: string; source?: 'inspection_panel_batch'; sourceTaskId?: string; readOnly?: boolean }
   SuppliesForm: { taskId: string; readOnly?: boolean }
 }
 
@@ -109,10 +109,10 @@ export type NoticesStackParamList = {
   TaskDetail: { id: string; action?: 'upload_key' | 'complete' }
   InspectionPanel: { taskId: string; sourceId?: string; readOnly?: boolean }
   InspectionComplete: { taskId: string; sourceId?: string; skipInspectionPhotos?: boolean }
-  CleaningSelfComplete: { taskId: string }
+  CleaningSelfComplete: { taskId: string; readOnly?: boolean }
   ManagerDailyTask: { taskId: string }
   DayEndBackupKeys: { date: string; userId?: string; userName?: string; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; taskRoomCodes?: string[]; targetRoles?: DayEndTargetRole[]; overviewMode?: boolean; overviewUsers?: DayEndOverviewUser[] }
-  FeedbackForm: { taskId: string; source?: 'inspection_panel_batch' }
+  FeedbackForm: { taskId: string; source?: 'inspection_panel_batch'; sourceTaskId?: string; readOnly?: boolean }
   SuppliesForm: { taskId: string; readOnly?: boolean }
 }
 

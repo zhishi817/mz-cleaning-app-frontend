@@ -137,8 +137,12 @@ export function taskFormPhotoRelationIds(task: any) {
 }
 
 export function taskFormPhotoReadOnlyRelationIds(task: any) {
+  if (task?.work_record_read_only === true) {
+    return uniq(Array.isArray(task?.read_only_views?.media_source_ids)
+      ? task.read_only_views.media_source_ids
+      : [])
+  }
   return uniq([
-    ...(Array.isArray(task?.read_only_views?.media_source_ids) ? task.read_only_views.media_source_ids : []),
     task?.source_id,
     ...(Array.isArray(task?.source_ids) ? task.source_ids : []),
     ...(Array.isArray(task?.active_source_ids) ? task.active_source_ids : []),

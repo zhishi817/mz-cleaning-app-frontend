@@ -31,6 +31,7 @@ test('uses uploaded key or canonical remote URL as the remote identity', () => {
 
 test('read-only media relation excludes display ids and superseded same-property candidates', () => {
   expect(taskFormPhotoReadOnlyRelationIds({
+    work_record_read_only: true,
     id: 'cleaning_tasks_merged:2026-07-24:RM-1001',
     source_id: 'checkin-1',
     source_ids: ['checkin-1'],
@@ -39,6 +40,17 @@ test('read-only media relation excludes display ids and superseded same-property
     all_related_source_ids: ['cleaning-1', 'checkin-1', 'cancelled-old-task'],
     superseded_source_ids: ['cancelled-old-task'],
   })).toEqual(['cleaning-1', 'checkin-1'])
+})
+
+test('read-only media never falls back to broad display relations without an explicit server capability', () => {
+  expect(taskFormPhotoReadOnlyRelationIds({
+    work_record_read_only: true,
+    id: 'cleaning_tasks_cleaner:checkout-1::record:completed:2026-10-21',
+    source_id: 'checkout-1',
+    source_ids: ['checkout-1'],
+    all_related_source_ids: ['checkout-1', 'unrelated-same-day'],
+    read_only_views: { media_source_ids: [] },
+  })).toEqual([])
 })
 
 test('server photo wins when the same photo exists in local draft and remote records', () => {

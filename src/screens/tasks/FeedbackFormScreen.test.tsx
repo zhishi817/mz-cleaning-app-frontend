@@ -99,11 +99,10 @@ test('清洁和检查人员都能查看同一任务房源已报问题', async ()
       </I18nProvider>,
     )
     await waitFor(() => {
-      expect(ui.getByText('本房源历史反馈')).toBeTruthy()
+      expect(ui.getByText('本任务报修记录')).toBeTruthy()
       expect(ui.getByText('客厅：水龙头漏水')).toBeTruthy()
     })
-    expect(listPropertyFeedbacks).toHaveBeenCalledWith('test-token', expect.objectContaining({ property_id: 'property-1' }))
-    expect(listPropertyFeedbacks.mock.calls.some(([, params]) => Object.prototype.hasOwnProperty.call(params, 'source_task_id'))).toBe(false)
+    expect(listPropertyFeedbacks).toHaveBeenCalledWith('test-token', expect.objectContaining({ property_id: 'property-1', source_task_id: 'cleaning-1' }))
     ui.unmount()
   }
 
@@ -111,6 +110,72 @@ test('清洁和检查人员都能查看同一任务房源已报问题', async ()
   listPropertyFeedbacks.mockClear()
   await renderForRole('cleaning_inspector')
   mockUser = { id: 'inspector-1', username: 'inspector', role: 'cleaning_inspector', roles: ['cleaning_inspector'] }
+})
+
+test('仅查看反馈权限隐藏新增和记录编辑入口', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
+  const { listPropertyFeedbacks } = require('../../lib/api') as { listPropertyFeedbacks: jest.Mock }
+  listPropertyFeedbacks.mockResolvedValue([{
+    id: 'feedback-read-only-1',
+    property_id: 'property-1',
+    source_task_id: 'cleaning-1',
+    kind: 'maintenance',
+    area: '客厅',
+    detail: '墙面划痕',
+    media_urls: [],
+    created_at: '2026-08-04T00:00:00.000Z',
+    status: 'open',
+    capabilities: { can_edit_content: true, can_delete: true, can_move_category: true },
+  }])
+  const ui = render(
+    <I18nProvider>
+      <FeedbackFormScreen navigation={{ navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }} route={{ key: 'feedback-read-only', name: 'FeedbackForm', params: { taskId: 'w-feedback', sourceTaskId: 'cleaning-1', readOnly: true } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByTestId('feedback-history-read-only-banner')).toBeTruthy())
+  expect(ui.queryByText('选择反馈类型')).toBeNull()
+  expect(ui.queryByRole('button', { name: '编辑反馈记录' })).toBeNull()
+  expect(ui.queryByRole('button', { name: '删除反馈记录' })).toBeNull()
+})
+
+test('仅查看入口水合新鲜可编辑缓存时仍强制清除修改能力', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
+  const storage = require('../../lib/storage') as { getJson: jest.Mock }
+  const { listPropertyFeedbacks } = require('../../lib/api') as { listPropertyFeedbacks: jest.Mock }
+  storage.getJson.mockImplementation(async (key: string) => String(key).startsWith('feedback_history_open_')
+    ? {
+        pending: [{
+          id: 'cached-editable-feedback',
+          property_id: 'property-1',
+          source_task_id: 'cleaning-1',
+          kind: 'maintenance',
+          area: '客厅',
+          detail: '缓存中的旧报修',
+          media_urls: [],
+          created_at: '2026-08-04T00:00:00.000Z',
+          status: 'open',
+          capabilities: { can_edit_content: true, can_delete: true, can_move_category: true },
+        }],
+        resolved: [],
+        updated_at: Date.now(),
+      }
+    : null)
+  listPropertyFeedbacks.mockImplementation(() => new Promise(() => {}))
+
+  const ui = render(
+    <I18nProvider>
+      <FeedbackFormScreen navigation={{ navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }} route={{ key: 'feedback-read-only-cache', name: 'FeedbackForm', params: { taskId: 'w-feedback', sourceTaskId: 'cleaning-1', readOnly: true } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByText('客厅：缓存中的旧报修')).toBeTruthy())
+  expect(ui.queryByRole('button', { name: '编辑反馈记录' })).toBeNull()
+  expect(ui.queryByRole('button', { name: '调整反馈类型' })).toBeNull()
+  expect(ui.queryByRole('button', { name: '删除反馈记录' })).toBeNull()
+  ui.unmount()
+  storage.getJson.mockImplementation(async () => null)
+  listPropertyFeedbacks.mockResolvedValue([])
 })
 
 test('检查批次反馈照片会持久化稳定 media id 供提交队列续传', async () => {

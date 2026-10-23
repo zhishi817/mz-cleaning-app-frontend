@@ -38,7 +38,10 @@ import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { findWorkTaskItemByAnyId, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
-import { getCleaningConsumables, getCompletionPhotos, getRestockProof, selfCompleteCleaningTask, type ChecklistItem } from '../../lib/api'
+import { getCleaningConsumables, getCompletionPhotos, getRestockProof, getWorkTaskFormPhotos, selfCompleteCleaningTask, type ChecklistItem } from '../../lib/api'
+import { buildCleaningMediaVideoSource } from '../../lib/cleaningMedia'
+import { taskFormPhotoReadOnlyRelationIds } from '../../lib/taskFormPhotos'
+import { availableActionsForTask, navigationForWorkTaskAction } from '../../lib/workTaskActions'
 import { consumableRestockStandard } from '../../lib/consumableRestockStandards'
 import { ensureSuppliesCatalogLoaded, retrySuppliesCatalog, useSuppliesCatalogStore } from '../../lib/useSuppliesCatalogStore'
 import { API_BASE_URL } from '../../config/env'
@@ -48,6 +51,7 @@ import ResponsiveImageGrid from '../../components/ui/ResponsiveImageGrid'
 import CleaningMediaImage from '../../components/CleaningMediaImage'
 import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 import SafeAreaBottomBar from '../../components/ui/SafeAreaBottomBar'
+import WorkRecordReadOnlyInfo from '../../components/WorkRecordReadOnlyInfo'
 import { layoutTokens } from '../../lib/theme'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'CleaningSelfComplete'>
@@ -182,6 +186,19 @@ function selfCompleteLockboxSyncStatus(item: InspectionMediaQueueItem | null, bu
   return { label: '同步失败', tone: 'pending' as StatusTone, hint: item.last_error || '视频仍保存在本机，可点击重试同步。' }
 }
 
+function emptyCompletionPhotos(): Record<PhotoArea, string[]> {
+  return {
+    toilet: [],
+    living: [],
+    sofa: [],
+    bedroom: [],
+    kitchen: [],
+    shower_drain: [],
+    remote_tv: [],
+    vacuum_used: [],
+  }
+}
+
 export default function CleaningSelfCompleteScreen(props: Props) {
   const { t } = useI18n()
   const { token, user } = useAuth()
@@ -209,13 +226,37 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   }, [])
 
   const task = findWorkTaskItemByAnyId(props.route.params.taskId)
+  const readOnly = props.route.params.readOnly === true || task?.work_record_read_only === true
   const cleaningTaskId = String(task?.source_id || '').trim()
+  const historicalSourceIdsKey = JSON.stringify(readOnly ? taskFormPhotoReadOnlyRelationIds(task) : [])
+  const historicalSourceIds = useMemo<string[]>(() => JSON.parse(historicalSourceIdsKey), [historicalSourceIdsKey])
+  const historicalRequestKey = readOnly ? `${String(task?.id || '').trim()}::${historicalSourceIdsKey}` : ''
+  const historicalRequestKeyRef = useRef(historicalRequestKey)
+  historicalRequestKeyRef.current = historicalRequestKey
+  const historicalViewGenerationRef = useRef({ key: historicalRequestKey, value: 0 })
+  if (historicalViewGenerationRef.current.key !== historicalRequestKey) {
+    historicalViewGenerationRef.current = {
+      key: historicalRequestKey,
+      value: historicalViewGenerationRef.current.value + 1,
+    }
+  }
+  const historicalViewGeneration = historicalViewGenerationRef.current.value
+  const historicalRequestRef = useRef<{
+    key: string
+    promise: ReturnType<typeof getWorkTaskFormPhotos>
+  } | null>(null)
+  const [historicalFormPhotos, setHistoricalFormPhotos] = useState<{
+    key: string
+    items: Awaited<ReturnType<typeof getWorkTaskFormPhotos>>['items']
+  } | null>(null)
+  const refreshSequenceRef = useRef(0)
+  const feedbackAction = availableActionsForTask(task).find((action) => action.id === 'report_issue') || null
   const propertyCode = String(task?.property?.code || '').trim()
   const propertyAddr = String(task?.property?.address || '').trim()
   const completedSelfCompleteView = ['done', 'completed', 'ready', 'cleaned', 'restock_pending', 'restocked', 'inspected']
     .includes(String((task as any)?.status || '').trim().toLowerCase())
     || (!!task && isDailyTaskKeyHandoverStage(task))
-  const skipRoomConfirmation = completedSelfCompleteView
+  const skipRoomConfirmation = readOnly || completedSelfCompleteView
   useEffect(() => {
     setRoomConfirmed(skipRoomConfirmation)
   }, [props.route.params.taskId, skipRoomConfirmation])
@@ -225,23 +266,29 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   const requiresConsumables = !isStayoverTask
   const requiresLockboxVideo = !isStayoverTask
 
-  const [completion, setCompletion] = useState<Record<PhotoArea, string[]>>({
-    toilet: [],
-    living: [],
-    sofa: [],
-    bedroom: [],
-    kitchen: [],
-    shower_drain: [],
-    remote_tv: [],
-    vacuum_used: [],
-  })
+  const [completion, setCompletion] = useState<Record<PhotoArea, string[]>>(emptyCompletionPhotos)
   const completionRef = useRef(completion)
   const [completionWatermarks, setCompletionWatermarks] = useState<Record<string, string>>({})
   const completionWatermarksRef = useRef<Record<string, string>>({})
   const [lockboxItem, setLockboxItem] = useState<InspectionMediaQueueItem | null>(null)
-  const lockboxFromTask = String((task as any)?.lockbox_video_url || '').trim()
-  const lockboxUrl = String(lockboxItem?.uploaded_url || lockboxItem?.local_uri || lockboxFromTask || '').trim() || null
-  const lockboxBusinessSaved = !!lockboxItem?.business_saved || !!lockboxFromTask
+  const [historicalLockboxVideo, setHistoricalLockboxVideo] = useState<{ reference: string; taskId: string } | null>(null)
+  const [historicalMediaAppliedKey, setHistoricalMediaAppliedKey] = useState('')
+  const historicalMediaVisible = !readOnly || historicalMediaAppliedKey === historicalRequestKey
+  const visibleHistoricalLockboxVideo = historicalMediaVisible ? historicalLockboxVideo : null
+  const lockboxFromTask = readOnly ? '' : String((task as any)?.lockbox_video_url || '').trim()
+  const lockboxUrl = String(visibleHistoricalLockboxVideo?.reference || lockboxItem?.uploaded_url || lockboxItem?.local_uri || lockboxFromTask || '').trim() || null
+  const lockboxBusinessSaved = !!visibleHistoricalLockboxVideo || !!lockboxItem?.business_saved || !!lockboxFromTask
+  const lockboxVideoSource = readOnly && visibleHistoricalLockboxVideo
+    ? buildCleaningMediaVideoSource(token, visibleHistoricalLockboxVideo.reference, {
+        accessTaskId: visibleHistoricalLockboxVideo.taskId,
+        accessWorkTaskId: String(task?.id || ''),
+        accessSourceIds: historicalSourceIds,
+        mediaScope: 'cleaner',
+      })
+    : { uri: toAbsoluteUrl(lockboxUrl) }
+  const historicalMediaAccess = readOnly
+    ? { accessWorkTaskId: String(task?.id || ''), accessSourceIds: historicalSourceIds, mediaScope: 'cleaner' as const }
+    : {}
   const remainingNightsRaw = (task as any)?.remaining_nights
   const remainingNights0 = remainingNightsRaw == null ? null : Number(remainingNightsRaw)
   const remainingNights = Number.isFinite(remainingNights0 as any) ? (remainingNights0 as number) : null
@@ -249,14 +296,27 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerItems, setViewerItems] = useState<ViewerItem[]>([])
   const [viewerIndex, setViewerIndex] = useState(0)
+  const [viewerHistoricalBinding, setViewerHistoricalBinding] = useState<{ key: string; generation: number } | null>(null)
+  const viewerVisible = viewerOpen && (!readOnly
+    || (viewerHistoricalBinding?.key === historicalRequestKey
+      && viewerHistoricalBinding.generation === historicalViewGeneration))
+  const visibleViewerItems = viewerVisible ? viewerItems : []
 
   const completionAreas = useMemo(() => COMPLETION_AREAS.map((item) => item.area), [])
   const requiredAreas = useMemo(() => COMPLETION_AREAS.filter((item) => item.required !== false).map((item) => item.area), [])
 
-  const completionOk = useMemo(() => requiredAreas.every(a => (completion[a] || []).length > 0), [completion, requiredAreas])
+  const visibleCompletion = useMemo(
+    () => historicalMediaVisible ? completion : emptyCompletionPhotos(),
+    [completion, historicalMediaVisible],
+  )
+  const completionOk = useMemo(() => requiredAreas.every(a => (visibleCompletion[a] || []).length > 0), [requiredAreas, visibleCompletion])
 
   const [suppliesSubmitted, setSuppliesSubmitted] = useState(false)
   const [supplies, setSupplies] = useState<SupplyItemState[]>([])
+  const [historicalSuppliesAppliedKey, setHistoricalSuppliesAppliedKey] = useState('')
+  const historicalSuppliesVisible = !readOnly || historicalSuppliesAppliedKey === historicalRequestKey
+  const visibleSupplies = historicalSuppliesVisible ? supplies : []
+  const visibleSuppliesSubmitted = historicalSuppliesVisible && suppliesSubmitted
   const suppliesCatalog = useSuppliesCatalogStore()
   const [draftPhotoMeta, setDraftPhotoMeta] = useState<CleaningConsumablesPhotoMetaMap>({})
   const [suppliesSubmitStatus, setSuppliesSubmitStatus] = useState<CleaningConsumablesSubmitStatus>('draft')
@@ -273,8 +333,10 @@ export default function CleaningSelfCompleteScreen(props: Props) {
 
   const lockboxOk = !requiresLockboxVideo || lockboxBusinessSaved
   const pendingSuppliesSubmit = suppliesSubmitStatus !== 'draft' && suppliesSubmitStatus !== 'synced'
-  const suppliesSummaryTone: StatusTone = suppliesSubmitted || suppliesSubmitStatus === 'synced' ? 'success' : pendingSuppliesSubmit ? 'info' : 'pending'
-  const suppliesSummaryText = suppliesSubmitted || suppliesSubmitStatus === 'synced' ? '已提交' : pendingSuppliesSubmit ? '待同步' : '未提交'
+  const visibleSuppliesSubmitStatus = historicalSuppliesVisible ? suppliesSubmitStatus : 'draft'
+  const visiblePendingSuppliesSubmit = visibleSuppliesSubmitStatus !== 'draft' && visibleSuppliesSubmitStatus !== 'synced'
+  const suppliesSummaryTone: StatusTone = visibleSuppliesSubmitted || visibleSuppliesSubmitStatus === 'synced' ? 'success' : visiblePendingSuppliesSubmit ? 'info' : 'pending'
+  const suppliesSummaryText = visibleSuppliesSubmitted || visibleSuppliesSubmitStatus === 'synced' ? '已提交' : visiblePendingSuppliesSubmit ? '待同步' : '未提交'
   const photoSummaryTone: StatusTone = completionOk ? 'success' : 'pending'
   const photoSummaryText = completionOk ? '已满足' : '未满足'
   const lockboxSyncStatus = selfCompleteLockboxSyncStatus(lockboxItem, lockboxBusinessSaved, requiresLockboxVideo)
@@ -315,12 +377,12 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   const scrollBottomPadding = 148 + Math.max(insets.bottom, layoutTokens.spacing.lg)
 
   useEffect(() => {
-    if (!task || isStayoverTask) return
+    if (!task || readOnly || isStayoverTask) return
     if (inspectionMode === 'self_complete') return
     Alert.alert('待确认检查安排', '当前任务不是“自完成”流程，请等待经理确认检查安排。', [
       { text: '知道了', onPress: () => props.navigation.goBack() },
     ])
-  }, [inspectionMode, isStayoverTask, props.navigation, task])
+  }, [inspectionMode, isStayoverTask, props.navigation, readOnly, task])
 
   const canSubmitSupplies = useMemo(() => {
     if (!supplies.length) return false
@@ -332,22 +394,49 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     return true
   }, [supplies])
 
+  const loadHistoricalFormPhotos = useCallback(() => {
+    if (!readOnly || !token || !task?.id || !historicalSourceIds.length) {
+      return Promise.resolve({ items: [] } as Awaited<ReturnType<typeof getWorkTaskFormPhotos>>)
+    }
+    const existing = historicalRequestRef.current
+    if (existing?.key === historicalRequestKey) return existing.promise
+    let promise: ReturnType<typeof getWorkTaskFormPhotos>
+    promise = getWorkTaskFormPhotos(token, String(task.id), historicalSourceIds, 'cleaner', { includeVideos: true })
+      .finally(() => {
+        if (historicalRequestRef.current?.promise === promise) historicalRequestRef.current = null
+      })
+    historicalRequestRef.current = { key: historicalRequestKey, promise }
+    return promise
+  }, [historicalRequestKey, historicalSourceIds, readOnly, task?.id, token])
+
   const refresh = useCallback(async () => {
     if (!token) return
-    if (!cleaningTaskId) return
+    if (!task?.id || (!cleaningTaskId && !readOnly)) return
+    const refreshSequence = ++refreshSequenceRef.current
+    const requestKey = historicalRequestKey
     try {
       setLoading(true)
       const [serverResult, draftResult] = await Promise.allSettled([
-        getCompletionPhotos(token, cleaningTaskId),
-        getCleaningConsumablesDraft(cleaningTaskId),
+        readOnly
+          ? loadHistoricalFormPhotos()
+          : getCompletionPhotos(token, cleaningTaskId),
+        readOnly ? Promise.resolve(null) : getCleaningConsumablesDraft(cleaningTaskId),
       ])
+      if (readOnly && (historicalRequestKeyRef.current !== requestKey || refreshSequenceRef.current !== refreshSequence)) return
       const serverReadOk = serverResult.status === 'fulfilled'
       const draftReadOk = draftResult.status === 'fulfilled'
+      if (readOnly && !serverReadOk) return
       if (!serverReadOk && !draftReadOk) return
       const r = serverResult.status === 'fulfilled' ? serverResult.value : null
       const draft = draftResult.status === 'fulfilled' ? draftResult.value : null
+      if (readOnly && serverReadOk) {
+        setHistoricalFormPhotos({
+          key: requestKey,
+          items: (r?.items || []) as Awaited<ReturnType<typeof getWorkTaskFormPhotos>>['items'],
+        })
+      }
       const next: Record<PhotoArea, string[]> = serverReadOk
-        ? { toilet: [], living: [], sofa: [], bedroom: [], kitchen: [], shower_drain: [], remote_tv: [], vacuum_used: [] }
+        ? emptyCompletionPhotos()
         : {
             toilet: [...completionRef.current.toilet],
             living: [...completionRef.current.living],
@@ -361,10 +450,19 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       const nextWatermarks = serverReadOk ? {} : { ...completionWatermarksRef.current }
       const pendingCompletionDraft = draft?.completion_submit_enabled && !draft.completion_business_saved
       const serverItems = pendingCompletionDraft ? [] : (r?.items || [])
+      let nextHistoricalVideo: { reference: string; taskId: string } | null = null
       for (const it of serverItems) {
+        const source = String((it as any).source || '').trim()
+        if (readOnly && source === 'lockbox_video') {
+          const reference = String((it as any).uploaded_key || (it as any).url || '').trim()
+          const sourceTaskId = String((it as any).task_id || '').trim()
+          if (reference && sourceTaskId && historicalSourceIds.includes(sourceTaskId)) nextHistoricalVideo = { reference, taskId: sourceTaskId }
+          continue
+        }
+        if (readOnly && source !== 'completion') continue
         const rawArea = String(it.area || '').trim()
         const a = (rawArea === 'remote_controls' || rawArea === 'remote_ac' ? 'remote_tv' : rawArea) as PhotoArea
-        const url = String(it.url || '').trim()
+        const url = String((it as any).uploaded_key || it.url || '').trim()
         if (!url) continue
         if (!(a in next)) continue
         next[a].push(url)
@@ -382,13 +480,17 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       }
       setCompletion(next)
       setCompletionWatermarks(nextWatermarks)
+      if (readOnly) {
+        setHistoricalLockboxVideo(nextHistoricalVideo)
+        setHistoricalMediaAppliedKey(requestKey)
+      }
     } finally {
-      setLoading(false)
+      if (refreshSequenceRef.current === refreshSequence) setLoading(false)
     }
-  }, [cleaningTaskId, token])
+  }, [cleaningTaskId, historicalRequestKey, historicalSourceIds, loadHistoricalFormPhotos, readOnly, task?.id, token])
 
   const reloadLockboxItem = useCallback(async () => {
-    if (!cleaningTaskId || !requiresLockboxVideo) {
+    if (readOnly || !cleaningTaskId || !requiresLockboxVideo) {
       setLockboxItem(null)
       return
     }
@@ -396,7 +498,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     const selfCompleteItems = items.filter((item) => item.meta?.lockbox_submission_mode === 'self_complete')
     const latest = selfCompleteItems.sort((a, b) => b.created_at.localeCompare(a.created_at))[0] || null
     setLockboxItem(latest)
-  }, [cleaningTaskId, requiresLockboxVideo])
+  }, [cleaningTaskId, readOnly, requiresLockboxVideo])
 
   useEffect(() => {
     completionRef.current = completion
@@ -407,10 +509,24 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   }, [completionWatermarks])
 
   useEffect(() => {
+    if (!readOnly) return
+    setHistoricalFormPhotos(null)
+    setHistoricalLockboxVideo(null)
+    setHistoricalMediaAppliedKey('')
+    setHistoricalSuppliesAppliedKey('')
+    setCompletion(emptyCompletionPhotos())
+    setCompletionWatermarks({})
+  }, [historicalRequestKey, readOnly])
+
+  useEffect(() => {
     refresh()
   }, [refresh])
 
   useEffect(() => {
+    if (readOnly) {
+      setLockboxItem(null)
+      return
+    }
     let cancelled = false
     void reloadLockboxItem()
     if (token && cleaningTaskId && requiresLockboxVideo) {
@@ -427,27 +543,27 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       cancelled = true
       unsubscribe()
     }
-  }, [cleaningTaskId, reloadLockboxItem, requiresLockboxVideo, token])
+  }, [cleaningTaskId, readOnly, reloadLockboxItem, requiresLockboxVideo, token])
 
   useEffect(() => {
     const nav: any = props.navigation as any
     if (!nav || typeof nav.addListener !== 'function') return
     const unsub = nav.addListener('focus', () => {
       refresh()
-      if (token && cleaningTaskId && requiresLockboxVideo) {
+      if (!readOnly && token && cleaningTaskId && requiresLockboxVideo) {
         void processInspectionMediaQueue(token).catch(() => null).finally(() => {
           void reloadLockboxItem()
         })
       }
     })
     return unsub
-  }, [cleaningTaskId, props.navigation, refresh, reloadLockboxItem, requiresLockboxVideo, token])
+  }, [cleaningTaskId, props.navigation, readOnly, refresh, reloadLockboxItem, requiresLockboxVideo, token])
 
   useEffect(() => {
     if (!requiresConsumables) return
     if (!token) return
     void ensureSuppliesCatalogLoaded(token).catch(() => null)
-  }, [requiresConsumables, token])
+  }, [readOnly, requiresConsumables, token])
 
   useEffect(() => {
     let cancelled = false
@@ -456,14 +572,45 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         suppliesDraftHydratedRef.current = true
         return
       }
+      if (readOnly && historicalSourceIds.length && historicalFormPhotos?.key !== historicalRequestKey) return
       const [draftResult, consumablesResult, restockResult] = await Promise.allSettled([
-        getCleaningConsumablesDraft(cleaningTaskId),
-        getCleaningConsumables(token, cleaningTaskId),
-        getRestockProof(token, cleaningTaskId),
+        readOnly ? Promise.resolve(null) : getCleaningConsumablesDraft(cleaningTaskId),
+        readOnly ? Promise.resolve({ items: [] }) : getCleaningConsumables(token, cleaningTaskId),
+        readOnly ? Promise.resolve({ items: [] }) : getRestockProof(token, cleaningTaskId),
       ])
       if (cancelled) return
+      if (readOnly && historicalRequestKeyRef.current !== historicalRequestKey) return
       const draft = draftResult.status === 'fulfilled' ? draftResult.value : null
-      const serverConsumables = consumablesResult.status === 'fulfilled' ? consumablesResult.value.items : []
+      const historicalMedia = readOnly && historicalFormPhotos?.key === historicalRequestKey
+        ? historicalFormPhotos.items
+        : []
+      const historicalConsumablesById = new Map<string, any>()
+      const historicalRestockById = new Map<string, any>()
+      for (const row of historicalMedia) {
+        const itemId = String(row.item_id || row.area || '').trim()
+        const url = String(row.uploaded_key || row.url || '').trim()
+        if (!itemId || !url) continue
+        if (row.source === 'consumable') {
+          const existing = historicalConsumablesById.get(itemId)
+          historicalConsumablesById.set(itemId, {
+            item_id: itemId,
+            item_label: String(row.label || itemId).trim(),
+            status: 'ok',
+            photo_urls: Array.from(new Set([...(existing?.photo_urls || []), url])),
+          })
+        }
+        if (row.source === 'restock') {
+          const existing = historicalRestockById.get(itemId)
+          historicalRestockById.set(itemId, {
+            item_id: itemId,
+            status: 'restocked',
+            proof_urls: Array.from(new Set([...(existing?.proof_urls || []), url])),
+          })
+        }
+      }
+      const serverConsumables = readOnly
+        ? Array.from(historicalConsumablesById.values())
+        : consumablesResult.status === 'fulfilled' ? consumablesResult.value.items : []
       const savedConsumables = serverConsumables.length > 0
       const consumablesById = new Map(
         serverConsumables
@@ -471,7 +618,9 @@ export default function CleaningSelfCompleteScreen(props: Props) {
           .filter(([itemId]) => !!itemId),
       )
       const restockById = new Map(
-        (restockResult.status === 'fulfilled' ? restockResult.value.items : [])
+        (readOnly
+          ? Array.from(historicalRestockById.values())
+          : restockResult.status === 'fulfilled' ? restockResult.value.items : [])
           .map((item) => [String(item.item_id || '').trim(), item] as const)
           .filter(([itemId]) => !!itemId),
       )
@@ -520,20 +669,21 @@ export default function CleaningSelfCompleteScreen(props: Props) {
             photo_urls: Array.isArray(prev?.photo_urls) && prev.photo_urls.length
               ? prev.photo_urls.map((url) => String(url || '').trim()).filter(Boolean)
               : Array.isArray(serverRestock?.proof_urls)
-                ? serverRestock.proof_urls.map((url) => String(url || '').trim()).filter(Boolean)
+                ? serverRestock.proof_urls.map((url: any) => String(url || '').trim()).filter(Boolean)
                 : [],
           }
         })
         setSupplies(next)
       }
+      if (readOnly) setHistoricalSuppliesAppliedKey(historicalRequestKey)
     })().catch(() => null)
     return () => {
       cancelled = true
     }
-  }, [cleaningTaskId, requiresConsumables, suppliesCatalog.items, token])
+  }, [cleaningTaskId, historicalFormPhotos, historicalRequestKey, historicalSourceIds.length, readOnly, requiresConsumables, suppliesCatalog.items, token])
 
   useEffect(() => {
-    if (!cleaningTaskId) return
+    if (readOnly || !cleaningTaskId) return
     return subscribeCleaningConsumablesSubmitQueue((changedTaskId) => {
       if (changedTaskId !== cleaningTaskId) return
       void getCleaningConsumablesDraft(cleaningTaskId).then((draft) => {
@@ -572,7 +722,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         void refresh()
       }).catch(() => {})
     })
-  }, [cleaningTaskId, refresh, requiresConsumables])
+  }, [cleaningTaskId, readOnly, refresh, requiresConsumables])
 
   useEffect(() => {
     if (!requiresConsumables) return
@@ -592,7 +742,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   }, [requiresConsumables, supplies.length, suppliesCatalog.items])
 
   useEffect(() => {
-    if (!requiresConsumables || !cleaningTaskId) return
+    if (readOnly || !requiresConsumables || !cleaningTaskId) return
     if (!suppliesDraftHydratedRef.current || !suppliesDirtyRef.current) return
     if (suppliesSubmitStatus !== 'draft' && suppliesSubmitStatus !== 'ready_to_submit') return
     void setCleaningConsumablesDraft(cleaningTaskId, {
@@ -608,7 +758,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         ? { consumables_business_saved: false, restock_business_saved: false }
         : {}),
     })
-  }, [cleaningTaskId, draftPhotoMeta, pendingSuppliesSubmit, propertyCode, requiresConsumables, supplies, suppliesSubmitStatus])
+  }, [cleaningTaskId, draftPhotoMeta, pendingSuppliesSubmit, propertyCode, readOnly, requiresConsumables, supplies, suppliesSubmitStatus])
 
   function toggle(k: keyof typeof expanded) {
     setExpanded(p => ({ ...p, [k]: !p[k] }))
@@ -631,6 +781,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       .filter(Boolean) as ViewerItem[]
     setViewerItems(nextItems)
     setViewerIndex(index)
+    setViewerHistoricalBinding(readOnly ? { key: historicalRequestKey, generation: historicalViewGeneration } : null)
     setViewerOpen(true)
   }
 
@@ -1053,7 +1204,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
           <View style={styles.headRow}>
             <View style={styles.heroTextWrap}>
               <Text style={styles.title}>补充与完成</Text>
-              <Text style={styles.heroHint}>{heroHint}</Text>
+              <Text style={styles.heroHint}>{readOnly ? '已完成工作记录：保留原清洁页面顺序，只可查看，不能重做或改写原任务。' : heroHint}</Text>
             </View>
             <View style={styles.badge}>
               <Ionicons name="home-outline" size={moderateScale(14)} color="#2563EB" />
@@ -1071,6 +1222,8 @@ export default function CleaningSelfCompleteScreen(props: Props) {
           </View>
           {loading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : null}
         </View>
+
+        <WorkRecordReadOnlyInfo task={task} token={token} />
 
         {requiresConsumables ? (
           <View style={styles.card}>
@@ -1091,11 +1244,11 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                     </View>
                     <StatusPill label={remainingNights == null ? '待住晚数 -' : `待住晚数 ${remainingNights}`} tone="neutral" />
                   </View>
-                  <Text style={styles.infoPanelText}>逐项选择“现场够用”“已补充”或“下次退房补”；已补充必须拍补货凭证。</Text>
-                  <Text style={styles.infoPanelText}>照片先保存在本机，提交时才上传并写入补货记录；弱网下可稍后继续。</Text>
+                  <Text style={styles.infoPanelText}>{readOnly ? '以下是本次任务已保存的补品记录，只读展示。' : '逐项选择“现场够用”“已补充”或“下次退房补”；已补充必须拍补货凭证。'}</Text>
+                  {!readOnly ? <Text style={styles.infoPanelText}>照片先保存在本机，提交时才上传并写入补货记录；弱网下可稍后继续。</Text> : null}
                   {catalogCacheHint ? <Text style={styles.infoPanelText}>{catalogCacheHint}</Text> : null}
-                  {pendingSuppliesSubmit ? <Text style={styles.ok}>已离线保存，待联网自动同步。</Text> : null}
-                  {suppliesSubmitted ? <Text style={styles.ok}>已提交</Text> : pendingSuppliesSubmit ? null : suppliesCatalog.loading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : <Text style={styles.warn}>未提交</Text>}
+                  {visiblePendingSuppliesSubmit ? <Text style={styles.ok}>已离线保存，待联网自动同步。</Text> : null}
+                  {visibleSuppliesSubmitted ? <Text style={styles.ok}>已提交</Text> : visiblePendingSuppliesSubmit ? null : suppliesCatalog.loading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : <Text style={styles.warn}>未提交</Text>}
                 </View>
                 {showCatalogErrorCard ? (
                   <View style={styles.inlineErrorCard}>
@@ -1118,7 +1271,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                       <Text style={styles.subSectionTitle}>消耗品补充</Text>
                       <Text style={styles.subSectionHint}>现场补好的记录为“已补充”；来不及补的记到下一次退房。</Text>
                     </View>
-                    {supplies.map((it, idx) => (
+                    {visibleSupplies.map((it, idx) => (
                       <View key={it.id} style={styles.itemCard}>
                         <View style={styles.itemHead}>
                           <View style={styles.supCopy}>
@@ -1141,6 +1294,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                           <AppTextInput
                             value={it.note}
                             onChangeText={(v) => setSupplyItem(idx, { note: v })}
+                            editable={!readOnly}
                             style={[styles.supInput, styles.supNote]}
                             placeholder="添加其他补充项（可选）"
                             multiline
@@ -1149,7 +1303,8 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                         <View style={styles.supRow}>
                           <Pressable
                             testID={`self-restock-${it.id}-sufficient`}
-                            onPress={() => setRestockResolution(idx, 'unavailable')}
+                            onPress={() => !readOnly && setRestockResolution(idx, 'unavailable')}
+                            disabled={readOnly}
                             style={({ pressed }) => [styles.supChip, it.restock_status === 'unavailable' ? styles.supChipActive : null, pressed ? styles.pressed : null]}
                           >
                             <Text style={[styles.supChipText, it.restock_status === 'unavailable' ? styles.supChipTextActive : null]}>现场够用</Text>
@@ -1157,14 +1312,15 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                           <Pressable
                             testID={`self-restock-${it.id}-restocked`}
                             onPress={() => onMarkRestocked(idx)}
-                            disabled={suppliesSubmitting}
+                            disabled={readOnly || suppliesSubmitting}
                             style={({ pressed }) => [styles.supChip, it.restock_status === 'restocked' ? styles.supChipActive : null, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
                           >
                             <Text style={[styles.supChipText, it.restock_status === 'restocked' ? styles.supChipTextActive : null]}>已补充</Text>
                           </Pressable>
                           <Pressable
                             testID={`self-restock-${it.id}-carry-forward`}
-                            onPress={() => setRestockResolution(idx, 'carry_forward')}
+                            onPress={() => !readOnly && setRestockResolution(idx, 'carry_forward')}
+                            disabled={readOnly}
                             style={({ pressed }) => [styles.supChip, it.restock_status === 'carry_forward' ? styles.supChipActive : null, pressed ? styles.pressed : null]}
                           >
                             <Text style={[styles.supChipText, it.restock_status === 'carry_forward' ? styles.supChipTextActive : null]}>下次退房补</Text>
@@ -1176,11 +1332,12 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                               <AppTextInput
                                 value={it.qty}
                                 onChangeText={(v) => setSupplyItem(idx, { qty: v.replace(/[^\d]/g, '').slice(0, 6) })}
+                                editable={!readOnly}
                                 style={[styles.supInput, styles.supQty]}
                                 placeholder="补充数量（可选）"
                                 keyboardType="number-pad"
                               />
-                              {it.restock_status === 'restocked' ? (
+                              {!readOnly && it.restock_status === 'restocked' ? (
                                 <Pressable
                                   onPress={() => onTakeStockPhoto(idx)}
                                   disabled={suppliesSubmitting}
@@ -1203,10 +1360,11 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                                         token={token}
                                         localUri={String(photoUrl).startsWith('file://') ? photoUrl : null}
                                         remoteReference={photoUrl}
+                                        {...historicalMediaAccess}
                                         style={styles.thumb}
                                       />
                                     </Pressable>
-                                    <Pressable
+                                    {!readOnly ? <Pressable
                                       onPress={() => {
                                         removePhotoUri(photoUrl)
                                         setSupplyItem(idx, { photo_urls: it.photo_urls.filter((_, photoIndex) => photoIndex !== photoIdx) })
@@ -1214,7 +1372,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                                       style={({ pressed }) => [styles.removeBtn, pressed ? styles.pressed : null]}
                                     >
                                       <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
-                                    </Pressable>
+                                    </Pressable> : null}
                                   </View>
                                 )}
                               />
@@ -1222,6 +1380,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                             <AppTextInput
                               value={it.note}
                               onChangeText={(v) => setSupplyItem(idx, { note: v })}
+                              editable={!readOnly}
                               style={[styles.supInput, styles.supNote]}
                               placeholder="备注（可选）"
                               multiline
@@ -1231,7 +1390,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                       </View>
                     ))}
 
-                    {supplies.length ? (
+                    {!readOnly && supplies.length ? (
                       <AppButton
                         label="提交消耗品补充"
                         onPress={onSubmitSupplies}
@@ -1259,15 +1418,23 @@ export default function CleaningSelfCompleteScreen(props: Props) {
           {expanded.feedback ? (
             <>
               <View style={styles.infoPanel}>
-                <Text style={styles.infoPanelText}>如发现房源问题，请在这里提交反馈。没有问题可跳过本步骤。</Text>
+                <Text style={styles.infoPanelText}>{readOnly ? '可查看本次问题记录；只有服务端明确授权时才可新增独立报修。' : '如发现房源问题，请在这里提交反馈。没有问题可跳过本步骤。'}</Text>
               </View>
               <View style={styles.rowCompact}>
-                <Pressable
-                  onPress={() => props.navigation.navigate('FeedbackForm', { taskId: task.id })}
+                {(!readOnly || feedbackAction) ? <Pressable
+                  testID="self-complete-feedback-before-photos"
+                  onPress={() => {
+                    if (feedbackAction) {
+                      const route = navigationForWorkTaskAction(task, feedbackAction)
+                      if (route) props.navigation.navigate(route.screen as any, route.params as any)
+                      return
+                    }
+                    props.navigation.navigate('FeedbackForm', { taskId: task.id })
+                  }}
                   style={({ pressed }) => [styles.grayBtn, pressed ? styles.pressed : null]}
                 >
-                  <Text style={styles.grayText}>进入房源问题反馈</Text>
-                </Pressable>
+                  <Text style={styles.grayText}>{feedbackAction?.label || '进入房源问题反馈'}</Text>
+                </Pressable> : <Text style={styles.mutedSmall}>当前记录没有可用的问题反馈权限。</Text>}
               </View>
             </>
           ) : null}
@@ -1284,12 +1451,12 @@ export default function CleaningSelfCompleteScreen(props: Props) {
           {expanded.photos ? (
             <>
               <View style={styles.infoPanel}>
-                <Text style={styles.infoPanelText}>电视和空调遥控器同框拍 1 张；浴室下水口和吸尘器使用后照片也必拍。</Text>
-                <Text style={styles.infoPanelText}>拍照后先保存到本机；点击“标记已完成”时才会逐张上传，并一次写入完成照片记录。</Text>
+                <Text style={styles.infoPanelText}>{readOnly ? '本次清洁已保存的照片可点击查看大图。' : '电视和空调遥控器同框拍 1 张；浴室下水口和吸尘器使用后照片也必拍。'}</Text>
+                {!readOnly ? <Text style={styles.infoPanelText}>拍照后先保存到本机；点击“标记已完成”时才会逐张上传，并一次写入完成照片记录。</Text> : null}
                 {completionOk ? <Text style={styles.ok}>已满足</Text> : <Text style={styles.warn}>未满足</Text>}
               </View>
               {COMPLETION_AREAS.map(({ area, title, hint }) => {
-                const list = completion[area] || []
+                const list = visibleCompletion[area] || []
                 const singlePhotoArea = area === 'remote_tv'
                 return (
                   <View key={area} style={styles.photoAreaCard}>
@@ -1300,14 +1467,14 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                       </View>
                       <View style={styles.photoAreaActions}>
                         <StatusPill label={`${list.length} 张`} tone={list.length ? 'success' : 'neutral'} />
-                        <Pressable
+                        {!readOnly ? <Pressable
                           testID={`completion-photo-${area}-capture`}
                           onPress={() => onAddCompletionPhoto(area)}
                           disabled={uploading || savingPhotos}
                           style={({ pressed }) => [styles.areaBtn, pressed ? styles.pressed : null, uploading || savingPhotos ? styles.disabled : null]}
                         >
                           <Text style={styles.areaBtnText}>{singlePhotoArea && list.length ? '重拍' : '拍照'}</Text>
-                        </Pressable>
+                        </Pressable> : null}
                       </View>
                     </View>
                     {list.length ? (
@@ -1322,16 +1489,17 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                                 token={token}
                                 localUri={String(u).startsWith('file://') ? u : null}
                                 remoteReference={u}
+                                {...historicalMediaAccess}
                                 style={styles.thumb}
                               />
                             </Pressable>
-                            <Pressable
+                            {!readOnly ? <Pressable
                               onPress={() => onRemovePhoto(area, u)}
                               disabled={savingPhotos}
                               style={({ pressed }) => [styles.removeBtn, pressed ? styles.pressed : null, savingPhotos ? styles.disabled : null]}
                             >
                               <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
-                            </Pressable>
+                            </Pressable> : null}
                           </View>
                         )}
                       />
@@ -1378,7 +1546,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                 {requiresLockboxVideo && lockboxOk ? (
                   <View style={styles.videoWrap}>
                     <Video
-                      source={{ uri: toAbsoluteUrl(lockboxUrl) }}
+                      source={lockboxVideoSource}
                       style={styles.video}
                       resizeMode={ResizeMode.CONTAIN}
                       shouldPlay={false}
@@ -1387,7 +1555,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                   </View>
                 ) : null}
                 <View style={styles.actionRow}>
-                  {requiresLockboxVideo ? (
+                  {!readOnly && requiresLockboxVideo ? (
                     <AppButton
                       label={lockboxBusinessSaved ? '重传视频' : lockboxItem ? '重拍视频' : '上传视频'}
                       onPress={onUploadLockboxVideo}
@@ -1397,7 +1565,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                       style={[styles.grayBtn, uploading || submitting ? styles.disabled : null]}
                     />
                   ) : null}
-                  {requiresLockboxVideo && lockboxItem && !lockboxBusinessSaved && (lockboxItem.last_error || lockboxItem.uploaded_url) ? (
+                  {!readOnly && requiresLockboxVideo && lockboxItem && !lockboxBusinessSaved && (lockboxItem.last_error || lockboxItem.uploaded_url) ? (
                     <AppButton
                       label="重试同步"
                       onPress={onRetryLockboxSync}
@@ -1413,7 +1581,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         </View>
       </ScrollView>
 
-      <SafeAreaBottomBar>
+      {!readOnly ? <SafeAreaBottomBar>
         <AppButton
           label="标记已完成"
           onPress={onSelfComplete}
@@ -1422,10 +1590,10 @@ export default function CleaningSelfCompleteScreen(props: Props) {
           fullWidth
           style={uploading || submitting ? styles.disabledPrimary : null}
         />
-      </SafeAreaBottomBar>
+      </SafeAreaBottomBar> : null}
       </KeyboardAvoidingView>
 
-      <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)}>
+      <Modal visible={viewerVisible} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)}>
         <View testID="self-complete-photo-viewer-mask" style={styles.viewerMask}>
           <View style={[styles.viewerTopRow, { paddingTop: Math.max(10, insets.top) }]} pointerEvents="box-none">
             <Text style={styles.viewerCloseText}>左右滑动查看</Text>
@@ -1446,12 +1614,12 @@ export default function CleaningSelfCompleteScreen(props: Props) {
             contentOffset={{ x: viewerIndex * viewerPageWidth, y: 0 }}
             onMomentumScrollEnd={(event) => {
               const nextIndex = Math.round(Number(event.nativeEvent.contentOffset.x || 0) / Math.max(viewerPageWidth, 1))
-              setViewerIndex(Math.max(0, Math.min(nextIndex, Math.max(viewerItems.length - 1, 0))))
+              setViewerIndex(Math.max(0, Math.min(nextIndex, Math.max(visibleViewerItems.length - 1, 0))))
             }}
           >
-            {viewerItems.map((item, index) => (
+            {visibleViewerItems.map((item, index) => (
               <View key={`${item.reference}:${index}`} style={[styles.viewerSlide, { width: viewerPageWidth }]}>
-                <CleaningMediaPreview token={token} reference={item.reference} loadPreview={index === viewerIndex} style={styles.viewerImg} />
+                <CleaningMediaPreview token={token} reference={item.reference} {...historicalMediaAccess} loadPreview={index === viewerIndex} style={styles.viewerImg} />
                 {item.watermarkText ? (
                   <View pointerEvents="none" style={styles.viewerWatermark}>
                     <Text style={styles.viewerWatermarkText}>{item.watermarkText}</Text>

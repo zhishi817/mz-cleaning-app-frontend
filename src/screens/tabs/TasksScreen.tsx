@@ -59,7 +59,7 @@ import {
   turnoverDisplayOf,
 } from '../../lib/turnoverDisplay'
 import { getInspectionModeTone, getInspectionScopeTone, getKeyHandoverPendingNotice, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
-import { guestReadyNotificationForActiveRole, guestReadyOperationId, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, primaryActionsForTask } from '../../lib/workTaskActions'
+import { guestReadyNotificationForActiveRole, guestReadyOperationId, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, navigationForWorkTaskRolePage, primaryActionsForTask } from '../../lib/workTaskActions'
 import { dailyTaskCurrentIdentityKey, dailyTaskGroupCounts, dailyTaskPhaseHistoryLines, dailyTaskStatusCounts, isDailyTaskKeyHandoverStage, partitionDailyTasks, reconcileDailyTaskDisplay } from '../../lib/dailyTaskPresentation'
 import { millisecondsUntilNextTaskBusinessDate, shouldFollowTaskBusinessDate, taskBusinessDateKey } from '../../lib/taskBusinessDate'
 import { formatTaskLoadDiagnosticsText } from '../../lib/taskLoadDiagnostics'
@@ -3289,7 +3289,7 @@ function showBanner(title: string, message: string) {
               })
               const taskType = String((task as any).task_type || '').trim().toLowerCase()
               const isCheckinSiteExecution = isCheckinSiteExecutionTask(task as any)
-              const isStayoverTask = isCleaningTask && isStayoverTaskType(taskType)
+              const isStayoverTask = isStayoverTaskType(taskType)
               const isCheckoutTask = taskType === 'checkout_clean' || !!checkoutTime
               const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
               const inspectionScopeTag = isPasswordOnlyInspection
@@ -3337,7 +3337,10 @@ function showBanner(title: string, message: string) {
               const isSelfCompleteEligible = isCleaningTask && isSelfCompleteMode(task as any) && (isCheckoutTask || isStayoverTask)
               const isDirectCompleteEligible = isCleaningTask && (isSelfCompleteEligible || isStayoverTask)
               const isPendingInspectionDecision = isCleaningTask && !isStayoverTask && inspectionMode === 'pending_decision'
-              const showInspectionPlanTag = isCleaningTask && !isStayoverTask
+              const showInspectionPlanTag = (
+                isCleaningTask
+                || (isInspectionTask && inspectionMode === 'self_complete')
+              ) && !isStayoverTask && !isPasswordOnlyInspection
               const checkedOutAt = String((task as any).checked_out_at || '').trim()
               const isCheckedOut = !!checkedOutAt
               const isHistoricalTask = isBeforeToday(String(task.scheduled_date || (task as any).date || ''))
@@ -3568,23 +3571,14 @@ function showBanner(title: string, message: string) {
                       })
                       return
                     }
-                    const isCleaningTask0 = isCleaningExecutionTask(task) || isInspectionExecutionTask(task) || isKeyHandoverExecutionTask(task)
-                    if (view === 'all' && canTaskManagerView && isCleaningTask0) {
-                      props.navigation.navigate('ManagerDailyTask', { taskId: task.id })
-                      return
-                    }
-                    if (Array.isArray((task as any).available_actions)) {
-                      props.navigation.navigate('TaskDetail', { id: task.id })
-                      return
-                    }
-                    const isInspector0 = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
-                    const isInspection0 = isInspectionExecutionTask(task)
-                    if (isInspector0 && isInspection0) {
-                      const sourceId = String((task as any)?.source_id || '').trim()
-                      props.navigation.navigate('InspectionPanel', { taskId: task.id, ...(sourceId ? { sourceId } : {}) })
-                      return
-                    }
-                    props.navigation.navigate('TaskDetail', { id: task.id })
+                    const route = navigationForWorkTaskRolePage({
+                      task,
+                      fallbackTaskId: task.id,
+                      roleNames,
+                      isTaskManager: view === 'all' && canTaskManagerView,
+                      isTaskInspector: roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector'),
+                    })
+                    if (route) props.navigation.navigate(route.screen as any, route.params as any)
                   }}
                     style={({ pressed }) => [styles.taskCard, pressed ? styles.segmentPressed : null]}
                   >

@@ -64,6 +64,7 @@ import {
 import { taskBusinessDateKey } from '../../lib/taskBusinessDate'
 import { dailyTaskPhaseHistoryLines } from '../../lib/dailyTaskPresentation'
 import { mergeTaskFormPhotos, taskFormPhotoReadOnlyRelationIds, type TaskFormPhoto } from '../../lib/taskFormPhotos'
+import { buildCleaningMediaVideoSource } from '../../lib/cleaningMedia'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
 type OfflineEditUserOption = { id: string; username?: string | null; display_name?: string | null }
@@ -409,6 +410,14 @@ export default function TaskDetailScreen(props: Props) {
   const readOnlyMediaScope = String(readOnlyViews?.media_scope || '').trim().toLowerCase() as 'cleaner' | 'inspector' | 'manager' | 'none' | ''
   const readOnlyPhotoRelationKey = JSON.stringify(taskFormPhotoReadOnlyRelationIds(task))
   const readOnlyPhotoRelationIds = useMemo(() => JSON.parse(readOnlyPhotoRelationKey) as string[], [readOnlyPhotoRelationKey])
+  const readOnlyTaskImagePhotos = useMemo(
+    () => readOnlyTaskPhotos.filter((photo) => String(photo.source || '').trim() !== 'lockbox_video'),
+    [readOnlyTaskPhotos],
+  )
+  const readOnlyLockboxVideo = useMemo(
+    () => readOnlyTaskPhotos.find((photo) => String(photo.source || '').trim() === 'lockbox_video') || null,
+    [readOnlyTaskPhotos],
+  )
   const hasProjectedReadOnlyKeyPhoto = !!String((task as any)?.key_photo_url || '').trim()
   const keyPhotoMediaScope: 'cleaner' | 'inspector' | 'manager' | null = readOnlyMediaScope === 'cleaner' || readOnlyMediaScope === 'inspector' || readOnlyMediaScope === 'manager'
     ? readOnlyMediaScope
@@ -430,19 +439,29 @@ export default function TaskDetailScreen(props: Props) {
       && String(task.source_type || '').trim() === 'cleaning_tasks'
       && !!token
       && ['cleaner', 'inspector', 'manager'].includes(readOnlyMediaScope)
-      && (readOnlyViews?.cleaner_photos === true || readOnlyViews?.inspection_photos === true)
+      && readOnlyPhotoRelationIds.length > 0
+      && (readOnlyViews?.cleaner_photos === true || readOnlyViews?.inspection_photos === true || readOnlyViews?.lockbox_video === true)
     if (!canLoad) {
       setReadOnlyTaskPhotosLoading(false)
       return () => { cancelled = true }
     }
     const relationIds = readOnlyPhotoRelationIds
     setReadOnlyTaskPhotosLoading(true)
-    void getWorkTaskFormPhotos(
-      token as string,
-      String(task.id || task.source_id || ''),
-      relationIds,
-      readOnlyMediaScope as 'cleaner' | 'inspector' | 'manager',
-    ).then((server) => {
+    const formPhotoRequest = readOnlyViews?.lockbox_video === true
+      ? getWorkTaskFormPhotos(
+          token as string,
+          String(task.id || task.source_id || ''),
+          relationIds,
+          readOnlyMediaScope as 'cleaner' | 'inspector' | 'manager',
+          { includeVideos: true },
+        )
+      : getWorkTaskFormPhotos(
+          token as string,
+          String(task.id || task.source_id || ''),
+          relationIds,
+          readOnlyMediaScope as 'cleaner' | 'inspector' | 'manager',
+        )
+    void formPhotoRequest.then((server) => {
       if (cancelled) return
       const allowedSources = readOnlyMediaScope === 'cleaner'
         ? new Set(['completion', 'consumable', 'restock', 'issue'])
@@ -450,6 +469,7 @@ export default function TaskDetailScreen(props: Props) {
           ? new Set(['inspection', 'restock', 'issue'])
           : null
       setReadOnlyTaskPhotos(mergeTaskFormPhotos(server?.items || [], []).filter((photo) => {
+        if (photo.source === 'lockbox_video') return readOnlyViews?.lockbox_video === true
         if (photo.source === 'key') return readOnlyViews?.guest_key_photo === true && !hasProjectedReadOnlyKeyPhoto
         return allowedSources == null || allowedSources.has(String(photo.source || '').trim())
       }))
@@ -461,7 +481,7 @@ export default function TaskDetailScreen(props: Props) {
       if (!cancelled) setReadOnlyTaskPhotosLoading(false)
     })
     return () => { cancelled = true }
-  }, [hasProjectedReadOnlyKeyPhoto, readOnlyMediaScope, readOnlyPhotoRelationIds, readOnlyViews?.cleaner_photos, readOnlyViews?.guest_key_photo, readOnlyViews?.inspection_photos, task?.id, token, workRecordReadOnly])
+  }, [hasProjectedReadOnlyKeyPhoto, readOnlyMediaScope, readOnlyPhotoRelationIds, readOnlyViews?.cleaner_photos, readOnlyViews?.guest_key_photo, readOnlyViews?.inspection_photos, readOnlyViews?.lockbox_video, task?.id, token, workRecordReadOnly])
 
   useEffect(() => {
     if (!offlineEditOpen || !token || !canEditOfflineTask) return
@@ -1350,6 +1370,7 @@ export default function TaskDetailScreen(props: Props) {
   const oldCode = canViewLockCodes ? String(turnoverDisplay?.old_code || (task as any).old_code || '').trim() : ''
   const newCode = canViewLockCodes ? String(turnoverDisplay?.new_code || (task as any).new_code || '').trim() : ''
   const guestSpecialRequest = guestRequestForDisplay(task)
+  const orderNote = String((task as any)?.order_note || '').trim()
   const urgency = urgencyMeta(task.urgency)
   const isCleaningSource = task.source_type === 'cleaning_tasks'
   const isKeyHandoverTask = isKeyHandoverExecutionTask(task as any)
@@ -1379,7 +1400,21 @@ export default function TaskDetailScreen(props: Props) {
       ? '钥匙照片待同步'
       : '未上传钥匙照片'
   const keyPhotoVisibleError = getKeyUploadVisibleError(keyQueueItem?.last_error)
-  const lockboxVideoUrl = String((task as any).lockbox_video_url || '').trim() || null
+  const readOnlyLockboxVideoReference = String(readOnlyLockboxVideo?.uploaded_key || readOnlyLockboxVideo?.uploaded_url || '').trim()
+  const readOnlyLockboxVideoTaskId = String(readOnlyLockboxVideo?.task_id || '').trim()
+  const lockboxVideoUrl = workRecordReadOnly
+    ? readOnlyLockboxVideoReference || null
+    : String((task as any).lockbox_video_url || '').trim() || null
+  const lockboxVideoSource = workRecordReadOnly && lockboxVideoUrl && readOnlyLockboxVideoTaskId
+    ? buildCleaningMediaVideoSource(token, lockboxVideoUrl, {
+        accessTaskId: readOnlyLockboxVideoTaskId,
+        accessSourceIds: readOnlyPhotoRelationIds,
+        mediaScope: readOnlyMediaScope as 'cleaner' | 'inspector' | 'manager',
+      })
+    : { uri: toAbsoluteUrl(lockboxVideoUrl) }
+  const canDisplayLockboxVideo = workRecordReadOnly
+    ? readOnlyViews?.lockbox_video === true && Boolean(lockboxVideoSource.uri)
+    : canViewLockboxVideo && Boolean(lockboxVideoSource.uri)
   const taskNote = String((task as any).note || '').trim()
   const checkedOutAt = String((task as any).checked_out_at || '').trim()
   const isCheckedOut = !!checkedOutAt
@@ -1406,8 +1441,14 @@ export default function TaskDetailScreen(props: Props) {
     return s === 'done' || s === 'completed' || s === 'ready'
   })()
   const taskActions = availableActionsForTask(task, { roleNames, activeRole })
-  const guestReadyNotification = guestReadyNotificationForActiveRole(task.guest_ready_notification, activeRole)
-  const guestReadyOutsideKey = guestReadyOutsideKeyForActiveRole(task.guest_ready_outside_key, activeRole)
+  const feedbackTaskAction = taskActions.find((action) => action.id === 'report_issue') || null
+  const executionTaskActions = taskActions.filter((action) => action.id !== 'report_issue')
+  const guestReadyNotification = workRecordReadOnly && readOnlyViews?.guest_context === true
+    ? task.guest_ready_notification || null
+    : guestReadyNotificationForActiveRole(task.guest_ready_notification, activeRole)
+  const guestReadyOutsideKey = workRecordReadOnly && readOnlyViews?.guest_context === true
+    ? task.guest_ready_outside_key || null
+    : guestReadyOutsideKeyForActiveRole(task.guest_ready_outside_key, activeRole)
   const completionPhotoAppendAction = taskActions.find((action) => action.id === 'append_completion_photo') || null
   const canAppendCompletionPhotos = !workRecordReadOnly && !isMaintenanceTask && isAlreadyDone && completionPhotoAppendAction?.enabled === true
   const canEditTaskHandling = !workRecordReadOnly && ((!isMaintenanceTask && !isAlreadyDone) || maintenanceCanAct)
@@ -1539,7 +1580,10 @@ export default function TaskDetailScreen(props: Props) {
   const renderTaskActionButton = (action: WorkTaskAvailableAction) => {
     const disabledReason = action.disabled_reason ? actionDisabledReasonText(action.disabled_reason) : ''
     const checkedOutVisual = action.id === 'mark_guest_checkout' && isCheckedOut
-    const isEqualWidthAction = action.id === 'upload_key_photo' || action.id === 'fill_supplies' || action.id === 'complete_cleaning'
+    const isEqualWidthAction = action.id === 'upload_key_photo'
+      || action.id === 'fill_supplies'
+      || action.id === 'complete_cleaning'
+      || action.id === 'upload_access_video'
     const isFullWidthAction = action.id === 'report_issue'
     const localDisabled =
       (action.id === 'upload_key_photo' && (keyUploading || keyPhotoEffectiveState !== 'missing'))
@@ -1655,9 +1699,11 @@ export default function TaskDetailScreen(props: Props) {
       <GuestLuggageCard
         notice={guestLuggage}
         token={token}
-        showAcknowledge={!canManagerView && roleNames.some((role) => ['cleaner', 'cleaner_inspector', 'cleaning_inspector'].includes(role))}
+        accessWorkTaskId={workRecordReadOnly ? task?.id || null : null}
+        accessSourceIds={workRecordReadOnly ? readOnlyPhotoRelationIds : null}
+        showAcknowledge={!workRecordReadOnly && !canManagerView && roleNames.some((role) => ['cleaner', 'cleaner_inspector', 'cleaning_inspector'].includes(role))}
         showAcknowledgementSummary={canManagerView}
-        onChanged={(notice) => task ? patchWorkTaskItem(task.id, { guest_luggage: notice } as any) : undefined}
+        onChanged={workRecordReadOnly ? undefined : ((notice) => task ? patchWorkTaskItem(task.id, { guest_luggage: notice } as any) : undefined)}
       />
 
       <View style={styles.card}>
@@ -1898,6 +1944,13 @@ export default function TaskDetailScreen(props: Props) {
           </View>
         ) : null}
 
+        {orderNote ? (
+          <View style={styles.row}>
+            <Ionicons name="document-text-outline" size={moderateScale(14)} color="#9CA3AF" />
+            <Text style={styles.rowText}>{`订单备注：${orderNote}`}</Text>
+          </View>
+        ) : null}
+
         {restockSummary.length ? (
           <View style={styles.restockWrap}>
             <Text style={styles.sectionTitle}>待补消耗品</Text>
@@ -1941,6 +1994,15 @@ export default function TaskDetailScreen(props: Props) {
             </Text>
           </View>
         )}
+
+        {isCleaningSource && feedbackTaskAction ? (
+          <View
+            testID="task-detail-feedback-before-photos"
+            style={[styles.actionsRow, isCompactLayout ? styles.actionsRowCompact : null]}
+          >
+            {renderTaskActionButton(feedbackTaskAction)}
+          </View>
+        ) : null}
 
         {isCleaningSource && !isStayoverTask && keyPhotoUrl ? (
           <>
@@ -1992,12 +2054,12 @@ export default function TaskDetailScreen(props: Props) {
             {!readOnlyTaskPhotosLoading && readOnlyTaskPhotosError ? (
               <Text testID="task-detail-read-only-photos-error" style={styles.mutedSmall}>{readOnlyTaskPhotosError}</Text>
             ) : null}
-            {!readOnlyTaskPhotosLoading && !readOnlyTaskPhotosError && !readOnlyTaskPhotos.length ? (
+            {!readOnlyTaskPhotosLoading && !readOnlyTaskPhotosError && !readOnlyTaskImagePhotos.length ? (
               <Text style={styles.mutedSmall}>本次任务暂无可查看照片。</Text>
             ) : null}
-            {readOnlyTaskPhotos.length ? (
+            {readOnlyTaskImagePhotos.length ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.markPhotoList}>
-                {readOnlyTaskPhotos.map((photo, index) => {
+                {readOnlyTaskImagePhotos.map((photo, index) => {
                   const remoteReference = String(photo.uploaded_key || photo.uploaded_url || '').trim()
                   const localUri = String(photo.local_uri || photo.thumbnail_uri || '').trim()
                   const displayReference = remoteReference || localUri
@@ -2028,13 +2090,13 @@ export default function TaskDetailScreen(props: Props) {
           </View>
         ) : null}
 
-        {canViewLockboxVideo && isCleaningSource && lockboxVideoUrl ? (
+        {canDisplayLockboxVideo && isCleaningSource && lockboxVideoUrl ? (
           <>
             <View style={styles.line} />
             <Text style={styles.sectionTitle}>执行人上传的视频</Text>
             <View testID="task-detail-lockbox-video" style={styles.videoCard}>
               <Video
-                source={{ uri: toAbsoluteUrl(lockboxVideoUrl) }}
+                source={lockboxVideoSource}
                 style={styles.videoInline}
                 resizeMode={ResizeMode.CONTAIN}
                 shouldPlay={false}
@@ -2045,17 +2107,17 @@ export default function TaskDetailScreen(props: Props) {
         ) : null}
 
         {isCleaningSource ? (
-          taskActions.length ? (
+          executionTaskActions.length ? (
             <>
               <View style={[styles.actionsRow, isCompactLayout ? styles.actionsRowCompact : null]}>
-                {taskActions.map(renderTaskActionButton)}
+                {executionTaskActions.map(renderTaskActionButton)}
               </View>
             </>
-          ) : (
+          ) : !feedbackTaskAction ? (
             <View style={styles.markWrap}>
               <Text style={styles.mutedSmall}>{workRecordReadOnly ? '这是只读工作记录，不提供执行操作。' : '当前任务暂无可用操作，请刷新任务后重试。'}</Text>
             </View>
-          )
+          ) : null
         ) : (
           <View style={styles.markWrap}>
             {offlineDetail || detailText ? (

@@ -2533,6 +2533,104 @@ test.each([
   ['admin', ['admin']],
   ['offline manager', ['offline_manager']],
   ['customer service', ['customer_service']],
+])('manager turnover card keeps the explicit self-complete tag for %s when the canonical representative is inspection', async (_label, roles) => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  const base = previousItems[0]
+
+  snapshot.items = [{
+    ...base,
+    id: `la910-self-complete-${roles[0]}`,
+    source_type: 'cleaning_tasks',
+    source_id: 'la910-checkout',
+    source_ids: ['la910-checkout', 'la910-inspection'],
+    cleaning_task_ids: ['la910-checkout'],
+    inspection_task_ids: ['la910-inspection'],
+    task_kind: 'inspection',
+    task_type: 'turnover',
+    title: 'LA910',
+    inspection_mode: 'self_complete',
+    inspection_scope: null,
+    status: 'assigned',
+    property: { ...base.property, code: 'LA910' },
+  }]
+  mockAuthState.user = { id: `${roles[0]}-la910`, username: `${roles[0]}-la910`, role: roles[0], roles }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: `tasks-la910-self-complete-${roles[0]}`, name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => {
+      expect(ui.getByLabelText(`task-card-la910-self-complete-${roles[0]}`)).toBeTruthy()
+      expect(ui.getByText('自完成')).toBeTruthy()
+    })
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test.each([
+  ['ordinary inspection', 'turnover', 'same_day', 'inspect_and_hang'],
+  ['password-only inspection', 'checkin_clean', 'self_complete', 'password_only'],
+  ['inspection-representative stayover', 'stayover_clean', null, 'inspect_and_hang'],
+])('%s cards are not mislabeled as self-complete', async (_label, taskType, inspectionMode, inspectionScope) => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items
+  const base = previousItems[0]
+
+  snapshot.items = [{
+    ...base,
+    id: `non-self-complete-${taskType}`,
+    source_type: 'cleaning_tasks',
+    source_id: `non-self-complete-${taskType}-source`,
+    task_kind: 'inspection',
+    task_type: taskType,
+    title: `非自完成 ${taskType}`,
+    inspection_mode: inspectionMode,
+    inspection_scope: inspectionScope,
+    status: 'assigned',
+  }]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-ordinary-inspection-mode', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByLabelText(`task-card-non-self-complete-${taskType}`)).toBeTruthy())
+    expect(ui.queryByText('自完成')).toBeNull()
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+  }
+})
+
+test.each([
+  ['admin', ['admin']],
+  ['offline manager', ['offline_manager']],
+  ['customer service', ['customer_service']],
 ])('daily execution list applies the server visibility projection for %s', async (_label, roles) => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
