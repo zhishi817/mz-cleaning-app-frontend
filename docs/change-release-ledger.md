@@ -15094,15 +15094,34 @@
 - Branch: `codex/mz053-073-role-media-followups-v2`
 - Base: `origin/Dev@293f394819993326e291a4a1419d356f3b9cd4d4`; fetched at `2026-10-23T13:42:39Z`
 - Candidate patch SHA-256: `7b8b960a4b872a8eda45211f92ee0d1a593f8de3f743b4e71c09350c8c80df80`
-- Commit SHA: `not committed`; MZ-067 UI and MZ-071 are integrated into this same reviewed candidate rather than carried as a separate dependency commit
+- Commit SHA: `3895374be73c912748b1cf98258f2f0f11ac452e`; MZ-067 UI and MZ-071 are integrated into this same reviewed candidate rather than carried as a separate dependency commit
 - Dependencies: `root/CRL-20261023-001@c2f1d8d37a3620d3c65fda2ccf92863f3ff660ca`
 - Required validation: `PASS`; clean-candidate `npm run check:ci` passed on 2026-10-23 (77 suites, 654 tests; typecheck, lint with 0 errors, button contract and ledger checks passed)
 - Shared-hunk review: `PASS`; selected role/media/access fixes intentionally share screens and stores; clean source diff matched the reviewed worktree before attempt metadata
 - Generated-file review: `PASS`; no preview output, HTML serializer, cache, native build or secret is selected
-- Technical state: `verified candidate`
+- Technical state: `committed`
 - User authorization: `approved-for-push`; evidence: user explicitly requested one Root branch plus one Mobile branch, commit, push and draft PR for MZ-053/063/064/067/071/072/073
 - Independent review: `GO` for this exact staged candidate on 2026-10-23; P0=0, P1=0, with only the documented native-device, paired Root/migration rollout and Root-side Express-plus-transaction-adapter P2 gaps
-- Action conclusion: `GO` for the exact local content commit; current nine-CRL staged gate and a post-commit full nine-CRL range report are required before the authorized non-force branch push and Draft PR
+- Action conclusion: `GO` for the exact local content commit; the nine-CRL staged gate passed and a post-receipt full nine-CRL range report remains required before the authorized non-force branch push and Draft PR
+
+#### RA-20261023-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261023-001`
+- Selected CRL identities: `mobile/CRL-20261023-001`
+- Intended action: ledger-only receipt for the already authorized bundled commit, then exact range audit, non-force branch push and Draft PR
+- Branch: `codex/mz053-073-role-media-followups-v2`
+- Base: `origin/Dev@293f394819993326e291a4a1419d356f3b9cd4d4`; fetched at `2026-10-23T13:42:39Z`
+- Candidate patch SHA-256: `7b8b960a4b872a8eda45211f92ee0d1a593f8de3f743b4e71c09350c8c80df80`, excluding `docs/change-release-ledger.md`
+- Commit SHA: `3895374be73c912748b1cf98258f2f0f11ac452e`; exact reviewed bundled content commit recorded by `RA-20261023-001`
+- Dependencies: `root/CRL-20261023-001@c2f1d8d37a3620d3c65fda2ccf92863f3ff660ca`
+- Required validation: `PASS`; clean-candidate `check:ci` and exact nine-CRL staged gate passed
+- Shared-hunk review: `PASS`; this receipt changes ledger evidence only
+- Generated-file review: `PASS`; no generated, native, secret, runtime or deployment file is selected
+- Technical state: `committed`; receipt pending
+- User authorization: `approved-for-push`; same explicit bundled Root/Mobile commit, push and Draft PR authorization recorded in `RA-20261023-001`
+- Independent review: `GO`; P0=0, P1=0 for the exact content commit
+- Action conclusion: `GO` for this ledger-only receipt; the exact post-receipt full nine-CRL range report remains required before push
 
 ### Risks / Release Notes
 
