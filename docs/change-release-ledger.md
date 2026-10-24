@@ -175,6 +175,28 @@
 - `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `d8448050751fa3fc6beb3fd7eacf42d6b3cb34fad313a77244216cce44e7ad60`
 - `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `e2750516b76b5311fb8ff43cf3a948a9e0eecf93d7800b869424a8ea4343b5ba`
 
+### Release Attempts
+
+#### RA-20261024-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261024-011`, `CRL-20261024-004`, `CRL-20261024-005`, `CRL-20261024-008`
+- Selected CRL identities: `mobile/CRL-20261024-011`, `mobile/CRL-20261024-004`, `mobile/CRL-20261024-005`, `mobile/CRL-20261024-008`
+- Intended action: `push`
+- Branch: `codex/mz057-081-seven-fixes`
+- Base: `origin/Dev@ac4932678c06ab71bcf61c36d61d27962d9be3fd`; fetched at `2026-10-24T17:12:05Z`
+- Candidate patch SHA-256: `69d4de9efb23dbfcf2596e92b0771eaf48eda904eced5ddd7759ba2480d00aa8`
+- Commit SHA: `24b5d262f0e52ba82358907312baec2459a4f843`
+- Dependencies: `none`
+- Cross-repository dependency verification: paired Root content commit `0734ef22331ca300a9b67f26548bc06483872ca6` was independently reviewed and its exact release report was run; deployment sequencing remains Root before Mobile and is not a prerequisite for opening either Draft PR
+- Required validation: `PASS`; evidence: final `npm run check:ci` passed 79 suites / 691 tests, TypeScript, lint with 0 errors, button contract, ledger range/coverage and diff checks
+- Shared-hunk review: `PASS`; evidence: MZ-075、078、080、081 were reviewed together across TasksScreen and inspection/cleaning history surfaces; MZ-079 is excluded
+- Generated-file review: `PASS`; evidence: no dependency directory, cache, preview hook/output, review bundle, screenshot, CSV, environment file or secret is selected
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: user explicitly requested all seven tasks be committed, pushed and opened as PRs
+- Independent review: `GO`; evidence: exact staged paired review found P0=0, P1=0 and P2=0 after closing the MZ-078 empty-history/current-catalog finding
+- Action conclusion: `GO`; blockers: no code blocker for Draft PR; native device, protected production media, weak-network and old-device queue validation remain disclosed and release is excluded
+
 ## CRL-20261024-004 — MZ-078 清洁历史详情模式与资料恢复
 
 - **Status:** local implementation fully tested; final integrated-candidate independent review GO after one read-only empty-history finding was corrected; not committed, pushed, merged, deployed, or released
