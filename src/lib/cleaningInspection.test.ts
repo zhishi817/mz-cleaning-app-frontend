@@ -45,6 +45,35 @@ describe('cleaningInspection display helpers', () => {
     })).toBe('入住')
   })
 
+  test('a deferred-inspection merge shows only the work that occurs on the display day', () => {
+    expect(cleaningTaskTitleSuffix({
+      source_type: 'cleaning_tasks',
+      task_kind: 'inspection',
+      task_type: 'checkin_clean',
+      start_time: '10am',
+      end_time: '3pm',
+      deferred_inspection_merged: true,
+      deferred_inspection_current_day_checkout: false,
+    })).toBe('入住')
+    expect(cleaningTaskTitleSuffix({
+      source_type: 'cleaning_tasks',
+      task_kind: 'inspection',
+      task_type: 'turnover',
+      start_time: '10am',
+      end_time: '3pm',
+      deferred_inspection_merged: true,
+      deferred_inspection_current_day_checkout: true,
+    })).toBe('退房 入住')
+    expect(cleaningTaskTitleSuffix({
+      source_type: 'cleaning_tasks',
+      task_kind: 'inspection',
+      task_type: 'turnover',
+      start_time: '10am',
+      end_time: '3pm',
+      deferred_inspection_merged: true,
+    })).toBe('退房 入住')
+  })
+
   test('marks password-only inspection tasks distinctly', () => {
     expect(normalizeInspectionScope('password_only')).toBe('password_only')
     expect(inspectionScopeLabel(null)).toBe('检查后挂钥匙')

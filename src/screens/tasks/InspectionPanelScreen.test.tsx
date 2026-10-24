@@ -104,11 +104,15 @@ jest.mock('../../lib/api', () => ({
   uploadCleaningMedia: jest.fn(async () => ({ url: 'https://example.test/inspection-issue.jpg' })),
 }))
 jest.mock('../../components/GuestLuggageCard', () => () => null)
-jest.mock('../../components/CleaningMediaImage', () => () => null)
+jest.mock('../../components/CleaningMediaImage', () => (props: any) => {
+  const mockReact = require('react')
+  const { View } = require('react-native')
+  return mockReact.createElement(View, { ...props, testID: 'inspection-media-image' })
+})
 jest.mock('../../components/CleaningMediaPreview', () => (props: any) => {
   const mockReact = require('react')
   const { View } = require('react-native')
-  return mockReact.createElement(View, { testID: props.testID || 'cleaning-media-preview' })
+  return mockReact.createElement(View, { ...props, testID: props.testID || 'cleaning-media-preview' })
 })
 jest.mock('../../components/ui/ResponsiveImageGrid', () => (props: any) => {
   const mockReact = require('react')
@@ -128,6 +132,36 @@ jest.mock('../../components/ui/AppTextInput', () => (props: any) => {
   const mockReact = require('react')
   const { TextInput } = require('react-native')
   return mockReact.createElement(TextInput, props)
+})
+
+test.each([false, true])('补品照片缩略图和大图携带准确服务端来源（历史=%s）', async (readOnly) => {
+  const previous = mockSnapshot.items[0]
+  mockSnapshot.items[0] = {
+    ...previous,
+    source_ids: ['cleaning-1', 'inspection-1'],
+    work_record_read_only: readOnly,
+    read_only_views: { media_source_ids: ['cleaning-1', 'inspection-1'] },
+    restock_items: [{ item_id: 'stock-1', label: '卷纸', qty: 1, photo_url: 'cleaning/synthetic/stock.jpg' }],
+  } as any
+  const api = require('../../lib/api')
+  api.getWorkTaskFormPhotos.mockResolvedValue({ items: [{ id: 'proof-1', task_id: 'cleaning-1', source: 'consumable', item_id: 'stock-1', label: '卷纸', url: 'cleaning/synthetic/stock.jpg' }] })
+  api.getCleaningConsumables.mockResolvedValue({ items: [{ item_id: 'stock-1', item_label: '卷纸', need_restock: true, qty: 1, photo_url: 'cleaning/synthetic/stock.jpg' }] })
+  try {
+    const Screen = require('./InspectionPanelScreen').default
+    const ui = render(<I18nProvider><Screen navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }} route={{ key: 'proof', name: 'InspectionPanel', params: { taskId: 'w-inspection', readOnly } }} /></I18nProvider>)
+    await waitFor(() => expect(ui.getByText('清洁员补货照片')).toBeTruthy())
+    const proof = ui.getAllByTestId('inspection-media-image').find((item) => item.props.remoteReference === 'cleaning/synthetic/stock.jpg')!
+    expect(proof.props.mediaScope).toBe('inspector')
+    expect(proof.props.accessSourceIds).toEqual(['cleaning-1', 'inspection-1'])
+    fireEvent.press(ui.getByText('清洁员补货照片'))
+    const viewer = ui.getByTestId('inspection-photo-viewer')
+    expect(viewer.props.accessSourceIds).toEqual(['cleaning-1', 'inspection-1'])
+    expect(viewer.props.mediaScope).toBe('inspector')
+  } finally {
+    mockSnapshot.items[0] = previous
+    api.getCleaningConsumables.mockReset().mockResolvedValue(null)
+    api.getWorkTaskFormPhotos.mockReset().mockResolvedValue({ items: [] })
+  }
 })
 
 test('检查人员可打开检查与补充页面并看到四个核心步骤', async () => {
@@ -377,6 +411,84 @@ test('完成任务仍可只读查看已同步检查照片，且不显示修改�
     expect(storage.getJson).not.toHaveBeenCalledWith('mzstay.inspection_post_submit_issue_draft.v1:w-inspection')
     expect(api.getCleaningConsumables).not.toHaveBeenCalled()
   })
+})
+
+test('历史检查记录保留已保存补品内容但完全隐藏补品写操作', async () => {
+  const before = { ...mockSnapshot.items[0] }
+  mockSnapshot.items[0] = {
+    ...before,
+    status: 'done',
+    work_record_read_only: true,
+    restock_items: [{
+      item_id: 'stock-1',
+      label: '清洁袋',
+      qty: 2,
+      note: '已补两包',
+      status: 'restocked',
+      photo_url: 'cleaning/media/restock-stock-1.jpg',
+    }],
+  } as any
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-read-only-restock', name: 'InspectionPanel', params: { taskId: 'w-inspection', sourceId: 'cleaning-1', readOnly: true } }} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByText('已保存数量：2')).toBeTruthy()
+      expect(ui.getByText('备注：已补两包')).toBeTruthy()
+      expect(ui.getByText('清洁员补货照片')).toBeTruthy()
+    })
+    expect(ui.queryByTestId('inspection-add-other-restock')).toBeNull()
+    expect(ui.queryByTestId('inspection-add-next-restock')).toBeNull()
+    expect(ui.queryByTestId('inspection-restock-stock-1-carry-forward')).toBeNull()
+    expect(ui.queryByPlaceholderText('备注（可选）')).toBeNull()
+    expect(ui.queryByText('拍照上传')).toBeNull()
+    expect(ui.queryByText('继续拍照')).toBeNull()
+    expect(ui.queryByText('移除')).toBeNull()
+    ui.unmount()
+  } finally {
+    mockSnapshot.items[0] = before
+  }
+})
+
+test('活动检查任务不把投影中的历史补品状态和备注带入可编辑草稿', async () => {
+  const before = { ...mockSnapshot.items[0] }
+  mockSnapshot.items[0] = {
+    ...before,
+    restock_items: [{
+      item_id: 'stock-1',
+      label: '清洁袋',
+      qty: 2,
+      note: '历史备注不可带入',
+      status: 'carry_forward',
+      photo_url: 'cleaning/media/restock-stock-1.jpg',
+    }],
+  } as any
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-active-restock', name: 'InspectionPanel', params: { taskId: 'w-inspection', sourceId: 'cleaning-1' } }} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(ui.getByTestId('inspection-restock-stock-1-carry-forward')).toBeTruthy())
+    expect(ui.getByTestId('inspection-restock-stock-1-carry-forward').props.style).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ backgroundColor: '#2563EB' }),
+    ]))
+    expect(ui.getByPlaceholderText('备注（可选）').props.value).toBe('')
+    expect(ui.queryByText('已保存状态：下次退房补')).toBeNull()
+    ui.unmount()
+  } finally {
+    mockSnapshot.items[0] = before
+  }
 })
 
 test('只读工作记录缺少精确媒体来源时关闭图库且不回退旧接口', async () => {
@@ -744,6 +856,12 @@ test('活动检查页从准确源任务恢复服务器正式批次并显示 MSQ4
     expect(ui.getByText('进入标记已完成')).toBeTruthy()
     expect(ui.queryByText('添加')).toBeNull()
   })
+  const ownRoomPhoto = ui.getAllByTestId('inspection-media-image').find((item) => item.props.remoteReference === 'cleaning/msq/living.jpg')!
+  expect(ownRoomPhoto.props.mediaScope).toBeUndefined()
+  expect(ownRoomPhoto.props.accessSourceIds).toBeUndefined()
+  fireEvent.press(ui.getByTestId('inspection-photo-living-0'))
+  expect(ui.getByTestId('inspection-photo-viewer').props.mediaScope).toBeUndefined()
+  expect(ui.getByTestId('inspection-photo-viewer').props.accessSourceIds).toBeUndefined()
   ui.unmount()
 })
 

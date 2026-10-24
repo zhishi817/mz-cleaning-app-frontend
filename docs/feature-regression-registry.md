@@ -1,16 +1,64 @@
 # Feature Regression Registry
 
+## FR-P1-MED-10 — 检查补品照缩略图与大图准确来源一致
+
+- **Status:** active; MZ-081 local candidate, not released.
+- **Maintenance scope:** mobile InspectionPanel media context; paired Root authorization.
+- **Last reviewed:** 2026-10-24 UTC
+- **Business outcome:** 活动及本人获准历史补品图片和大图都携带 Root-issued source IDs / inspector scope，服务端确认同源或唯一可靠周转及检查职责；缺权限保持403，不从房号日期猜关联，不开放上传修改删除或原清洁完成/问题照片。
+- **Test-to-invariant mapping:** `src/screens/tasks/InspectionPanelScreen.test.tsx` sufficient：活动及历史补品缩略图和点击大图的scope/source相同；`src/lib/cleaningMediaCache.test.ts` sufficient：403不生成缓存图片、权限失效后必须重新鉴权。由完整 `npm run check:ci` 执行。
+- **Last verification:** `mobile/CRL-20261024-008`, not committed, 2026-10-24; complete check:ci passed 78 suites / 677 tests and paired Root backend gate passed.
+- **Related CRLs:** `root/CRL-20261024-008` / `mobile/CRL-20261024-008`.
+- **Delivery boundary:** Root先部署；不修改媒体或队列。真机、生产私有媒体与弱网未验收。
+
+## FR-P1-MED-09 — 挂钥匙视频受权回看与完整播放器
+
+- **Status:** local MZ-080 candidate; not committed or released.
+- **Maintenance scope:** exact-source video URL, CleaningMediaVideo, historical InspectionPanel key media and InspectionComplete playback.
+- **Last reviewed:** 2026-10-24 UTC
+- **Business outcome:** 正确来源和原有角色权限下可只读回看挂钥匙视频；照片和视频上下独立全宽，完整标签/画面；明确播放、暂停、进度、全屏、加载、失败与读取重试。历史补品资料保留已保存内容但不渲染任何新增、编辑、拍照、改状态或提交控件；活动页不变。读取重试不触发上传或业务保存。
+- **Related CRLs:** `mobile/CRL-20261024-005`; existing Root variant=source authorization/Range contract unchanged.
+
+### Test-to-invariant mapping
+
+- `src/lib/cleaningMedia.test.ts` — 历史 display ID 不进入视频 source 请求；准确 source、scope、Bearer 保留，错误来源拒绝。
+- `src/components/CleaningMediaVideo.test.tsx` — native受权source/控件，解码错误与同源重试、换源清状态/纵向比例，Web受权Blob读取与403失败关闭/撤销。
+- `src/screens/tasks/InspectionPanelScreen.test.tsx`, `src/screens/tasks/InspectionCompleteScreen.test.tsx` — 活动/历史门禁和媒体调用契约回归；历史补品保存值可见且写控件不渲染。
+
+### Delivery boundary
+
+- 不改变上传队列、任务状态、人员权限、源记录、原生配置或依赖；真实受保护视频、iOS/Android设备和弱网仍需单独验收。网页合成视频预览不是原生验收。
+
+## FR-P1-TSK-07 — 清洁历史详情按真实模式只读恢复
+
+- **Status:** active; MZ-078 local candidate, not committed or released.
+- **Maintenance scope:** `mobile` cleaner historical `CleaningSelfComplete` presentation and exact-source media hydration.
+- **Last reviewed:** 2026-10-24 UTC
+- **Business outcome:** 普通同日检查、自完成和入住中清洁的历史记录必须沿用清洁页面原有顺序，但只显示各自真实模式的内容。普通同日检查不得套用清洁自完成的挂钥匙要求；只有真正 `self_complete` 才显示清洁本人同源的挂钥匙视频。客人钥匙、补品和完成照片仅从 Root 授权的准确 source task 读取，检查内容和其他任务媒体不得借入。历史读取失败必须与“无记录”分开，并允许安全重试；补品区保留已保存状态、数量、照片和备注，但不渲染新增、编辑、拍照、改状态或提交控件；只读页不得重新执行原任务必填门槛或提交。
+- **Related CRLs:** `mobile/CRL-20261024-004`; preserves Root form-photo scope and `mobile/CRL-20261024-003` upload-queue protections.
+
+### Test-to-invariant mapping
+
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — AU2117-shaped ordinary same-day history, true self-complete history, stayover/active mode, exact-source guest-key/restock/completion media, an old saved supply absent from a non-empty current catalog, cross-source/inspection rejection, neutral per-area load failure/manual retry, saved supplies visibility and complete absence of historical write controls.
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — mode-aware lockbox section, exact-source read-only hydration, neutral historical status and failure/empty distinction.
+
+### Delivery boundary
+
+- 不改变 Root 鉴权、任务安排/状态、清洁或检查提交契约；不清理、迁移、回放或重传本机媒体和上传队列。
+- Expo Web 预览和 Jest 不能替代原生 iOS/Android、真实账号、弱网或旧设备队列验收；提交、推送、OTA 和生产操作均需另行授权。
+
 ## FR-P1-TSK-06 — 延期检查与当天入住可靠合卡展示
 
 - **Status:** active; combined MZ-075/MZ-076 candidate committed locally, not pushed or released.
 - **Maintenance scope:** `mobile` management task-list presentation; paired Root relation, projection and save target are `root/CRL-20261024-002`.
 - **Last reviewed:** 2026-10-24 UTC
-- **Business outcome:** 只有 Root 明确标记为同一次可靠周转的延期检查 + 当天入住，Mobile 才显示一张带“含延期检查”的卡及真实 `原退房日期 → 本次检查日期`。入住安排和分配状态来自入住 source；真实未分配不能继承延期计划检查人，保存成功后的已分配必须由下一次权威投影确认。普通入住、不同周转、歧义来源和缺失日期不得由客户端猜测或误标。
+- **Business outcome:** 只有 Root 明确标记为同一次可靠周转的延期检查 + 当天入住，Mobile 才显示一张带“是延期检查”的卡及真实 `原退房日期 → 本次检查日期`。标题只描述展示日真实任务；历史 checkout source 不能让延期执行日冒出“退房”，当天确有 checkout 时只接受 Root 明确下发的权威事实。入住安排和分配状态来自入住 source；真实未分配不能继承延期计划检查人，保存成功后的已分配必须由下一次权威投影确认。普通入住、不同周转、歧义来源和缺失日期不得由客户端猜测或误标。
 - **Related CRLs:** `mobile/CRL-20261024-001`; paired `root/CRL-20261024-002`.
 
 ### Test-to-invariant mapping
 
-- `src/screens/tabs/TasksScreen.test.tsx` — admin、offline_manager、customer_service 均显示合卡标签/真实日期/入住执行人；真正未分配保留“未分配”；普通入住没有“含延期检查”。
+- `src/lib/cleaningInspection.test.ts` — 历史退房 source 在延期执行日只生成“入住”；Root 明确下发当日 checkout 时仍显示“退房 入住”。
+- `src/screens/tabs/TasksScreen.test.tsx` — admin、offline_manager、customer_service 均显示“是延期检查”/真实日期/入住执行人；真正未分配保留“未分配”；普通入住没有延期标签。
 - `src/lib/api.ts` — 只声明 Root 的结构化字段；客户端不按房号日期配对。
 
 ### Delivery boundary

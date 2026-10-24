@@ -749,6 +749,7 @@ export type WorkTask = {
   inspection_original_checkout_date?: string | null
   deferred_inspection_merged?: boolean
   deferred_inspection_effective_date?: string | null
+  deferred_inspection_current_day_checkout?: boolean | null
   inspection_action_task_id?: string | null
   inspection_assignment_conflict?: {
     reasons: string[]

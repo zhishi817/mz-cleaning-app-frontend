@@ -3666,7 +3666,7 @@ function showBanner(title: string, message: string) {
                         ) : null}
                         {deferredInspectionMerged ? (
                           <View style={taskTagStylePair('info').container}>
-                            <Text style={taskTagStylePair('info').text}>含延期检查</Text>
+                            <Text style={taskTagStylePair('info').text}>是延期检查</Text>
                           </View>
                         ) : null}
                         {inspectionOriginalCheckoutDate && !deferredInspectionMerged ? (

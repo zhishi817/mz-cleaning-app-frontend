@@ -1703,6 +1703,9 @@ test.each([
     inspection_original_checkout_date: '2026-10-23',
     deferred_inspection_merged: true,
     deferred_inspection_effective_date: mockTodayKey,
+    deferred_inspection_current_day_checkout: false,
+    start_time: '10am',
+    end_time: '3pm',
     inspection_assignment_conflict: null,
     property: { ...base.property, code: '883406' },
   }]
@@ -1722,7 +1725,9 @@ test.each([
 
   try {
     await waitFor(() => {
-      expect(ui.getByText('含延期检查')).toBeTruthy()
+      expect(ui.getByText('是延期检查')).toBeTruthy()
+      expect(ui.getByText('883406 入住')).toBeTruthy()
+      expect(ui.queryByText('883406 退房 入住')).toBeNull()
       expect(ui.getByText(`原退房 2026-10-23 → 本次检查 ${mockTodayKey}`)).toBeTruthy()
       expect(ui.queryByText('检查安排冲突')).toBeNull()
     })
@@ -1764,6 +1769,9 @@ test('a genuinely unassigned merged card stays unassigned and an ordinary check-
       inspection_original_checkout_date: '2026-10-23',
       deferred_inspection_merged: true,
       deferred_inspection_effective_date: mockTodayKey,
+      deferred_inspection_current_day_checkout: false,
+      start_time: '10am',
+      end_time: '3pm',
       property: { ...base.property, code: 'UNASSIGNED' },
     },
     {
@@ -1803,11 +1811,11 @@ test('a genuinely unassigned merged card stays unassigned and an ordinary check-
 
   try {
     await waitFor(() => {
-      expect(ui.getByText('含延期检查')).toBeTruthy()
+      expect(ui.getByText('是延期检查')).toBeTruthy()
       expect(ui.getByText('未分配')).toBeTruthy()
       expect(ui.getByLabelText('task-card-ordinary-checkin')).toBeTruthy()
     })
-    expect(ui.getAllByText('含延期检查')).toHaveLength(1)
+    expect(ui.getAllByText('是延期检查')).toHaveLength(1)
   } finally {
     ui.unmount()
     snapshot.items = previousItems

@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
-import { ResizeMode, Video } from 'expo-av'
 import { useNetInfo } from '@react-native-community/netinfo'
 import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -64,6 +63,7 @@ import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import CleaningMediaImage from '../../components/CleaningMediaImage'
 import CleaningMediaPreview from '../../components/CleaningMediaPreview'
+import CleaningMediaVideo from '../../components/CleaningMediaVideo'
 import AppButton from '../../components/ui/AppButton'
 import AppTextInput from '../../components/ui/AppTextInput'
 import ResponsiveImageGrid from '../../components/ui/ResponsiveImageGrid'
@@ -75,6 +75,7 @@ type Props = NativeStackScreenProps<TasksStackParamList, 'InspectionPanel'>
 type RestockState = InspectionPanelBatchRestockItem
 type RoomPhotoMap = Record<InspectionPanelRoomPhotoArea, InspectionPanelBatchMedia[]>
 type ViewerTarget = {
+  suppliesProof?: boolean
   localUri?: string | null
   thumbnailUri?: string | null
   remoteReference?: string | null
@@ -202,21 +203,25 @@ function feedbackSummary(draft: InspectionPanelFeedbackDraftState | null) {
   return `已暂存 ${total} 条反馈（维修 ${maintenance} / 深清 ${deep} / 日用品 ${daily}）`
 }
 
-function buildInitialRestock(task: any) {
+function buildInitialRestock(task: any, preserveSavedState = false) {
   const list = Array.isArray(task?.restock_items) ? task.restock_items : []
   return list
     .map((x: any) => {
       const itemId = cleanText(x?.item_id)
       if (!itemId) return null
       const qty0 = x?.qty == null ? null : Number(x.qty)
+      const rawStatus = preserveSavedState ? cleanText(x?.status).toLowerCase() : ''
+      const status = rawStatus === 'restocked' || rawStatus === 'carry_forward' || rawStatus === 'unavailable'
+        ? rawStatus
+        : null
       return {
         item_id: itemId,
         label: cleanText(x?.label) || itemId,
         qty: Number.isFinite(qty0) ? qty0 : null,
-        status: null,
+        status,
         source_photo_url: cleanText(x?.photo_url) || null,
         proof_media: [],
-        note: '',
+        note: preserveSavedState ? cleanText(x?.note) : '',
         origin: 'task' as const,
       }
     })
@@ -456,9 +461,17 @@ export default function InspectionPanelScreen(props: Props) {
   }, [cleaningTaskId])
   const historicalSourceIds = readOnly ? taskFormPhotoReadOnlyRelationIds(task) : []
   const historicalSourceIdsKey = historicalSourceIds.join('|')
+  // Active consumables may belong to the canonical cleaner source, just as
+  // historical media does. Send exact Root-projected sources for both views;
+  // the server verifies the relationship and the viewer's inspection duty.
   const historicalMediaAccess = readOnly
     ? { accessWorkTaskId: cleanText(task?.id), accessSourceIds: historicalSourceIds, mediaScope: 'inspector' as const }
     : {}
+  const suppliesMediaAccess = {
+    accessWorkTaskId: cleanText(task?.id),
+    accessSourceIds: taskFormPhotoReadOnlyRelationIds(task),
+    mediaScope: 'inspector' as const,
+  }
   const historicalLockboxVideoSource = readOnly && historicalLockboxVideo
     ? buildCleaningMediaVideoSource(token, historicalLockboxVideo.reference, {
         accessTaskId: historicalLockboxVideo.taskId,
@@ -540,7 +553,7 @@ export default function InspectionPanelScreen(props: Props) {
   const canRetryFailedBatch = batchStatus === 'failed' || batchStatus === 'partial_failed'
   const canDiscardFrozenBatch = canRetryFailedBatch || !!batchValidationError
   const scrollBottomPadding = canDiscardFrozenBatch ? 140 + Math.max(insets.bottom, 16) : 32 + Math.max(insets.bottom, 16)
-  const initialRestockItems = useMemo(() => buildInitialRestock(task), [task])
+  const initialRestockItems = useMemo(() => buildInitialRestock(task, readOnly), [readOnly, task])
   const draftValidationIssue = useMemo(
     () => (
       showValidationIssue && task
@@ -1289,9 +1302,9 @@ export default function InspectionPanelScreen(props: Props) {
       <Text style={styles.inlineErrorText}>暂时无法确认消耗品状态，请重试后再确认现场是否充足。</Text>
       <Pressable
         testID="inspection-retry-restock-load"
-        onPress={() => !isFrozen && void loadLocalState({ showSpinner: true, forceDraftReload: true })}
-        disabled={isFrozen}
-        style={({ pressed }) => [styles.inlineRetryBtn, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}
+        onPress={() => (readOnly || !isFrozen) && void loadLocalState({ showSpinner: true, forceDraftReload: true })}
+        disabled={!readOnly && isFrozen}
+        style={({ pressed }) => [styles.inlineRetryBtn, !readOnly && isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}
       >
         <Text style={styles.inlineRetryText}>重试读取</Text>
       </Pressable>
@@ -1366,19 +1379,20 @@ export default function InspectionPanelScreen(props: Props) {
                     onPress={() => setViewerTarget({ remoteReference: historicalKeyPhoto.reference })}
                     style={({ pressed }) => [styles.readOnlyMediaItem, pressed ? styles.pressed : null]}
                   >
+                    <Text style={styles.proofHint}>清洁人员拍摄的客人钥匙照片</Text>
                     <CleaningMediaImage
                       token={token}
                       remoteReference={historicalKeyPhoto.reference}
                       {...historicalMediaAccess}
                       style={styles.readOnlyMediaImage}
+                      resizeMode="contain"
                     />
-                    <Text style={styles.proofHint}>清洁人员拍摄的客人钥匙照片</Text>
                   </Pressable>
                 ) : null}
                 {historicalLockboxVideoSource.uri ? (
                   <View testID="inspection-read-only-lockbox-video" style={styles.readOnlyMediaItem}>
-                    <Video source={historicalLockboxVideoSource} style={styles.readOnlyMediaVideo} resizeMode={ResizeMode.CONTAIN} shouldPlay={false} useNativeControls />
                     <Text style={styles.proofHint}>本次任务挂钥匙视频</Text>
+                    <CleaningMediaVideo source={historicalLockboxVideoSource} />
                   </View>
                 ) : null}
               </View>
@@ -1406,17 +1420,21 @@ export default function InspectionPanelScreen(props: Props) {
                     </View>
                   ) : null}
                   {!restockLoading && !restockLoadError ? (
-                    <>
-                      <Text style={styles.mutedSmall}>{restockConfirmedSufficient ? '已确认当前消耗品充足。' : '当前没有待补充项，请确认现场消耗品都充足，或添加其他要补充项或下次退房要补的项目。'}</Text>
-                      <Pressable
-                        onPress={() => !isFrozen && setRestockConfirmedSufficient(true)}
-                        disabled={isFrozen}
-                        style={({ pressed }) => [styles.primaryBtn, styles.restockConfirmButton, restockConfirmedSufficient ? styles.primaryBtnSuccess : null, isFrozen ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
-                      >
-                        <Text style={styles.primaryText}>{restockConfirmedSufficient ? '已确认充足' : '确认都充足'}</Text>
-                      </Pressable>
-                      {restockAddButtons}
-                    </>
+                    readOnly ? (
+                      <Text style={styles.mutedSmall}>{restockConfirmedSufficient ? '本次任务已保存“消耗品充足”记录。' : '本次任务没有已保存的补品记录。'}</Text>
+                    ) : (
+                      <>
+                        <Text style={styles.mutedSmall}>{restockConfirmedSufficient ? '已确认当前消耗品充足。' : '当前没有待补充项，请确认现场消耗品都充足，或添加其他要补充项或下次退房要补的项目。'}</Text>
+                        <Pressable
+                          onPress={() => !isFrozen && setRestockConfirmedSufficient(true)}
+                          disabled={isFrozen}
+                          style={({ pressed }) => [styles.primaryBtn, styles.restockConfirmButton, restockConfirmedSufficient ? styles.primaryBtnSuccess : null, isFrozen ? styles.submitDisabled : null, pressed ? styles.pressed : null]}
+                        >
+                          <Text style={styles.primaryText}>{restockConfirmedSufficient ? '已确认充足' : '确认都充足'}</Text>
+                        </Pressable>
+                        {restockAddButtons}
+                      </>
+                    )
                   ) : null}
                 </View>
               ) : (
@@ -1428,7 +1446,7 @@ export default function InspectionPanelScreen(props: Props) {
                       <Text style={styles.inlineErrorText}>{draftValidationIssue.message}</Text>
                     </View>
                   ) : null}
-                  {restockAddButtons}
+                  {!readOnly ? restockAddButtons : null}
                   {restock.map((item, idx) => (
                     <View key={item.item_id} style={[styles.block, draftValidationIssue?.section === 'restock' && draftValidationIssue.item_id === item.item_id ? styles.validationBlock : null]}>
                       <View style={styles.inlineHeadRow}>
@@ -1436,29 +1454,35 @@ export default function InspectionPanelScreen(props: Props) {
                           <Text style={styles.label}>{item.label}</Text>
                           {consumableRestockStandard(item.item_id, item.label) ? <Text style={styles.restockStandard}>{`补充标准：${consumableRestockStandard(item.item_id, item.label)}`}</Text> : null}
                         </View>
-                        {item.origin === 'manual' ? (
+                        {item.origin === 'manual' && !readOnly ? (
                           <Pressable onPress={() => !isFrozen && setRestock((prev) => prev.filter((_, index) => index !== idx))} disabled={isFrozen} style={({ pressed }) => [styles.removeBtn, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}>
                             <Text style={styles.removeBtnText}>移除</Text>
                           </Pressable>
                         ) : null}
                       </View>
-                      <Text style={styles.mutedSmall}>{item.qty != null ? `建议补充：${item.qty}` : ''}</Text>
-                      <View style={styles.row}>
-                        <Pressable onPress={() => void onMarkRestocked(idx)} disabled={isFrozen} style={({ pressed }) => [styles.chip, styles.chipHalf, item.status === 'restocked' ? styles.chipActive : null, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}>
-                          <Text style={[styles.chipText, item.status === 'restocked' ? styles.chipTextActive : null]}>已补充</Text>
-                        </Pressable>
-                        <Pressable testID={`inspection-restock-${item.item_id}-carry-forward`} onPress={() => !isFrozen && setRestock((prev) => prev.map((entry, index) => (index === idx ? { ...entry, status: 'carry_forward', proof_media: [] } : entry)))} disabled={isFrozen} style={({ pressed }) => [styles.chip, styles.chipHalf, item.status === 'carry_forward' ? styles.chipActive : null, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}>
-                          <Text style={[styles.chipText, item.status === 'carry_forward' ? styles.chipTextActive : null]}>下次退房补</Text>
-                        </Pressable>
-                        <Pressable onPress={() => !isFrozen && setRestock((prev) => prev.map((entry, index) => (index === idx ? { ...entry, status: 'unavailable', proof_media: [] } : entry)))} disabled={isFrozen} style={({ pressed }) => [styles.chip, styles.chipFull, item.status === 'unavailable' ? styles.chipActive : null, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}>
-                          <Text style={[styles.chipText, item.status === 'unavailable' ? styles.chipTextActive : null]}>现场够用</Text>
-                        </Pressable>
-                      </View>
+                      <Text style={styles.mutedSmall}>{item.qty != null ? `${readOnly ? '已保存数量' : '建议补充'}：${item.qty}` : ''}</Text>
+                      {readOnly ? (
+                        <Text testID={`inspection-restock-${item.item_id}-saved-status`} style={styles.mutedSmall}>
+                          {`已保存状态：${item.status === 'restocked' ? '已补充' : item.status === 'carry_forward' ? '下次退房补' : item.status === 'unavailable' ? '现场够用' : '未记录'}`}
+                        </Text>
+                      ) : (
+                        <View style={styles.row}>
+                          <Pressable onPress={() => void onMarkRestocked(idx)} disabled={isFrozen} style={({ pressed }) => [styles.chip, styles.chipHalf, item.status === 'restocked' ? styles.chipActive : null, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}>
+                            <Text style={[styles.chipText, item.status === 'restocked' ? styles.chipTextActive : null]}>已补充</Text>
+                          </Pressable>
+                          <Pressable testID={`inspection-restock-${item.item_id}-carry-forward`} onPress={() => !isFrozen && setRestock((prev) => prev.map((entry, index) => (index === idx ? { ...entry, status: 'carry_forward', proof_media: [] } : entry)))} disabled={isFrozen} style={({ pressed }) => [styles.chip, styles.chipHalf, item.status === 'carry_forward' ? styles.chipActive : null, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}>
+                            <Text style={[styles.chipText, item.status === 'carry_forward' ? styles.chipTextActive : null]}>下次退房补</Text>
+                          </Pressable>
+                          <Pressable onPress={() => !isFrozen && setRestock((prev) => prev.map((entry, index) => (index === idx ? { ...entry, status: 'unavailable', proof_media: [] } : entry)))} disabled={isFrozen} style={({ pressed }) => [styles.chip, styles.chipFull, item.status === 'unavailable' ? styles.chipActive : null, isFrozen ? styles.actionBtnDisabled : null, pressed ? styles.pressed : null]}>
+                            <Text style={[styles.chipText, item.status === 'unavailable' ? styles.chipTextActive : null]}>现场够用</Text>
+                          </Pressable>
+                        </View>
+                      )}
                       <View style={styles.restockProofRow}>
                         <View style={styles.restockProofGallery}>
                           {cleanText(item.source_photo_url) ? (
-                            <Pressable onPress={() => setViewerTarget({ remoteReference: cleanText(item.source_photo_url) })} style={({ pressed }) => [styles.proofThumbWrap, pressed ? styles.pressed : null]}>
-                              <CleaningMediaImage token={token} isOnline={isOnline} remoteReference={item.source_photo_url} {...historicalMediaAccess} style={styles.proofThumb} />
+                            <Pressable onPress={() => setViewerTarget({ remoteReference: cleanText(item.source_photo_url), suppliesProof: true })} style={({ pressed }) => [styles.proofThumbWrap, pressed ? styles.pressed : null]}>
+                              <CleaningMediaImage token={token} isOnline={isOnline} remoteReference={item.source_photo_url} {...suppliesMediaAccess} style={styles.proofThumb} />
                               <Text style={styles.proofHint}>清洁员补货照片</Text>
                             </Pressable>
                           ) : null}
@@ -1484,7 +1508,7 @@ export default function InspectionPanelScreen(props: Props) {
                             </View>
                           ))}
                         </View>
-                        <View style={styles.restockActionCol}>
+                        {!readOnly ? <View style={styles.restockActionCol}>
                           {item.status === 'unavailable' ? (
                             <Text style={[styles.mutedSmall, styles.restockNoNeedText]}>现场够用，无需再上传照片</Text>
                           ) : item.status === 'carry_forward' ? (
@@ -1494,9 +1518,13 @@ export default function InspectionPanelScreen(props: Props) {
                               <Text style={styles.photoBtnText}>{item.proof_media.length ? '继续拍照' : '拍照上传'}</Text>
                             </Pressable>
                           )}
-                        </View>
+                        </View> : null}
                       </View>
-                      <AppTextInput value={item.note} onChangeText={(value) => !isFrozen && setRestock((prev) => prev.map((entry, index) => (index === idx ? { ...entry, note: value.slice(0, 300) } : entry)))} editable={!isFrozen} style={[styles.input, styles.note]} placeholder="备注（可选）" multiline />
+                      {readOnly ? (
+                        cleanText(item.note) ? <Text style={styles.mutedSmall}>{`备注：${cleanText(item.note)}`}</Text> : null
+                      ) : (
+                        <AppTextInput value={item.note} onChangeText={(value) => !isFrozen && setRestock((prev) => prev.map((entry, index) => (index === idx ? { ...entry, note: value.slice(0, 300) } : entry)))} editable={!isFrozen} style={[styles.input, styles.note]} placeholder="备注（可选）" multiline />
+                      )}
                     </View>
                   ))}
                 </>
@@ -1932,7 +1960,7 @@ export default function InspectionPanelScreen(props: Props) {
               token={token}
               reference={viewerTarget.remoteReference || viewerTarget.localUri || viewerTarget.thumbnailUri}
               thumbnailReference={viewerTarget.localUri || viewerTarget.thumbnailUri || viewerTarget.remoteReference}
-              {...historicalMediaAccess}
+              {...(viewerTarget.suppliesProof ? suppliesMediaAccess : historicalMediaAccess)}
               style={styles.viewerImg}
             />
           ) : null}
@@ -1975,10 +2003,9 @@ const styles = StyleSheet.create({
   sub: { marginTop: 8, color: '#6B7280', fontWeight: '700' },
   readOnlyBanner: { marginTop: 10, paddingHorizontal: 10, paddingVertical: 9, borderRadius: 10, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE', color: '#1D4ED8', fontWeight: '900', lineHeight: 18 },
   readOnlyMediaTitle: { color: '#111827', fontWeight: '900', fontSize: 15 },
-  readOnlyMediaRow: { marginTop: 10, flexDirection: 'row', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' },
-  readOnlyMediaItem: { flexGrow: 1, flexBasis: 150, minWidth: 150, overflow: 'hidden', borderRadius: 12, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F8FAFC' },
-  readOnlyMediaImage: { width: '100%', height: 148 },
-  readOnlyMediaVideo: { width: '100%', height: 180, backgroundColor: '#111827' },
+  readOnlyMediaRow: { marginTop: 10, gap: 14 },
+  readOnlyMediaItem: { width: '100%', gap: 10, padding: 10, overflow: 'hidden', borderRadius: 12, borderWidth: hairline(), borderColor: '#E5E7EB', backgroundColor: '#F8FAFC' },
+  readOnlyMediaImage: { width: '100%', aspectRatio: 4 / 3 },
   muted: { marginTop: 6, color: '#6B7280', fontWeight: '700' },
   mutedSmall: { marginTop: 8, color: '#6B7280', fontWeight: '700', fontSize: 12 },
   warnSmall: { marginTop: 8, color: '#B45309', fontWeight: '900', fontSize: 12 },

@@ -1,5 +1,364 @@
 # Change Release Ledger
 
+## CRL-20261024-011 — MZ-075 延期执行日标题与标签纠正
+
+- **Status:** independent review findings fixed locally and full Mobile quality gate passed; independent re-review pending; not committed, pushed, merged, deployed, or published
+- **Repository:** `mobile`
+- **Updated:** 2026-10-24 UTC
+- **Request:** 延期检查当天只有入住时，移动端标题不得显示“退房 入住”；标记必须是“是延期检查”。保留原退房日期说明、入住安排优先、真实未分配及准确 source，不影响当天真实退房任务。
+- **Outcome:** 标题 helper 优先使用 Root 的展示日 checkout 事实；历史退房 source 不再制造当天退房标题。三类管理角色仍看到原退房到本次检查日期链、独立分配状态和“是延期检查”标签。
+
+### Implementation
+
+- `src/lib/api.ts` — modified: WorkTask contract 增加 `deferred_inspection_current_day_checkout`。
+- `src/lib/cleaningInspection.ts` / `.test.ts` — modified: 延期合卡仅按展示日事实生成“入住”或“退房 入住”；无入住时保留“延期检查”语义。
+- `src/lib/turnoverDisplay.ts` — modified: 展示日明确无退房时拒绝从历史 source 或旧缓存恢复退房时间/晚退房；当天真实有退房的权威标记继续保留。
+- `src/lib/turnoverDisplay.test.ts` — modified: 覆盖延期执行日隐藏旧退房时间与真实同日退房继续显示的反例。
+- `src/screens/tabs/TasksScreen.tsx` / `.test.tsx` — modified: 标签改为“是延期检查”，覆盖 admin、offline_manager、customer_service、未分配与普通入住边界。
+- `docs/feature-regression-registry.md`、`docs/change-release-ledger.md` — modified: 登记修正后的有效显示规则和未发布状态。
+
+### Files / Areas
+
+- `src/lib/api.ts`
+- `src/lib/cleaningInspection.ts`
+- `src/lib/cleaningInspection.test.ts`
+- `src/lib/turnoverDisplay.ts`
+- `src/lib/turnoverDisplay.test.ts`
+- `src/screens/tabs/TasksScreen.tsx`
+- `src/screens/tabs/TasksScreen.test.tsx`
+- `docs/feature-regression-registry.md`
+- `docs/change-release-ledger.md`
+
+### Impact / Dependencies
+
+- API dependency: paired `root/CRL-20261024-011` must deploy before this Mobile update is released.
+- Database / migration / backfill / native config / dependencies: none。
+- Permissions / media / upload queues: unchanged；不清理、迁移、重放或重传任何本机媒体。
+- Existing true same-day checkout remains visible only when Root explicitly sets the authoritative display-day flag.
+
+### Validation
+
+- Focused Jest `cleaningInspection.test.ts` + `TasksScreen.test.tsx` — PASS（2 suites / 78 tests）。
+- `npm run typecheck` — PASS。
+- Full `npm run check:ci` — PASS（78 suites / 678 tests；typecheck PASS；lint 0 errors / 853 baseline warnings；ledger coverage PASS）。
+- Independent reviewer findings addressed: authoritative false suppresses stale checkout title/time/late-checkout, while authoritative true preserves real same-day checkout; independent re-review pending。
+- `python3 scripts/audit_change_release_ledger.py` — PASS（9/9 changed files）；`git diff --check` — PASS；Mobile registry coverage is part of `check:ci`（no standalone Root registry script in this repository）。
+- Native iOS/Android, real account, weak network and OTA: not run。
+
+### Git State
+
+- Branch: `codex/mz075-deferred-display-correction`
+- Base: `origin/Dev@ac4932678c06ab71bcf61c36d61d27962d9be3fd`
+- State: local uncommitted candidate; not pushed; no PR; not published.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; ignored dependency symlinks are local test scaffolding and are excluded from the staged candidate.
+
+- `docs/feature-regression-registry.md` — SHA-256: `6429eb466d604fe6c76b94f76db9b1f52977f84a6bf58bb30217117773a44630`
+- `docs/feature-regression-registry.md` — SHA-256: `bc0335d76ff8cb340674ceb24bf63ebcb824381fdd2531e43e489a6363424e8d`
+- `docs/feature-regression-registry.md` — SHA-256: `e222a7593a315aafb07acbd5ec51eb819c8acca7ecda9832c046e2ed3d00d5b7`
+- `src/components/CleaningMediaVideo.test.tsx` — SHA-256: `7106c6f78f872c6fa1b6729f63e52638d5bb2fee6125f503d3d96c2efdbed786`
+- `src/components/CleaningMediaVideo.tsx` — SHA-256: `e8f2d43610dc8b735f86250a77e7b6408e5a486435afac398d526984fc611d1d`
+- `src/lib/api.ts` — SHA-256: `82fd681c60736d0d14cd9aa6f7c03718c8d2911485ed9cf89574e2c3fe5b37b3`
+- `src/lib/cleaningInspection.test.ts` — SHA-256: `c24f6837816a21543eafd748201642945d91a1e7d5ab3fa0fd8537e547c4762a`
+- `src/lib/cleaningInspection.ts` — SHA-256: `6ac4eda5d1e93e84fd188a4d5d4a3f2e7a64132cf108b587690f671a386a9cc9`
+- `src/lib/cleaningInspection.ts` — SHA-256: `d80468fab0b17415ab9b01e3786d5f3f18a1944c8bc5b25d794de4cf765a6f5e`
+- `src/lib/cleaningInspection.ts` — SHA-256: `f5dc03dc8bf24da51111855a9cf011f30ccce3bb4057ec5995bd3b2492f8c7eb`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `c1e7293c549ab21054cf58aa0e2705b487487b19e46d144ea4676d26bbab91ec`
+- `src/lib/cleaningMedia.ts` — SHA-256: `0d93e35adad5c6d5d32f990ba50bb32f6dbda318c9bf5ee8a557aabbeed3c04e`
+- `src/lib/turnoverDisplay.test.ts` — SHA-256: `ba7313f45ddfc492de7d3b66b9344f550b5d7bdd8414cc9d3d2a98989149add9`
+- `src/lib/turnoverDisplay.test.ts` — SHA-256: `c57e881549eb7f2878813d066814758b2c25b2ce1f6a1d5481ccfddc9e031004`
+- `src/lib/turnoverDisplay.ts` — SHA-256: `2125d878b6b95db2bd05a3b5fcc8c67ce617b40c14444645f3c57467ea3b05f8`
+- `src/lib/turnoverDisplay.ts` — SHA-256: `b74e2b28f974842ef64b278f1f57c31035cb3834eb18f467cbf51e1cdf84c2d8`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `27d23feee1eb39224847c37031b4d6fb720b7f8c85f12d0c4f27a64449881b7e`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `640bda0ff9f0d3b706ef89e368d9f8f218f44c2dd24ae988b7bc674da9f78cee`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `abbd981a73bab32582b3536904b0ee20a403d4c591ee7662d99a177c25e90448`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `b17b4094b5c157d9db3e8b40b074867b1ab9a6b97a26ab5eb0472b3ff43e4ab8`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `eb13d0726d8a0d7332d5e54d5fa6542597468bc7956da297ab4db7e7ccffa435`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `35f44edb7e6b0f4c6b95681d699fc38457bb2c8f9ca4ee1cb17d6f1e9ee78922`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `2b82d98337fa6b1587e7387be6a63735bc423afa6563bb71a811128b2351fdc6`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `929854da87713e376a1c5a9a86f7893a5b5d5fa1946265e88026a7cfff84723d`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `2c3a471b5d6773e0d55206cfdfe6f38582c448bd7db4a4149b0b9a1cdc3564ae`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `397581b6c698bf9ec1361f25c44ec8eeaf3dae6613390d993f4af256142b1b27`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `6721d7300fb39290cb4fe2fb8142cf14ff00cfe7cde72678b2914b87c7cb4c4a`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `bfe94ef7f8dd70afa67e142ed07a16bf490cd508aab69068e39deb44d356cbb8`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `a83f56930462623c9b2c2b44f9bb858417ab334a91741bf62e4c91a7d3e960e4`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `f63e90595fc42e04fcb1a21a63d4be998320900758988dda5ca73aef3fb56e70`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `01bb934b848d51f635b2a04741b37cfe9fcb2a0e0ea2556b3ba8cbd681a1864c`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `0c343afd6db651b8ce7e9e4759b1ae7d860ab223e929bdf774126cddccd9e6c4`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `0cfd7fa5aea59d601b353fc019096f3c6220c9ac1c7c126a81985b64465d3701`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `0e250a1413fc41d2b4aee57092891735e954a62cbdbbfa9971332789ceb3be70`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `1717c5a825e415c0c6871f6616cba1e6f064c81ad8148951d53cfed8148e96fe`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `194e1e9eba6ab55c488352f5a71cb76e031d11868ecb0d1a4b541e14c6f4afe8`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `2273e322bc9d4d7871ca5840cc07e0749b8ca86180c967f66838aae97f1d8547`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `2ab193111045813fe59e615bde04e76a86f9e3ee9eb891ec9531731ea37220de`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `3378208e0e12926842db266e0ce835b34db37301e4887ca08b43d1bc00d2b1a5`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `3a2e0860a808557a4b19deb978d41be476d8b404f25e32929c5e2c1e2b7450b6`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `407095f28b0f52faa1c9e989f418589d2cc12ee973baea440a5fb46c1b7403d0`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `462e18b66f4119fd9a4be505e83183dca9f428e0910f5b93e6f29f8ec8aba136`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `4a3cafdc58141b5e2de64d8d3bbf5de7adccea287516a2a6dc1c4fef2abb74c9`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `4b911b80edb43301fb5e0325c6eb062187120d1ff5700d59930b4ee5ff221e95`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `5526d39b57c140fdab0b11d8a946c7005046c3a8371b1116da501a43491d24d1`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `6191884bdb747fd2ab480259eb4aade5bdd6230f95eff989d769dc57a6b2f78a`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `62b570c58dfc4e09cf75ba4ff734815f5cee8e8b57e8584b91cdf15e9557e39d`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `66f8a74ff91ecc7fddb57533df8132dabc691240fdae601b709b1a68aacf4652`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `68331adb95b69fa49887e7e6004a718b8e5f6ee83c582e040c1dc8a27f662e90`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `69c46f05c938d0ce15ba2ea1ca428c7190388bd1528ee068d8c925a5c08fbab5`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `6f115b6c7cd241a6f28175144be3ae5011cebf4b66aec673a95ac9e59f704ce5`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `70577e4f4d65868968237f15dba5eff349d7ddc8467f6235b81b5488104407ce`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `7100e12889660a177467f96e647e4773174a2cd3cbe36c1b915caa5b2c0ba10d`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `71fc6a1f614bf0cf9de7eec9b73e88cd6b600f83eabfe8c02185bc7985349812`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `745389ffc41a37fc3117d24095d3033b7ba2d670670544227d43f90a1a450c29`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `799afbc2479b9d6fa255a03ceffe9c01279e66fe0b35a7adf1e0e112c7df3467`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `81068bacbf21802d27983a0d19bf997e005be3dd0f3d7553c165b5ea32536dca`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `822b6370e909a46ee9b38598a8985981683fe02c47c926a045824e94ee19da37`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `85b080e606220b1e7eace3016fbdaf8d374f4993df8f480ab5d0193b3d99535e`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `868ca8ddebb8866e2fa7bfa9d86c408eb681a11276cf9bc983a2820132ae709c`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `8a1c053d994dc5186ca41347531a8032f3878140fa6c9d090a7e230d71704d32`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `9133fc341098b104a3d40a3c3b4390744e296089c56cbc950445ca23b04baeae`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `921fbd5d531886916037b9ac3382e3443e6d99d11a3ebed68654eab303b18698`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `9a82f78ea3f428b1ba26580eb02a967c6bb01c1f6700469a0d723bdcd2932369`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `bcc782fba4218ea5fce0fa9ce5179dd5d4e4808256c075068173c868b06c3ba1`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `bde0a371e90237c5f500a82366c5fe1b05082bb808f80aabe37c11a190bc9968`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `c2bb2aba141a95b147956bff72a10912a344407ac1fac8fdbf9a61d75330eae4`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `c35a6ad60c672e2fc26342ff12028feec6a1bb543db7a3b5e3068faa31857eb6`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `d5bbf1b0b84bc76f1aa5ce77f9529dc23253a67dc92db55bdf994f6817601568`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `def0598f172ea400e7760239faed5c0652b9fce6d6898080904af01f87caf6c9`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `ecafbc8e636acaa9a657e6afb31a4c5635489970094f154ee64bee90024db656`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `ee86f53e14d351f133857635a3158eeb0205289710d5ae250cee637c7d64aea5`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `efe98edd6c8c1820a4774f43f5ef5052e5b20f69833a98080721286312db3215`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `f455cd06f210e8c1e13fa02f7c64de021d00c242460b0f1fd6e744797aff7904`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `f70f6ded445ac3bd866691d5187864eee0ff9b43e85434c7480fe0622d73a528`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `facff254e7de5e5af12e15edddb1d66f8cc09c6dece5a8cfae59788ca27eb1f7`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `fbd87776962a275a19eee22a89860d2ac2511cb5532fdbddee69229a6f5ba829`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `ff2229883911ce5fe3c7e96e0b65ab9ade844b109a920f2be8ff12cdf12b178e`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `660a3665942db7bf28c78dac1b99cbed5f890ad3465ac08ac8ee30be587132c1`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `72676f94c7bea663471e332745186ff1aa369d4fc1573b08273d80ac4eaad675`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — SHA-256: `8f7d894ed8f751293e94fe3816d834928b44ae32673f8fd6d0df6d92f0ea80d4`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `0a51b52e6c34105a40c93f41acf25b75bb96a39d6d13080f74bd69587f14a42d`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `1f40523a92d729f45cf1169d453cb90144319f47953d84e7f6724b884b2708f5`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `342768c319ea425cc926eae5e4b90e89af5b7634f62575d129b33fc9a6b8073a`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `6cc66e3118a3c603492099f13e096d634a8e2e96cb1b962763b907f26121d8a5`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `a60449e3ec30e0a0a471babf1fc40c41a9474697a9bffc279cc8f4d7093cbacd`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `2bdb57141629003a2f5391e438971885490abeada069516b3438ee57bb809d25`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `6fca4a8a891f4be06eff2c0efbd69b9077c2725b2698e4cf5e90a9359e36bfba`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `99fc4e016c3f6353b924f41a5e12e8499d83efcb3ba20394d9e26c53ec0db9cf`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `b00c4144d2c75779bec5bb8969943a59edaecf07705fcdd72e45fdf90c9314b1`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `e93e23e30f15b19799735d3da17eaac3040412abbf77f5efa898feeac8dda497`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `0084099e3efdac02432f4860f56a9625bacfb4ec814a903f04fe15eb68eec775`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `02260bddb84fbcb9d817273f25acc92e59b0b4ff66a8145d94f3f8fb40291c0e`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `13b7e646ffb6ef5049f9c083c03e52c7525bc82c921acc0051f2e72337165b1b`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `26ef7ad7a99977f6840efa6879934095ff62aefbb4b177853ca06275026b7ad4`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `310a0ddb614f04952714bf97dbe9acb0d38d19e56b7145902edbb4eb75b7924d`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `40ff40db7b856af4ae79f7db01bc89689baef3481ece2e57b07cd89db31e1610`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `41dda1620ccb16073d5e7fdab863aafabeb4fa9942dc65912e6145b27c869726`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `494c0c6aa1001c926c71b0373fc9b09b0cf75997a36268b8030ea849bbf0f838`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `4a48ef2c6476704ff61093ab15c50f93d3070ce57b3f7145f065fab08b10de51`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `4acbc8353045d6141feddb03a64eb1db57064abb49a974b8eb50b05e81c0c55f`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `4adf164a84f0bbb66597b1139a67cdd36445d76081a52abb610b833ae0df0a05`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `6045ec6ea34347621a375d479c3f026a336e9e724a673a8a92335b774d8e8481`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `62cd2b385789d77fe3170540844b93edd4edff195722d9dfc6da842a195c09c8`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `73964459103c2594e8e61c4b8f5c53f8b3774ab7f2f793268d23b77269387853`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `80124349cbead4da93c7a2bece56c785e9c02113eb3d9e5d742df596f4df202e`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `852f252f9ed3e878ada97021cff76daf0712c10a0f71889e8955742ac3bbcc55`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `88f5667bee1c3aa2109e622594e19f6dad8d4a2b978cd72bef5449b6fe1cffde`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `8ebfb357ad14ec7696549086e9f5b473006a08563f275436ac8d586a50e3e364`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `9a0dc6d1ab874dfc7eabefd33d53a9593dcc8da0b1d01c27ec16655c28fdf30d`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `9b459abdb8a9e56dfe66f13bf543ef3683ae97b0c21285a825d80f485cb90387`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `af2b46c81b4fd630e8aa3e51a17ffa7246fb0214c3377e4a65ed68d02dfff3e7`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `b5c5c3fb9211ee666115cd08274df140f2255c58fde9c53c3fb213122dd86b63`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `d235160103b949519acde3a4f5923c58d4ba4a4c319abc973c10513cb1255d56`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `d784de57973372c60b5574214edbe86ab9018cc14a78be3885381fee220df029`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `d8448050751fa3fc6beb3fd7eacf42d6b3cb34fad313a77244216cce44e7ad60`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `e2750516b76b5311fb8ff43cf3a948a9e0eecf93d7800b869424a8ea4343b5ba`
+
+### Release Attempts
+
+#### RA-20261024-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261024-011`, `CRL-20261024-004`, `CRL-20261024-005`, `CRL-20261024-008`
+- Selected CRL identities: `mobile/CRL-20261024-011`, `mobile/CRL-20261024-004`, `mobile/CRL-20261024-005`, `mobile/CRL-20261024-008`
+- Intended action: `push`
+- Branch: `codex/mz057-081-seven-fixes`
+- Base: `origin/Dev@ac4932678c06ab71bcf61c36d61d27962d9be3fd`; fetched at `2026-10-24T17:12:05Z`
+- Candidate patch SHA-256: `69d4de9efb23dbfcf2596e92b0771eaf48eda904eced5ddd7759ba2480d00aa8`
+- Commit SHA: `24b5d262f0e52ba82358907312baec2459a4f843`
+- Dependencies: `none`
+- Cross-repository dependency verification: paired Root content commit `0734ef22331ca300a9b67f26548bc06483872ca6` was independently reviewed and its exact release report was run; deployment sequencing remains Root before Mobile and is not a prerequisite for opening either Draft PR
+- Required validation: `PASS`; evidence: final `npm run check:ci` passed 79 suites / 691 tests, TypeScript, lint with 0 errors, button contract, ledger range/coverage and diff checks
+- Shared-hunk review: `PASS`; evidence: MZ-075、078、080、081 were reviewed together across TasksScreen and inspection/cleaning history surfaces; MZ-079 is excluded
+- Generated-file review: `PASS`; evidence: no dependency directory, cache, preview hook/output, review bundle, screenshot, CSV, environment file or secret is selected
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: user explicitly requested all seven tasks be committed, pushed and opened as PRs
+- Independent review: `GO`; evidence: exact staged paired review found P0=0, P1=0 and P2=0 after closing the MZ-078 empty-history/current-catalog finding
+- Action conclusion: `GO`; blockers: no code blocker for Draft PR; native device, protected production media, weak-network and old-device queue validation remain disclosed and release is excluded
+
+## CRL-20261024-004 — MZ-078 清洁历史详情模式与资料恢复
+
+- **Status:** local implementation fully tested; final integrated-candidate independent review GO after one read-only empty-history finding was corrected; not committed, pushed, merged, deployed, or released
+- **Repository:** `mobile`
+- **Board item:** `MZ-078`
+- **Updated:** 2026-10-24 UTC
+- **Request:** 清洁历史详情必须按真实检查模式显示：普通同日检查不能套用自完成挂钥匙要求；真正自完成保留清洁本人挂钥匙内容；已完成记录按原清洁页面顺序只读显示准确同源的客人钥匙、补品和完成照片，并区分读取失败与无记录。
+- **Outcome:** `CleaningSelfComplete` 历史页按 `inspection_mode` 分流展示；读取 Root 已授权精确 source task 的清洁资料，不显示检查媒体、不跨任务借图；历史状态改为中性只读文案，读取失败可手动重试且不会误报“未拍/未提交”。历史补品仅展示已保存状态、数量、照片与备注，新增、改状态、拍照、编辑及提交控件不渲染。
+
+### Implementation
+
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — modified: mode-aware lockbox requirement; exact-source guest-key/completion/consumable/restock hydration; catalog-independent historical supplies reconstruction; historical loading/error/empty states and retry; saved supplies render as plain read-only content without write controls; an empty read-only history never initializes from the current supplies catalog; read-only completion semantics without active submit gates.
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — modified: ordinary same-day, true self-complete, active/stayover, exact-source/cross-source, inspector-media exclusion, empty-history/current-catalog isolation and retry regressions.
+- `docs/feature-regression-registry.md` — modified: add FR-P1-TSK-07 invariant and delivery boundary.
+- `docs/change-release-ledger.md` — modified: record this isolated MZ-078 candidate.
+
+### Impact / Dependencies
+
+- Root/API dependency: existing authorized `GET /mzapp/work-tasks/:id/form-photos` exact-source cleaner scope and current work-task `inspection_mode`/`read_only_views`/`restock_items`; no Root code or schema change.
+- Database/migration/backfill/native config/dependencies: none.
+- Permissions: unchanged; Mobile additionally rechecks returned `task_id` against Root-projected source IDs and never renders inspection media in the cleaner page.
+- Local media/upload queues: untouched; no migration, cleanup, replay, re-key or automatic retry.
+
+### Validation
+
+- Focused `CleaningSelfCompleteScreen.test.tsx` covers the historical saved item removed from a non-empty current catalog, neutral per-area failure states, saved quantity/note/photo visibility, and absence of historical restock write controls.
+- Final full `npm run check:ci` after the integrated-candidate review correction — PASS (79 suites / 691 tests); TypeScript and button contract PASS; ESLint completed with 0 errors / 870 existing warnings.
+- Ledger range audit (44 tests), ledger coverage audit and `git diff --check` — PASS.
+- Real `CleaningSelfCompleteScreen` route rendered at 390×844 through Expo Web with synthetic data; manually inspected ordinary same-day top/bottom, true self-complete top/video and load-failure/retry states. Library files: `libfile_47769b345f448191918c237fda72236c`, `libfile_05bb1d173998819199f7219028bbc133`, `libfile_16512c0a6fe8819187c9bb266da70af7`, `libfile_b18da78eadbc8191b707c19aae19e945`, `libfile_fb6352f4b79881918f52f6879c22fb37`.
+- Earlier isolated review found two P2 presentation gaps (historical item removed from current catalog, and per-area failure copy); both were corrected with regressions. Final integrated-candidate review then found one P1: empty read-only history could initialize from the current catalog and misstate those entries as historical. The initializer now exits for read-only views and the empty-history/non-empty-current-catalog regression passes. Final independent re-review：GO（P0=0/P1=0/P2=0）。
+- Native/real-device, protected production media, old-device queue and weak-network verification — not run.
+- Production data/API writes, EAS, OTA, APK and database operations — not run.
+
+### Files / Areas
+
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx`
+- `docs/feature-regression-registry.md`
+- `docs/change-release-ledger.md`
+
+### Risks / Release Notes
+
+- The historical view depends on Root-projected exact source IDs. Missing authorization remains fail closed and is reported as no saved record or load failure; Mobile does not fall back to room/date matching.
+- Browser rendering cannot prove native camera, gallery, authenticated media bytes, weak-network restoration or physical-device layout.
+- Preview/test fixtures must remain synthetic and must not contain production property credentials, guest data, signed media URLs or device queue contents.
+- Git state: isolated local branch `codex/mz078-cleaning-history`; uncommitted and not released.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; ignored dependency symlinks are local test scaffolding and are excluded from the staged candidate.
+
+## CRL-20261024-005 — MZ-080 挂钥匙视频授权读取与独立播放器
+
+- **Status:** verified local candidate; full quality gate PASS; independent review GO (P0=0, P1=0, P2=0); not committed or published
+- **Repository:** `mobile`
+- **Board item:** `MZ-080` revision 1
+- **Updated:** 2026-10-24 UTC
+- **Request:** 检查历史详情挂钥匙视频黑框且与客人钥匙照片挤在一起；恢复准确来源的受权回看、上下全宽布局与明确播放/加载/失败重试。
+- **Outcome:** 视频请求沿原 source-task 权限发送，移除服务端 variant=source 明确拒绝的 work_task_id；照片与视频分开纵向展示。视频可播放、暂停、拖动原生进度条和全屏，读取及解码失败可见且可只读重试。历史补品区只展示已保存状态、数量、照片和备注，新增、改状态、拍照、编辑与提交控件完全不渲染；活动页保持原操作能力。
+
+### Implementation
+
+- `src/lib/cleaningMedia.ts`, `src/lib/cleaningMedia.test.ts` — 视频 URL 继续校验 source_task_id 属于 source_ids，保留 media_scope 与 Bearer；视频请求不再携带仅用于图片的 display work_task_id。
+- `src/components/CleaningMediaVideo.tsx`, `src/components/CleaningMediaVideo.test.tsx` — 可复用只读播放器；native 保留带头 source 和 Range 流读取，Web 用同受权端点 fetch 后的临时 Blob 交给 HTML video，卸载/换源撤销 Blob。来源/授权/重试变化原子重挂载，旧视频与晚回调不串任务；全屏失败独立提示、不卸载正常视频。含加载、缓冲、解码失败、只读重试、明确播放/暂停/全屏和进度提示；比例适配且 contain 不裁切。
+- `src/screens/tasks/InspectionPanelScreen.tsx` — 历史钥匙/视频区改为照片与视频上下独立全宽、标签前置；历史补品保留保存值只读展示并隐藏全部写控件，活动页与补品照片鉴权/上传契约不变。
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — 视频回看复用受权源和播放器；本机 file URI 仍直接回看，提交门禁和队列不变。
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — 对象上传但业务保存失败/未保存时继续回看本机原件，不要求服务端尚未成立的媒体关联。
+- `docs/feature-regression-registry.md` — 登记视频读取、播放与纵向布局保护。
+
+### Files / Areas
+
+- `src/lib/cleaningMedia.ts`
+- `src/lib/cleaningMedia.test.ts`
+- `src/components/CleaningMediaVideo.tsx`
+- `src/components/CleaningMediaVideo.test.tsx`
+- `src/screens/tasks/InspectionPanelScreen.tsx`
+- `src/screens/tasks/InspectionCompleteScreen.tsx`
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx`
+- `docs/change-release-ledger.md`
+- `docs/feature-regression-registry.md`
+
+### Impact / Dependencies
+
+- Existing Root contract: `cleaning-app/media/image?variant=source` rejects work_task_id, requires exact source_task_id/source_ids/media_scope, retains app authorization and existing Range/MIME response. No Root changes, schema or migration.
+- No task permission, upload, business save, queue, local original, cleanup, native config or dependency changes. No production reads/writes or real media replay performed.
+- Excludes MZ-078 cleaning-mode fixes and MZ-081 restock-photo authorization; InspectionPanel overlap is only the key-media JSX and styles.
+
+### Validation
+
+- Historical read-only control follow-up adds an explicit saved-restock regression: saved status/quantity/photo/note remain visible while add/status/upload/edit/remove controls are absent; active controls retain their existing regression.
+- Final `npm run check:ci` after the follow-up — PASS (79 suites / 683 tests); ledger range/coverage, TypeScript, lint (0 errors / 860 existing warnings), button contract, fast and full Jest all PASS.
+- Existing Root `npm run test:mzapp-media-visibility --prefix backend` PASS; Root authorization/Range/MIME source contract reviewed. No new real-production request or PostgreSQL write test.
+- Independent read-only review GO, P0=0/P1=0/P2=0 after targeted regression fixes; `git diff --check` PASS.
+- Real Expo Web at 390×844 using actual InspectionPanel route and synthetic API/video: decoded 640×360; playback time advanced, pause and seek 0.7s worked; fullscreen entered; simulated503 displayed error and explicit read retry recovered readyState4. Final browser check had zero console errors. Preview-only App/auth/store/image-cache shims removed afterward.
+- Preview screenshots are synthetic and contain no real credentials, guest or property data. Browser preview does not prove protected real-video iOS/Android codec, native controls, weak-network or physical-device behavior.
+- Corrected Library previews after the historical-control follow-up: stacked key/video plus read-only saved supplies `libfile_e53fc2bad03481918b57244b0eab6639`; video plus the complete saved status/quantity/photo/note section with no write controls `libfile_a8d920795b40819187a08a7c31f0b7e5`. The earlier normal-state preview is superseded. Preview shims and generated artifacts are absent from candidate diff; local services stopped.
+- Production deployment, OTA, native build/device, production media/permissions and actual employee video: NOT RUN.
+
+### Sensitive Data / Rollback
+
+- Only synthetic fixtures; no production identifiers or secrets added. Revert these scoped product files to undo; no data migration or queue rollback needed.
+
+### Git State
+
+- Branch: `codex/mz080-video-playback`; base `origin/Dev@ac4932678c06ab71bcf61c36d61d27962d9be3fd`.
+- Uncommitted local changes only; no push/PR/release authorization.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; ignored dependency symlinks are local test scaffolding and are excluded from the staged candidate.
+
+## CRL-20261024-008 — MZ-081 检查补品照片准确来源读取上下文
+
+- **Repository:** `mobile`
+- **Status:** source fixed and local regressions passed; not committed or released
+- **Updated:** 2026-10-24 UTC
+- **Request:** 检查人员当前和有权历史页面一致查看准确清洁来源的补货和消耗品照片，缩略图和大图权限一致。
+- **Outcome:** 活动 InspectionPanel 也携带 Root 下发的准确媒体来源及 inspector scope；服务端仍核定读取资格。
+
+### Implementation
+
+- `src/screens/tasks/InspectionPanelScreen.tsx` — modified: active/historical cleaner-supplies thumbnails and the corresponding viewer use the same exact Root source context; existing active own-inspection media context remains unchanged; no layout, queue or submit change.
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — modified: active/history supplies thumbnails and viewer context regression, plus active own-inspection media keeps its prior context.
+- `docs/feature-regression-registry.md` — modified: source-context invariant.
+- `docs/change-release-ledger.md` — modified: this unit.
+
+### Files / Areas
+
+- `src/screens/tasks/InspectionPanelScreen.tsx`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx`
+- `docs/feature-regression-registry.md`
+- `docs/change-release-ledger.md`
+
+### Impact / Dependencies
+
+- Root required: `root/CRL-20261024-008`, deploy Root before Mobile. Existing API only; no schema/native/dependency change.
+- Source IDs are only hints; Root independently authorizes exact task/turnover and role. No room/date lookup or widened client permission.
+- Queue, local files, media persistence, retry/upload flows and task save behavior unchanged.
+
+### Validation
+
+- Focused InspectionPanel + existing cleaningMediaCache 403/visibility tests — PASS (2 suites / 32 tests).
+- Complete `npm run check:ci` — PASS: TypeScript, lint (0 errors; existing warnings), button contract, fast tests and full Jest 78 suites / 677 tests. Existing CleaningSelfCompleteScreen act warnings remain.
+- Ledger audit and `git diff --check` — PASS. Independent review found no remaining P0/P1/P2 code issues after narrowing active source context to supplies only; final local-candidate verdict recorded in review thread.
+- Native simulator/device, real protected media and weak-network tests not run. No production APIs or writes.
+
+### Risks / Release Notes
+
+- Synthetic route and component tests do not establish device playback or production access. Existing 403 cache test checks failed download leaves no final or partial cache entry.
+- Revert isolated patch for rollback. No real credentials/private media in fixtures.
+- Git: `codex/mz081-restock-photo-read`, base `origin/Dev@ac4932678c06ab71bcf61c36d61d27962d9be3fd`; not committed/pushed; no PR/merge/deployment/OTA.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; ignored dependency symlinks are local test scaffolding and are excluded from the staged candidate.
+
 ## CRL-20261024-001 — MZ-075 延期检查入住合卡标签与日期
 
 - **Status:** integrated candidate fully verified and committed locally in this release unit; not pushed, merged, deployed, or released
