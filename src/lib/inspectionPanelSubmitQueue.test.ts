@@ -117,6 +117,124 @@ test('requires the new bathroom overall photo before submitting inspection photo
     .rejects.toThrow('请拍摄 浴室 检查照片')
 })
 
+test('resolves one exact source batch after a display task id changes without re-keying storage', async () => {
+  const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  await queueMod.saveInspectionPanelDraftBatch({
+    task_id: 'display-before-status-change',
+    cleaning_task_id: 'source-msq4504e',
+    property_id: 'property-msq',
+    property_code: 'MSQ4504E',
+    snapshot: {
+      ...baseSnapshot('display-before-status-change'),
+      cleaning_task_id: 'source-msq4504e',
+      property_id: 'property-msq',
+      property_code: 'MSQ4504E',
+    },
+  })
+
+  const resolution = await queueMod.resolveInspectionPanelBatch({
+    task_id: 'display-after-status-change',
+    cleaning_task_id: 'source-msq4504e',
+    property_id: 'property-msq',
+    property_code: 'MSQ4504E',
+  })
+  expect(resolution.matched_by).toBe('source_task_id')
+  expect(resolution.item?.task_id).toBe('display-before-status-change')
+  expect(await queueMod.getInspectionPanelBatch('display-after-status-change')).toBeNull()
+})
+
+test('a deferred/check-in merged display resolves only the authoritative check-in source batch', async () => {
+  const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  for (const fixture of [
+    { taskId: 'deferred-display-before-merge', sourceId: 'deferred-checkout-source' },
+    { taskId: 'checkin-display-before-merge', sourceId: 'checkin-action-source' },
+  ]) {
+    await queueMod.saveInspectionPanelDraftBatch({
+      task_id: fixture.taskId,
+      cleaning_task_id: fixture.sourceId,
+      property_id: 'property-merged',
+      property_code: 'MERGED-406',
+      snapshot: {
+        ...baseSnapshot(fixture.taskId),
+        cleaning_task_id: fixture.sourceId,
+        property_id: 'property-merged',
+        property_code: 'MERGED-406',
+      },
+    })
+  }
+
+  const resolution = await queueMod.resolveInspectionPanelBatch({
+    task_id: 'deferred-checkin:deferred-checkout-source:checkin-action-source',
+    cleaning_task_id: 'checkin-action-source',
+    property_id: 'property-merged',
+    property_code: 'MERGED-406',
+  })
+  expect(resolution).toEqual(expect.objectContaining({
+    matched_by: 'source_task_id',
+    ambiguous_count: 0,
+  }))
+  expect(resolution.item?.task_id).toBe('checkin-display-before-merge')
+  expect(resolution.item?.cleaning_task_id).toBe('checkin-action-source')
+})
+
+test('source fallback fails closed for another property or multiple local inspection rounds', async () => {
+  const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  for (const taskId of ['round-a', 'round-b']) {
+    await queueMod.saveInspectionPanelDraftBatch({
+      task_id: taskId,
+      cleaning_task_id: 'shared-source',
+      property_id: 'property-a',
+      property_code: 'A101',
+      snapshot: {
+        ...baseSnapshot(taskId),
+        cleaning_task_id: 'shared-source',
+        property_id: 'property-a',
+        property_code: 'A101',
+      },
+    })
+  }
+
+  expect(await queueMod.resolveInspectionPanelBatch({
+    task_id: 'new-display',
+    cleaning_task_id: 'shared-source',
+    property_id: 'property-b',
+    property_code: 'B202',
+  })).toEqual({ item: null, matched_by: 'ambiguous', ambiguous_count: 2 })
+
+  const ambiguous = await queueMod.resolveInspectionPanelBatch({
+    task_id: 'new-display',
+    cleaning_task_id: 'shared-source',
+    property_id: 'property-a',
+    property_code: 'A101',
+  })
+  expect(ambiguous.item).toBeNull()
+  expect(ambiguous.matched_by).toBe('ambiguous')
+  expect(ambiguous.ambiguous_count).toBe(2)
+})
+
+test('fails closed when an exact display key belongs to another source or property', async () => {
+  const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  await queueMod.saveInspectionPanelDraftBatch({
+    task_id: 'reused-display-key',
+    cleaning_task_id: 'source-before-refresh',
+    property_id: 'property-before-refresh',
+    property_code: 'A101',
+    snapshot: {
+      ...baseSnapshot('reused-display-key'),
+      cleaning_task_id: 'source-before-refresh',
+      property_id: 'property-before-refresh',
+      property_code: 'A101',
+    },
+  })
+
+  expect(await queueMod.resolveInspectionPanelBatch({
+    task_id: 'reused-display-key',
+    cleaning_task_id: 'source-after-refresh',
+    property_id: 'property-after-refresh',
+    property_code: 'B202',
+  })).toEqual({ item: null, matched_by: 'conflict', ambiguous_count: 1 })
+})
+
 test('exposes failed sync steps and retained local media for the inspector status panel', async () => {
   const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
   const item = {
@@ -368,6 +486,40 @@ test('does not emit a queue update when binding the same action target again', a
 
   expect(listener).not.toHaveBeenCalled()
   unsubscribe()
+})
+
+test('never rewrites a non-empty source when binding receives a conflicting action target', async () => {
+  const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+
+  await queueMod.saveInspectionPanelDraftBatch({
+    task_id: 'task-conflicting-bind',
+    cleaning_task_id: 'source-original',
+    property_id: 'property-original',
+    property_code: 'A1201',
+    snapshot: {
+      ...baseSnapshot('task-conflicting-bind'),
+      cleaning_task_id: 'source-original',
+      property_id: 'property-original',
+      property_code: 'A1201',
+    },
+  })
+  await queueMod.bindInspectionPanelCleaningTaskId({
+    task_id: 'task-conflicting-bind',
+    cleaning_task_id: 'source-different',
+    property_id: 'property-different',
+    property_code: 'B2202',
+  })
+
+  expect(await queueMod.getInspectionPanelBatch('task-conflicting-bind')).toMatchObject({
+    cleaning_task_id: 'source-original',
+    property_id: 'property-original',
+    property_code: 'A1201',
+    snapshot: {
+      cleaning_task_id: 'source-original',
+      property_id: 'property-original',
+      property_code: 'A1201',
+    },
+  })
 })
 
 test('blocks a legacy pending batch with missing required photos before any API call', async () => {

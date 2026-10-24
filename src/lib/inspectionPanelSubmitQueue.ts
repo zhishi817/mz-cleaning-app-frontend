@@ -944,6 +944,73 @@ export async function getInspectionPanelBatch(taskId: string) {
   return (await loadQueue()).find((item) => item.task_id === key) || null
 }
 
+export type InspectionPanelBatchResolution = {
+  item: InspectionPanelSubmitQueueItem | null
+  matched_by: 'display_task_id' | 'source_task_id' | 'none' | 'ambiguous' | 'conflict'
+  ambiguous_count: number
+}
+
+function inspectionPanelBatchMatchesProperty(
+  item: InspectionPanelSubmitQueueItem,
+  propertyId?: string | null,
+  propertyCode?: string | null,
+) {
+  const expectedPropertyId = cleanText(propertyId)
+  const expectedPropertyCode = cleanText(propertyCode).toLowerCase()
+  const itemPropertyId = cleanText(item.property_id || item.snapshot.property_id)
+  const itemPropertyCode = cleanText(item.property_code || item.snapshot.property_code).toLowerCase()
+  if (expectedPropertyId && itemPropertyId && expectedPropertyId !== itemPropertyId) return false
+  if (expectedPropertyCode && itemPropertyCode && expectedPropertyCode !== itemPropertyCode) return false
+  return true
+}
+
+/**
+ * Resolves a local inspection batch without mutating or re-keying the queue.
+ * The exact source task id is the only cross-display-id fallback. Room/date
+ * similarity is deliberately never used, and multiple source matches fail
+ * closed so a different inspection round cannot be borrowed silently.
+ */
+export async function resolveInspectionPanelBatch(params: {
+  task_id: string
+  cleaning_task_id?: string | null
+  property_id?: string | null
+  property_code?: string | null
+}): Promise<InspectionPanelBatchResolution> {
+  const taskId = cleanText(params.task_id)
+  const sourceId = cleanText(params.cleaning_task_id)
+  if (!taskId) return { item: null, matched_by: 'none', ambiguous_count: 0 }
+  const items = await loadQueue()
+  const exact = items.find((item) => item.task_id === taskId) || null
+  if (exact) {
+    const exactSourceId = cleanText(exact.cleaning_task_id || exact.snapshot.cleaning_task_id)
+    const sourceMatches = !sourceId || !exactSourceId || exactSourceId === sourceId
+    const propertyMatches = inspectionPanelBatchMatchesProperty(exact, params.property_id, params.property_code)
+    if (
+      sourceMatches
+      && propertyMatches
+    ) {
+      return { item: exact, matched_by: 'display_task_id', ambiguous_count: 0 }
+    }
+    // An exact display key with another source/property is a local identity
+    // conflict, not an absent batch. Never let a server receipt bypass it.
+    return { item: null, matched_by: 'conflict', ambiguous_count: 1 }
+  }
+  if (!sourceId) return { item: null, matched_by: 'none', ambiguous_count: 0 }
+  const sourceCandidates = items.filter((item) => (
+    cleanText(item.cleaning_task_id || item.snapshot.cleaning_task_id) === sourceId
+  ))
+  if (sourceCandidates.length > 1) {
+    return { item: null, matched_by: 'ambiguous', ambiguous_count: sourceCandidates.length }
+  }
+  if (sourceCandidates.length === 1) {
+    if (inspectionPanelBatchMatchesProperty(sourceCandidates[0], params.property_id, params.property_code)) {
+      return { item: sourceCandidates[0], matched_by: 'source_task_id', ambiguous_count: 0 }
+    }
+    return { item: null, matched_by: 'conflict', ambiguous_count: 1 }
+  }
+  return { item: null, matched_by: 'none', ambiguous_count: 0 }
+}
+
 export async function saveInspectionPanelDraftBatch(params: {
   task_id: string
   cleaning_task_id: string
@@ -991,13 +1058,26 @@ export async function bindInspectionPanelCleaningTaskId(params: {
   if (!taskId || !cleaningTaskId) return null
   return await updateQueueItem(taskId, (current) => {
     if (!current) return current
-    const existing = cleanText(current.cleaning_task_id)
+    const existing = cleanText(current.cleaning_task_id || current.snapshot.cleaning_task_id)
+    const currentPropertyId = cleanText(current.property_id || current.snapshot.property_id)
+    const currentPropertyCode = cleanText(current.property_code || current.snapshot.property_code).toLowerCase()
+    const nextPropertyId = cleanText(params.property_id)
+    const nextPropertyCode = cleanText(params.property_code).toLowerCase()
     const businessStepSucceeded =
       current.steps.save_restock_proof.status === 'succeeded'
       || current.steps.save_inspection_photos.status === 'succeeded'
       || current.steps.create_feedback_batch.status === 'succeeded'
       || current.steps.complete_feedback_projects.status === 'succeeded'
-    if (existing === cleaningTaskId || (existing && businessStepSucceeded) || current.status === 'synced') return current
+    // Binding is only a compatibility path for legacy batches that never had
+    // a source id. A non-empty different source is an identity conflict and
+    // must never be rewritten merely because a screen was opened.
+    if (
+      existing
+      || businessStepSucceeded
+      || current.status === 'synced'
+      || (currentPropertyId && nextPropertyId && currentPropertyId !== nextPropertyId)
+      || (currentPropertyCode && nextPropertyCode && currentPropertyCode !== nextPropertyCode)
+    ) return current
     const shouldResetFailedBusinessSteps = current.status === 'failed' || current.status === 'partial_failed'
     return {
       ...current,

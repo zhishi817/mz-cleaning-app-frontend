@@ -1,5 +1,23 @@
 # Feature Regression Registry
 
+## FR-P1-TSK-06 — 延期检查与当天入住可靠合卡展示
+
+- **Status:** active; combined MZ-075/MZ-076 candidate committed locally, not pushed or released.
+- **Maintenance scope:** `mobile` management task-list presentation; paired Root relation, projection and save target are `root/CRL-20261024-002`.
+- **Last reviewed:** 2026-10-24 UTC
+- **Business outcome:** 只有 Root 明确标记为同一次可靠周转的延期检查 + 当天入住，Mobile 才显示一张带“含延期检查”的卡及真实 `原退房日期 → 本次检查日期`。入住安排和分配状态来自入住 source；真实未分配不能继承延期计划检查人，保存成功后的已分配必须由下一次权威投影确认。普通入住、不同周转、歧义来源和缺失日期不得由客户端猜测或误标。
+- **Related CRLs:** `mobile/CRL-20261024-001`; paired `root/CRL-20261024-002`.
+
+### Test-to-invariant mapping
+
+- `src/screens/tabs/TasksScreen.test.tsx` — admin、offline_manager、customer_service 均显示合卡标签/真实日期/入住执行人；真正未分配保留“未分配”；普通入住没有“含延期检查”。
+- `src/lib/api.ts` — 只声明 Root 的结构化字段；客户端不按房号日期配对。
+
+### Delivery boundary
+
+- 必须先部署配套 Root，再发布 Mobile；单独 Mobile 不会创造合卡或修复保存目标。
+- 不改变任务权限、状态、底层来源、媒体、检查费、上传队列、缓存清理或原生依赖。列表测试不能替代真机、生产账号或保存后刷新验收。
+
 ## FR-P1-MED-08 — 可重下缓存预算与未同步媒体保护
 
 - **Status:** active; MZ-036 isolated local candidate, not released.

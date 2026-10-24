@@ -3300,6 +3300,13 @@ function showBanner(title: string, message: string) {
               const inspectionMode = effectiveInspectionMode(task as any)
               const inspectionPlanLabel = inspectionModeLabel(inspectionMode, String((task as any).inspection_due_date || '').trim() || null)
               const inspectionOriginalCheckoutDate = String((task as any).inspection_original_checkout_date || '').slice(0, 10)
+              const deferredInspectionMerged = (task as any).deferred_inspection_merged === true
+              const deferredInspectionEffectiveDate = String((task as any).deferred_inspection_effective_date || '').slice(0, 10)
+              const deferredInspectionMergeDateText = deferredInspectionMerged
+                && inspectionOriginalCheckoutDate
+                && deferredInspectionEffectiveDate
+                ? `原退房 ${inspectionOriginalCheckoutDate} → 本次检查 ${deferredInspectionEffectiveDate}`
+                : ''
               const inspectionAssignmentConflict = (task as any).inspection_assignment_conflict || null
               const inspectionConflictPlannedName = String(
                 inspectionAssignmentConflict?.planned_inspector_name
@@ -3657,7 +3664,12 @@ function showBanner(title: string, message: string) {
                             <Text style={inspectionPlanTagStyles.text}>{inspectionPlanLabel}</Text>
                           </View>
                         ) : null}
-                        {inspectionOriginalCheckoutDate ? (
+                        {deferredInspectionMerged ? (
+                          <View style={taskTagStylePair('info').container}>
+                            <Text style={taskTagStylePair('info').text}>含延期检查</Text>
+                          </View>
+                        ) : null}
+                        {inspectionOriginalCheckoutDate && !deferredInspectionMerged ? (
                           <View style={taskTagStylePair('neutral').container}>
                             <Text style={taskTagStylePair('neutral').text}>{`原退房 ${inspectionOriginalCheckoutDate}`}</Text>
                           </View>
@@ -3687,6 +3699,10 @@ function showBanner(title: string, message: string) {
                       </View>
                     ) : null}
                   </View>
+
+                  {deferredInspectionMergeDateText ? (
+                    <Text style={styles.summary} numberOfLines={2}>{deferredInspectionMergeDateText}</Text>
+                  ) : null}
 
                   {workRecordContext ? (
                     <Text style={styles.summary} numberOfLines={2}>{workRecordContext}</Text>

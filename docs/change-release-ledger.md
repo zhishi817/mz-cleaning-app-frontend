@@ -1,5 +1,113 @@
 # Change Release Ledger
 
+## CRL-20261024-001 — MZ-075 延期检查入住合卡标签与日期
+
+- **Status:** integrated candidate fully verified and committed locally in this release unit; not pushed, merged, deployed, or released
+- **Repository:** `mobile`
+- **Updated:** 2026-10-24 UTC
+- **Request:** 同一可靠周转的延期检查与当天入住合成一张卡后，admin、线下经理和客服必须看到“含延期检查”标记及真实 `原退房日期 → 本次检查日期`；入住确实未分配时仍显示未分配，保存执行人后由 Root 权威投影显示已分配。
+- **Outcome:** Mobile 只消费 Root 的结构化合卡事实，不从房号/日期猜测。合卡标签、日期说明和分配状态彼此独立；普通入住不误标，缺失日期不生成说明。
+
+### Implementation
+
+- `src/lib/api.ts` — modified: WorkTask contract 增加延期合卡和本次检查日期字段。
+- `src/screens/tabs/TasksScreen.tsx` — modified: 管理角色任务卡显示“含延期检查”及实际日期链；合卡不重复显示通用“原退房”标签，状态 pill 继续独立显示已分配/未分配。
+- `src/screens/tabs/TasksScreen.test.tsx` — modified: 覆盖 admin、offline_manager、customer_service，入住执行人显示，真实未分配不继承，以及普通入住不显示合卡标签。
+- `docs/feature-regression-registry.md` — modified: FR-P1-TSK-06 登记结构化来源、显示和状态边界。
+
+### Impact / Dependencies
+
+- API dependency: paired `root/CRL-20261024-002` 必须先部署；Mobile 不自行关联或改变 source。
+- Database / migration / backfill / native config / dependencies: none。
+- Permissions: none；仅显示当前用户已经获得的权威任务投影。
+- Media / upload queues: untouched；不迁移、清理、重放或重传任何本机媒体。
+
+### Validation
+
+- Focused `TasksScreen.test.tsx` — PASS（1 suite / 71 tests）。
+- TypeScript — PASS。
+- 完整 `npm run check:ci` — PASS（ledger、TypeScript、lint 0 errors / 820 existing warnings、button contract、fast 8 suites / 132 tests、full 77 suites / 658 tests）。
+- `npm run check:ledger` 与 `git diff --check` — PASS；最终差异复核确认普通入住不误标、三类管理角色一致且分配状态与延期标签互不覆盖。
+- 原生真机、生产账号、OTA、APK 与生产写入：未执行。
+
+### Files / Areas
+
+- `src/lib/api.ts`
+- `src/screens/tabs/TasksScreen.tsx`
+- `src/screens/tabs/TasksScreen.test.tsx`
+- `docs/change-release-ledger.md`
+- `docs/feature-regression-registry.md`
+
+### Git State
+
+- Branch: `codex/mz074-076-integrated`
+- Base: `origin/Dev@b989be24a810ca3a87d648540dc8094d27837e40`
+- State: locally committed on this branch; not pushed; no PR.
+## CRL-20261024-003 — 检查照片服务器恢复与视频门禁纠正
+
+- **Status:** integrated candidate fully verified and committed locally in this release unit; prior independent review GO (P0=0, P1=0, P2=0); not pushed, merged, deployed, or published
+- **Repository:** `mobile`
+- **Board item:** `MZ-076` revision 1
+- **Updated:** 2026-10-24 UTC
+- **Request:** MSQ4504E 的正式检查照片和提交回执已在服务器，但检查人员活动页只认本机展示任务 ID，照片显示为未拍且挂钥匙视频门禁误拦；恢复显示和后续流程，同时保护本机待同步内容与任务来源隔离。
+- **Outcome:** 活动检查页按准确源任务读取已同步服务器照片并与本机待同步/失败照片去重合并；视频页认可同源正式提交回执；本机批次可按唯一准确 source task 跨展示 ID 解析，多批次或来源不明时失败关闭且不改写队列。
+
+### Implementation
+
+- Previous behavior: `InspectionPanelScreen` 和 `InspectionCompleteScreen` 只以易变的展示 `task.id` 精确读取本机队列；服务器已有正式批次时仍可能显示全部“未拍”并禁用视频。
+- New behavior: 活动页并行读取准确 `cleaning_task_id` 的服务器照片/正式回执，本机内容优先合并且远端失败不清空本机；完成页只在无本机批次且同源正式回执成立时解锁视频。
+- Key decisions: 本机草稿或失败批次始终优先于旧服务器回执；唯一 source fallback 只读复用原存储键，不自动迁移、重键、删除或重放；已有非空 source 不会被兼容绑定覆盖，只有唯一且 source 为空的旧批次可安全补绑；多候选、source/物业冲突、无正式回执或服务器失败均 fail closed；跨展示 ID 恢复后继续从原队列键读取反馈草稿；不按房号日期借图。
+
+### Files / Areas
+
+- `src/lib/api.ts` — modified: additive formal inspection submission response type.
+- `src/lib/inspectionPanelServerRecovery.ts` — added: server-photo normalization, exact remote identity dedupe and formal-receipt guard.
+- `src/lib/inspectionPanelServerRecovery.test.ts` — added: MSQ4504E-shaped server batch, local-pending preservation, dedupe and formal-receipt coverage.
+- `src/lib/inspectionPanelSubmitQueue.ts` — modified: non-mutating exact display/source batch resolver with explicit source/property conflict states, ambiguity failure and narrow legacy missing-source compatibility bind.
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — modified: display-ID change, source/property mismatch, safe missing-source bind and multiple inspection-round isolation coverage.
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — combined MZ-075/MZ-076 regression: a deferred/check-in merged display resolves only the authoritative check-in source batch and never borrows deferred-source media.
+- `src/screens/tasks/InspectionPanelScreen.tsx` — modified: active server hydration, local-first merge, loading/failure UI, stable local storage key, conflict/ambiguity handling and cross-display feedback-draft preservation.
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — modified: six-photo server recovery, offline local preservation, source/property conflict failure, safe legacy bind, feedback preservation and cross-display-ID submit using original queue key.
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — modified: exact server formal receipt video gate and local/ambiguous precedence.
+- `src/screens/tasks/InspectionCompleteScreen.test.tsx` — modified: server-only formal recovery, local draft precedence and ambiguous-round rejection.
+- `docs/change-release-ledger.md` — added: this scoped Mobile release unit.
+
+### Impact / Dependencies
+
+- API: consumes additive `root/CRL-20261024-003` `formal_submission`; absent/failed responses remain fail closed.
+- Database / migration / backfill / native config / dependencies: none.
+- Local storage / upload queue: no schema change, migration, deletion, replay or automatic retry; existing queue objects and file references remain intact.
+- Permissions: unchanged; requests use the exact server-projected source task and existing endpoint authorization.
+- Related units: paired `root/CRL-20261024-003`; excludes MZ-074, MZ-075, MZ-062 and other paused work.
+
+### Validation
+
+- Focused Jest — PASS: 4 suites / 60 tests covering server formal recovery, local pending/failed preservation, exact-source dedupe, display-ID change, source/property conflict failure, safe missing-source compatibility, feedback preservation, task/round isolation, MZ-075 merged-display source isolation and video-gate precedence.
+- `npm run typecheck` — PASS.
+- `npm run lint -- --quiet` — PASS.
+- `npm run check:ci` — PASS on the combined candidate: full Mobile gate, including 78 Jest suites / 675 tests; lint completed with zero errors (repository warning baseline remains).
+- `git diff --check` — PASS.
+- Independent review — GO (P0=0, P1=0, P2=0): exact-source authorization, local-batch precedence, conflict/ambiguity fail-closed behavior, safe legacy binding, feedback preservation, and no re-key/delete/replay behavior verified.
+- Native iOS/Android device and real queue recovery acceptance — not run; local tests do not replace device validation.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** locally committed on `codex/mz074-076-integrated`
+- **Untracked review:** no untracked product files; temporary dependency link is excluded and removed before commit
+
+### Release Attempts
+
+- None; user authorized local implementation and testing only. The previously requested OTA remains paused.
+
+### Risks / Release Notes
+
+- Root must deploy first; publishing the Mobile candidate against an older Root would keep the video gate fail closed.
+- A server formal receipt does not override a local draft with newer unsubmitted changes; ambiguous same-source local rounds require support rather than automatic selection.
+- This restores server-confirmed media display but does not prove or alter why a particular device lost its prior exact display-ID key.
+- Sensitive-information review: all tests use synthetic media references and IDs; no production photos, signed URLs, property credentials, guest data or device queue contents are recorded.
+- Git state: combined local Mobile commit on `codex/mz074-076-integrated`; not pushed.
+
 ## CRL-20261021-013 — MZ-067 入住时间备注表单对齐
 
 - **Status:** local implementation validated; independent review GO (P0=0, P1=0, P2=1); not released

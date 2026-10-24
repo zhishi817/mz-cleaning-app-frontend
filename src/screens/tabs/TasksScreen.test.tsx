@@ -1673,6 +1673,150 @@ test('tasks screen shows original checkout and blocks silent inspection reassign
   snapshot.items[0] = previousTask
 })
 
+test.each([
+  ['admin', ['admin']],
+  ['offline manager', ['offline_manager']],
+  ['customer service', ['customer_service']],
+])('manager merged deferred/check-in card shows the merge label and check-in assignment for %s', async (_label, roles) => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  const base = previousItems[0]
+  snapshot.items = [{
+    ...base,
+    id: `deferred-checkin-${roles[0]}`,
+    source_type: 'cleaning_tasks',
+    source_id: 'checkin-406',
+    source_ids: ['checkout-406', 'checkin-406'],
+    task_kind: 'inspection',
+    task_type: 'checkin_clean',
+    title: '883406',
+    scheduled_date: mockTodayKey,
+    status: 'assigned',
+    assignee_id: 'mia-id',
+    inspector_id: null,
+    assignee_name: 'Mia',
+    inspection_mode: 'same_day',
+    inspection_scope: 'inspect_and_hang',
+    inspection_original_checkout_date: '2026-10-23',
+    deferred_inspection_merged: true,
+    deferred_inspection_effective_date: mockTodayKey,
+    inspection_assignment_conflict: null,
+    property: { ...base.property, code: '883406' },
+  }]
+  mockAuthState.user = { id: `${roles[0]}-075`, username: `${roles[0]}-075`, role: roles[0], roles }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: `tasks-mz075-${roles[0]}`, name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => {
+      expect(ui.getByText('含延期检查')).toBeTruthy()
+      expect(ui.getByText(`原退房 2026-10-23 → 本次检查 ${mockTodayKey}`)).toBeTruthy()
+      expect(ui.queryByText('检查安排冲突')).toBeNull()
+    })
+    expandTask(ui, `deferred-checkin-${roles[0]}`)
+    await waitFor(() => expect(ui.getByText('Mia')).toBeTruthy())
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('a genuinely unassigned merged card stays unassigned and an ordinary check-in has no deferred label', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  const base = previousItems[0]
+  snapshot.items = [
+    {
+      ...base,
+      id: 'deferred-checkin-unassigned',
+      source_type: 'cleaning_tasks',
+      source_id: 'checkin-unassigned',
+      source_ids: ['checkout-deferred', 'checkin-unassigned'],
+      task_kind: 'inspection',
+      task_type: 'checkin_clean',
+      title: '未分配入住',
+      scheduled_date: mockTodayKey,
+      status: 'pending',
+      assignee_id: null,
+      inspector_id: null,
+      assignee_name: null,
+      inspection_mode: 'pending_decision',
+      inspection_scope: 'inspect_and_hang',
+      inspection_original_checkout_date: '2026-10-23',
+      deferred_inspection_merged: true,
+      deferred_inspection_effective_date: mockTodayKey,
+      property: { ...base.property, code: 'UNASSIGNED' },
+    },
+    {
+      ...base,
+      id: 'ordinary-checkin',
+      source_type: 'cleaning_tasks',
+      source_id: 'ordinary-checkin-source',
+      source_ids: ['ordinary-checkin-source'],
+      task_kind: 'inspection',
+      task_type: 'checkin_clean',
+      title: '普通入住',
+      scheduled_date: mockTodayKey,
+      status: 'assigned',
+      assignee_id: 'mia-id',
+      assignee_name: 'Mia',
+      inspection_mode: 'same_day',
+      inspection_scope: 'inspect_and_hang',
+      inspection_original_checkout_date: null,
+      deferred_inspection_merged: false,
+      deferred_inspection_effective_date: null,
+      property: { ...base.property, code: 'ORDINARY' },
+    },
+  ]
+  mockAuthState.user = { id: 'admin-mz075-boundaries', username: 'admin-mz075-boundaries', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-mz075-boundaries', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => {
+      expect(ui.getByText('含延期检查')).toBeTruthy()
+      expect(ui.getByText('未分配')).toBeTruthy()
+      expect(ui.getByLabelText('task-card-ordinary-checkin')).toBeTruthy()
+    })
+    expect(ui.getAllByText('含延期检查')).toHaveLength(1)
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
 test('manager keeps MSQ1905E reopened overdue inspection separate from the current turnover', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()

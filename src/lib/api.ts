@@ -747,6 +747,8 @@ export type WorkTask = {
   inspector_id?: string | null
   inspection_mode?: 'pending_decision' | 'same_day' | 'deferred' | 'self_complete' | 'checked_done' | null
   inspection_original_checkout_date?: string | null
+  deferred_inspection_merged?: boolean
+  deferred_inspection_effective_date?: string | null
   inspection_action_task_id?: string | null
   inspection_assignment_conflict?: {
     reasons: string[]
@@ -2167,6 +2169,12 @@ export async function getInspectionPhotos(token: string, cleaningTaskId: string)
   if (!res.ok) throw toApiError(res, await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as {
     items: Array<{ area: string; url: string; note?: string | null; captured_at?: string | null; created_at?: string | null }>
+    formal_submission?: {
+      status: 'submitted' | 'none' | 'unavailable'
+      submit_id: string | null
+      saved_at: string | null
+      guest_arrival_confirmed?: boolean
+    }
   }
 }
 

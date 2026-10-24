@@ -21,8 +21,8 @@ import {
   createInspectionPanelLocalMedia,
   discardInspectionPanelBatch,
   findInspectionPanelValidationIssue,
-  getInspectionPanelBatch,
   processInspectionPanelSubmitQueue,
+  resolveInspectionPanelBatch,
   saveInspectionPanelDraftBatch,
   submitInspectionPanelBatch,
   subscribeInspectionPanelSubmitQueue,
@@ -48,8 +48,15 @@ import { checkinTimeForDisplay, cleaningExecutionTaskIdsFromTask, guestRequestFo
 import { consumableRestockStandard } from '../../lib/consumableRestockStandards'
 import { ensureSuppliesCatalogLoaded, retrySuppliesCatalog, useSuppliesCatalogStore } from '../../lib/useSuppliesCatalogStore'
 import { getWorkTasksSnapshot, patchWorkTaskItem, subscribeWorkTasks } from '../../lib/workTasksStore'
-import { appendInspectionIssuePhotos, getCleaningConsumables, getWorkTaskFormPhotos, uploadCleaningMedia } from '../../lib/api'
+import { appendInspectionIssuePhotos, getCleaningConsumables, getInspectionPhotos, getWorkTaskFormPhotos, uploadCleaningMedia } from '../../lib/api'
 import { buildCleaningMediaVideoSource, cleaningMediaReference } from '../../lib/cleaningMedia'
+import {
+  buildInspectionPanelServerPhotoState,
+  emptyInspectionPanelRoomPhotos,
+  hasExactFormalInspectionSubmission,
+  mergeInspectionPanelServerPhotos,
+  type InspectionPanelServerSubmission,
+} from '../../lib/inspectionPanelServerRecovery'
 import { taskFormPhotoReadOnlyRelationIds } from '../../lib/taskFormPhotos'
 import { availableActionsForTask, navigationForWorkTaskAction } from '../../lib/workTaskActions'
 import { getJson, remove as removeStorage, setJson } from '../../lib/storage'
@@ -89,35 +96,7 @@ const ROOM_AREAS: { key: InspectionPanelRoomPhotoArea; label: string; hint: stri
 ]
 
 function baseRoomPhotos(): RoomPhotoMap {
-  return { living: [], sofa: [], bedroom: [], kitchen: [], bathroom: [], balcony: [] }
-}
-
-function buildRemoteInspectionPhotoState(items: any[]) {
-  const roomPhotos = baseRoomPhotos()
-  const cleaningIssue: InspectionPanelBatchMedia[] = []
-  for (const [index, item] of (Array.isArray(items) ? items : []).entries()) {
-    const url = cleanText(item?.uploaded_key || item?.url)
-    const area = cleanText(item?.area).toLowerCase()
-    if (!url || (!Object.prototype.hasOwnProperty.call(roomPhotos, area) && area !== 'unclean')) continue
-    const media: InspectionPanelBatchMedia = {
-      id: `remote-inspection-${area}-${index}`,
-      local_uri: null,
-      thumbnail_uri: null,
-      uploaded_key: cleanText(item?.uploaded_key) || null,
-      uploaded_url: url,
-      name: `已同步${area}检查照片`,
-      mime_type: 'image/jpeg',
-      captured_at: cleanText(item?.captured_at) || cleanText(item?.created_at) || '1970-01-01T00:00:00.000Z',
-      note: cleanText(item?.note) || null,
-    }
-    if (area === 'unclean') cleaningIssue.push(media)
-    else (roomPhotos as any)[area].push(media)
-  }
-  return {
-    roomPhotos,
-    cleaningIssue,
-    total: Object.values(roomPhotos).reduce((sum, values) => sum + values.length, 0) + cleaningIssue.length,
-  }
+  return emptyInspectionPanelRoomPhotos()
 }
 
 function cleanText(value: any) {
@@ -398,6 +377,15 @@ export default function InspectionPanelScreen(props: Props) {
   const [historicalKeyPhoto, setHistoricalKeyPhoto] = useState<{ reference: string; taskId: string } | null>(null)
   const [historicalLockboxVideo, setHistoricalLockboxVideo] = useState<{ reference: string; taskId: string } | null>(null)
   const [batchItem, setBatchItem] = useState<InspectionPanelSubmitQueueItem | null>(null)
+  const [batchLookupIssue, setBatchLookupIssue] = useState<'ambiguous' | 'conflict' | null>(null)
+  const [serverSubmission, setServerSubmission] = useState<InspectionPanelServerSubmission | null>(null)
+  const [serverPhotoLoadState, setServerPhotoLoadState] = useState<'idle' | 'loading' | 'loaded' | 'failed'>('idle')
+  const [serverPhotoCount, setServerPhotoCount] = useState(0)
+  const serverPhotoCacheRef = useRef<{
+    sourceId: string
+    state: ReturnType<typeof buildInspectionPanelServerPhotoState>
+    submission: InspectionPanelServerSubmission | null
+  } | null>(null)
   const [roomConfirmed, setRoomConfirmed] = useState(false)
   const [postSubmitIssueDraft, setPostSubmitIssueDraft] = useState<PostSubmitIssueDraft | null>(null)
   const [postSubmitIssueSubmitting, setPostSubmitIssueSubmitting] = useState(false)
@@ -458,6 +446,14 @@ export default function InspectionPanelScreen(props: Props) {
   }, [])
 
   const cleaningTaskId = cleanText(props.route.params.sourceId) || cleanText(task?.source_id)
+  useEffect(() => {
+    const cachedSourceId = serverPhotoCacheRef.current?.sourceId || ''
+    if (cachedSourceId && cachedSourceId !== cleaningTaskId) serverPhotoCacheRef.current = null
+    setServerSubmission(null)
+    setServerPhotoCount(0)
+    setServerPhotoLoadState('idle')
+    setBatchLookupIssue(null)
+  }, [cleaningTaskId])
   const historicalSourceIds = readOnly ? taskFormPhotoReadOnlyRelationIds(task) : []
   const historicalSourceIdsKey = historicalSourceIds.join('|')
   const historicalMediaAccess = readOnly
@@ -481,6 +477,41 @@ export default function InspectionPanelScreen(props: Props) {
   const propertyId = cleanText(task?.property_id || task?.property?.id)
   const propertyCode = cleanText(task?.property?.code)
   const propertyAddr = cleanText(task?.property?.address)
+  const resolveCurrentBatchResolution = useCallback(async () => {
+    if (!task?.id) return { item: null, matched_by: 'none' as const, ambiguous_count: 0 }
+    let resolution = await resolveInspectionPanelBatch({
+      task_id: task.id,
+      cleaning_task_id: cleaningTaskId,
+      property_id: propertyId,
+      property_code: propertyCode,
+    })
+    const resolvedSourceId = cleanText(
+      resolution.item?.cleaning_task_id || resolution.item?.snapshot.cleaning_task_id,
+    )
+    if (resolution.item && !resolvedSourceId && cleaningTaskId) {
+      await bindInspectionPanelCleaningTaskId({
+        task_id: resolution.item.task_id,
+        cleaning_task_id: cleaningTaskId,
+        property_id: propertyId,
+        property_code: propertyCode,
+      })
+      resolution = await resolveInspectionPanelBatch({
+        task_id: task.id,
+        cleaning_task_id: cleaningTaskId,
+        property_id: propertyId,
+        property_code: propertyCode,
+      })
+    }
+    setBatchLookupIssue(
+      resolution.matched_by === 'ambiguous' || resolution.matched_by === 'conflict'
+        ? resolution.matched_by
+        : null,
+    )
+    return resolution
+  }, [cleaningTaskId, propertyCode, propertyId, task?.id])
+  const resolveCurrentBatch = useCallback(async () => (
+    await resolveCurrentBatchResolution()
+  ).item, [resolveCurrentBatchResolution])
   const checkinTime = cleanText(checkinTimeForDisplay(task))
   const guestSpecialRequest = guestRequestForDisplay(task)
   const consumableSourceIdsKey = useMemo(() => sourceIdsForConsumables(task, cleaningTaskId).join('|'), [cleaningTaskId, task])
@@ -497,9 +528,12 @@ export default function InspectionPanelScreen(props: Props) {
       ? 'guest_arrival_confirmed'
       : 'required'
   const inspectionScopeNoticeStyles = noticeToneStylePair(getInspectionScopeTone(isPasswordOnlyInspection))
-  const batchStatus = batchItem?.status || 'draft'
+  const localBatchTaskId = cleanText(batchItem?.task_id) || cleanText(task?.id)
+  const batchLookupBlocked = batchLookupIssue != null
+  const serverFormalSubmission = hasExactFormalInspectionSubmission(serverSubmission) && !batchLookupBlocked
+  const batchStatus = batchItem?.status || (serverFormalSubmission ? 'synced' : 'draft')
   const hasFormalSubmission = batchStatus !== 'draft'
-  const isFrozen = readOnly || batchStatus !== 'draft'
+  const isFrozen = readOnly || batchLookupBlocked || batchStatus !== 'draft'
   const canAppendPostSubmitCleaningIssue = !readOnly && batchStatus === 'synced' && !!cleaningTaskId
   const isOnline = netInfo.isConnected !== false && netInfo.isInternetReachable !== false
   const batchValidationError = hasFormalSubmission && batchItem ? validateInspectionPanelSnapshot(batchItem.snapshot) : null
@@ -542,21 +576,16 @@ export default function InspectionPanelScreen(props: Props) {
     if (showSpinner) setLoading(true)
     setRestockLoading(true)
     setRestockLoadError(false)
+    if (!readOnly && token && cleaningTaskId) setServerPhotoLoadState('loading')
     try {
-      if (!readOnly && cleaningTaskId) {
-        await bindInspectionPanelCleaningTaskId({
-          task_id: task.id,
-          cleaning_task_id: cleaningTaskId,
-          property_id: propertyId,
-          property_code: propertyCode,
-        })
-      }
       const consumableSourceIds0 = consumableSourceIdsKey ? consumableSourceIdsKey.split('|').filter(Boolean) : []
       const consumableSourceIds = readOnly
         ? consumableSourceIds0.filter((id) => historicalSourceIds.includes(id))
         : consumableSourceIds0
-      const [batch, draft, feedback, consumableResults, remoteInspectionPhotos] = await Promise.all([
-        readOnly ? Promise.resolve(null) : getInspectionPanelBatch(task.id),
+      const [batchResolution, draft, feedback, consumableResults, remoteInspectionPhotos, activeInspectionPhotos] = await Promise.all([
+        readOnly
+          ? Promise.resolve({ item: null, matched_by: 'none' as const, ambiguous_count: 0 })
+          : resolveCurrentBatchResolution(),
         readOnly ? Promise.resolve(null) : getInspectionPanelDraft(task.id),
         readOnly ? Promise.resolve(null) : getInspectionPanelFeedbackDraft(task.id),
         !readOnly && token && consumableSourceIds.length
@@ -567,15 +596,55 @@ export default function InspectionPanelScreen(props: Props) {
               .then((result) => result?.items || [])
               .catch(() => [])
           : Promise.resolve([]),
+        !readOnly && token && cleaningTaskId
+          ? getInspectionPhotos(token, cleaningTaskId)
+              .then((response) => ({ ok: true as const, response }))
+              .catch(() => ({ ok: false as const, response: null }))
+          : Promise.resolve({ ok: false as const, response: null }),
       ])
       if (localStateLoadVersionRef.current !== loadVersion) return
+      const batch = batchResolution.item
+      setBatchLookupIssue(
+        batchResolution.matched_by === 'ambiguous' || batchResolution.matched_by === 'conflict'
+          ? batchResolution.matched_by
+          : null,
+      )
       const consumablesResponses = consumableResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])
       const remoteMediaItems: any[] = Array.isArray(remoteInspectionPhotos) ? remoteInspectionPhotos : []
       const consumableLoadFailed = !readOnly && consumableSourceIds.length > 0 && (!token || consumableResults.some((result) => result.status === 'rejected'))
       const remoteRestockItems = readOnly
         ? buildRestockFromWorkTaskMedia(remoteMediaItems)
         : buildRestockFromConsumables(consumablesResponses)
-      const remotePhotoState = readOnly ? buildRemoteInspectionPhotoState(remoteMediaItems) : null
+      const readOnlyPhotoState = readOnly
+        ? buildInspectionPanelServerPhotoState(remoteMediaItems.map((item: any) => ({
+            ...item,
+            url: cleanText(item?.uploaded_key || item?.url),
+          })))
+        : null
+      const cachedServerPhotos = serverPhotoCacheRef.current?.sourceId === cleaningTaskId
+        ? serverPhotoCacheRef.current
+        : null
+      const activePhotoState = !readOnly && activeInspectionPhotos.ok
+        ? buildInspectionPanelServerPhotoState(activeInspectionPhotos.response?.items || [])
+        : cachedServerPhotos?.state || null
+      const remotePhotoState = readOnly ? readOnlyPhotoState : activePhotoState
+      if (!readOnly) {
+        if (activeInspectionPhotos.ok) {
+          const nextSubmission = activeInspectionPhotos.response?.formal_submission || null
+          serverPhotoCacheRef.current = {
+            sourceId: cleaningTaskId,
+            state: activePhotoState || buildInspectionPanelServerPhotoState([]),
+            submission: nextSubmission,
+          }
+          setServerSubmission(nextSubmission)
+          setServerPhotoCount(activePhotoState?.total || 0)
+          setServerPhotoLoadState('loaded')
+        } else {
+          setServerSubmission(cachedServerPhotos?.submission || null)
+          setServerPhotoCount(cachedServerPhotos?.state.total || 0)
+          setServerPhotoLoadState(token && cleaningTaskId ? 'failed' : 'idle')
+        }
+      }
       if (readOnly) {
         const keyPhoto = remoteMediaItems.find((item: any) => cleanText(item?.source) === 'key')
         const video = remoteMediaItems.find((item: any) => cleanText(item?.source) === 'lockbox_video')
@@ -591,16 +660,24 @@ export default function InspectionPanelScreen(props: Props) {
         setHistoricalKeyPhoto(null)
         setHistoricalLockboxVideo(null)
       }
-      const sourceSnapshot = batch && batch.status !== 'draft' ? batch.snapshot : null
+      // The queue snapshot is the authoritative local copy for every batch state,
+      // including drafts. Falling back to the separate draft store here would hide
+      // queued local photos after a display-task id change or a failed server read.
+      const sourceSnapshot = batch?.snapshot || null
       setBatchItem(batch)
       setFeedbackDraft(sourceSnapshot?.feedback || feedback || null)
       if (sourceSnapshot) {
+        const mergedPhotos = mergeInspectionPanelServerPhotos({
+          localRoomPhotos: sourceSnapshot.room_photos,
+          localCleaningIssue: sourceSnapshot.cleaning_issue,
+          server: remotePhotoState,
+        })
         setRestockLoadError(false)
         setRestock(sourceSnapshot.restock.map(cloneRestockItem))
         setRestockConfirmedSufficient(!!sourceSnapshot.restock_confirmed_sufficient)
         setGuestArrivalPhotoSkipConfirmed(sourceSnapshot.room_photo_requirement === 'guest_arrival_confirmed')
-        commitRoomPhotos(remotePhotoState?.total ? remotePhotoState.roomPhotos : cloneRoomPhotos({ ...baseRoomPhotos(), ...(sourceSnapshot.room_photos || {}) }))
-        setCleaningIssue(remotePhotoState?.total ? remotePhotoState.cleaningIssue : [...(sourceSnapshot.cleaning_issue || [])])
+        commitRoomPhotos(mergedPhotos.roomPhotos)
+        setCleaningIssue(mergedPhotos.cleaningIssue)
         draftHydratedRef.current = true
         return
       }
@@ -608,8 +685,13 @@ export default function InspectionPanelScreen(props: Props) {
       if (draftHydratedRef.current && !forceDraftReload) {
         if (feedback) setFeedbackDraft(feedback)
         if (remotePhotoState?.total) {
-          commitRoomPhotos(remotePhotoState.roomPhotos)
-          setCleaningIssue(remotePhotoState.cleaningIssue)
+          const mergedPhotos = mergeInspectionPanelServerPhotos({
+            localRoomPhotos: roomPhotosRef.current,
+            localCleaningIssue: cleaningIssue,
+            server: remotePhotoState,
+          })
+          commitRoomPhotos(mergedPhotos.roomPhotos)
+          setCleaningIssue(mergedPhotos.cleaningIssue)
         }
         const incoming = mergeRestockItems(initialRestockItems.map(cloneRestockItem), remoteRestockItems)
         if (incoming.length) {
@@ -628,8 +710,13 @@ export default function InspectionPanelScreen(props: Props) {
       )
       setRestockConfirmedSufficient(!!draft?.restock_confirmed_sufficient && !remoteRestockItems.length)
       setGuestArrivalPhotoSkipConfirmed(draft?.room_photo_requirement === 'guest_arrival_confirmed')
-      commitRoomPhotos(remotePhotoState?.total ? remotePhotoState.roomPhotos : cloneRoomPhotos({ ...baseRoomPhotos(), ...(draft?.room_photos || {}) }))
-      setCleaningIssue(remotePhotoState?.total ? remotePhotoState.cleaningIssue : [...(draft?.cleaning_issue || [])])
+      const mergedPhotos = mergeInspectionPanelServerPhotos({
+        localRoomPhotos: draft?.room_photos || baseRoomPhotos(),
+        localCleaningIssue: draft?.cleaning_issue || [],
+        server: remotePhotoState,
+      })
+      commitRoomPhotos(mergedPhotos.roomPhotos)
+      setCleaningIssue(mergedPhotos.cleaningIssue)
       draftHydratedRef.current = true
     } finally {
       if (localStateLoadVersionRef.current === loadVersion) {
@@ -637,7 +724,7 @@ export default function InspectionPanelScreen(props: Props) {
         if (showSpinner) setLoading(false)
       }
     }
-  }, [cleaningTaskId, commitRoomPhotos, consumableSourceIdsKey, historicalSourceIdsKey, initialRestockItems, propertyCode, propertyId, readOnly, task, token])
+  }, [cleaningIssue, cleaningTaskId, commitRoomPhotos, consumableSourceIdsKey, historicalSourceIdsKey, initialRestockItems, propertyCode, propertyId, readOnly, resolveCurrentBatchResolution, task, token])
 
   const loadLocalStateRef = useRef(loadLocalState)
   useEffect(() => {
@@ -653,14 +740,14 @@ export default function InspectionPanelScreen(props: Props) {
     const taskId = task?.id
     if (!taskId || readOnly) return
     const unsubscribe = subscribeInspectionPanelSubmitQueue(() => {
-      void getInspectionPanelBatch(taskId)
+      void resolveCurrentBatch()
         .then((batch) => {
           setBatchItem((current) => shouldRefreshBatchPresentation(current, batch) ? batch : current)
         })
         .catch(() => null)
     })
     return unsubscribe
-  }, [readOnly, task?.id])
+  }, [readOnly, resolveCurrentBatch, task?.id])
 
   useEffect(() => {
     if (!restockPickerOpen || !token) return
@@ -672,12 +759,22 @@ export default function InspectionPanelScreen(props: Props) {
     const nav: any = props.navigation as any
     if (!nav || typeof nav.addListener !== 'function') return
     const unsub = nav.addListener('focus', () => {
-      void getInspectionPanelFeedbackDraft(props.route.params.taskId).then((draft) => {
-        setFeedbackDraft(draft)
+      void Promise.all([
+        getInspectionPanelFeedbackDraft(props.route.params.taskId),
+        resolveCurrentBatch(),
+      ]).then(async ([draft, currentBatch]) => {
+        if (draft) {
+          setFeedbackDraft(draft)
+          return
+        }
+        const legacyDraft = localBatchTaskId !== props.route.params.taskId
+          ? await getInspectionPanelFeedbackDraft(localBatchTaskId)
+          : null
+        setFeedbackDraft(legacyDraft || currentBatch?.snapshot.feedback || null)
       })
     })
     return unsub
-  }, [props.navigation, props.route.params.taskId, readOnly])
+  }, [localBatchTaskId, props.navigation, props.route.params.taskId, readOnly, resolveCurrentBatch])
 
   const persistDraft = useCallback(async (
     nextRestock = restock,
@@ -688,7 +785,7 @@ export default function InspectionPanelScreen(props: Props) {
   ) => {
     if (!task || isFrozen) return
     const snapshot = buildSnapshot({
-      taskId: task.id,
+      taskId: localBatchTaskId,
       cleaningTaskId,
       propertyId,
       propertyCode,
@@ -703,10 +800,10 @@ export default function InspectionPanelScreen(props: Props) {
     draftPersistChainRef.current = draftPersistChainRef.current
       .catch(() => undefined)
       .then(async () => {
-        await setInspectionPanelDraft(task.id, snapshot)
+        await setInspectionPanelDraft(localBatchTaskId, snapshot)
       })
     await draftPersistChainRef.current
-  }, [cleaningIssue, cleaningTaskId, feedbackDraft, isFrozen, propertyCode, propertyId, restock, restockConfirmedSufficient, roomPhotoRequirement, roomPhotos, task])
+  }, [cleaningIssue, cleaningTaskId, feedbackDraft, isFrozen, localBatchTaskId, propertyCode, propertyId, restock, restockConfirmedSufficient, roomPhotoRequirement, roomPhotos, task])
 
   useEffect(() => {
     if (!loading) {
@@ -1025,12 +1122,12 @@ export default function InspectionPanelScreen(props: Props) {
       Alert.alert('暂不可提交检查', '请先等待清洁提交补品记录和房源照片，清洁完成后刷新任务再提交检查。')
       return
     }
-    const currentBatch = await getInspectionPanelBatch(task.id)
+    const currentBatch = await resolveCurrentBatch()
     if (currentBatch && currentBatch.status !== 'draft') {
       setSubmitting(true)
       try {
         await processInspectionPanelSubmitQueue(token)
-        setBatchItem(await getInspectionPanelBatch(task.id))
+        setBatchItem(await resolveCurrentBatch())
       } catch (e: any) {
         Alert.alert(t('common_error'), String(e?.message || '重试同步失败'))
       } finally {
@@ -1049,12 +1146,12 @@ export default function InspectionPanelScreen(props: Props) {
       setShowValidationIssue(false)
       await persistDraft()
       await saveInspectionPanelDraftBatch({
-        task_id: task.id,
+        task_id: localBatchTaskId,
         cleaning_task_id: cleaningTaskId,
         property_id: propertyId,
         property_code: propertyCode,
         snapshot: buildSnapshot({
-          taskId: task.id,
+          taskId: localBatchTaskId,
           cleaningTaskId,
           propertyId,
           propertyCode,
@@ -1066,10 +1163,10 @@ export default function InspectionPanelScreen(props: Props) {
           feedback: feedbackDraft,
         }),
       })
-      const submitted = await submitInspectionPanelBatch(task.id)
+      const submitted = await submitInspectionPanelBatch(localBatchTaskId)
       setBatchItem(submitted)
       await processInspectionPanelSubmitQueue(token)
-      const latest = await getInspectionPanelBatch(task.id)
+      const latest = await resolveCurrentBatch()
       setBatchItem(latest)
       Alert.alert(
         t('common_ok'),
@@ -1079,7 +1176,7 @@ export default function InspectionPanelScreen(props: Props) {
       )
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '提交失败'))
-      setBatchItem(await getInspectionPanelBatch(task.id))
+      setBatchItem(await resolveCurrentBatch())
     } finally {
       setSubmitting(false)
     }
@@ -1087,8 +1184,9 @@ export default function InspectionPanelScreen(props: Props) {
 
   async function onDiscardFailedBatch() {
     if (!task) return
-    await discardInspectionPanelBatch(task.id)
-    await clearInspectionPanelDraft(task.id)
+    await discardInspectionPanelBatch(localBatchTaskId)
+    await clearInspectionPanelDraft(localBatchTaskId)
+    if (localBatchTaskId !== task.id) await clearInspectionPanelDraft(task.id)
     draftHydratedRef.current = true
     setBatchItem(null)
     setRestock(initialRestockItems.map(cloneRestockItem))
@@ -1158,7 +1256,11 @@ export default function InspectionPanelScreen(props: Props) {
   }
 
   const completeDisabled = !hasFormalSubmission || !!batchValidationError || (!!guestSpecialRequest && !guestNeedDone)
-  const syncHint = readOnly ? '只读查看模式，已同步照片不可修改。' : batchStatusHint(batchStatus, batchItem?.last_error)
+  const syncHint = readOnly
+    ? '只读查看模式，已同步照片不可修改。'
+    : serverFormalSubmission && !batchItem
+      ? '已按本任务的准确来源从服务器恢复正式检查批次；不会改写或重放本机上传队列。'
+      : batchStatusHint(batchStatus, batchItem?.last_error)
   const failedStepDetails = inspectionPanelFailedStepDetails(batchItem)
   const localMediaSummary = inspectionPanelLocalMediaSummary(batchItem)
   const restockAddButtons = (
@@ -1551,6 +1653,15 @@ export default function InspectionPanelScreen(props: Props) {
             </Pressable>
             {expanded.photos ? (
               <View style={styles.block}>
+                {!readOnly && serverPhotoLoadState === 'loading' ? (
+                  <Text testID="inspection-server-photos-loading" style={styles.mutedSmall}>正在读取本任务已同步的服务器照片，本机内容会继续保留。</Text>
+                ) : null}
+                {!readOnly && serverPhotoLoadState === 'failed' ? (
+                  <Text testID="inspection-server-photos-failed" style={styles.warnSmall}>服务器照片暂时读取失败；本机照片未被清除，请刷新后重试。</Text>
+                ) : null}
+                {!readOnly && serverPhotoLoadState === 'loaded' && serverPhotoCount > 0 ? (
+                  <Text testID="inspection-server-photos-restored" style={styles.mutedSmall}>{`已从本任务服务器记录恢复 ${serverPhotoCount} 张检查照片。`}</Text>
+                ) : null}
                 {draftValidationIssue?.section === 'photos' ? (
                   <View style={styles.inlineErrorCard}>
                     <Text style={styles.inlineErrorTitle}>还有照片没完成</Text>
@@ -1564,7 +1675,13 @@ export default function InspectionPanelScreen(props: Props) {
                     <View style={[styles.photoCard, draftValidationIssue?.section === 'photos' && draftValidationIssue.room_area === area.key ? styles.validationPhotoCard : null]}>
                       <View style={styles.photoHeadRow}>
                         <Text style={styles.photoLabel}>{area.label}</Text>
-                        <Text style={styles.photoCount}>{(roomPhotos[area.key] || []).length ? `${(roomPhotos[area.key] || []).length}/${area.max}` : '未拍'}</Text>
+                        <Text style={styles.photoCount}>{(roomPhotos[area.key] || []).length
+                          ? `${(roomPhotos[area.key] || []).length}/${area.max}`
+                          : serverPhotoLoadState === 'loading'
+                            ? '读取中'
+                            : serverPhotoLoadState === 'failed'
+                              ? '待重试'
+                              : '未拍'}</Text>
                       </View>
                       <Text style={styles.photoHint}>{area.hint}</Text>
                       <View style={styles.thumbRow}>
@@ -1591,7 +1708,7 @@ export default function InspectionPanelScreen(props: Props) {
                         ) : (
                           <View style={styles.thumbMiniEmpty}>
                             <Ionicons name="image-outline" size={moderateScale(16)} color="#9CA3AF" />
-                            <Text style={styles.photoEmptyText}>未拍</Text>
+                            <Text style={styles.photoEmptyText}>{serverPhotoLoadState === 'loading' ? '读取中' : serverPhotoLoadState === 'failed' ? '待重试' : '未拍'}</Text>
                           </View>
                         )}
                       </View>
@@ -1616,7 +1733,11 @@ export default function InspectionPanelScreen(props: Props) {
                 ) : null}
                 <Text style={styles.mutedSmall}>
                   {isFrozen
-                    ? (readOnly ? '已同步照片支持点击查看大图，当前为只读状态。' : '本页照片已随提交批次冻结保存在本机；进入完成页不会删除这些照片。')
+                    ? (readOnly
+                        ? '已同步照片支持点击查看大图，当前为只读状态。'
+                        : serverFormalSubmission && !batchItem
+                          ? '本任务的正式检查照片已从服务器恢复；本机待同步内容未被清除或重放。'
+                          : '本页照片已随提交批次冻结保存在本机；进入完成页不会删除这些照片。')
                     : roomPhotosSavedAt
                     ? `已于 ${roomPhotosSavedAt} 保存到本机草稿；提交本页后才会统一同步。`
                     : '拍照后会自动保存到本机草稿；也可点击上方按钮再次确认。提交本页后才会统一同步。'}
@@ -1644,13 +1765,15 @@ export default function InspectionPanelScreen(props: Props) {
                 </View>
               ) : null}
               {!hasFormalSubmission ? <Text style={styles.mutedSmall}>先点击“提交本页检查与补充”，保存本机批次后即可进入完成页。</Text> : null}
-              {hasFormalSubmission && !batchValidationError ? <Text style={styles.mutedSmall}>检查与补充已保存到本机。即使还在同步或失败状态，也可以继续进入视频页；任务会等待检查照片同步完成后再完成。</Text> : null}
+              {hasFormalSubmission && !batchValidationError ? <Text style={styles.mutedSmall}>{serverFormalSubmission && !batchItem
+                ? '服务器已确认本任务正式检查批次，可以继续进入视频页。'
+                : '检查与补充已保存到本机。即使还在同步或失败状态，也可以继续进入视频页；任务会等待检查照片同步完成后再完成。'}</Text> : null}
               {batchValidationError ? <Text style={styles.warnSmall}>当前冻结批次不完整，不能进入完成页。请放弃并重建草稿后补齐内容。</Text> : null}
               <AppButton
                 label={hasFormalSubmission
                   ? batchValidationError
                     ? '照片不完整，请重建草稿'
-                    : (isPasswordOnlyInspection ? '进入改密码并完成' : batchItem?.status === 'synced' ? '进入标记已完成' : '进入视频提交（任务待完成）')
+                    : (isPasswordOnlyInspection ? '进入改密码并完成' : batchStatus === 'synced' ? '进入标记已完成' : '进入视频提交（任务待完成）')
                   : '提交本页检查与补充'}
                 onPress={() => {
                   if (hasFormalSubmission) {
@@ -1658,7 +1781,8 @@ export default function InspectionPanelScreen(props: Props) {
                     props.navigation.navigate('InspectionComplete', {
                       taskId: task.id,
                       ...(cleaningTaskId ? { sourceId: cleaningTaskId } : {}),
-                      skipInspectionPhotos: batchItem?.snapshot.room_photo_requirement === 'guest_arrival_confirmed',
+                      skipInspectionPhotos: batchItem?.snapshot.room_photo_requirement === 'guest_arrival_confirmed'
+                        || serverSubmission?.guest_arrival_confirmed === true,
                     })
                     return
                   }
@@ -1678,6 +1802,11 @@ export default function InspectionPanelScreen(props: Props) {
 
           {!readOnly ? <View testID="inspection-sync-status-card" style={styles.card}>
             <View style={styles.block}>
+              {batchLookupIssue ? (
+                <Text testID="inspection-source-batch-conflict" style={styles.warnSmall}>{batchLookupIssue === 'ambiguous'
+                  ? '本机存在多个同源检查批次，系统未自动选择或改写；请保留本机数据并联系支持。'
+                  : '本机检查批次与当前任务来源不一致，系统未自动覆盖或改写；请保留本机数据并联系支持。'}</Text>
+              ) : null}
               <Text style={styles.mutedSmall}>{`当前状态：${batchStatusLabel(batchStatus)}`}</Text>
               <Text style={batchStatus === 'failed' || batchStatus === 'partial_failed' || batchValidationError ? styles.warnSmall : styles.mutedSmall}>
                 {batchValidationError ? `当前批次验证失败：${batchValidationError}` : syncHint}

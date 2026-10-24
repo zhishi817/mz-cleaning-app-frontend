@@ -6,16 +6,17 @@ import * as ImagePicker from 'expo-image-picker'
 import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { API_BASE_URL } from '../../config/env'
-import { deleteLockboxVideo } from '../../lib/api'
+import { deleteLockboxVideo, getInspectionPhotos } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import {
   bindInspectionPanelCleaningTaskId,
   getInspectionPanelVideoReadiness,
-  getInspectionPanelBatch,
+  resolveInspectionPanelBatch,
   subscribeInspectionPanelSubmitQueue,
   type InspectionPanelBatchStatus,
   type InspectionPanelVideoReadiness,
 } from '../../lib/inspectionPanelSubmitQueue'
+import { hasExactFormalInspectionSubmission } from '../../lib/inspectionPanelServerRecovery'
 import { useI18n } from '../../lib/i18n'
 import {
   enqueueInspectionMediaItem,
@@ -103,6 +104,7 @@ export default function InspectionCompleteScreen(props: Props) {
   const [validationReady, setValidationReady] = useState(false)
   const [panelBatchStatus, setPanelBatchStatus] = useState<InspectionPanelBatchStatus | null>(null)
   const [panelBatchError, setPanelBatchError] = useState<string | null>(null)
+  const [panelRecoveredFromServer, setPanelRecoveredFromServer] = useState(false)
   const [panelVideoReadiness, setPanelVideoReadiness] = useState<InspectionPanelVideoReadiness>({
     ready: false,
     reason: '请先完成检查与补充照片。',
@@ -166,22 +168,73 @@ export default function InspectionCompleteScreen(props: Props) {
         setValidationReady(false)
       }
       const needs: string[] = []
-      if (!skipInspectionPhotos && inspectionPanelSourceId) {
-        await bindInspectionPanelCleaningTaskId({
+      const resolveBatch = async () => {
+        let resolution = await resolveInspectionPanelBatch({
           task_id: props.route.params.taskId,
           cleaning_task_id: inspectionPanelSourceId,
           property_id: cleanText((task as any)?.property_id || (task as any)?.property?.id),
           property_code: cleanText((task as any)?.property?.code),
         })
+        const resolvedSourceId = cleanText(
+          resolution.item?.cleaning_task_id || resolution.item?.snapshot.cleaning_task_id,
+        )
+        if (resolution.item && !resolvedSourceId && inspectionPanelSourceId) {
+          await bindInspectionPanelCleaningTaskId({
+            task_id: resolution.item.task_id,
+            cleaning_task_id: inspectionPanelSourceId,
+            property_id: cleanText((task as any)?.property_id || (task as any)?.property?.id),
+            property_code: cleanText((task as any)?.property?.code),
+          })
+          resolution = await resolveInspectionPanelBatch({
+            task_id: props.route.params.taskId,
+            cleaning_task_id: inspectionPanelSourceId,
+            property_id: cleanText((task as any)?.property_id || (task as any)?.property?.id),
+            property_code: cleanText((task as any)?.property?.code),
+          })
+        }
+        return resolution
       }
-      const batch = skipInspectionPhotos ? null : await getInspectionPanelBatch(props.route.params.taskId)
-      const status = batch?.status || null
+      const [batchResolution, serverPhotos] = await Promise.all([
+        skipInspectionPhotos
+          ? Promise.resolve({ item: null, matched_by: 'none' as const, ambiguous_count: 0 })
+          : resolveBatch(),
+        !skipInspectionPhotos && token && inspectionPanelSourceId
+          ? getInspectionPhotos(token, inspectionPanelSourceId)
+              .then((response) => ({ ok: true as const, response }))
+              .catch(() => ({ ok: false as const, response: null }))
+          : Promise.resolve({ ok: false as const, response: null }),
+      ])
+      const batch = batchResolution.item
+      const batchLookupBlocked = batchResolution.matched_by === 'ambiguous'
+        || batchResolution.matched_by === 'conflict'
+      const serverFormalSubmission = !batchLookupBlocked
+        && hasExactFormalInspectionSubmission(serverPhotos.response?.formal_submission)
+      const status = batch?.status || (serverFormalSubmission ? 'synced' : null)
       const videoReadiness = skipInspectionPhotos
         ? { ready: true, reason: null, skipInspectionPhotos: true }
-        : getInspectionPanelVideoReadiness(batch)
+        : batchLookupBlocked
+          ? {
+              ready: false,
+              reason: batchResolution.matched_by === 'ambiguous'
+                ? '本机存在多个同源检查批次，系统未自动选择；请保留本机数据并联系支持。'
+                : '本机检查批次与当前任务来源不一致，系统未自动覆盖；请保留本机数据并联系支持。',
+              skipInspectionPhotos: false,
+            }
+          : batch
+            ? getInspectionPanelVideoReadiness(batch)
+            : serverFormalSubmission
+              ? { ready: true, reason: null, skipInspectionPhotos: serverPhotos.response?.formal_submission?.guest_arrival_confirmed === true }
+              : {
+                  ready: false,
+                  reason: serverPhotos.ok
+                    ? '服务器尚未确认本任务正式检查批次，请先返回检查与补充页完成提交。'
+                    : '暂时无法确认本任务服务器检查批次，请保留本机内容并稍后重试。',
+                  skipInspectionPhotos: false,
+                }
       if (generation !== refreshGenerationRef.current) return
       setPanelBatchStatus(status)
       setPanelBatchError(batch?.last_error || null)
+      setPanelRecoveredFromServer(!batch && serverFormalSubmission)
       setPanelVideoReadiness(videoReadiness)
       if (!skipInspectionPhotos && !videoReadiness.ready) needs.push(videoReadiness.reason || '检查与补充照片尚未完成本机保存')
       setMissing(needs)
@@ -189,7 +242,7 @@ export default function InspectionCompleteScreen(props: Props) {
     } finally {
       if (blocking) setLoading(false)
     }
-  }, [cleaningTaskId, inspectionPanelSourceId, props.route.params.taskId, skipInspectionPhotos, task])
+  }, [cleaningTaskId, inspectionPanelSourceId, props.route.params.taskId, skipInspectionPhotos, task, token])
 
   useEffect(() => {
     void refresh({ blocking: true })
@@ -448,7 +501,11 @@ export default function InspectionCompleteScreen(props: Props) {
             </Text>
           </View>
         ) : (
-          <Text style={panelBatchStatus === 'synced' ? styles.ok : styles.pending}>检查与补充照片已完整保存到本机，可继续拍摄视频</Text>
+          <Text testID={panelRecoveredFromServer ? 'inspection-server-submission-ready' : undefined} style={panelBatchStatus === 'synced' ? styles.ok : styles.pending}>
+            {panelRecoveredFromServer
+              ? '服务器已确认本任务正式检查批次，可继续拍摄视频'
+              : '检查与补充照片已完整保存到本机，可继续拍摄视频'}
+          </Text>
         )}
         {!skipInspectionPhotos && inspectionBatchStatusHint(panelBatchStatus, panelBatchError) ? (
           <Text style={panelBatchStatus === 'failed' || panelBatchStatus === 'partial_failed' ? styles.warn : styles.muted}>
