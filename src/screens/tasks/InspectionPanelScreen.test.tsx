@@ -22,6 +22,7 @@ const mockSuppliesCatalogItems = [
 ]
 
 let inspectionQueueListener: (() => void) | null = null
+const mockGetInspectionPanelBatch = jest.fn(async (_taskId?: string) => null)
 
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
@@ -55,7 +56,12 @@ jest.mock('../../lib/inspectionPanelSubmitQueue', () => ({
   createInspectionPanelLocalMedia: jest.fn(async () => ({ id: 'media-1', local_uri: 'file:///test.jpg' })),
   discardInspectionPanelBatch: jest.fn(async () => null),
   findInspectionPanelValidationIssue: jest.fn(() => null),
-  getInspectionPanelBatch: jest.fn(async () => null),
+  getInspectionPanelBatch: mockGetInspectionPanelBatch,
+  resolveInspectionPanelBatch: jest.fn(async (params: any) => ({
+    item: await mockGetInspectionPanelBatch(params.task_id),
+    matched_by: 'display_task_id',
+    ambiguous_count: 0,
+  })),
   inspectionPanelFailedStepDetails: jest.fn(() => []),
   inspectionPanelLocalMediaSummary: jest.fn(() => null),
   processInspectionPanelSubmitQueue: jest.fn(async () => null),
@@ -659,9 +665,10 @@ test('检查照片队列进度只刷新状态，不重新读取整份草稿', as
   const initialDraftReads = draft.getInspectionPanelDraft.mock.calls.length
   queue.getInspectionPanelBatch.mockResolvedValueOnce({
     task_id: 'w-inspection',
+    cleaning_task_id: 'cleaning-1',
     status: 'syncing',
     last_error: null,
-    snapshot: { room_photo_requirement: 'required' },
+    snapshot: { cleaning_task_id: 'cleaning-1', room_photo_requirement: 'required' },
   })
   await act(async () => {
     inspectionQueueListener?.()
@@ -692,5 +699,286 @@ test('同一检查任务的来源任务变化时会受控重读草稿', async ()
     </I18nProvider>,
   )
   await waitFor(() => expect(draft.getInspectionPanelDraft.mock.calls.length).toBeGreaterThan(initialDraftReads))
+  ui.unmount()
+})
+
+test('活动检查页从准确源任务恢复服务器正式批次并显示 MSQ4504E 六张照片', async () => {
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  const api = require('../../lib/api')
+  queue.getInspectionPanelBatch.mockReset().mockResolvedValue(null)
+  ;(queue.resolveInspectionPanelBatch as jest.Mock).mockImplementation(async (params: any) => ({
+    item: await queue.getInspectionPanelBatch(params.task_id),
+    matched_by: 'none',
+    ambiguous_count: 0,
+  }))
+  ;(api.getInspectionPhotos as jest.Mock).mockResolvedValueOnce({
+    items: [
+      { area: 'living', url: 'cleaning/msq/living.jpg' },
+      { area: 'sofa', url: 'cleaning/msq/sofa.jpg' },
+      { area: 'bedroom', url: 'cleaning/msq/bedroom-1.jpg' },
+      { area: 'bedroom', url: 'cleaning/msq/bedroom-2.jpg' },
+      { area: 'bedroom', url: 'cleaning/msq/bedroom-3.jpg' },
+      { area: 'bedroom', url: 'cleaning/msq/bedroom-4.jpg' },
+    ],
+    formal_submission: {
+      status: 'submitted',
+      submit_id: 'inspection_batch_msq4504e',
+      saved_at: '2026-10-24T00:39:02.000Z',
+      guest_arrival_confirmed: false,
+    },
+  })
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
+  const ui = render(
+    <I18nProvider>
+      <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-server-recovery', name: 'InspectionPanel', params: { taskId: 'w-inspection', sourceId: 'cleaning-1' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(api.getInspectionPhotos).toHaveBeenCalledWith('test-token', 'cleaning-1')
+    expect(ui.getByTestId('inspection-server-photos-restored').props.children).toBe('已从本任务服务器记录恢复 6 张检查照片。')
+    expect(ui.getAllByText('1/3').length).toBeGreaterThanOrEqual(1)
+    expect(ui.getByText('1/2')).toBeTruthy()
+    expect(ui.getByText('4/8')).toBeTruthy()
+    expect(ui.getByText('进入标记已完成')).toBeTruthy()
+    expect(ui.queryByText('添加')).toBeNull()
+  })
+  ui.unmount()
+})
+
+test('服务器读取失败保留本机待同步照片且不会把空白误报为已读取', async () => {
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  const api = require('../../lib/api')
+  queue.getInspectionPanelBatch.mockReset().mockResolvedValue({
+    submit_id: 'local-draft',
+    task_id: 'w-inspection',
+    cleaning_task_id: 'cleaning-1',
+    property_id: 'property-1',
+    property_code: 'TEST-1',
+    status: 'draft',
+    snapshot: {
+      task_id: 'w-inspection',
+      cleaning_task_id: 'cleaning-1',
+      room_photo_requirement: 'required',
+      restock_confirmed_sufficient: false,
+      restock: [],
+      room_photos: {
+        living: [{ id: 'pending-living', local_uri: 'file:///pending-living.jpg', uploaded_url: null, name: 'pending.jpg', mime_type: 'image/jpeg', captured_at: '2026-10-24T00:30:00.000Z' }],
+        sofa: [], bedroom: [], kitchen: [], bathroom: [], balcony: [],
+      },
+      cleaning_issue: [],
+      feedback: null,
+    },
+    steps: {},
+  })
+  ;(queue.resolveInspectionPanelBatch as jest.Mock).mockImplementation(async (params: any) => ({
+    item: await queue.getInspectionPanelBatch(params.task_id),
+    matched_by: 'display_task_id',
+    ambiguous_count: 0,
+  }))
+  ;(api.getInspectionPhotos as jest.Mock).mockRejectedValueOnce(new Error('offline'))
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
+  const ui = render(
+    <I18nProvider>
+      <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-server-failed', name: 'InspectionPanel', params: { taskId: 'w-inspection', sourceId: 'cleaning-1' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByTestId('inspection-server-photos-failed')).toBeTruthy()
+    expect(ui.getByTestId('inspection-photo-living-0')).toBeTruthy()
+    expect(ui.getAllByText('待重试').length).toBeGreaterThan(0)
+  })
+  ui.unmount()
+})
+
+test('本机批次来源冲突时正式服务器回执也不能绕过门禁', async () => {
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  const api = require('../../lib/api')
+  ;(queue.bindInspectionPanelCleaningTaskId as jest.Mock).mockClear()
+  ;(queue.resolveInspectionPanelBatch as jest.Mock).mockResolvedValue({
+    item: null,
+    matched_by: 'conflict',
+    ambiguous_count: 1,
+  })
+  ;(api.getInspectionPhotos as jest.Mock).mockResolvedValue({
+    items: [{ area: 'living', url: 'cleaning/fixture/living.jpg' }],
+    formal_submission: {
+      status: 'submitted',
+      submit_id: 'formal-submit-conflict-fixture',
+      saved_at: '2026-10-24T00:39:02.000Z',
+    },
+  })
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
+  const ui = render(
+    <I18nProvider>
+      <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-source-conflict', name: 'InspectionPanel', params: { taskId: 'w-inspection', sourceId: 'cleaning-1' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByTestId('inspection-source-batch-conflict')).toBeTruthy()
+    expect(ui.getByText(/本机检查批次与当前任务来源不一致/)).toBeTruthy()
+    expect(ui.queryByText('进入标记已完成')).toBeNull()
+    expect(queue.bindInspectionPanelCleaningTaskId).not.toHaveBeenCalled()
+  })
+  ui.unmount()
+})
+
+test('只为缺少来源的旧本机批次补绑定准确源任务', async () => {
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  const api = require('../../lib/api')
+  const legacyBatch = {
+    submit_id: 'legacy-waiting-source',
+    task_id: 'legacy-display-task',
+    cleaning_task_id: '',
+    property_id: 'property-1',
+    property_code: 'TEST-1',
+    status: 'pending_submit',
+    last_error: '已保存到本机，等待任务信息刷新后自动同步。',
+    snapshot: {
+      task_id: 'legacy-display-task',
+      cleaning_task_id: '',
+      property_id: 'property-1',
+      property_code: 'TEST-1',
+      room_photo_requirement: 'guest_arrival_confirmed',
+      restock_confirmed_sufficient: true,
+      restock: [],
+      room_photos: { living: [], sofa: [], bedroom: [], kitchen: [], bathroom: [], balcony: [] },
+      cleaning_issue: [],
+      feedback: null,
+    },
+    steps: {},
+  }
+  const boundBatch = {
+    ...legacyBatch,
+    cleaning_task_id: 'cleaning-1',
+    snapshot: { ...legacyBatch.snapshot, cleaning_task_id: 'cleaning-1' },
+  }
+  ;(queue.bindInspectionPanelCleaningTaskId as jest.Mock).mockClear().mockResolvedValue(boundBatch)
+  ;(queue.resolveInspectionPanelBatch as jest.Mock)
+    .mockResolvedValueOnce({ item: legacyBatch, matched_by: 'display_task_id', ambiguous_count: 0 })
+    .mockResolvedValue({ item: boundBatch, matched_by: 'display_task_id', ambiguous_count: 0 })
+  ;(api.getInspectionPhotos as jest.Mock).mockResolvedValue({
+    items: [],
+    formal_submission: { status: 'none', submit_id: null, saved_at: null },
+  })
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
+  const ui = render(
+    <I18nProvider>
+      <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-legacy-source-bind', name: 'InspectionPanel', params: { taskId: 'w-inspection', sourceId: 'cleaning-1' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(queue.bindInspectionPanelCleaningTaskId).toHaveBeenCalledTimes(1)
+    expect(queue.bindInspectionPanelCleaningTaskId).toHaveBeenCalledWith(expect.objectContaining({
+      task_id: 'legacy-display-task',
+      cleaning_task_id: 'cleaning-1',
+    }))
+    expect(ui.getByText('当前状态：待同步')).toBeTruthy()
+  })
+  ui.unmount()
+})
+
+test('展示任务 ID 变化后继续使用唯一同源本机批次的原存储键提交', async () => {
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  const draft = require('../../lib/inspectionPanelDraft')
+  const api = require('../../lib/api')
+  const sourceBatch = {
+    submit_id: 'old-local-batch',
+    task_id: 'old-display-task-id',
+    cleaning_task_id: 'cleaning-1',
+    property_id: 'property-1',
+    property_code: 'TEST-1',
+    status: 'draft',
+    snapshot: {
+      task_id: 'old-display-task-id',
+      cleaning_task_id: 'cleaning-1',
+      property_id: 'property-1',
+      property_code: 'TEST-1',
+      room_photo_requirement: 'required',
+      restock_confirmed_sufficient: true,
+      restock: [],
+      room_photos: {
+        living: [{ id: 'local-living', local_uri: 'file:///living.jpg', uploaded_url: null, name: 'living.jpg', mime_type: 'image/jpeg', captured_at: '2026-10-24T00:30:00.000Z' }],
+        sofa: [], bedroom: [], kitchen: [], bathroom: [], balcony: [],
+      },
+      cleaning_issue: [],
+      feedback: {
+        task_id: 'old-display-task-id',
+        updated_at: '2026-10-24T00:30:00.000Z',
+        kind: 'maintenance',
+        maintenanceDrafts: [{
+          clientId: 'feedback-old-display',
+          client_item_id: 'feedback-old-display',
+          area: null,
+          detail: '保留旧展示键下的问题草稿',
+          media: [],
+          submitAsCompleted: false,
+          completionNote: '',
+          completionAfterPhotos: [],
+        }],
+        deepCleaningDrafts: [],
+        dailyDrafts: [],
+      },
+    },
+    steps: {},
+  }
+  ;(queue.resolveInspectionPanelBatch as jest.Mock).mockResolvedValue({
+    item: sourceBatch,
+    matched_by: 'source_task_id',
+    ambiguous_count: 0,
+  })
+  ;(queue.saveInspectionPanelDraftBatch as jest.Mock).mockClear().mockResolvedValue(sourceBatch)
+  ;(queue.submitInspectionPanelBatch as jest.Mock).mockClear().mockResolvedValue({ ...sourceBatch, status: 'pending_submit' })
+  ;(queue.processInspectionPanelSubmitQueue as jest.Mock).mockClear().mockResolvedValue({ processed: 0, remaining: 1 })
+  ;(draft.setInspectionPanelDraft as jest.Mock).mockClear().mockResolvedValue(undefined)
+  ;(api.getInspectionPhotos as jest.Mock).mockReset().mockResolvedValue({
+    items: [],
+    formal_submission: { status: 'none', submit_id: null, saved_at: null },
+  })
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
+  const ui = render(
+    <I18nProvider>
+      <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-display-id-changed', name: 'InspectionPanel', params: { taskId: 'w-inspection', sourceId: 'cleaning-1' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByTestId('inspection-photo-living-0')).toBeTruthy())
+  const focusCalls = (navigation.addListener.mock.calls as unknown as any[][])
+    .filter((call) => call[0] === 'focus')
+  const focusCallback = focusCalls[focusCalls.length - 1]?.[1] as (() => void) | undefined
+  if (!focusCallback) throw new Error('focus listener was not registered')
+  await act(async () => {
+    focusCallback()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+  fireEvent.press(ui.getByText('房号正确，继续'))
+  await waitFor(() => expect(ui.queryByTestId('inspection-room-confirmation')).toBeNull())
+  fireEvent.press(ui.getByText('提交本页检查与补充'))
+
+  await waitFor(() => {
+    expect(draft.setInspectionPanelDraft).toHaveBeenCalledWith('old-display-task-id', expect.objectContaining({
+      task_id: 'old-display-task-id',
+      cleaning_task_id: 'cleaning-1',
+    }))
+    expect(queue.saveInspectionPanelDraftBatch).toHaveBeenCalledWith(expect.objectContaining({
+      task_id: 'old-display-task-id',
+      cleaning_task_id: 'cleaning-1',
+      snapshot: expect.objectContaining({
+        feedback: expect.objectContaining({
+          maintenanceDrafts: [expect.objectContaining({ detail: '保留旧展示键下的问题草稿' })],
+        }),
+      }),
+    }))
+    expect(queue.submitInspectionPanelBatch).toHaveBeenCalledWith('old-display-task-id')
+  })
   ui.unmount()
 })

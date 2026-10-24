@@ -5,6 +5,7 @@ import { I18nProvider } from '../../lib/i18n'
 
 let mockQueueItems: any[] = []
 let mockInspectionPanelQueueListener: (() => void) | null = null
+const mockGetInspectionPanelBatch = jest.fn(async (_taskId?: string) => null)
 const mockSnapshot: any = {
   items: [
     {
@@ -79,12 +80,18 @@ jest.mock('../../lib/auth', () => ({
 
 jest.mock('../../lib/api', () => ({
   deleteLockboxVideo: jest.fn(async () => ({})),
+  getInspectionPhotos: jest.fn(async () => ({ items: [], formal_submission: { status: 'none', submit_id: null, saved_at: null } })),
   uploadLockboxVideo: jest.fn(async () => ({})),
 }))
 
 jest.mock('../../lib/inspectionPanelSubmitQueue', () => ({
   bindInspectionPanelCleaningTaskId: jest.fn(async () => null),
-  getInspectionPanelBatch: jest.fn(async () => null),
+  getInspectionPanelBatch: mockGetInspectionPanelBatch,
+  resolveInspectionPanelBatch: jest.fn(async (params: any) => ({
+    item: await mockGetInspectionPanelBatch(params.task_id),
+    matched_by: 'display_task_id',
+    ambiguous_count: 0,
+  })),
   getInspectionPanelVideoReadiness: jest.fn((batch: any) => ({
     ready: !!batch?.snapshot,
     reason: batch?.snapshot ? null : '请先提交本页检查与补充，确保照片已保存到本机。',
@@ -116,6 +123,7 @@ beforeEach(() => {
   jest.spyOn(Alert, 'alert').mockImplementation(() => {})
 	const api = require('../../lib/api')
 	;(api.deleteLockboxVideo as jest.Mock).mockReset().mockResolvedValue({})
+	;(api.getInspectionPhotos as jest.Mock).mockReset().mockResolvedValue({ items: [], formal_submission: { status: 'none', submit_id: null, saved_at: null } })
 	;(api.uploadLockboxVideo as jest.Mock).mockReset().mockResolvedValue({})
 	const mediaQueue = require('../../lib/inspectionMediaQueue')
 	;(mediaQueue.enqueueInspectionMediaItem as jest.Mock).mockReset().mockResolvedValue({})
@@ -126,6 +134,11 @@ beforeEach(() => {
 	  mockInspectionPanelQueueListener = null
 	  const queue = require('../../lib/inspectionPanelSubmitQueue')
 	  ;(queue.getInspectionPanelBatch as jest.Mock).mockResolvedValue(null)
+	  ;(queue.resolveInspectionPanelBatch as jest.Mock).mockImplementation(async (params: any) => ({
+	    item: await queue.getInspectionPanelBatch(params.task_id),
+	    matched_by: 'display_task_id',
+	    ambiguous_count: 0,
+	  }))
 	  mockQueueItems = [
 	    {
 	      id: 'q1',
@@ -218,8 +231,10 @@ function mockNextQueueProcessingAsSaved(finalizationPending = false) {
 test('inspection queue event refreshes silently without restoring the blocking validation state', async () => {
   const queue = require('../../lib/inspectionPanelSubmitQueue')
   ;(queue.getInspectionPanelBatch as jest.Mock).mockResolvedValue({
+    task_id: 'w1',
+    cleaning_task_id: 'ct1',
     status: 'synced',
-    snapshot: readyInspectionSnapshot(),
+    snapshot: { ...readyInspectionSnapshot(), cleaning_task_id: 'ct1' },
   })
   mockSnapshot.items[0].title = 'X 检查后挂钥匙'
   mockSnapshot.items[0].inspection_scope = 'inspect_and_hang'
@@ -281,7 +296,7 @@ test('replacement video is queued before the old pending local video is removed'
     </I18nProvider>,
   )
 
-  await waitFor(() => expect(ui.getByTestId('inspection-complete-upload-video')).toBeTruthy())
+  await waitFor(() => expect(ui.getByTestId('inspection-complete-upload-video').props.accessibilityState?.disabled).toBe(false))
   fireEvent.press(ui.getByTestId('inspection-complete-upload-video'))
 
   await waitFor(() => expect(mediaQueue.removeInspectionMediaItem).toHaveBeenCalledWith('q-old'))
@@ -319,7 +334,7 @@ test('failed replacement enqueue keeps the old pending local video', async () =>
     </I18nProvider>,
   )
 
-  await waitFor(() => expect(ui.getByTestId('inspection-complete-upload-video')).toBeTruthy())
+  await waitFor(() => expect(ui.getByTestId('inspection-complete-upload-video').props.accessibilityState?.disabled).toBe(false))
   fireEvent.press(ui.getByTestId('inspection-complete-upload-video'))
 
   await waitFor(() => expect(mediaQueue.enqueueInspectionMediaItem).toHaveBeenCalled())
@@ -602,7 +617,7 @@ test('blocks ordinary inspection video until the local photo batch is ready', as
   )
 
   await waitFor(() => {
-    expect(ui.getByText(/请先提交本页检查与补充/)).toBeTruthy()
+    expect(ui.getByText(/服务器尚未确认本任务正式检查批次/)).toBeTruthy()
     expect(ui.getByText('先完成检查与补充')).toBeTruthy()
   })
 
@@ -642,5 +657,183 @@ test('guest-arrival-confirmed batch can proceed to video without room photos', a
   await waitFor(() => {
     expect(mediaQueue.processInspectionMediaQueue).toHaveBeenCalledWith('t1')
     expect(api.uploadLockboxVideo).not.toHaveBeenCalled()
+  })
+})
+
+test('accepts an exact formal server inspection submission when the local batch is unavailable', async () => {
+  const api = require('../../lib/api')
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  mockSnapshot.items[0].title = 'MSQ4504E 检查'
+  mockSnapshot.items[0].source_id = 'source-msq4504e-fixture'
+  mockSnapshot.items[0].inspection_scope = 'inspect_and_hang'
+  mockSnapshot.items[0].available_actions = [
+    { id: 'submit_inspection', enabled: true, target: 'InspectionPanel' },
+    { id: 'upload_access_video', enabled: true, target: 'InspectionComplete' },
+  ]
+  ;(queue.resolveInspectionPanelBatch as jest.Mock).mockResolvedValue({
+    item: null,
+    matched_by: 'none',
+    ambiguous_count: 0,
+  })
+  ;(api.getInspectionPhotos as jest.Mock).mockResolvedValue({
+    items: [
+      { id: 'photo-living', category: 'living', url: 'https://example.com/living.jpg' },
+      { id: 'photo-sofa', category: 'sofa', url: 'https://example.com/sofa.jpg' },
+      { id: 'photo-bedroom-1', category: 'bedroom', url: 'https://example.com/bedroom-1.jpg' },
+      { id: 'photo-bedroom-2', category: 'bedroom', url: 'https://example.com/bedroom-2.jpg' },
+      { id: 'photo-bedroom-3', category: 'bedroom', url: 'https://example.com/bedroom-3.jpg' },
+      { id: 'photo-bedroom-4', category: 'bedroom', url: 'https://example.com/bedroom-4.jpg' },
+    ],
+    formal_submission: {
+      status: 'submitted',
+      submit_id: 'inspection-batch-msq4504e-fixture',
+      saved_at: '2026-10-24T00:39:02.000Z',
+      guest_arrival_confirmed: false,
+    },
+  })
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
+  const InspectionCompleteScreen = require('./InspectionCompleteScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <InspectionCompleteScreen
+        navigation={navigation as any}
+        route={{ key: 'inspection-complete-server-recovery', name: 'InspectionComplete', params: { taskId: 'w1' } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(api.getInspectionPhotos).toHaveBeenCalledWith('t1', 'source-msq4504e-fixture')
+    expect(ui.getByTestId('inspection-server-submission-ready')).toBeTruthy()
+    expect(ui.getByText('服务器已确认本任务正式检查批次，可继续拍摄视频')).toBeTruthy()
+    expect(ui.getByTestId('inspection-complete-upload-video').props.accessibilityState?.disabled).toBe(false)
+  })
+})
+
+test('keeps a local draft authoritative over an older formal server submission', async () => {
+  const api = require('../../lib/api')
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  mockSnapshot.items[0].inspection_scope = 'inspect_and_hang'
+  mockSnapshot.items[0].available_actions = [
+    { id: 'submit_inspection', enabled: true, target: 'InspectionPanel' },
+    { id: 'upload_access_video', enabled: true, target: 'InspectionComplete' },
+  ]
+  ;(queue.resolveInspectionPanelBatch as jest.Mock).mockResolvedValue({
+    item: { status: 'draft', snapshot: { room_photos: {}, restock: [] } },
+    matched_by: 'source_task_id',
+    ambiguous_count: 0,
+  })
+  ;(queue.getInspectionPanelVideoReadiness as jest.Mock).mockReturnValue({
+    ready: false,
+    reason: '本机有尚未提交的新检查内容。',
+    skipInspectionPhotos: false,
+  })
+  ;(api.getInspectionPhotos as jest.Mock).mockResolvedValue({
+    items: [{ id: 'server-photo', category: 'living', url: 'https://example.com/server.jpg' }],
+    formal_submission: {
+      status: 'submitted',
+      submit_id: 'older-formal-submit',
+      saved_at: '2026-10-24T00:39:02.000Z',
+    },
+  })
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
+  const InspectionCompleteScreen = require('./InspectionCompleteScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <InspectionCompleteScreen
+        navigation={navigation as any}
+        route={{ key: 'inspection-complete-local-draft', name: 'InspectionComplete', params: { taskId: 'w1' } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText(/本机有尚未提交的新检查内容/)).toBeTruthy()
+    expect(ui.queryByTestId('inspection-server-submission-ready')).toBeNull()
+    expect(ui.getByTestId('inspection-complete-upload-video').props.accessibilityState?.disabled).toBe(true)
+  })
+})
+
+test('fails closed when multiple local inspection rounds match the same source task', async () => {
+  const api = require('../../lib/api')
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  mockSnapshot.items[0].inspection_scope = 'inspect_and_hang'
+  mockSnapshot.items[0].available_actions = [
+    { id: 'submit_inspection', enabled: true, target: 'InspectionPanel' },
+    { id: 'upload_access_video', enabled: true, target: 'InspectionComplete' },
+  ]
+  ;(queue.resolveInspectionPanelBatch as jest.Mock).mockResolvedValue({
+    item: null,
+    matched_by: 'ambiguous',
+    ambiguous_count: 2,
+  })
+  ;(api.getInspectionPhotos as jest.Mock).mockResolvedValue({
+    items: [{ id: 'server-photo', category: 'living', url: 'https://example.com/server.jpg' }],
+    formal_submission: {
+      status: 'submitted',
+      submit_id: 'formal-submit',
+      saved_at: '2026-10-24T00:39:02.000Z',
+    },
+  })
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
+  const InspectionCompleteScreen = require('./InspectionCompleteScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <InspectionCompleteScreen
+        navigation={navigation as any}
+        route={{ key: 'inspection-complete-ambiguous-rounds', name: 'InspectionComplete', params: { taskId: 'w1' } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText(/本机存在多个同源检查批次/)).toBeTruthy()
+    expect(ui.queryByTestId('inspection-server-submission-ready')).toBeNull()
+    expect(ui.getByTestId('inspection-complete-upload-video').props.accessibilityState?.disabled).toBe(true)
+  })
+})
+
+test('fails closed when the exact local display batch conflicts with the current source', async () => {
+  const api = require('../../lib/api')
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  ;(queue.bindInspectionPanelCleaningTaskId as jest.Mock).mockClear()
+  mockSnapshot.items[0].inspection_scope = 'inspect_and_hang'
+  mockSnapshot.items[0].available_actions = [
+    { id: 'submit_inspection', enabled: true, target: 'InspectionPanel' },
+    { id: 'upload_access_video', enabled: true, target: 'InspectionComplete' },
+  ]
+  ;(queue.resolveInspectionPanelBatch as jest.Mock).mockResolvedValue({
+    item: null,
+    matched_by: 'conflict',
+    ambiguous_count: 1,
+  })
+  ;(api.getInspectionPhotos as jest.Mock).mockResolvedValue({
+    items: [{ area: 'living', url: 'https://example.com/server.jpg' }],
+    formal_submission: {
+      status: 'submitted',
+      submit_id: 'formal-submit-conflict-fixture',
+      saved_at: '2026-10-24T00:39:02.000Z',
+    },
+  })
+  const navigation = { goBack: jest.fn(), navigate: jest.fn(), addListener: jest.fn(() => () => {}) }
+  const InspectionCompleteScreen = require('./InspectionCompleteScreen').default as React.ComponentType<any>
+
+  const ui = render(
+    <I18nProvider>
+      <InspectionCompleteScreen
+        navigation={navigation as any}
+        route={{ key: 'inspection-complete-source-conflict', name: 'InspectionComplete', params: { taskId: 'w1' } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(ui.getByText(/本机检查批次与当前任务来源不一致/)).toBeTruthy()
+    expect(ui.queryByTestId('inspection-server-submission-ready')).toBeNull()
+    expect(ui.getByTestId('inspection-complete-upload-video').props.accessibilityState?.disabled).toBe(true)
+    expect(queue.bindInspectionPanelCleaningTaskId).not.toHaveBeenCalled()
   })
 })
