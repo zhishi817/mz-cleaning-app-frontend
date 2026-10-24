@@ -254,12 +254,19 @@ export function cleaningTaskTitleSuffix(task: {
   end_time?: any
   checkout_time?: any
   checkin_time?: any
+  deferred_inspection_merged?: any
+  deferred_inspection_current_day_checkout?: any
 }) {
   if (shouldUseDeferredInspectionTitle(task)) return '延期检查'
   const checkoutTime = String(task?.start_time ?? task?.checkout_time ?? '').trim()
   const checkinTime = String(task?.end_time ?? task?.checkin_time ?? '').trim()
-  const hasCheckout = !!checkoutTime
+  const deferredInspectionMerged = task?.deferred_inspection_merged === true
+  const authoritativeCurrentDayCheckout = task?.deferred_inspection_current_day_checkout
+  const hasCheckout = deferredInspectionMerged && typeof authoritativeCurrentDayCheckout === 'boolean'
+    ? authoritativeCurrentDayCheckout
+    : !!checkoutTime
   const hasCheckin = !!checkinTime
+  if (deferredInspectionMerged && !hasCheckout && !hasCheckin) return '延期检查'
   if (!hasCheckout && !hasCheckin) return ''
   return `${hasCheckout ? '退房' : ''}${hasCheckout && hasCheckin ? ' ' : ''}${hasCheckin ? '入住' : ''}`
 }

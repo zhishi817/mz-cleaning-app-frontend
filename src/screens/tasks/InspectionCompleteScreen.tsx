@@ -3,9 +3,9 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensio
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
-import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { API_BASE_URL } from '../../config/env'
+import CleaningMediaVideo from '../../components/CleaningMediaVideo'
+import { buildCleaningMediaVideoSource } from '../../lib/cleaningMedia'
 import { deleteLockboxVideo, getInspectionPhotos } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import {
@@ -65,24 +65,6 @@ function noticeToneStylePair(tone: TaskTone) {
   }
 }
 
-function normalizeBase(base: string) {
-  return String(base || '').trim().replace(/\/+$/g, '')
-}
-
-function toAbsoluteUrl(rawUrl: any) {
-  const s0 = String(rawUrl ?? '').trim()
-  if (!s0) return ''
-  if (/^https?:\/\//i.test(s0)) return s0
-  if (s0.startsWith('//')) return `https:${s0}`
-  const base = normalizeBase(API_BASE_URL)
-  const stripAuth = base.replace(/\/auth\/?$/g, '')
-  const stripApi = stripAuth.replace(/\/api\/?$/g, '')
-  const root = stripApi || stripAuth || base
-  if (!root) return s0
-  if (s0.startsWith('/')) return `${root}${s0}`
-  return s0
-}
-
 function staleQueueUpload(item: InspectionMediaQueueItem | null, now = Date.now()) {
   if (!item || item.upload_status !== 'uploading') return false
   const startedAt = new Date(String(item.last_attempt_at || item.uploaded_at || item.created_at || '')).getTime()
@@ -132,6 +114,16 @@ export default function InspectionCompleteScreen(props: Props) {
     ? ''
     : String((task as any)?.lockbox_video_url || '').trim()
   const effectiveLockboxUrl = String(lockboxItem?.uploaded_url || lockboxItem?.local_uri || lockboxFromTask || '').trim() || null
+  const lockboxPlaybackUrl = !lockboxItem?.business_saved && lockboxItem?.local_uri
+    ? String(lockboxItem.local_uri).trim()
+    : effectiveLockboxUrl
+  const lockboxVideoSource = lockboxPlaybackUrl?.startsWith('file:')
+    ? { uri: lockboxPlaybackUrl }
+    : buildCleaningMediaVideoSource(token, lockboxPlaybackUrl, {
+        accessTaskId: cleaningTaskId,
+        accessSourceIds: [cleaningTaskId],
+        mediaScope: isSelfCompleteKeyHandover ? 'cleaner' : 'inspector',
+      })
   const lockboxSaved = !!lockboxItem?.business_saved || !!lockboxFromTask
   const checkinTime = String((task as any)?.end_time || (task as any)?.checkin_time || '').trim()
   const isEarlyCheckinSkipAttempt = routeSkipInspectionPhotos
@@ -550,13 +542,7 @@ export default function InspectionCompleteScreen(props: Props) {
         </View>
         {effectiveLockboxUrl ? (
           <View style={styles.videoWrap}>
-            <Video
-              source={{ uri: toAbsoluteUrl(effectiveLockboxUrl) }}
-              style={styles.video}
-              resizeMode={ResizeMode.CONTAIN}
-              shouldPlay={false}
-              useNativeControls
-            />
+            <CleaningMediaVideo source={lockboxVideoSource} />
           </View>
         ) : null}
         {lockboxUiStatus.phase !== 'none' ? (

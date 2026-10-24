@@ -17,6 +17,7 @@ const baseMockTask = {
 const mockSnapshot = { items: [{ ...baseMockTask }] }
 
 let mockLockboxQueueItems: any[] = []
+let mockInspectionMode = 'self_complete'
 
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }))
 jest.mock('expo-av', () => {
@@ -34,7 +35,7 @@ jest.mock('../../lib/workTasksStore', () => ({
   patchWorkTaskItem: jest.fn(async () => {}),
   subscribeWorkTasks: jest.fn(() => () => {}),
 }))
-jest.mock('../../lib/cleaningInspection', () => ({ effectiveInspectionMode: () => 'self_complete' }))
+jest.mock('../../lib/cleaningInspection', () => ({ effectiveInspectionMode: () => mockInspectionMode }))
 jest.mock('../../lib/cleaningConsumablesDraft', () => ({
   deleteCleaningConsumablesPhoto: jest.fn(),
   enqueueCleaningConsumablesMediaCleanup: jest.fn(async () => {}),
@@ -138,6 +139,7 @@ beforeEach(() => {
   imagePicker.requestCameraPermissionsAsync.mockResolvedValue({ granted: true })
   imagePicker.launchCameraAsync.mockResolvedValue({ canceled: true, assets: [] })
   mockSuppliesCatalogState.items = []
+  mockInspectionMode = 'self_complete'
   const draft = require('../../lib/cleaningConsumablesDraft')
   draft.getCleaningConsumablesDraft.mockClear()
   draft.setCleaningConsumablesDraft.mockClear()
@@ -210,6 +212,31 @@ test('自完成未结束任务先确认房号，已结束任务直接查看', as
     </I18nProvider>,
   )
   await waitFor(() => expect(completed.queryByTestId('self-complete-room-confirmation')).toBeNull())
+})
+
+test('活动普通同日检查不会显示自完成挂钥匙要求，并继续阻止误入自完成提交页', async () => {
+  mockInspectionMode = 'same_day'
+  mockSnapshot.items[0].task_type = 'checkout_clean'
+  ;(mockSnapshot.items[0] as any).status = 'in_progress'
+  const alertSpy = jest.spyOn(require('react-native').Alert, 'alert').mockImplementation((...args: unknown[]) => {
+    const buttons = args[2] as any[] | undefined
+    buttons?.[0]?.onPress?.()
+  })
+  const CleaningSelfCompleteScreen = require('./CleaningSelfCompleteScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }
+
+  const ui = render(
+    <I18nProvider>
+      <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'same-day-active', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => {
+    expect(alertSpy).toHaveBeenCalledWith('待确认检查安排', expect.any(String), expect.any(Array))
+    expect(navigation.goBack).toHaveBeenCalled()
+  })
+  expect(ui.queryByText('挂钥匙视频')).toBeNull()
+  alertSpy.mockRestore()
 })
 
 test('Root 结构化已挂钥匙跳过房号确认，明确无事实时不信任 raw keys_hung', async () => {
@@ -402,7 +429,116 @@ test('清洁历史记录恢复原页面顺序，只读取准确来源并禁止�
     const rendered = JSON.stringify(ui.toJSON())
     expect(rendered.indexOf('消耗品补充')).toBeLessThan(rendered.indexOf('房源问题反馈'))
     expect(rendered.indexOf('房源问题反馈')).toBeLessThan(rendered.indexOf('房间完成照片'))
-    expect(rendered.indexOf('房间完成照片')).toBeLessThan(rendered.indexOf('标记已完成'))
+    expect(rendered.indexOf('房间完成照片')).toBeLessThan(rendered.indexOf('完成记录'))
+  } finally {
+    mockSnapshot.items[0] = previousTask
+  }
+})
+
+test('普通同日检查历史沿用清洁只读页面，不套用自完成挂钥匙门槛，并恢复准确同源资料', async () => {
+  mockInspectionMode = 'same_day'
+  mockSuppliesCatalogState.items = [{ id: 'current-only', label: '当前目录新品', required: true }]
+  const previousTask = { ...mockSnapshot.items[0] }
+  mockSnapshot.items[0] = {
+    ...previousTask,
+    task_type: 'checkout_clean',
+    status: 'done',
+    work_record_read_only: true,
+    restock_items: [
+      { item_id: 'paper', label: '卷纸', qty: 2, note: '已补两卷', status: 'restocked', photo_url: 'cleaning/media/restock-paper.jpg' },
+      { item_id: 'soap', label: '洗手液', qty: null, status: 'unavailable', photo_url: 'cleaning/media/restock-soap.jpg' },
+      { item_id: 'towels', label: '毛巾', qty: 0, status: 'restocked' },
+    ],
+    read_only_views: {
+      media_scope: 'cleaner',
+      media_source_ids: ['cleaning-1'],
+      cleaner_photos: true,
+      guest_key_photo: true,
+      lockbox_video: false,
+    },
+  } as any
+  const api = require('../../lib/api')
+  api.getWorkTaskFormPhotos.mockResolvedValue({
+    items: [
+      { id: 'key', task_id: 'cleaning-1', source: 'key', area: 'guest_key', url: 'cleaning/media/key.jpg' },
+      { id: 'completion', task_id: 'cleaning-1', source: 'completion', area: 'living', url: 'cleaning/media/living.jpg' },
+      { id: 'consumable', task_id: 'cleaning-1', source: 'consumable', item_id: 'paper', label: '卷纸', url: 'cleaning/media/consumable-paper.jpg' },
+      { id: 'restock', task_id: 'cleaning-1', source: 'restock', item_id: 'paper', label: '卷纸', url: 'cleaning/media/restock-paper.jpg' },
+      { id: 'inspection', task_id: 'cleaning-1', source: 'inspection', area: 'kitchen', url: 'cleaning/media/inspection-must-not-show.jpg' },
+      { id: 'video', task_id: 'cleaning-1', source: 'lockbox_video', area: 'key_handover', url: 'cleaning/media/video-must-not-be-required.mov' },
+      { id: 'wrong-source', task_id: 'other-cleaning', source: 'completion', area: 'sofa', url: 'cleaning/media/wrong-source.jpg' },
+    ],
+  })
+  const CleaningSelfCompleteScreen = require('./CleaningSelfCompleteScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'same-day-history', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning', readOnly: true } }} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByTestId('cleaning-history-key-photo')).toBeTruthy()
+      expect(ui.getByTestId('completion-photo-living-0')).toBeTruthy()
+      expect(ui.getByText('已保存数量：2')).toBeTruthy()
+      expect(ui.getByText('已保存数量：0')).toBeTruthy()
+      expect(ui.getByText('备注：已补两卷')).toBeTruthy()
+      expect(ui.getByText('卷纸')).toBeTruthy()
+      expect(ui.getByText('洗手液')).toBeTruthy()
+      expect(ui.getByText('毛巾')).toBeTruthy()
+    })
+    expect(ui.queryByText('已保存数量：1')).toBeNull()
+    expect(ui.queryByTestId('self-restock-paper-sufficient')).toBeNull()
+    expect(ui.queryByTestId('self-restock-paper-restocked')).toBeNull()
+    expect(ui.queryByTestId('self-restock-paper-carry-forward')).toBeNull()
+    expect(ui.queryByPlaceholderText('补充数量（可选）')).toBeNull()
+    expect(ui.queryByPlaceholderText('备注（可选）')).toBeNull()
+    expect(ui.queryByPlaceholderText('添加其他补充项（可选）')).toBeNull()
+    expect(ui.queryByText('拍补货凭证')).toBeNull()
+    expect(ui.queryByText('继续拍凭证 (1)')).toBeNull()
+    expect(ui.queryByText('提交消耗品补充')).toBeNull()
+    expect(ui.queryByText('当前目录新品')).toBeNull()
+    expect(ui.queryByTestId('completion-photo-sofa-0')).toBeNull()
+    expect(ui.queryByText('挂钥匙视频')).toBeNull()
+    expect(ui.queryByText('未满足')).toBeNull()
+    expect(ui.queryByText('未提交')).toBeNull()
+    expect(ui.getByText('普通同日检查任务由检查流程负责挂钥匙；清洁历史这里只展示清洁本人已保存的内容。')).toBeTruthy()
+    expect(JSON.stringify(ui.toJSON())).not.toContain('inspection-must-not-show.jpg')
+  } finally {
+    mockSnapshot.items[0] = previousTask
+  }
+})
+
+test('真正自完成历史仅只读显示本次挂钥匙记录，不把缺少记录标为待上传', async () => {
+  mockInspectionMode = 'self_complete'
+  mockSuppliesCatalogState.items = [{ id: 'current-only', label: '当前目录新品', required: true }]
+  const previousTask = { ...mockSnapshot.items[0] }
+  mockSnapshot.items[0] = {
+    ...previousTask,
+    task_type: 'checkout_clean',
+    status: 'done',
+    work_record_read_only: true,
+    read_only_views: { media_scope: 'cleaner', media_source_ids: ['cleaning-1'], cleaner_photos: true, lockbox_video: true },
+  } as any
+  const api = require('../../lib/api')
+  api.getWorkTaskFormPhotos.mockResolvedValue({ items: [] })
+  const CleaningSelfCompleteScreen = require('./CleaningSelfCompleteScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'self-complete-history-empty', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning', readOnly: true } }} />
+      </I18nProvider>,
+    )
+    await waitFor(() => expect(ui.getByText('本次自完成记录没有已保存的挂钥匙视频。')).toBeTruthy())
+    expect(ui.queryByText('未上传')).toBeNull()
+    expect(ui.queryByText('完成前请上传挂钥匙视频，可重复拍摄覆盖。')).toBeNull()
+    expect(ui.queryByText('标记已完成')).toBeNull()
+    expect(ui.queryByText('当前目录新品')).toBeNull()
+    expect(ui.getByText('完成记录')).toBeTruthy()
   } finally {
     mockSnapshot.items[0] = previousTask
   }
@@ -488,14 +624,21 @@ test('清洁历史照片首次读取失败后可在返回页面时重试', async
         <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'cleaning-history-retry', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning', readOnly: true } }} />
       </I18nProvider>,
     )
-    await waitFor(() => expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(1))
+    await waitFor(() => {
+      expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(1)
+      expect(ui.getByText('资料暂时读取失败，页面不会把它误显示成“未拍”或“未提交”。')).toBeTruthy()
+      expect(ui.queryByText('未满足')).toBeNull()
+      expect(ui.queryByText('本次未保存照片')).toBeNull()
+      expect(ui.getAllByText('本区域照片尚未读取成功，请在页面上方重试。').length).toBeGreaterThan(0)
+    })
     await act(async () => {
-      focusRef.current?.()
+      fireEvent.press(ui.getByTestId('cleaning-history-retry'))
     })
     await waitFor(() => {
       expect(api.getWorkTaskFormPhotos).toHaveBeenCalledTimes(2)
       expect(ui.getByTestId('completion-photo-living-0')).toBeTruthy()
     })
+    expect(focusRef.current).toEqual(expect.any(Function))
   } finally {
     mockSnapshot.items[0] = previousTask
   }

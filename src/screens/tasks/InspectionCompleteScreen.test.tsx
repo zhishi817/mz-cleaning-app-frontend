@@ -213,6 +213,17 @@ test('self-complete cleaner can record this task key handover without inspection
   expect(ui.queryByText('进入检查与补充')).toBeNull()
 })
 
+test('uploaded object awaiting business save still plays the preserved local video', async () => {
+  mockQueueItems[0] = {
+    ...mockQueueItems[0], local_uri: 'file:///synthetic/pending-video.mov',
+    uploaded_url: 'https://synthetic.r2.dev/cleaning/pending-video.mov', business_saved: false,
+  }
+  const Screen = require('./InspectionCompleteScreen').default as React.ComponentType<any>
+  const ui = render(<I18nProvider><Screen navigation={{ goBack: jest.fn(), navigate: jest.fn(), addListener: jest.fn(() => () => {}) }} route={{ key: 'pending-business-save', name: 'InspectionComplete', params: { taskId: 'w1' } }} /></I18nProvider>)
+  await waitFor(() => expect(ui.getByTestId('video').props.source).toEqual({ uri: 'file:///synthetic/pending-video.mov' }))
+  expect(require('../../lib/inspectionMediaQueue').removeInspectionMediaItem).not.toHaveBeenCalled()
+})
+
 function mockNextQueueProcessingAsSaved(finalizationPending = false) {
   const mediaQueue = require('../../lib/inspectionMediaQueue')
   ;(mediaQueue.processInspectionMediaQueue as jest.Mock).mockImplementationOnce(async () => {

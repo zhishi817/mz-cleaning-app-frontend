@@ -82,6 +82,7 @@ export function executionTaskIdsForRole(task: any, roleKind?: any) {
 }
 
 export function checkoutTimeForDisplay(task: any) {
+  if (task?.deferred_inspection_merged === true && task?.deferred_inspection_current_day_checkout === false) return ''
   const display = turnoverDisplayOf(task)
   return cleanText(display?.checkout_time) || cleanText(task?.start_time || task?.checkout_time)
 }
@@ -97,6 +98,7 @@ export function guestRequestForDisplay(task: any) {
 }
 
 export function isLateCheckoutDisplay(task: any, checkoutTime?: string) {
+  if (task?.deferred_inspection_merged === true && task?.deferred_inspection_current_day_checkout === false) return false
   const display = turnoverDisplayOf(task)
   if (typeof display?.is_late_checkout === 'boolean') return display.is_late_checkout
   const value = cleanText(checkoutTime) || checkoutTimeForDisplay(task)

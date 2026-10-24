@@ -75,6 +75,7 @@ type SupplyItemState = {
 }
 
 type StatusTone = 'success' | 'pending' | 'info' | 'neutral'
+type HistoricalLoadState = 'idle' | 'loading' | 'loaded' | 'error'
 
 const STATUS_TONE_COLORS: Record<StatusTone, { bg: string; border: string; text: string }> = {
   success: { bg: '#ECFDF5', border: '#A7F3D0', text: '#047857' },
@@ -264,7 +265,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   const isStayoverTask = taskType === 'stayover_clean'
   const inspectionMode = effectiveInspectionMode(task as any)
   const requiresConsumables = !isStayoverTask
-  const requiresLockboxVideo = !isStayoverTask
+  const requiresLockboxVideo = !isStayoverTask && inspectionMode === 'self_complete'
 
   const [completion, setCompletion] = useState<Record<PhotoArea, string[]>>(emptyCompletionPhotos)
   const completionRef = useRef(completion)
@@ -272,9 +273,12 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   const completionWatermarksRef = useRef<Record<string, string>>({})
   const [lockboxItem, setLockboxItem] = useState<InspectionMediaQueueItem | null>(null)
   const [historicalLockboxVideo, setHistoricalLockboxVideo] = useState<{ reference: string; taskId: string } | null>(null)
+  const [historicalKeyPhoto, setHistoricalKeyPhoto] = useState<{ reference: string; taskId: string } | null>(null)
+  const [historicalLoadState, setHistoricalLoadState] = useState<HistoricalLoadState>('idle')
   const [historicalMediaAppliedKey, setHistoricalMediaAppliedKey] = useState('')
   const historicalMediaVisible = !readOnly || historicalMediaAppliedKey === historicalRequestKey
   const visibleHistoricalLockboxVideo = historicalMediaVisible ? historicalLockboxVideo : null
+  const visibleHistoricalKeyPhoto = historicalMediaVisible ? historicalKeyPhoto : null
   const lockboxFromTask = readOnly ? '' : String((task as any)?.lockbox_video_url || '').trim()
   const lockboxUrl = String(visibleHistoricalLockboxVideo?.reference || lockboxItem?.uploaded_url || lockboxItem?.local_uri || lockboxFromTask || '').trim() || null
   const lockboxBusinessSaved = !!visibleHistoricalLockboxVideo || !!lockboxItem?.business_saved || !!lockboxFromTask
@@ -310,6 +314,10 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     [completion, historicalMediaVisible],
   )
   const completionOk = useMemo(() => requiredAreas.every(a => (visibleCompletion[a] || []).length > 0), [requiredAreas, visibleCompletion])
+  const completionPhotoCount = useMemo(
+    () => completionAreas.reduce((count, area) => count + (visibleCompletion[area] || []).length, 0),
+    [completionAreas, visibleCompletion],
+  )
 
   const [suppliesSubmitted, setSuppliesSubmitted] = useState(false)
   const [supplies, setSupplies] = useState<SupplyItemState[]>([])
@@ -329,23 +337,43 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     if (suppliesCatalog.isFromCache || suppliesCatalog.refreshing) return '当前显示本地缓存，正在同步最新补品清单。'
     return ''
   }, [suppliesCatalog.error, suppliesCatalog.isFromCache, suppliesCatalog.items.length, suppliesCatalog.refreshing])
-  const showCatalogErrorCard = !!suppliesCatalog.error && !suppliesCatalog.items.length
+  const showCatalogErrorCard = !readOnly && !!suppliesCatalog.error && !suppliesCatalog.items.length
 
   const lockboxOk = !requiresLockboxVideo || lockboxBusinessSaved
   const pendingSuppliesSubmit = suppliesSubmitStatus !== 'draft' && suppliesSubmitStatus !== 'synced'
   const visibleSuppliesSubmitStatus = historicalSuppliesVisible ? suppliesSubmitStatus : 'draft'
   const visiblePendingSuppliesSubmit = visibleSuppliesSubmitStatus !== 'draft' && visibleSuppliesSubmitStatus !== 'synced'
-  const suppliesSummaryTone: StatusTone = visibleSuppliesSubmitted || visibleSuppliesSubmitStatus === 'synced' ? 'success' : visiblePendingSuppliesSubmit ? 'info' : 'pending'
-  const suppliesSummaryText = visibleSuppliesSubmitted || visibleSuppliesSubmitStatus === 'synced' ? '已提交' : visiblePendingSuppliesSubmit ? '待同步' : '未提交'
-  const photoSummaryTone: StatusTone = completionOk ? 'success' : 'pending'
-  const photoSummaryText = completionOk ? '已满足' : '未满足'
-  const lockboxSyncStatus = selfCompleteLockboxSyncStatus(lockboxItem, lockboxBusinessSaved, requiresLockboxVideo)
+  const historicalRecordsLoaded = readOnly && historicalLoadState === 'loaded'
+  const suppliesSummaryTone: StatusTone = readOnly
+    ? historicalLoadState === 'loading' ? 'info' : historicalLoadState === 'error' ? 'pending' : visibleSupplies.length || visibleSuppliesSubmitted ? 'success' : 'neutral'
+    : visibleSuppliesSubmitted || visibleSuppliesSubmitStatus === 'synced' ? 'success' : visiblePendingSuppliesSubmit ? 'info' : 'pending'
+  const suppliesSummaryText = readOnly
+    ? historicalLoadState === 'loading' ? '读取中' : historicalLoadState === 'error' ? '读取失败' : visibleSupplies.length || visibleSuppliesSubmitted ? '已记录' : '无记录'
+    : visibleSuppliesSubmitted || visibleSuppliesSubmitStatus === 'synced' ? '已提交' : visiblePendingSuppliesSubmit ? '待同步' : '未提交'
+  const photoSummaryTone: StatusTone = readOnly
+    ? historicalLoadState === 'loading' ? 'info' : historicalLoadState === 'error' ? 'pending' : completionPhotoCount ? 'success' : 'neutral'
+    : completionOk ? 'success' : 'pending'
+  const photoSummaryText = readOnly
+    ? historicalLoadState === 'loading' ? '读取中' : historicalLoadState === 'error' ? '读取失败' : completionPhotoCount ? `${completionPhotoCount} 张` : '无记录'
+    : completionOk ? '已满足' : '未满足'
+  const activeLockboxSyncStatus = selfCompleteLockboxSyncStatus(lockboxItem, lockboxBusinessSaved, requiresLockboxVideo)
+  const lockboxSyncStatus = readOnly
+    ? historicalLoadState === 'loading'
+      ? { label: '读取中', tone: 'info' as StatusTone, hint: '正在读取本次任务已保存的挂钥匙视频。' }
+      : historicalLoadState === 'error'
+        ? { label: '读取失败', tone: 'pending' as StatusTone, hint: '本次任务资料读取失败，可在页面上方重试。' }
+        : visibleHistoricalLockboxVideo
+          ? { label: '已记录', tone: 'success' as StatusTone, hint: '这是本次自完成任务已保存的挂钥匙视频，只读查看。' }
+          : { label: '无记录', tone: 'neutral' as StatusTone, hint: '本次自完成记录没有已保存的挂钥匙视频。' }
+    : activeLockboxSyncStatus
   const lockboxSummaryTone = lockboxSyncStatus.tone
   const lockboxSummaryText = lockboxSyncStatus.label
   const completeHeaderTone: StatusTone = requiresLockboxVideo ? lockboxSummaryTone : photoSummaryTone
   const completeHeaderText = requiresLockboxVideo ? lockboxSummaryText : photoSummaryText
   const heroHint = requiresConsumables
-    ? '先完成补品检查，再补齐房间完成照片和挂钥匙视频。'
+    ? requiresLockboxVideo
+      ? '先完成补品检查，再补齐房间完成照片和挂钥匙视频。'
+      : '先完成补品检查，再补齐房间完成照片。挂钥匙由同日检查流程负责。'
     : '入住中清洁只需补齐完成照片后标记完成。'
   const stepLabels = useMemo(() => {
     let step = 1
@@ -416,6 +444,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     const requestKey = historicalRequestKey
     try {
       setLoading(true)
+      if (readOnly) setHistoricalLoadState('loading')
       const [serverResult, draftResult] = await Promise.allSettled([
         readOnly
           ? loadHistoricalFormPhotos()
@@ -425,7 +454,10 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       if (readOnly && (historicalRequestKeyRef.current !== requestKey || refreshSequenceRef.current !== refreshSequence)) return
       const serverReadOk = serverResult.status === 'fulfilled'
       const draftReadOk = draftResult.status === 'fulfilled'
-      if (readOnly && !serverReadOk) return
+      if (readOnly && !serverReadOk) {
+        setHistoricalLoadState('error')
+        return
+      }
       if (!serverReadOk && !draftReadOk) return
       const r = serverResult.status === 'fulfilled' ? serverResult.value : null
       const draft = draftResult.status === 'fulfilled' ? draftResult.value : null
@@ -434,6 +466,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
           key: requestKey,
           items: (r?.items || []) as Awaited<ReturnType<typeof getWorkTaskFormPhotos>>['items'],
         })
+        setHistoricalLoadState('loaded')
       }
       const next: Record<PhotoArea, string[]> = serverReadOk
         ? emptyCompletionPhotos()
@@ -451,12 +484,21 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       const pendingCompletionDraft = draft?.completion_submit_enabled && !draft.completion_business_saved
       const serverItems = pendingCompletionDraft ? [] : (r?.items || [])
       let nextHistoricalVideo: { reference: string; taskId: string } | null = null
+      let nextHistoricalKeyPhoto: { reference: string; taskId: string } | null = null
       for (const it of serverItems) {
         const source = String((it as any).source || '').trim()
+        const sourceTaskId = String((it as any).task_id || '').trim()
+        if (readOnly && (!sourceTaskId || !historicalSourceIds.includes(sourceTaskId))) continue
         if (readOnly && source === 'lockbox_video') {
           const reference = String((it as any).uploaded_key || (it as any).url || '').trim()
-          const sourceTaskId = String((it as any).task_id || '').trim()
           if (reference && sourceTaskId && historicalSourceIds.includes(sourceTaskId)) nextHistoricalVideo = { reference, taskId: sourceTaskId }
+          continue
+        }
+        if (readOnly && source === 'key') {
+          const reference = String((it as any).uploaded_key || (it as any).url || '').trim()
+          if ((task as any)?.read_only_views?.guest_key_photo === true && reference) {
+            nextHistoricalKeyPhoto = { reference, taskId: sourceTaskId }
+          }
           continue
         }
         if (readOnly && source !== 'completion') continue
@@ -482,12 +524,13 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       setCompletionWatermarks(nextWatermarks)
       if (readOnly) {
         setHistoricalLockboxVideo(nextHistoricalVideo)
+        setHistoricalKeyPhoto(nextHistoricalKeyPhoto)
         setHistoricalMediaAppliedKey(requestKey)
       }
     } finally {
       if (refreshSequenceRef.current === refreshSequence) setLoading(false)
     }
-  }, [cleaningTaskId, historicalRequestKey, historicalSourceIds, loadHistoricalFormPhotos, readOnly, task?.id, token])
+  }, [cleaningTaskId, historicalRequestKey, historicalSourceIds, loadHistoricalFormPhotos, readOnly, task, token])
 
   const reloadLockboxItem = useCallback(async () => {
     if (readOnly || !cleaningTaskId || !requiresLockboxVideo) {
@@ -512,6 +555,8 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     if (!readOnly) return
     setHistoricalFormPhotos(null)
     setHistoricalLockboxVideo(null)
+    setHistoricalKeyPhoto(null)
+    setHistoricalLoadState('idle')
     setHistoricalMediaAppliedKey('')
     setHistoricalSuppliesAppliedKey('')
     setCompletion(emptyCompletionPhotos())
@@ -560,6 +605,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   }, [cleaningTaskId, props.navigation, readOnly, refresh, reloadLockboxItem, requiresLockboxVideo, token])
 
   useEffect(() => {
+    if (readOnly) return
     if (!requiresConsumables) return
     if (!token) return
     void ensureSuppliesCatalogLoaded(token).catch(() => null)
@@ -587,6 +633,8 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       const historicalConsumablesById = new Map<string, any>()
       const historicalRestockById = new Map<string, any>()
       for (const row of historicalMedia) {
+        const sourceTaskId = String(row.task_id || '').trim()
+        if (readOnly && (!sourceTaskId || !historicalSourceIds.includes(sourceTaskId))) continue
         const itemId = String(row.item_id || row.area || '').trim()
         const url = String(row.uploaded_key || row.url || '').trim()
         if (!itemId || !url) continue
@@ -634,8 +682,47 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         || (!draft && savedConsumables),
       )
       const byId = new Map((draft?.items || []).map((item) => [String(item.item_id || '').trim(), item]))
-      if (suppliesCatalog.items.length) {
-        const mapped = suppliesCatalog.items.map((it: ChecklistItem) => ({
+      const projectedRestockItems = readOnly && Array.isArray((task as any)?.restock_items)
+        ? (task as any).restock_items
+        : []
+      for (const projected of projectedRestockItems) {
+        const itemId = String(projected?.item_id || '').trim()
+        if (!itemId) continue
+        const existing = restockById.get(itemId)
+        restockById.set(itemId, {
+          ...existing,
+          item_id: itemId,
+          item_label: String(projected?.label || existing?.item_label || itemId).trim(),
+          status: String(projected?.status || existing?.status || '').trim() || null,
+          qty: projected?.qty ?? existing?.qty ?? null,
+          note: projected?.note ?? existing?.note ?? null,
+          proof_urls: Array.from(new Set([
+            ...(existing?.proof_urls || []),
+            String(projected?.photo_url || '').trim(),
+          ].filter(Boolean))),
+        })
+      }
+      const historicalSeedIds = readOnly
+        ? Array.from(new Set([
+            ...consumablesById.keys(),
+            ...restockById.keys(),
+          ]))
+        : []
+      const catalogById = new Map(suppliesCatalog.items.map((item) => [String(item.id || '').trim(), item]))
+      const catalogItems = readOnly
+        ? historicalSeedIds.map((itemId) => {
+            const consumable = consumablesById.get(itemId)
+            const restock = restockById.get(itemId)
+            const currentCatalogItem = catalogById.get(itemId)
+            return {
+              id: itemId,
+              label: String(restock?.item_label || consumable?.item_label || currentCatalogItem?.label || itemId).trim(),
+              required: false,
+            }
+          })
+        : suppliesCatalog.items
+      if (catalogItems.length) {
+        const mapped = catalogItems.map((it) => ({
           id: it.id,
           label: it.label,
           required: !!it.required,
@@ -664,23 +751,25 @@ export default function CleaningSelfCompleteScreen(props: Props) {
           return {
             ...item,
             restock_status: restockStatus,
-            qty: prev?.qty != null ? String(prev.qty) : serverRestock?.qty != null ? String(serverRestock.qty) : '1',
+            qty: prev?.qty != null ? String(prev.qty) : serverRestock?.qty != null ? String(serverRestock.qty) : readOnly ? '' : '1',
             note: String(prev?.note || serverRestock?.note || ''),
-            photo_urls: Array.isArray(prev?.photo_urls) && prev.photo_urls.length
-              ? prev.photo_urls.map((url) => String(url || '').trim()).filter(Boolean)
-              : Array.isArray(serverRestock?.proof_urls)
-                ? serverRestock.proof_urls.map((url: any) => String(url || '').trim()).filter(Boolean)
-                : [],
+            photo_urls: Array.from(new Set([
+              ...(Array.isArray(prev?.photo_urls) ? prev.photo_urls : []),
+              ...(Array.isArray(serverRestock?.proof_urls) ? serverRestock.proof_urls : []),
+              ...(Array.isArray(serverConsumable?.photo_urls) ? serverConsumable.photo_urls : []),
+            ].map((url: any) => String(url || '').trim()).filter(Boolean))),
           }
         })
         setSupplies(next)
+      } else if (readOnly) {
+        setSupplies([])
       }
       if (readOnly) setHistoricalSuppliesAppliedKey(historicalRequestKey)
     })().catch(() => null)
     return () => {
       cancelled = true
     }
-  }, [cleaningTaskId, historicalFormPhotos, historicalRequestKey, historicalSourceIds.length, readOnly, requiresConsumables, suppliesCatalog.items, token])
+  }, [cleaningTaskId, historicalFormPhotos, historicalRequestKey, historicalSourceIds, readOnly, requiresConsumables, suppliesCatalog.items, task, token])
 
   useEffect(() => {
     if (readOnly || !cleaningTaskId) return
@@ -725,7 +814,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   }, [cleaningTaskId, readOnly, refresh, requiresConsumables])
 
   useEffect(() => {
-    if (!requiresConsumables) return
+    if (readOnly || !requiresConsumables) return
     if (!suppliesCatalog.items.length) return
     if (supplies.length) return
     const mapped = suppliesCatalog.items.map((it: ChecklistItem) => ({
@@ -739,7 +828,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       photo_urls: [],
     }))
     setSupplies(mapped)
-  }, [requiresConsumables, supplies.length, suppliesCatalog.items])
+  }, [readOnly, requiresConsumables, supplies.length, suppliesCatalog.items])
 
   useEffect(() => {
     if (readOnly || !requiresConsumables || !cleaningTaskId) return
@@ -1225,6 +1314,58 @@ export default function CleaningSelfCompleteScreen(props: Props) {
 
         <WorkRecordReadOnlyInfo task={task} token={token} />
 
+        {readOnly ? (
+          <View testID="cleaning-history-load-state" style={historicalLoadState === 'error' ? styles.inlineErrorCard : styles.historyStateCard}>
+            <View style={styles.infoPanelHeader}>
+              <View style={styles.infoPanelTitleRow}>
+                <Ionicons
+                  name={historicalLoadState === 'error' ? 'alert-circle-outline' : 'cloud-done-outline'}
+                  size={moderateScale(16)}
+                  color={historicalLoadState === 'error' ? '#B91C1C' : '#1D4ED8'}
+                />
+                <Text style={historicalLoadState === 'error' ? styles.inlineErrorTitle : styles.infoPanelTitle}>本次清洁资料</Text>
+              </View>
+              <StatusPill
+                label={historicalLoadState === 'loading' ? '读取中' : historicalLoadState === 'error' ? '读取失败' : historicalRecordsLoaded ? '已读取' : '等待读取'}
+                tone={historicalLoadState === 'error' ? 'pending' : historicalLoadState === 'loading' ? 'info' : historicalRecordsLoaded ? 'success' : 'neutral'}
+              />
+            </View>
+            {historicalLoadState === 'error' ? (
+              <>
+                <Text style={styles.inlineErrorText}>资料暂时读取失败，页面不会把它误显示成“未拍”或“未提交”。</Text>
+                <Pressable testID="cleaning-history-retry" onPress={() => void refresh()} style={({ pressed }) => [styles.inlineRetryBtn, pressed ? styles.pressed : null]}>
+                  <Text style={styles.inlineRetryText}>重试读取</Text>
+                </Pressable>
+              </>
+            ) : historicalLoadState === 'loaded' && !historicalFormPhotos?.items.length ? (
+              <Text style={styles.infoPanelText}>本次任务没有已保存的清洁照片、钥匙或补品图片记录。</Text>
+            ) : (
+              <Text style={styles.infoPanelText}>只读展示本次任务已保存的清洁资料，不会重新提交或改写原任务。</Text>
+            )}
+          </View>
+        ) : null}
+
+        {readOnly && (task as any)?.read_only_views?.guest_key_photo === true ? (
+          <View style={styles.card}>
+            <View style={styles.sectionHead}>
+              {sectionTitle('', '客人钥匙照片', 'key-outline')}
+              <StatusPill label={visibleHistoricalKeyPhoto ? '已记录' : historicalLoadState === 'error' ? '读取失败' : historicalLoadState === 'loading' ? '读取中' : '无记录'} tone={visibleHistoricalKeyPhoto ? 'success' : historicalLoadState === 'error' ? 'pending' : historicalLoadState === 'loading' ? 'info' : 'neutral'} />
+            </View>
+            {visibleHistoricalKeyPhoto ? (
+              <ResponsiveImageGrid
+                items={[visibleHistoricalKeyPhoto.reference]}
+                fixedItemWidth={112}
+                keyExtractor={(reference) => reference}
+                renderItem={(reference) => (
+                  <Pressable testID="cleaning-history-key-photo" onPress={() => openViewer([reference])} style={({ pressed }) => [styles.historyKeyPhoto, pressed ? styles.pressed : null]}>
+                    <CleaningMediaImage token={token} remoteReference={reference} {...historicalMediaAccess} style={styles.historyKeyPhotoImage} />
+                  </Pressable>
+                )}
+              />
+            ) : historicalLoadState === 'loaded' ? <Text style={styles.mutedSmall}>本次任务没有已保存的客人钥匙照片。</Text> : null}
+          </View>
+        ) : null}
+
         {requiresConsumables ? (
           <View style={styles.card}>
             <Pressable onPress={() => toggle('supplies')} style={({ pressed }) => [styles.sectionHead, pressed ? styles.pressed : null]}>
@@ -1246,9 +1387,17 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                   </View>
                   <Text style={styles.infoPanelText}>{readOnly ? '以下是本次任务已保存的补品记录，只读展示。' : '逐项选择“现场够用”“已补充”或“下次退房补”；已补充必须拍补货凭证。'}</Text>
                   {!readOnly ? <Text style={styles.infoPanelText}>照片先保存在本机，提交时才上传并写入补货记录；弱网下可稍后继续。</Text> : null}
-                  {catalogCacheHint ? <Text style={styles.infoPanelText}>{catalogCacheHint}</Text> : null}
+                  {!readOnly && catalogCacheHint ? <Text style={styles.infoPanelText}>{catalogCacheHint}</Text> : null}
                   {visiblePendingSuppliesSubmit ? <Text style={styles.ok}>已离线保存，待联网自动同步。</Text> : null}
-                  {visibleSuppliesSubmitted ? <Text style={styles.ok}>已提交</Text> : visiblePendingSuppliesSubmit ? null : suppliesCatalog.loading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : <Text style={styles.warn}>未提交</Text>}
+                  {readOnly ? (
+                    historicalLoadState === 'loading'
+                      ? <Text style={styles.mutedSmall}>正在读取本次补品记录。</Text>
+                      : historicalLoadState === 'error'
+                        ? <Text style={styles.warn}>补品记录尚未读取成功，请在页面上方重试。</Text>
+                        : visibleSupplies.length
+                          ? <Text style={styles.ok}>已读取本次保存内容</Text>
+                          : <Text style={styles.mutedSmall}>本次任务没有已保存的补品记录。</Text>
+                  ) : visibleSuppliesSubmitted ? <Text style={styles.ok}>已提交</Text> : visiblePendingSuppliesSubmit ? null : suppliesCatalog.loading ? <Text style={styles.mutedSmall}>{t('common_loading')}</Text> : <Text style={styles.warn}>未提交</Text>}
                 </View>
                 {showCatalogErrorCard ? (
                   <View style={styles.inlineErrorCard}>
@@ -1269,7 +1418,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                   <>
                     <View style={styles.subSection}>
                       <Text style={styles.subSectionTitle}>消耗品补充</Text>
-                      <Text style={styles.subSectionHint}>现场补好的记录为“已补充”；来不及补的记到下一次退房。</Text>
+                      <Text style={styles.subSectionHint}>{readOnly ? '以下状态、照片、数量和备注均为本次任务已保存记录。' : '现场补好的记录为“已补充”；来不及补的记到下一次退房。'}</Text>
                     </View>
                     {visibleSupplies.map((it, idx) => (
                       <View key={it.id} style={styles.itemCard}>
@@ -1290,7 +1439,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                             <StatusPill label="待确认" tone="neutral" />
                           )}
                         </View>
-                        {it.id === 'other' ? (
+                        {it.id === 'other' && !readOnly ? (
                           <AppTextInput
                             value={it.note}
                             onChangeText={(v) => setSupplyItem(idx, { note: v })}
@@ -1300,11 +1449,10 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                             multiline
                           />
                         ) : null}
-                        <View style={styles.supRow}>
+                        {!readOnly ? <View style={styles.supRow}>
                           <Pressable
                             testID={`self-restock-${it.id}-sufficient`}
-                            onPress={() => !readOnly && setRestockResolution(idx, 'unavailable')}
-                            disabled={readOnly}
+                            onPress={() => setRestockResolution(idx, 'unavailable')}
                             style={({ pressed }) => [styles.supChip, it.restock_status === 'unavailable' ? styles.supChipActive : null, pressed ? styles.pressed : null]}
                           >
                             <Text style={[styles.supChipText, it.restock_status === 'unavailable' ? styles.supChipTextActive : null]}>现场够用</Text>
@@ -1312,21 +1460,20 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                           <Pressable
                             testID={`self-restock-${it.id}-restocked`}
                             onPress={() => onMarkRestocked(idx)}
-                            disabled={readOnly || suppliesSubmitting}
+                            disabled={suppliesSubmitting}
                             style={({ pressed }) => [styles.supChip, it.restock_status === 'restocked' ? styles.supChipActive : null, pressed ? styles.pressed : null, suppliesSubmitting ? styles.disabled : null]}
                           >
                             <Text style={[styles.supChipText, it.restock_status === 'restocked' ? styles.supChipTextActive : null]}>已补充</Text>
                           </Pressable>
                           <Pressable
                             testID={`self-restock-${it.id}-carry-forward`}
-                            onPress={() => !readOnly && setRestockResolution(idx, 'carry_forward')}
-                            disabled={readOnly}
+                            onPress={() => setRestockResolution(idx, 'carry_forward')}
                             style={({ pressed }) => [styles.supChip, it.restock_status === 'carry_forward' ? styles.supChipActive : null, pressed ? styles.pressed : null]}
                           >
                             <Text style={[styles.supChipText, it.restock_status === 'carry_forward' ? styles.supChipTextActive : null]}>下次退房补</Text>
                           </Pressable>
-                        </View>
-                        {it.restock_status === 'restocked' || it.restock_status === 'carry_forward' ? (
+                        </View> : null}
+                        {!readOnly && (it.restock_status === 'restocked' || it.restock_status === 'carry_forward') ? (
                           <>
                             <View style={styles.supRow}>
                               <AppTextInput
@@ -1337,7 +1484,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                                 placeholder="补充数量（可选）"
                                 keyboardType="number-pad"
                               />
-                              {!readOnly && it.restock_status === 'restocked' ? (
+                              {it.restock_status === 'restocked' ? (
                                 <Pressable
                                   onPress={() => onTakeStockPhoto(idx)}
                                   disabled={suppliesSubmitting}
@@ -1364,7 +1511,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                                         style={styles.thumb}
                                       />
                                     </Pressable>
-                                    {!readOnly ? <Pressable
+                                    <Pressable
                                       onPress={() => {
                                         removePhotoUri(photoUrl)
                                         setSupplyItem(idx, { photo_urls: it.photo_urls.filter((_, photoIndex) => photoIndex !== photoIdx) })
@@ -1372,7 +1519,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                                       style={({ pressed }) => [styles.removeBtn, pressed ? styles.pressed : null]}
                                     >
                                       <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
-                                    </Pressable> : null}
+                                    </Pressable>
                                   </View>
                                 )}
                               />
@@ -1386,6 +1533,24 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                               multiline
                             />
                           </>
+                        ) : null}
+                        {readOnly ? (
+                          <View style={styles.subSection}>
+                            {String(it.qty || '').trim() ? <Text style={styles.mutedSmall}>{`已保存数量：${String(it.qty).trim()}`}</Text> : null}
+                            {it.photo_urls.length ? (
+                              <ResponsiveImageGrid
+                                items={it.photo_urls}
+                                fixedItemWidth={96}
+                                keyExtractor={(photoUrl, photoIdx) => `${photoUrl}-${photoIdx}`}
+                                renderItem={(photoUrl, photoIdx) => (
+                                  <Pressable onPress={() => openViewer(it.photo_urls, photoIdx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
+                                    <CleaningMediaImage token={token} remoteReference={photoUrl} {...historicalMediaAccess} style={styles.thumb} />
+                                  </Pressable>
+                                )}
+                              />
+                            ) : null}
+                            {String(it.note || '').trim() ? <Text style={styles.mutedSmall}>{`备注：${String(it.note).trim()}`}</Text> : null}
+                          </View>
                         ) : null}
                       </View>
                     ))}
@@ -1453,20 +1618,37 @@ export default function CleaningSelfCompleteScreen(props: Props) {
               <View style={styles.infoPanel}>
                 <Text style={styles.infoPanelText}>{readOnly ? '本次清洁已保存的照片可点击查看大图。' : '电视和空调遥控器同框拍 1 张；浴室下水口和吸尘器使用后照片也必拍。'}</Text>
                 {!readOnly ? <Text style={styles.infoPanelText}>拍照后先保存到本机；点击“标记已完成”时才会逐张上传，并一次写入完成照片记录。</Text> : null}
-                {completionOk ? <Text style={styles.ok}>已满足</Text> : <Text style={styles.warn}>未满足</Text>}
+                {readOnly ? (
+                  historicalLoadState === 'loading'
+                    ? <Text style={styles.mutedSmall}>正在读取本次保存内容。</Text>
+                    : historicalLoadState === 'error'
+                      ? <Text style={styles.warn}>完成照片尚未读取成功，请在页面上方重试。</Text>
+                      : completionPhotoCount
+                        ? <Text style={styles.ok}>已保存 {completionPhotoCount} 张</Text>
+                        : <Text style={styles.mutedSmall}>本次任务没有已保存的完成照片。</Text>
+                ) : completionOk ? <Text style={styles.ok}>已满足</Text> : <Text style={styles.warn}>未满足</Text>}
               </View>
               {COMPLETION_AREAS.map(({ area, title, hint }) => {
                 const list = visibleCompletion[area] || []
                 const singlePhotoArea = area === 'remote_tv'
+                const historicalAreaPending = readOnly && historicalLoadState !== 'loaded'
+                const historicalAreaLabel = historicalLoadState === 'error'
+                  ? '读取失败'
+                  : historicalLoadState === 'loading'
+                    ? '读取中'
+                    : '等待读取'
                 return (
                   <View key={area} style={styles.photoAreaCard}>
                     <View style={styles.photoAreaHead}>
                       <View style={styles.photoAreaCopy}>
                         <Text style={styles.areaTitle}>{title}</Text>
-                        <Text style={styles.photoAreaHint}>{hint}</Text>
+                        <Text style={styles.photoAreaHint}>{readOnly ? '本次保存记录' : hint}</Text>
                       </View>
                       <View style={styles.photoAreaActions}>
-                        <StatusPill label={`${list.length} 张`} tone={list.length ? 'success' : 'neutral'} />
+                        <StatusPill
+                          label={historicalAreaPending ? historicalAreaLabel : `${list.length} 张`}
+                          tone={historicalLoadState === 'error' ? 'pending' : historicalAreaPending ? 'info' : list.length ? 'success' : 'neutral'}
+                        />
                         {!readOnly ? <Pressable
                           testID={`completion-photo-${area}-capture`}
                           onPress={() => onAddCompletionPhoto(area)}
@@ -1503,7 +1685,13 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                           </View>
                         )}
                       />
-                    ) : <Text style={styles.mutedSmall}>暂无照片</Text>}
+                    ) : <Text style={styles.mutedSmall}>{readOnly
+                      ? historicalLoadState === 'error'
+                        ? '本区域照片尚未读取成功，请在页面上方重试。'
+                        : historicalAreaPending
+                          ? '正在读取本区域照片。'
+                          : '本次未保存照片'
+                      : '暂无照片'}</Text>}
                   </View>
                 )
               })}
@@ -1513,7 +1701,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
 
         <View style={styles.card}>
           <Pressable onPress={() => toggle('complete')} style={({ pressed }) => [styles.sectionHead, pressed ? styles.pressed : null]}>
-            {sectionTitle(stepLabels.complete, '标记已完成', 'checkmark-circle-outline')}
+            {sectionTitle(stepLabels.complete, readOnly ? '完成记录' : '标记已完成', 'checkmark-circle-outline')}
             <View style={styles.sectionHeadRight}>
               <StatusPill label={completeHeaderText} tone={completeHeaderTone} />
               <Ionicons name={expanded.complete ? 'chevron-up' : 'chevron-down'} size={moderateScale(18)} color="#6B7280" />
@@ -1532,7 +1720,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                   <View style={styles.subCardHead}>
                     <View style={styles.subCardCopy}>
                       <Text style={styles.subCardTitle}>挂钥匙视频</Text>
-                      <Text style={styles.subCardHint}>完成前请上传挂钥匙视频，可重复拍摄覆盖。</Text>
+                      <Text style={styles.subCardHint}>{readOnly ? '本次自完成任务已保存的视频可在这里只读查看。' : '完成前请上传挂钥匙视频，可重复拍摄覆盖。'}</Text>
                       <Text testID="self-complete-lockbox-sync-hint" style={lockboxSummaryTone === 'pending' ? styles.warnSmall : styles.mutedSmall}>{lockboxSyncStatus.hint}</Text>
                     </View>
                     <StatusPill label={lockboxSummaryText} tone={lockboxSummaryTone} />
@@ -1540,7 +1728,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                 ) : (
                   <View style={styles.noticeBanner}>
                     <Ionicons name="checkmark-circle-outline" size={moderateScale(16)} color="#1D4ED8" />
-                    <Text style={styles.noticeBannerText}>入住中清洁无需补品和挂钥匙视频，补齐完成照片后可直接标记完成。</Text>
+                    <Text style={styles.noticeBannerText}>{isStayoverTask ? '入住中清洁无需补品和挂钥匙视频。' : '普通同日检查任务由检查流程负责挂钥匙；清洁历史这里只展示清洁本人已保存的内容。'}</Text>
                   </View>
                 )}
                 {requiresLockboxVideo && lockboxOk ? (
@@ -1706,6 +1894,9 @@ const styles = StyleSheet.create({
   infoPanelTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   infoPanelTitle: { color: '#111827', fontWeight: '900' },
   infoPanelText: { marginTop: 8, color: '#475569', fontWeight: '700', lineHeight: 19 },
+  historyStateCard: { padding: 12, borderRadius: 16, backgroundColor: '#EFF6FF', borderWidth: hairline(), borderColor: '#BFDBFE' },
+  historyKeyPhoto: { width: 112, height: 112, marginTop: 12, borderRadius: 14, overflow: 'hidden', borderWidth: hairline(), borderColor: '#DBEAFE' },
+  historyKeyPhotoImage: { width: '100%', height: '100%' },
   subSection: { marginTop: 14, gap: 4 },
   subSectionTitle: { color: '#111827', fontWeight: '900', fontSize: 16 },
   subSectionHint: { color: '#6B7280', fontWeight: '700' },

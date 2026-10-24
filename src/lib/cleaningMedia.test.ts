@@ -57,6 +57,7 @@ test('binds a read-only key photo to exact source ids and viewer scope', () => {
 test('builds an authenticated exact-source video stream and rejects an unbound source', () => {
   expect(buildCleaningMediaVideoSource('token-1', 'cleaning/lockbox.mp4', {
     accessTaskId: 'checkout-task',
+    accessWorkTaskId: 'cleaning_work_record:historical-display-id',
     accessSourceIds: ['checkout-task', 'checkin-task'],
     mediaScope: 'manager',
   })).toEqual({

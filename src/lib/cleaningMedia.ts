@@ -146,7 +146,9 @@ export function buildCleaningMediaVideoSource(
   const key = normalizePrivateFeedbackObjectKey(reference)
   if (!isAuthenticatedCleaningMediaReference(reference)) return { uri: '' }
   return {
-    uri: cleaningMediaProxyUrl(key || reference, 'source', options),
+    // The video endpoint authorizes the exact source relation. Unlike image
+    // reads, variant=source explicitly rejects a display/work-record ID.
+    uri: cleaningMediaProxyUrl(key || reference, 'source', { ...options, accessWorkTaskId: null }),
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   }
 }
