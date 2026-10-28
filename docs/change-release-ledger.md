@@ -3,7 +3,7 @@
 ## CRL-20261028-005 — 人员结算补发回归去除重复整屏渲染
 
 - **Repository:** `mobile`
-- **Status:** push-ready local candidate; exact range audit and independent push review GO; final review receipt audit pending; not pushed, merged, deployed, or published
+- **Status:** GitHub candidate objects prepared after exact range audit and independent push review GO; new branch creation pending; not merged, deployed, or published
 - **Updated:** 2026-10-28 UTC
 - **Request:** 继续修复 `mobile/CRL-20261028-004` 合并后仍在 Root 完整回归并行 Jest worker 中触发的 `PersonnelSettlementScreen.test.tsx` 默认 5000ms 超时；不得增加时限、跳过测试、削弱补发/GST/汇总断言或修改结算业务。
 - **Outcome:** 把独立补发用例的全部数据和断言并入既有“上一完整周核对并提交”真实屏幕流程，使同一次真实 `PersonnelSettlementScreen` 渲染同时覆盖基础工作量、补贴、付款后补发、来源周、税前/GST 拆分、周汇总和二次确认；移除的只是重复的第二次整屏渲染，不移除任何受保护断言。
@@ -69,15 +69,15 @@
 - Base: `origin/Dev@61ffa855e1fa5bff68a197c0f53183988dc0db40`; fetched at `2026-10-28T12:44:13Z` by read-only remote ref verification, matching the locally fetched `origin/Dev`.
 - Target branch preflight: read-only `ls-remote` confirmed `codex/personnel-settlement-timeout-fix-v2` absent at `2026-10-28T12:44:21Z`; publication must create this branch and must not update another ref.
 - Candidate patch SHA-256: `f0a28dee547b919f90489b1589a45ffdead9d62256b28f6e86185d6954e74a1d`, computed from `origin/Dev...working-tree` excluding `docs/change-release-ledger.md`.
-- Commit SHA: `37b3971ec4a3feef2002f0ad01d327d4b75d59c7`; candidate content commit.
+- Commit SHA: `cb929fd6060ff41cff835645379a581b69c82a69`; GitHub candidate content commit with tree `d965ff1574c74d887d3ad8d374f805399a2864fb`.
 - Dependencies: none.
 - Required validation: PASS; focused settlement 30/30, Root-shape plain multi-worker Jest 82 suites / 723 tests, Mobile `check:ci` including typecheck/lint/button/ledger/fast/serial full checks, and ledger coverage audit all passed.
 - Shared-hunk review: PASS in preliminary independent read-only review; every protected supplement/GST/summary/submission assertion moved into the existing real-screen two-step flow, and arithmetic remains `6091 + 609 = 6700` cents.
 - Generated-file review: PASS; candidate paths are one TSX test and two Markdown governance files. Ignored `node_modules` is not selected; no generated artifact, environment file, cache, credential, media or log is included.
-- Technical state: committed local candidate; exact `61ffa855...0a16d69` release report GO.
+- Technical state: committed GitHub candidate object; the equivalent local range completed exact release audit before object publication.
 - User authorization: selected-for-commit and approved-for-push; on 2026-10-28 the user authorized continuing this test fix, installing exact lockfile dependencies in the isolated v2 worktree, preparing a new branch, pushing it and creating a draft PR to `Dev`. Merge, main, production, deployment and OTA remain excluded.
 - Independent review: GO for commit only; no P0/P1/P2. The reviewer recomputed the exact staged non-ledger fingerprint, confirmed 8 selected hunks, no untracked files, arithmetic conservation, and no lost protected assertion. This review does not authorize push, PR, merge, deployment or OTA.
-- Action conclusion: completed local commit action; exact range report at audit head `0a16d69d1124fefb35501aba2abed5afc440b37c` is GO with candidate fingerprint unchanged.
+- Action conclusion: completed candidate commit action; GitHub commit `cb929fd6060ff41cff835645379a581b69c82a69` preserves the reviewed non-ledger tree and candidate fingerprint.
 
 #### RA-20261028-006
 
@@ -89,12 +89,12 @@
 - Base: `origin/Dev@61ffa855e1fa5bff68a197c0f53183988dc0db40`; fetched at `2026-10-28T12:44:13Z` by read-only remote ref verification, matching the locally fetched `origin/Dev`.
 - Target branch preflight: read-only `ls-remote` confirmed `codex/personnel-settlement-timeout-fix-v2` absent at `2026-10-28T12:44:21Z`; publication must create this branch and must not update another ref.
 - Candidate patch SHA-256: `f0a28dee547b919f90489b1589a45ffdead9d62256b28f6e86185d6954e74a1d`.
-- Commit SHA: `37b3971ec4a3feef2002f0ad01d327d4b75d59c7`; candidate content commit. Exact commit-range audit head before this push receipt: `0a16d69d1124fefb35501aba2abed5afc440b37c`.
+- Commit SHA: `cb929fd6060ff41cff835645379a581b69c82a69`; GitHub candidate content commit. The equivalent local range audit at `95cbe7c6bbb424031af649457cc71ce99444595d` was GO before GitHub object preparation.
 - Dependencies: none.
 - Required validation: PASS; focused settlement 30/30, Root-shape plain multi-worker Jest 82 suites / 723 tests, Mobile `check:ci`, ledger coverage and exact committed-range report all passed.
 - Shared-hunk review: PASS; all 8 selected non-ledger hunks retain the protected supplement/GST/summary/submission coverage and remove only a duplicate real-screen render.
 - Generated-file review: PASS; exact range contains one TSX test and two Markdown governance files, no generated or sensitive category, and no ignored dependency content.
-- Technical state: committed, exact-range audited and approved for the reviewed new-branch push plus draft PR.
+- Technical state: GitHub candidate commit and review-receipt tree prepared, exact-range audited locally, and approved for the reviewed new-branch push plus draft PR.
 - User authorization: approved-for-push; on 2026-10-28 the user explicitly authorized continuing this exact v2 fix on a new branch, pushing it and creating a draft PR to `Dev`. Merge, main, production, deployment and OTA remain excluded.
 - Independent review: GO for the exact new-branch push plus draft PR; no P0/P1/P2. The reviewer independently recomputed range fingerprint `f0a28dee547b919f90489b1589a45ffdead9d62256b28f6e86185d6954e74a1d`, reconfirmed `Dev` at the selected base, verified the target branch remains absent, and found no coverage, generated-file, sensitive-information or production-write issue. This review does not authorize merge, deployment or OTA.
 - Action conclusion: GO for creating only `codex/personnel-settlement-timeout-fix-v2`, publishing the exact audited range and opening a draft PR to `Dev`, subject to a current exact range report after this review receipt.
