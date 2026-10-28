@@ -67,15 +67,15 @@
 - Base: `origin/Dev@5109f9d07908f3e902f7b6b77bf9522ff900d1b2`; fetched at `2026-10-28T08:05:28Z` (shared clone evidence) and confirmed by read-only `ls-remote` at `2026-10-28T09:57:52Z`
 - Target branch preflight: read-only GitHub branch search confirmed `codex/personnel-settlement-timeout-fix` absent at `2026-10-28T10:40:30Z`; publication must create it from the exact audited candidate and must not update another ref.
 - Candidate patch SHA-256: `c4f66f4c1fbc7fa43cd2b2c22ad87cce7f3794413d6e212c1d5902f21f90cfd5`
-- Commit SHA: not committed
+- Commit SHA: `200dfe12e4ec8e147b8c9bf2381e6004d288236b`
 - Dependencies: none
 - Required validation: PASS; targeted timing checks, Mobile `check:ci`, Root+Mobile `check:full`, ledger audit and feature-registry audit passed.
 - Shared-hunk review: PASS; exact non-ledger fingerprints include only the test query hunk and FR-P1-FIN-03 metadata hunks selected by this CRL; no other FR or business implementation hunk is included.
 - Generated-file review: PASS; no tracked generated artifact or untracked path is selected, and the temporary dependency symlink was removed before staging.
-- Technical state: candidate; exact three-file fix is selected for commit and approved for publication on `codex/personnel-settlement-timeout-fix`, with a draft PR targeting `Dev`.
+- Technical state: committed; GitHub candidate content commit `200dfe12e4ec8e147b8c9bf2381e6004d288236b` points to the exact reviewed tree `fab319645d8ec85ce4d712c6b4deae0512aedf4b` and is approved for publication on `codex/personnel-settlement-timeout-fix`, with a draft PR targeting `Dev`.
 - User authorization: approved-for-push; on 2026-10-28 the user explicitly approved committing and pushing this exact three-file fix to the new branch, creating a draft PR to `Dev`, and checking remote CI. Merge, deployment, OTA and production access remain excluded.
 - Independent review: GO for the authorized push workflow with no P0/P1/P2 findings. The reviewer confirmed the exact three-file scope, five non-ledger hunks, candidate fingerprint, absent target branch, public-repository authorization, and continued exclusion of merge/deployment/OTA/production access.
-- Action conclusion: GO for the selected local commit and exact new-branch push plus draft PR, subject to the committed-range release report remaining GO before any remote ref is created.
+- Action conclusion: GO for the exact new-branch push plus draft PR after this ledger-only receipt is committed and the resulting committed-range release report confirms the same candidate fingerprint and scope.
 
 ### Risks / Release Notes
 
