@@ -107,6 +107,7 @@ const SAFE_PATCH_FIELDS = new Set([
   'inspection_mode',
   'inspection_scope',
   'inspection_due_date',
+  'self_complete_progress',
   'keys_required',
   'keys_required_checkout',
   'keys_required_checkin',

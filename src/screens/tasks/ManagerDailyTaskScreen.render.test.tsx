@@ -57,6 +57,8 @@ const mockAuthState = {
   user: { id: 'customer-service-1', username: 'customer-service', role: 'customer_service', roles: ['customer_service'] },
 }
 
+const mockGuestLuggageCard = jest.fn((_props: any) => null)
+
 const defaultConsumablesResponse = {
   living_room_photo_urls: ['cleaning/living.jpg'],
   items: [{ item_id: 'remote_tv', photo_urls: ['cleaning/remote.jpg'], item_label: '电视遥控器' }],
@@ -110,7 +112,10 @@ jest.mock('../../lib/workTasksStore', () => ({
 
 jest.mock('../../lib/noticesStore', () => ({ prependNotice: jest.fn(async () => {}) }))
 
-jest.mock('../../components/GuestLuggageCard', () => () => null)
+jest.mock('../../components/GuestLuggageCard', () => ({
+  __esModule: true,
+  default: (props: any) => mockGuestLuggageCard(props),
+}))
 jest.mock('../../components/CleaningMediaImage', () => {
   const React = jest.requireActual<typeof import('react')>('react')
   return { __esModule: true, default: (props: any) => React.createElement('CleaningMediaImage', props) }
@@ -344,6 +349,55 @@ test('customer-service reassigned history uses exact actor-bound media and keeps
       taskId: 'history-reassigned-record',
       sourceTaskId: 'checkout-source',
     }))
+    ui.unmount()
+  } finally {
+    for (const key of Object.keys(mockTask)) delete mockTask[key]
+    Object.assign(mockTask, before)
+  }
+})
+
+test('manager history renders the temporary notice only in the canonical lower section', async () => {
+  const before = { ...mockTask }
+  Object.assign(mockTask, {
+    id: 'history-temporary-notice-record',
+    work_record_read_only: true,
+    work_record_state: 'completed',
+    guest_luggage: {
+      id: 'synthetic-notice',
+      note: '合成临时通知',
+      photo_urls: ['synthetic/notice.jpg'],
+    },
+    read_only_views: {
+      guest_context: true,
+      media_source_ids: ['cleaning-1'],
+    },
+  })
+
+  try {
+    const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+    const ui = render(
+      <I18nProvider>
+        <ManagerDailyTaskScreen
+          navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+          route={{ key: 'manager-history-temporary-notice', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+        />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(ui.getByTestId('work-record-read-only-info')).toBeTruthy())
+    expect(ui.getAllByText('当天任务临时通知')).toHaveLength(1)
+    expect(mockGuestLuggageCard).toHaveBeenCalled()
+    expect(mockGuestLuggageCard).toHaveBeenCalledWith(expect.objectContaining({
+      notice: expect.objectContaining({ id: 'synthetic-notice' }),
+      showAcknowledgementSummary: true,
+      compact: true,
+    }))
+    expect(mockGuestLuggageCard.mock.calls.every(([props]) => (
+      props?.showAcknowledgementSummary === true
+      && props?.compact === true
+      && props?.showAcknowledge === undefined
+      && props?.accessWorkTaskId === undefined
+    ))).toBe(true)
     ui.unmount()
   } finally {
     for (const key of Object.keys(mockTask)) delete mockTask[key]

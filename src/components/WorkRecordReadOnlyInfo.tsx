@@ -9,6 +9,7 @@ import { normalizeHttpUrl } from '../lib/urls'
 type Props = {
   task: any
   token?: string | null
+  showGuestLuggage?: boolean
 }
 
 function cleanText(value: any) {
@@ -25,7 +26,7 @@ function InfoRow({ icon, text }: { icon: any; text: string }) {
   )
 }
 
-export default function WorkRecordReadOnlyInfo({ task, token }: Props) {
+export default function WorkRecordReadOnlyInfo({ task, token, showGuestLuggage = true }: Props) {
   if (task?.work_record_read_only !== true) return null
   const views = task?.read_only_views || {}
   const propertyAccess = views.property_access === true
@@ -66,7 +67,7 @@ export default function WorkRecordReadOnlyInfo({ task, token }: Props) {
       {lockCodes ? <InfoRow icon="lock-closed-outline" text={`旧密码：${oldCode || '-'}  新密码：${newCode || '-'}`} /> : null}
       {guestRequest ? <InfoRow icon="chatbubble-ellipses-outline" text={`客人需求：${guestRequest}`} /> : null}
       {orderNote ? <InfoRow icon="document-text-outline" text={`订单备注：${orderNote}`} /> : null}
-      {guestContext ? (
+      {guestContext && showGuestLuggage ? (
         <GuestLuggageCard
           notice={task?.guest_luggage || null}
           token={token}

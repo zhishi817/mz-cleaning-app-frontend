@@ -974,6 +974,38 @@ test('deferred inspection task uses 延期检查 title instead of 退房', async
   snapshot.items[0].inspection_mode = undefined
 })
 
+test('merged deferred inspection uses the authoritative execution-day check-in title', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  snapshot.items[0].task_kind = 'inspection'
+  snapshot.items[0].task_type = 'checkin_clean'
+  snapshot.items[0].inspection_mode = 'deferred'
+  snapshot.items[0].status = 'assigned'
+  snapshot.items[0].start_time = '10am'
+  snapshot.items[0].end_time = '3pm'
+  snapshot.items[0].deferred_inspection_merged = true
+  snapshot.items[0].deferred_inspection_current_day_checkout = false
+
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'k4-merged', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => {
+      expect(ui.getByText('X 入住')).toBeTruthy()
+      expect(ui.queryByText('X 延期检查')).toBeNull()
+      expect(ui.queryByText('X 退房 入住')).toBeNull()
+    })
+  } finally {
+    ui.unmount()
+    snapshot.items[0] = previousTask
+  }
+})
+
 test('password-only inspection task shows explicit execution scope', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()

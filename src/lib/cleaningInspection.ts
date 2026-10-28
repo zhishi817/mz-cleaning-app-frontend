@@ -257,11 +257,23 @@ export function cleaningTaskTitleSuffix(task: {
   deferred_inspection_merged?: any
   deferred_inspection_current_day_checkout?: any
 }) {
-  if (shouldUseDeferredInspectionTitle(task)) return '延期检查'
   const checkoutTime = String(task?.start_time ?? task?.checkout_time ?? '').trim()
   const checkinTime = String(task?.end_time ?? task?.checkin_time ?? '').trim()
   const deferredInspectionMerged = task?.deferred_inspection_merged === true
   const authoritativeCurrentDayCheckout = task?.deferred_inspection_current_day_checkout
+
+  // A reliable execution-day merge describes the work happening today, even
+  // though the retained source arrangement is still `deferred`. Evaluate the
+  // Root-owned display-day fact before the generic deferred-title fallback so
+  // the historical checkout does not hide today's real check-in.
+  if (deferredInspectionMerged && typeof authoritativeCurrentDayCheckout === 'boolean') {
+    const hasCheckout = authoritativeCurrentDayCheckout
+    const hasCheckin = !!checkinTime
+    if (!hasCheckout && !hasCheckin) return '延期检查'
+    return `${hasCheckout ? '退房' : ''}${hasCheckout && hasCheckin ? ' ' : ''}${hasCheckin ? '入住' : ''}`
+  }
+
+  if (shouldUseDeferredInspectionTitle(task)) return '延期检查'
   const hasCheckout = deferredInspectionMerged && typeof authoritativeCurrentDayCheckout === 'boolean'
     ? authoritativeCurrentDayCheckout
     : !!checkoutTime

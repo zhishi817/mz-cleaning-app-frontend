@@ -36,6 +36,9 @@ import {
   type InspectionPanelSubmitQueueItem,
 } from '../../lib/inspectionPanelSubmitQueue'
 import { inspectionScopeLabel, isPasswordOnlyInspectionTask } from '../../lib/cleaningInspection'
+import {
+  classifyLegacyConsumableScenePhoto,
+} from '../../lib/cleaningScenePhotoTemplate'
 import { isDailyTaskKeyHandoverStage } from '../../lib/dailyTaskPresentation'
 import { compressImageForUpload } from '../../lib/imageCompression'
 import { useI18n } from '../../lib/i18n'
@@ -72,7 +75,14 @@ import WorkRecordReadOnlyInfo from '../../components/WorkRecordReadOnlyInfo'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'InspectionPanel'>
 
-type RestockState = InspectionPanelBatchRestockItem
+type HistoricalRestockPhoto = {
+  reference: string
+  label: string
+}
+
+type RestockState = InspectionPanelBatchRestockItem & {
+  historical_source_photos?: HistoricalRestockPhoto[]
+}
 type RoomPhotoMap = Record<InspectionPanelRoomPhotoArea, InspectionPanelBatchMedia[]>
 type ViewerTarget = {
   suppliesProof?: boolean
@@ -133,6 +143,7 @@ function cloneRestockItem(item: RestockState): RestockState {
   return {
     ...item,
     proof_media: [...(item.proof_media || [])],
+    historical_source_photos: item.historical_source_photos?.map((photo) => ({ ...photo })),
   }
 }
 
@@ -208,7 +219,7 @@ function buildInitialRestock(task: any, preserveSavedState = false) {
   return list
     .map((x: any) => {
       const itemId = cleanText(x?.item_id)
-      if (!itemId) return null
+      if (!itemId || (preserveSavedState && classifyLegacyConsumableScenePhoto(itemId))) return null
       const qty0 = x?.qty == null ? null : Number(x.qty)
       const rawStatus = preserveSavedState ? cleanText(x?.status).toLowerCase() : ''
       const status = rawStatus === 'restocked' || rawStatus === 'carry_forward' || rawStatus === 'unavailable'
@@ -220,6 +231,9 @@ function buildInitialRestock(task: any, preserveSavedState = false) {
         qty: Number.isFinite(qty0) ? qty0 : null,
         status,
         source_photo_url: cleanText(x?.photo_url) || null,
+        historical_source_photos: preserveSavedState && cleanText(x?.photo_url)
+          ? [{ reference: cleanText(x.photo_url), label: '清洁员补货照片' }]
+          : undefined,
         proof_media: [],
         note: preserveSavedState ? cleanText(x?.note) : '',
         origin: 'task' as const,
@@ -268,10 +282,15 @@ function buildRestockFromWorkTaskMedia(items: any[]) {
   for (const item of items) {
     const source = cleanText(item?.source)
     if (source !== 'restock' && source !== 'consumable') continue
+    if (source === 'consumable' && classifyLegacyConsumableScenePhoto(item?.item_id, item?.area)) continue
     const itemId = cleanText(item?.item_id || item?.area)
     const reference = cleanText(item?.uploaded_key || item?.url)
     if (!itemId || !reference) continue
     const current = byItem.get(itemId)
+    const historicalPhoto = {
+      reference,
+      label: source === 'restock' ? '检查人员补货凭证' : '清洁员补货照片',
+    }
     if (!current) {
       byItem.set(itemId, {
         item_id: itemId,
@@ -279,10 +298,15 @@ function buildRestockFromWorkTaskMedia(items: any[]) {
         qty: null,
         status: null,
         source_photo_url: reference,
+        historical_source_photos: [historicalPhoto],
         proof_media: [],
         note: '',
         origin: 'task',
       })
+      continue
+    }
+    if (!current.historical_source_photos?.some((photo) => photo.reference === reference)) {
+      current.historical_source_photos = [...(current.historical_source_photos || []), historicalPhoto]
     }
   }
   return Array.from(byItem.values())
@@ -305,6 +329,10 @@ function mergeRestockItems(base: RestockState[], incoming: RestockState[]) {
       qty: current.qty == null ? item.qty : current.qty,
       source_photo_url: current.source_photo_url || item.source_photo_url,
       note: current.note || item.note,
+      historical_source_photos: [
+        ...(current.historical_source_photos || []),
+        ...(item.historical_source_photos || []).filter((photo) => !(current.historical_source_photos || []).some((existing) => existing.reference === photo.reference)),
+      ],
     }
   }
   return out
@@ -461,6 +489,8 @@ export default function InspectionPanelScreen(props: Props) {
   }, [cleaningTaskId])
   const historicalSourceIds = readOnly ? taskFormPhotoReadOnlyRelationIds(task) : []
   const historicalSourceIdsKey = historicalSourceIds.join('|')
+  const canReadHistoricalGuestKey = readOnly && (task as any)?.read_only_views?.guest_key_photo === true
+  const canReadHistoricalLockboxVideo = readOnly && (task as any)?.read_only_views?.lockbox_video === true
   // Active consumables may belong to the canonical cleaner source, just as
   // historical media does. Send exact Root-projected sources for both views;
   // the server verifies the relationship and the viewer's inspection duty.
@@ -605,7 +635,9 @@ export default function InspectionPanelScreen(props: Props) {
           ? Promise.allSettled(consumableSourceIds.map((id) => getCleaningConsumables(token, id)))
           : Promise.resolve([]),
         readOnly && token && task?.id && historicalSourceIds.length
-          ? getWorkTaskFormPhotos(token, cleanText(task.id), historicalSourceIds, 'inspector', { includeVideos: true })
+          ? (canReadHistoricalLockboxVideo
+              ? getWorkTaskFormPhotos(token, cleanText(task.id), historicalSourceIds, 'inspector', { includeVideos: true })
+              : getWorkTaskFormPhotos(token, cleanText(task.id), historicalSourceIds, 'inspector'))
               .then((result) => result?.items || [])
               .catch(() => [])
           : Promise.resolve([]),
@@ -629,7 +661,9 @@ export default function InspectionPanelScreen(props: Props) {
         ? buildRestockFromWorkTaskMedia(remoteMediaItems)
         : buildRestockFromConsumables(consumablesResponses)
       const readOnlyPhotoState = readOnly
-        ? buildInspectionPanelServerPhotoState(remoteMediaItems.map((item: any) => ({
+        ? buildInspectionPanelServerPhotoState(remoteMediaItems
+          .filter((item: any) => cleanText(item?.source) === 'inspection')
+          .map((item: any) => ({
             ...item,
             url: cleanText(item?.uploaded_key || item?.url),
           })))
@@ -659,8 +693,12 @@ export default function InspectionPanelScreen(props: Props) {
         }
       }
       if (readOnly) {
-        const keyPhoto = remoteMediaItems.find((item: any) => cleanText(item?.source) === 'key')
-        const video = remoteMediaItems.find((item: any) => cleanText(item?.source) === 'lockbox_video')
+        const keyPhoto = canReadHistoricalGuestKey
+          ? remoteMediaItems.find((item: any) => cleanText(item?.source) === 'key')
+          : null
+        const video = canReadHistoricalLockboxVideo
+          ? remoteMediaItems.find((item: any) => cleanText(item?.source) === 'lockbox_video')
+          : null
         setHistoricalKeyPhoto(keyPhoto ? {
           reference: cleanText(keyPhoto.uploaded_key || keyPhoto.url),
           taskId: cleanText(keyPhoto.task_id),
@@ -737,7 +775,7 @@ export default function InspectionPanelScreen(props: Props) {
         if (showSpinner) setLoading(false)
       }
     }
-  }, [cleaningIssue, cleaningTaskId, commitRoomPhotos, consumableSourceIdsKey, historicalSourceIdsKey, initialRestockItems, propertyCode, propertyId, readOnly, resolveCurrentBatchResolution, task, token])
+  }, [canReadHistoricalGuestKey, canReadHistoricalLockboxVideo, cleaningIssue, cleaningTaskId, commitRoomPhotos, consumableSourceIdsKey, historicalSourceIdsKey, initialRestockItems, propertyCode, propertyId, readOnly, resolveCurrentBatchResolution, task, token])
 
   const loadLocalStateRef = useRef(loadLocalState)
   useEffect(() => {
@@ -1368,12 +1406,12 @@ export default function InspectionPanelScreen(props: Props) {
             onChanged={readOnly ? undefined : (notice) => patchWorkTaskItem(task.id, { guest_luggage: notice } as any)}
           /> : null}
 
-          {readOnly && (historicalKeyPhoto?.reference || historicalLockboxVideoSource.uri) ? (
+          {readOnly && ((canReadHistoricalGuestKey && historicalKeyPhoto?.reference) || (canReadHistoricalLockboxVideo && historicalLockboxVideoSource.uri)) ? (
             <View testID="inspection-read-only-key-media" style={styles.card}>
               <Text style={styles.readOnlyMediaTitle}>本次任务钥匙资料</Text>
               <Text style={styles.mutedSmall}>仅展示服务端与本工作记录明确关联的钥匙照片和挂钥匙视频。</Text>
               <View style={styles.readOnlyMediaRow}>
-                {historicalKeyPhoto?.reference ? (
+                {canReadHistoricalGuestKey && historicalKeyPhoto?.reference ? (
                   <Pressable
                     testID="inspection-read-only-key-photo"
                     onPress={() => setViewerTarget({ remoteReference: historicalKeyPhoto.reference })}
@@ -1389,7 +1427,7 @@ export default function InspectionPanelScreen(props: Props) {
                     />
                   </Pressable>
                 ) : null}
-                {historicalLockboxVideoSource.uri ? (
+                {canReadHistoricalLockboxVideo && historicalLockboxVideoSource.uri ? (
                   <View testID="inspection-read-only-lockbox-video" style={styles.readOnlyMediaItem}>
                     <Text style={styles.proofHint}>本次任务挂钥匙视频</Text>
                     <CleaningMediaVideo source={historicalLockboxVideoSource} />
@@ -1480,7 +1518,16 @@ export default function InspectionPanelScreen(props: Props) {
                       )}
                       <View style={styles.restockProofRow}>
                         <View style={styles.restockProofGallery}>
-                          {cleanText(item.source_photo_url) ? (
+                          {readOnly && item.historical_source_photos?.length ? item.historical_source_photos.map((photo, photoIndex) => (
+                            <Pressable
+                              key={`${photo.reference}:${photoIndex}`}
+                              onPress={() => setViewerTarget({ remoteReference: photo.reference, suppliesProof: true })}
+                              style={({ pressed }) => [styles.proofThumbWrap, pressed ? styles.pressed : null]}
+                            >
+                              <CleaningMediaImage token={token} isOnline={isOnline} remoteReference={photo.reference} {...suppliesMediaAccess} style={styles.proofThumb} />
+                              <Text style={styles.proofHint}>{photo.label}</Text>
+                            </Pressable>
+                          )) : cleanText(item.source_photo_url) ? (
                             <Pressable onPress={() => setViewerTarget({ remoteReference: cleanText(item.source_photo_url), suppliesProof: true })} style={({ pressed }) => [styles.proofThumbWrap, pressed ? styles.pressed : null]}>
                               <CleaningMediaImage token={token} isOnline={isOnline} remoteReference={item.source_photo_url} {...suppliesMediaAccess} style={styles.proofThumb} />
                               <Text style={styles.proofHint}>清洁员补货照片</Text>

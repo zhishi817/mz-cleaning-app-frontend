@@ -51,6 +51,48 @@ function isPendingInspectionStatus(status0: string) {
   return s === 'todo' || s === 'pending' || s === 'unassigned' || s === 'assigned'
 }
 
+const AUTHORITATIVE_SELF_COMPLETE_STATUSES = new Set([
+  'todo',
+  'pending',
+  'unassigned',
+  'assigned',
+  'in_progress',
+  'to_complete',
+  'to_hang_keys',
+  'keys_hung',
+  'cleaned',
+  'restock_pending',
+  'restocked',
+  'inspected',
+  'done',
+  'completed',
+  'ready',
+])
+
+function authoritativeSelfCompleteStatus(task: Partial<WorkTaskItem> | null | undefined) {
+  if (String(task?.source_type || '').trim().toLowerCase() !== 'cleaning_tasks') return null
+  if (effectiveInspectionMode(task as any) !== 'self_complete') return null
+  if ((task as any)?.inspection_assignment_conflict) return null
+  if (Array.isArray((task as any)?.display_conflicts) && (task as any).display_conflicts.length > 0) return null
+  const projection = (task as any)?.self_complete_progress
+  if (projection?.authoritative !== true) return null
+  const sourceTaskId = String(projection?.source_task_id || '').trim()
+  const sourceTaskIds = Array.from(new Set(
+    (Array.isArray(projection?.source_task_ids) ? projection.source_task_ids : [])
+      .map((value: unknown) => String(value || '').trim())
+      .filter(Boolean),
+  )).sort()
+  const activeSourceIds = Array.from(new Set(
+    (Array.isArray((task as any)?.active_source_ids) ? (task as any).active_source_ids : [])
+      .map((value: unknown) => String(value || '').trim())
+      .filter(Boolean),
+  )).sort()
+  const status = String(projection?.status || '').trim().toLowerCase()
+  if (!sourceTaskId || sourceTaskIds.length !== 2 || !sourceTaskIds.includes(sourceTaskId)) return null
+  if (activeSourceIds.length !== sourceTaskIds.length || activeSourceIds.some((value, index) => value !== sourceTaskIds[index])) return null
+  return AUTHORITATIVE_SELF_COMPLETE_STATUSES.has(status) ? status : null
+}
+
 export function isTaskWorkflowProgressStatus(status0: string) {
   const s = String(status0 || '').trim().toLowerCase()
   return s === 'in_progress' || s === 'to_inspect' || s === 'to_hang_keys' || s === 'to_complete'
@@ -69,9 +111,11 @@ export function getEffectiveTaskStatus(task: Partial<WorkTaskItem> | null | unde
   const source = String(task?.source_type || '').trim().toLowerCase()
   const kind = String(task?.task_kind || '').trim().toLowerCase()
   const isCheckinSiteExecution = isCheckinSiteExecutionTask(task as any)
+  if (status === 'cancelled' || status === 'canceled') return status
+  const selfCompleteStatus = authoritativeSelfCompleteStatus(task)
+  if (selfCompleteStatus) return selfCompleteStatus
   if (source === 'cleaning_tasks' && kind === 'cleaning' && !isCheckinSiteExecution && (task as any)?.cleaning_submission_ready === false) {
     const cleaningStatus = String((task as any)?.cleaning_status || '').trim().toLowerCase()
-    if (status === 'cancelled' || status === 'canceled') return status
     if (cleaningStatus && !isDoneLikeStatus(cleaningStatus)) return cleaningStatus
     if (status === 'in_progress' || status === 'cleaning' || String((task as any)?.key_photo_url || '').trim()) {
       return 'in_progress'

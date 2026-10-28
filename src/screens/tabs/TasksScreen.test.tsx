@@ -1698,7 +1698,7 @@ test.each([
     assignee_id: 'mia-id',
     inspector_id: null,
     assignee_name: 'Mia',
-    inspection_mode: 'same_day',
+    inspection_mode: 'deferred',
     inspection_scope: 'inspect_and_hang',
     inspection_original_checkout_date: '2026-10-23',
     deferred_inspection_merged: true,

@@ -770,6 +770,12 @@ export type WorkTask = {
   cleaning_status?: string | null
   cleaning_submission_ready?: boolean | null
   inspection_status?: string | null
+  self_complete_progress?: {
+    authoritative: true
+    source_task_id: string
+    source_task_ids: string[]
+    status: string
+  } | null
   urgency: string
   sort_index?: number | null
   photo_urls?: string[] | null
