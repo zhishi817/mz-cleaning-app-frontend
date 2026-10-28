@@ -69,14 +69,14 @@
 - Candidate patch SHA-256: `6adae44a6b6178970e1db36d9913e5a6f7424aa9d3219891c83d2442257938c4`; ledger metadata excluded
 - Commit SHA: `008fe603a1be532a9a180b9375e9cef6a7e7c123`
 - Dependencies: `root/CRL-20261025-004@71a24b143b553835c214091d9a89b4666c1a95db`
-- Cross-repository dependency verification: `PASS`; paired Root exact release report audited `c0f56c9a2232193e4b0937cea7b1169976a80a91...04e3b24042137430ebc58362a263d138f77b1338`, contains the declared content commit `71a24b143b553835c214091d9a89b4666c1a95db`, retained candidate fingerprint `e53b3ca4ae55eb5e808a00723b95ca6dbe4edfef3e3b6a1dc83893d1d4ebac21`, and concluded `GO`; Root remains a later deployment prerequisite, but no deployment is part of this push
+- Cross-repository dependency verification: `PASS for the exact paired source / overall cross-repository report remains NOT VERIFIED by design`; paired Root report audited `c0f56c9a2232193e4b0937cea7b1169976a80a91...4e57adf9e904415f7c955b5301400dc271be293a`, contains declared Root content commit `71a24b143b553835c214091d9a89b4666c1a95db` and FR-004 content commit `533c85b69f09e38532b2cb565daa17d24aae28a1`, retained complete candidate fingerprint `5bda2b6f6fdb71d8d3bf892f826ec64398247836242222f14d7eb509a9f4ed58`, and passed every Root-local range, ownership, generated and sensitive gate; its sole remaining `NOT VERIFIED` item is this canonical Mobile dependency, which this independent Mobile report must verify. Root remains a later deployment prerequisite; no merge, deployment or OTA is part of this receipt
 - Required validation: PASS; combined `npm run check:ci` passed 82 suites / 724 tests with TypeScript, lint 0 errors, button, fast, ledger and registry gates; focused MZ-075 tests passed 3 suites / 122 tests
 - Shared-hunk review: PASS; independent review verified MZ-075/082/083/085/086 joint behavior and found no permission expansion, active write regression, proactive OTA operation, notice data loss or self-complete fallback conflict
 - Generated-file review: PASS; temporary dependency symlink and all preview/test output were removed, with no native, generated, cache or media file selected
-- Technical state: committed; ledger-only receipt pending
+- Technical state: pushed; content commit `008fe603a1be532a9a180b9375e9cef6a7e7c123` and prior ledger receipt are reachable from PR #68 head `8b2f9d8383836cebc0deac8c1177aca7fbdcfb0e`; this paired Root-head update is ledger-only
 - User authorization: approved-for-push; evidence: user explicitly requested “提交推送8 个修复” for MZ-075/082/083/085/086/087/088/089, excluding MZ-084, with no PR, merge, deployment, OTA or production-data action
 - Independent review: GO for the exact squashed content commit; P0=0, code P1=0. The review's governance P1 is closed by this joint Release Attempt and the passing exact staged-scope audit; only the documented native-device and production acceptance gaps remain
-- Action conclusion: GO for this ledger-only receipt commit; normal non-force push remains conditional on the exact post-receipt range report and final remote preflight
+- Action conclusion: GO for the ledger-only paired-source receipt; any branch update remains conditional on a fresh independent receipt review, exact Mobile range report and expected head `8b2f9d8383836cebc0deac8c1177aca7fbdcfb0e`
 
 ### Risks / Release Notes
 
