@@ -3,7 +3,7 @@
 ## CRL-20261028-005 — 人员结算补发回归去除重复整屏渲染
 
 - **Repository:** `mobile`
-- **Status:** GitHub candidate objects prepared after exact range audit and independent push review GO; new branch creation pending; not merged, deployed, or published
+- **Status:** pushed to the authorized new GitHub branch after exact range audit and independent push review GO; draft PR pending; not merged, deployed, or published
 - **Updated:** 2026-10-28 UTC
 - **Request:** 继续修复 `mobile/CRL-20261028-004` 合并后仍在 Root 完整回归并行 Jest worker 中触发的 `PersonnelSettlementScreen.test.tsx` 默认 5000ms 超时；不得增加时限、跳过测试、削弱补发/GST/汇总断言或修改结算业务。
 - **Outcome:** 把独立补发用例的全部数据和断言并入既有“上一完整周核对并提交”真实屏幕流程，使同一次真实 `PersonnelSettlementScreen` 渲染同时覆盖基础工作量、补贴、付款后补发、来源周、税前/GST 拆分、周汇总和二次确认；移除的只是重复的第二次整屏渲染，不移除任何受保护断言。
@@ -94,10 +94,11 @@
 - Required validation: PASS; focused settlement 30/30, Root-shape plain multi-worker Jest 82 suites / 723 tests, Mobile `check:ci`, ledger coverage and exact committed-range report all passed.
 - Shared-hunk review: PASS; all 8 selected non-ledger hunks retain the protected supplement/GST/summary/submission coverage and remove only a duplicate real-screen render.
 - Generated-file review: PASS; exact range contains one TSX test and two Markdown governance files, no generated or sensitive category, and no ignored dependency content.
-- Technical state: GitHub candidate commit and review-receipt tree prepared, exact-range audited locally, and approved for the reviewed new-branch push plus draft PR.
+- Technical state: pushed to `codex/personnel-settlement-timeout-fix-v2`; draft PR pending.
 - User authorization: approved-for-push; on 2026-10-28 the user explicitly authorized continuing this exact v2 fix on a new branch, pushing it and creating a draft PR to `Dev`. Merge, main, production, deployment and OTA remain excluded.
 - Independent review: GO for the exact new-branch push plus draft PR; no P0/P1/P2. The reviewer independently recomputed range fingerprint `f0a28dee547b919f90489b1589a45ffdead9d62256b28f6e86185d6954e74a1d`, reconfirmed `Dev` at the selected base, verified the target branch remains absent, and found no coverage, generated-file, sensitive-information or production-write issue. This review does not authorize merge, deployment or OTA.
-- Action conclusion: GO for creating only `codex/personnel-settlement-timeout-fix-v2`, publishing the exact audited range and opening a draft PR to `Dev`, subject to a current exact range report after this review receipt.
+- Remote evidence: GitHub created `codex/personnel-settlement-timeout-fix-v2` from receipt commit `8a51a379142ef27c7e2de9fd2a48b25bd3976a14`; read-only `ls-remote` confirmed the branch at that exact SHA after creation. The branch did not pre-exist and no existing ref was updated.
+- Action conclusion: new-branch push completed; this ledger receipt may advance only that branch by ordinary expected-SHA update before opening the authorized draft PR to `Dev`.
 
 ### Risks / Release Notes
 
