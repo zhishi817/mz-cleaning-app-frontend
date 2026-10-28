@@ -33,7 +33,7 @@ import { getEffectiveTaskStatus, guestCheckoutCanDriveTaskStatus, hasAuthoritati
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, patchWorkTaskItems, requestWorkTasksRefresh, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
 import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyOperationId, isGuestReadyNotificationAction, mergeGuestReadyNotificationActions, navigationForWorkTaskAction } from '../../lib/workTaskActions'
 import { buildCleaningMediaVideoSource } from '../../lib/cleaningMedia'
-import { ALL_KITCHEN_SCENE_PHOTOS } from '../../lib/cleaningScenePhotoTemplate'
+import { CLEANING_SCENE_PHOTO_IDS, CLEANING_SCENE_PHOTO_LABEL } from '../../lib/cleaningScenePhotoTemplate'
 import {
   completionPhotoTaskIdsFromTask,
   inspectionPhotoTaskIdsFromTask,
@@ -87,16 +87,6 @@ const AREA_LABEL: Record<string, string> = {
   remote_controls: '电视和空调遥控器（旧记录）',
   vacuum_used: '吸尘器使用后',
 }
-
-const CLEANING_SCENE_PHOTO_LABEL: Record<string, string> = {
-  shower_drain_photo_1: '淋浴房下水口 1',
-  shower_drain_photo_2: '淋浴房下水口 2',
-  shower_drain_photo_3: '淋浴房下水口 3',
-  ...Object.fromEntries(ALL_KITCHEN_SCENE_PHOTOS.map((item) => [item.id, item.label])),
-  vacuum_used_photo: '吸尘器使用后',
-}
-
-const CLEANING_SCENE_PHOTO_IDS = new Set(Object.keys(CLEANING_SCENE_PHOTO_LABEL))
 
 function normalizeUrlList(raw: any, fallback?: any) {
   const values = Array.isArray(raw) ? raw : raw ? [raw] : []
@@ -1033,7 +1023,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
           </View>
         </View>
 
-        <WorkRecordReadOnlyInfo task={task} token={token} />
+        <WorkRecordReadOnlyInfo task={task} token={token} showGuestLuggage={false} />
 
         {photoLoadIssues.length ? (
           <View testID="manager-photo-load-issues" style={styles.photoIssueCard}>

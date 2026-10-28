@@ -27,6 +27,99 @@ export const ALL_KITCHEN_SCENE_PHOTOS = [
   ...CURRENT_KITCHEN_REQUIRED_PHOTOS,
 ] as const
 
+export type CleaningCompletionDisplayArea =
+  | 'toilet'
+  | 'living'
+  | 'sofa'
+  | 'bedroom'
+  | 'kitchen'
+  | 'shower_drain'
+  | 'remote_tv'
+  | 'vacuum_used'
+
+export const CLEANING_SCENE_PHOTO_LABEL: Record<string, string> = {
+  shower_drain_photo_1: '淋浴房下水口 1',
+  shower_drain_photo_2: '淋浴房下水口 2',
+  shower_drain_photo_3: '淋浴房下水口 3',
+  ...Object.fromEntries(ALL_KITCHEN_SCENE_PHOTOS.map((item) => [item.id, item.label])),
+  vacuum_used_photo: '吸尘器使用后',
+}
+
+export const CLEANING_SCENE_PHOTO_IDS = new Set(Object.keys(CLEANING_SCENE_PHOTO_LABEL))
+
+const COMPLETION_AREA_SET = new Set<CleaningCompletionDisplayArea>([
+  'toilet',
+  'living',
+  'sofa',
+  'bedroom',
+  'kitchen',
+  'shower_drain',
+  'remote_tv',
+  'vacuum_used',
+])
+
+export type CleaningCompletionEvidence = {
+  area: CleaningCompletionDisplayArea
+  label: string
+  legacyConsumable: boolean
+}
+
+function cleanText(value: unknown) {
+  return String(value || '').trim()
+}
+
+export function normalizeCleaningCompletionArea(value: unknown): CleaningCompletionDisplayArea | null {
+  const area = cleanText(value)
+  if (area === 'remote_ac' || area === 'remote_controls') return 'remote_tv'
+  return COMPLETION_AREA_SET.has(area as CleaningCompletionDisplayArea)
+    ? area as CleaningCompletionDisplayArea
+    : null
+}
+
+/**
+ * Older cleaning clients persisted required room-scene evidence alongside
+ * consumable rows. Those rows remain valid completion evidence, but must not
+ * be presented as restock decisions. Unknown consumable ids intentionally
+ * return null so historical/removed supplies remain visible as supplies.
+ */
+export function classifyLegacyConsumableScenePhoto(
+  itemIdValue: unknown,
+  areaValue?: unknown,
+): CleaningCompletionEvidence | null {
+  const itemId = cleanText(itemIdValue)
+  const area = cleanText(areaValue)
+  if (!itemId && area === 'living') {
+    return { area: 'living', label: '客厅照片', legacyConsumable: true }
+  }
+  if (itemId === 'remote_tv' || itemId === 'remote_ac') {
+    return { area: 'remote_tv', label: '电视和空调遥控器', legacyConsumable: true }
+  }
+  if (itemId === 'vacuum_used_photo') {
+    return { area: 'vacuum_used', label: CLEANING_SCENE_PHOTO_LABEL[itemId], legacyConsumable: true }
+  }
+  if (itemId.startsWith('shower_drain_photo_') && CLEANING_SCENE_PHOTO_IDS.has(itemId)) {
+    return { area: 'shower_drain', label: CLEANING_SCENE_PHOTO_LABEL[itemId], legacyConsumable: true }
+  }
+  if (ALL_KITCHEN_SCENE_PHOTOS.some((item) => item.id === itemId)) {
+    return { area: 'kitchen', label: CLEANING_SCENE_PHOTO_LABEL[itemId], legacyConsumable: true }
+  }
+  return null
+}
+
+export function classifyHistoricalCleaningCompletionPhoto(record: {
+  source?: unknown
+  item_id?: unknown
+  area?: unknown
+}): CleaningCompletionEvidence | null {
+  const source = cleanText(record?.source)
+  if (source === 'completion') {
+    const area = normalizeCleaningCompletionArea(record?.area)
+    return area ? { area, label: area, legacyConsumable: false } : null
+  }
+  if (source !== 'consumable') return null
+  return classifyLegacyConsumableScenePhoto(record?.item_id, record?.area)
+}
+
 const LEGACY_KITCHEN_PHOTO_IDS = new Set<string>(LEGACY_KITCHEN_REQUIRED_PHOTOS.map((item) => item.id))
 const CURRENT_KITCHEN_PHOTO_IDS = new Set<string>(CURRENT_KITCHEN_REQUIRED_PHOTOS.map((item) => item.id))
 

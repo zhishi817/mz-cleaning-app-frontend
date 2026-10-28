@@ -1,5 +1,71 @@
 # Feature Regression Registry
 
+## FR-P1-UPD-01 — OTA 已下载与实际生效提示
+
+- **Status:** active; MZ-083 Scheme A selected local commit candidate, not released.
+- **Maintenance scope:** Mobile root update observer, versioned notice persistence, “我的” update entry and compiled release notes.
+- **Last reviewed:** 2026-10-26 UTC
+- **Business outcome:** 只有 Expo Updates 明确提供已下载目标时显示“更新已下载”；只有实际运行 `updateId` 与目标一致或相对已知运行版本真实变化后，才显示一次“更新完成”。首次安装、回退、应急启动、缓存缺失/替代和未知元数据不得伪报成功。选择“稍后”只表示当前会话不由本功能主动重启，用户可从“我的”再次查看。
+- **Related CRLs:** `mobile/CRL-20261025-001`.
+
+### Test-to-invariant mapping
+
+- `src/lib/appUpdateNoticeState.test.ts` — 首装不误报、pending/ack 去重、running updateId 生效、漏观察 pending、startup 未稳定、rollback/emergency/cache missing/replacement、损坏存储与缺失发布说明。
+- `src/components/AppUpdateNoticeProvider.test.tsx` — SDK downloaded 提示、无主动重启按钮、稍后与手动入口、实际生效说明、rollback 不误报。
+- `src/screens/tabs/MeScreen.test.tsx` — “我的”入口可见并打开提示。
+
+### Delivery boundary
+
+- 不主动调用 OTA check/fetch/reload；不修改原生 `ON_LOAD`、runtime、channel、依赖、上传队列、草稿或媒体。
+- 方案 A 只提供准确提示，不是“可控重启/完整资料恢复”方案。冷启动仍可能应用已缓存更新；iOS/Android 真机、真实 rollback、离线与受保护生产资料仍需发布前后单独验收。
+
+## FR-P2-NOT-01 — 管理详情临时通知单一入口
+
+- **Status:** active; selected local commit candidate, not released.
+- **Maintenance scope:** Mobile `ManagerDailyTaskScreen` historical and active manager detail.
+- **Last reviewed:** 2026-10-26 UTC
+- **Business outcome:** 每日清洁管理详情只在原“当天任务临时通知”完整区块显示临时通知、照片及清洁/检查知晓状态；历史只读资料卡不得再次渲染同一通知。其他仅依赖 `WorkRecordReadOnlyInfo` 的页面继续保留原只读通知入口。
+- **Test-to-invariant mapping:** `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` verifies a read-only work record with a synthetic notice renders one heading and exactly one canonical `GuestLuggageCard`, with acknowledgement summary preserved and the upper duplicate omitted.
+- **Delivery boundary:** 不删除通知或照片，不改变下方编辑/只读规则、知晓状态、后端鉴权或生产数据；真机与真实受保护照片未验收。
+- **Related CRLs:** `mobile/CRL-20261025-002`.
+
+## FR-P1-TSK-08 — 自完成合卡状态保持清洁源权威进度
+
+- **Status:** active; selected local BO717 commit candidate, not released.
+- **Maintenance scope:** Mobile management task-card status presentation; paired Root exact-source projection is `root/CRL-20261025-004`.
+- **Last reviewed:** 2026-10-26 UTC
+- **Business outcome:** 可靠同一次周转的自完成退房与关联入住合成一张卡时，入住的未分配或待处理检查阶段只能补充入住资料，不得把整卡从清洁源真实进度改成“待检查”。Mobile 只接受 Root 标记为权威、准确双 source 且与当前 active source 完全一致的 `self_complete_progress`；普通检查、取消、来源冲突、不同周转、缺失或旧缓存标记全部 fail-closed。
+- **Related CRLs:** `root/CRL-20261025-004` / `mobile/CRL-20261025-004`.
+
+### Test-to-invariant mapping
+
+- `src/lib/taskVisualTheme.test.ts` — BO717 形态显示待挂钥匙；普通 same-day、取消、来源不一致、人员冲突或无权威字段继续使用原状态。
+- `src/lib/workTasksStore.test.ts` — 同一准确 source 的实时补丁可更新权威自完成进度，刷新/重新进入不依赖临时 UI 推断。
+
+### Delivery boundary
+
+- 不改变人员、任务模式、源记录、历史阶段、媒体、上传队列或生产状态；Root 必须先部署，再发布 Mobile。
+- 合成列表测试及 Expo Web 预览不能替代真实账号、原生 iOS/Android、生产源记录与弱网验收；BO717 照片是否上传成功是独立调查，不属于本修复。
+
+## FR-P1-MED-11 — 历史房间完成照与补品记录准确分类
+
+- **Status:** active; MZ-082 selected local commit candidate, not pushed or released.
+- **Maintenance scope:** cleaner and inspector historical read-only media presentation; shared scene-photo classification with the manager view.
+- **Last reviewed:** 2026-10-26 UTC
+- **Business outcome:** 清洁历史页必须把清洁房间完成照显示在清洁本人完成照片区，不得把 `remote_tv`、吸尘器、浴室下水口或新旧厨房模板照片冒充消耗品。检查历史页不得展示清洁人员房间完成照，只保留受权的客人钥匙、真实补品及检查人员自己的检查记录。真实补品、历史下架补品及未来未知补品继续作为只读记录保留；缺失状态显示“待确认／未记录”，不得伪造“现场够用”。
+- **Related CRLs:** `mobile/CRL-20261024-012`; preserves `mobile/CRL-20261024-004`, `mobile/CRL-20261024-005`, and paired MZ-081 exact-source authorization.
+
+### Test-to-invariant mapping
+
+- `src/lib/cleaningScenePhotoTemplate.classification.test.ts` — 新旧厨房模板、遥控器、吸尘器、下水口、旧客厅混存的共享分类；真实、下架和未知补品不得误分类。
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — 清洁历史只读页把完成照移回原完成分区、URL去重，并保留真实及下架补品且无写控件。
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — 检查历史只读页完全不渲染清洁完成照，真实补品和检查人员自己的检查照仍保留，且补品区无新增、拍照或提交按钮。
+
+### Delivery boundary
+
+- 不修改 Root 鉴权、数据库媒体记录、上传队列、任务状态或活动任务编辑规则；不移动、删除、重传或重写任何真实照片。
+- Expo Web 合成预览和 Jest 不能替代原生 iOS/Android、真实受保护媒体、弱网及旧设备缓存验收；提交、推送、OTA、APK 均需另行授权。
+
 ## FR-P1-MED-10 — 检查补品照缩略图与大图准确来源一致
 
 - **Status:** active; MZ-081 local candidate, not released.
@@ -49,16 +115,16 @@
 
 ## FR-P1-TSK-06 — 延期检查与当天入住可靠合卡展示
 
-- **Status:** active; combined MZ-075/MZ-076 candidate committed locally, not pushed or released.
+- **Status:** active; original combined MZ-075/MZ-076 candidate is released, and the 2026-10-27 true-deferred title follow-up is fixed locally but not committed or released.
 - **Maintenance scope:** `mobile` management task-list presentation; paired Root relation, projection and save target are `root/CRL-20261024-002`.
-- **Last reviewed:** 2026-10-24 UTC
+- **Last reviewed:** 2026-10-27 UTC
 - **Business outcome:** 只有 Root 明确标记为同一次可靠周转的延期检查 + 当天入住，Mobile 才显示一张带“是延期检查”的卡及真实 `原退房日期 → 本次检查日期`。标题只描述展示日真实任务；历史 checkout source 不能让延期执行日冒出“退房”，当天确有 checkout 时只接受 Root 明确下发的权威事实。入住安排和分配状态来自入住 source；真实未分配不能继承延期计划检查人，保存成功后的已分配必须由下一次权威投影确认。普通入住、不同周转、歧义来源和缺失日期不得由客户端猜测或误标。
-- **Related CRLs:** `mobile/CRL-20261024-001`; paired `root/CRL-20261024-002`.
+- **Related CRLs:** `mobile/CRL-20261024-001`, `mobile/CRL-20261027-001`; paired `root/CRL-20261024-002`.
 
 ### Test-to-invariant mapping
 
-- `src/lib/cleaningInspection.test.ts` — 历史退房 source 在延期执行日只生成“入住”；Root 明确下发当日 checkout 时仍显示“退房 入住”。
-- `src/screens/tabs/TasksScreen.test.tsx` — admin、offline_manager、customer_service 均显示“是延期检查”/真实日期/入住执行人；真正未分配保留“未分配”；普通入住没有延期标签。
+- `src/lib/cleaningInspection.test.ts` — 包括 `inspection_mode=deferred` 的真实合卡形态：历史退房 source 在延期执行日只生成“入住”；Root 明确下发当日 checkout 时仍显示“退房 入住”；缺权威当日事实时不按旧时间猜测。
+- `src/screens/tabs/TasksScreen.test.tsx`、`src/screens/tasks/TaskDetailScreen.test.tsx` — 列表与详情均消费相同标题 helper；admin、offline_manager、customer_service 列表显示“是延期检查”/真实日期/入住执行人，详情标题保持一致；真正未分配保留“未分配”；普通入住没有延期标签。
 - `src/lib/api.ts` — 只声明 Root 的结构化字段；客户端不按房号日期配对。
 
 ### Delivery boundary

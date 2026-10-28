@@ -33,6 +33,7 @@ import {
   type InspectionMediaQueueItem,
 } from '../../lib/inspectionMediaQueue'
 import { effectiveInspectionMode } from '../../lib/cleaningInspection'
+import { classifyHistoricalCleaningCompletionPhoto, classifyLegacyConsumableScenePhoto } from '../../lib/cleaningScenePhotoTemplate'
 import { isDailyTaskKeyHandoverStage } from '../../lib/dailyTaskPresentation'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
@@ -501,13 +502,14 @@ export default function CleaningSelfCompleteScreen(props: Props) {
           }
           continue
         }
-        if (readOnly && source !== 'completion') continue
-        const rawArea = String(it.area || '').trim()
+        const historicalCompletion = readOnly ? classifyHistoricalCleaningCompletionPhoto(it as any) : null
+        if (readOnly && !historicalCompletion) continue
+        const rawArea = historicalCompletion?.area || String(it.area || '').trim()
         const a = (rawArea === 'remote_controls' || rawArea === 'remote_ac' ? 'remote_tv' : rawArea) as PhotoArea
         const url = String((it as any).uploaded_key || it.url || '').trim()
         if (!url) continue
         if (!(a in next)) continue
-        next[a].push(url)
+        if (!next[a].includes(url)) next[a].push(url)
       }
       for (const media of draft?.media || []) {
         if (media.media_kind !== 'completion_photo') continue
@@ -638,12 +640,12 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         const itemId = String(row.item_id || row.area || '').trim()
         const url = String(row.uploaded_key || row.url || '').trim()
         if (!itemId || !url) continue
-        if (row.source === 'consumable') {
+        if (row.source === 'consumable' && !classifyLegacyConsumableScenePhoto(row.item_id, row.area)) {
           const existing = historicalConsumablesById.get(itemId)
           historicalConsumablesById.set(itemId, {
             item_id: itemId,
             item_label: String(row.label || itemId).trim(),
-            status: 'ok',
+            status: null,
             photo_urls: Array.from(new Set([...(existing?.photo_urls || []), url])),
           })
         }
@@ -687,7 +689,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         : []
       for (const projected of projectedRestockItems) {
         const itemId = String(projected?.item_id || '').trim()
-        if (!itemId) continue
+        if (!itemId || classifyLegacyConsumableScenePhoto(itemId)) continue
         const existing = restockById.get(itemId)
         restockById.set(itemId, {
           ...existing,

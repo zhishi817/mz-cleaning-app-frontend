@@ -11,6 +11,7 @@ import { hasAnyPermission } from '../../lib/roles'
 import { hairline } from '../../lib/scale'
 import { layoutTokens } from '../../lib/theme'
 import type { MeStackParamList } from '../../navigation/RootNavigator'
+import { useAppUpdateNotice } from '../../components/AppUpdateNoticeProvider'
 
 function initialsOf(username: string) {
   const u = username.trim()
@@ -26,6 +27,7 @@ type Props = NativeStackScreenProps<MeStackParamList, 'MeHome'>
 export default function MeScreen(props: Props) {
   const { user, token, signOut } = useAuth()
   const { locale, setLocale, t } = useI18n()
+  const appUpdate = useAppUpdateNotice()
   const [profile, setProfile] = useState<Profile>(() => defaultProfileFromUser(user))
   const canOpenExpenseCenter = useMemo(
     () =>
@@ -152,6 +154,15 @@ export default function MeScreen(props: Props) {
           <Ionicons name="cash-outline" size={20} color="#2563EB" />
           <Text style={styles.itemText}>费用结算</Text>
         </Pressable>
+        <View style={styles.sep} />
+        <Pressable testID="me-app-update" onPress={appUpdate.open} style={({ pressed }) => [styles.listItem, pressed ? styles.pressed : null]}>
+          <Ionicons name="cloud-download-outline" size={20} color="#2563EB" />
+          <View style={styles.itemCopy}>
+            <Text style={styles.itemText}>{appUpdate.label}</Text>
+            <Text style={styles.itemHint}>{appUpdate.detail}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+        </Pressable>
       </View>
 
       <Pressable testID="me-logout-action" style={({ pressed }) => [styles.logoutBtn, pressed ? styles.logoutPressed : null]} onPress={onLogout}>
@@ -201,6 +212,8 @@ const styles = StyleSheet.create({
   langTextActive: { color: '#FFFFFF' },
   listItem: { paddingHorizontal: 14, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', gap: 10 },
   itemText: { flex: 1, minWidth: 0, fontSize: 14, fontWeight: '900', color: '#111827' },
+  itemCopy: { flex: 1, minWidth: 0 },
+  itemHint: { marginTop: 3, fontSize: 12, lineHeight: 17, color: '#6B7280' },
   sep: { height: hairline(), backgroundColor: '#EEF0F6' },
   logoutBtn: {
     marginTop: 16,

@@ -50,6 +50,7 @@ describe('cleaningInspection display helpers', () => {
       source_type: 'cleaning_tasks',
       task_kind: 'inspection',
       task_type: 'checkin_clean',
+      inspection_mode: 'deferred',
       start_time: '10am',
       end_time: '3pm',
       deferred_inspection_merged: true,
@@ -59,6 +60,7 @@ describe('cleaningInspection display helpers', () => {
       source_type: 'cleaning_tasks',
       task_kind: 'inspection',
       task_type: 'turnover',
+      inspection_mode: 'deferred',
       start_time: '10am',
       end_time: '3pm',
       deferred_inspection_merged: true,
@@ -72,6 +74,15 @@ describe('cleaningInspection display helpers', () => {
       end_time: '3pm',
       deferred_inspection_merged: true,
     })).toBe('退房 入住')
+    expect(cleaningTaskTitleSuffix({
+      source_type: 'cleaning_tasks',
+      task_kind: 'inspection',
+      task_type: 'turnover',
+      inspection_mode: 'deferred',
+      start_time: '10am',
+      end_time: '3pm',
+      deferred_inspection_merged: true,
+    })).toBe('延期检查')
   })
 
   test('marks password-only inspection tasks distinctly', () => {

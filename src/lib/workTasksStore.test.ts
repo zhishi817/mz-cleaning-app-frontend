@@ -174,6 +174,46 @@ test('recomputes a cached visible projection when local or SSE visibility inputs
   expect(mergePatchIntoTask({ ...offline, assignee_id: null }, statusPatch).execution_list_visible).toBe(false)
 })
 
+test('keeps authoritative self-complete progress current across a safe realtime patch', () => {
+  const task = makeTask({
+    id: 'cleaning_tasks_manager_turnover:bo717',
+    task_kind: 'inspection',
+    task_type: 'turnover',
+    status: 'to_inspect',
+    inspection_mode: 'self_complete',
+    active_source_ids: ['bo717-checkout', 'bo717-checkin'],
+    self_complete_progress: {
+      authoritative: true,
+      source_task_id: 'bo717-checkout',
+      source_task_ids: ['bo717-checkout', 'bo717-checkin'],
+      status: 'to_hang_keys',
+    },
+  } as any)
+  const event = {
+    event_type: 'TASK_UPDATED',
+    change_scope: 'list',
+    changed_fields: ['self_complete_progress'],
+    payload: {
+      patch: {
+        self_complete_progress: {
+          authoritative: true,
+          source_task_id: 'bo717-checkout',
+          source_task_ids: ['bo717-checkout', 'bo717-checkin'],
+          status: 'keys_hung',
+        },
+      },
+    },
+  } as any
+
+  expect(isSafePatchEvent(event)).toBe(true)
+  expect(mergePatchIntoTask(task, event).self_complete_progress).toEqual({
+    authoritative: true,
+    source_task_id: 'bo717-checkout',
+    source_task_ids: ['bo717-checkout', 'bo717-checkin'],
+    status: 'keys_hung',
+  })
+})
+
 test('keeps a local checkout marker when the refreshed cleaning payload omits the field', () => {
   const previous = [makeTask({ id: 'old-merged-card', source_ids: ['checkout-1', 'checkin-1'], checked_out_at: '2026-07-25T01:00:00.000Z' } as any)]
   const remote = [makeTask({ id: 'new-merged-card', source_ids: ['checkout-1', 'checkin-1'] } as any)]

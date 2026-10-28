@@ -119,7 +119,7 @@ jest.mock('../../components/ui/ResponsiveImageGrid', () => (props: any) => {
   return mockReact.createElement(
     mockReact.Fragment,
     null,
-    (props.items || []).map((item: any, index: number) => mockReact.createElement(mockReact.Fragment, { key: item.key || item.id || index }, props.renderItem(item))),
+    (props.items || []).map((item: any, index: number) => mockReact.createElement(mockReact.Fragment, { key: item.key || item.id || index }, props.renderItem(item, index))),
   )
 })
 jest.mock('../../components/ui/SafeAreaBottomBar', () => () => null)
@@ -164,8 +164,76 @@ test.each([false, true])('补品照片缩略图和大图携带准确服务端来
   }
 })
 
+test('历史检查页不展示清洁房间完成照，仍保留真实补品与检查员自己的检查照片', async () => {
+  const previous = mockSnapshot.items[0]
+  mockSnapshot.items[0] = {
+    ...previous,
+    status: 'done',
+    source_ids: ['cleaning-1', 'inspection-1'],
+    work_record_read_only: true,
+    read_only_views: { media_source_ids: ['cleaning-1', 'inspection-1'] },
+    restock_items: [{ item_id: 'toilet-paper', label: '卷纸', qty: 1, photo_url: 'cleaning/synthetic/toilet-paper.jpg' }],
+  } as any
+  const api = require('../../lib/api')
+  api.getWorkTaskFormPhotos.mockResolvedValue({
+    items: [
+      { id: 'paper', task_id: 'cleaning-1', source: 'consumable', item_id: 'toilet-paper', label: '卷纸', url: 'cleaning/synthetic/toilet-paper.jpg' },
+      { id: 'retired', task_id: 'cleaning-1', source: 'consumable', item_id: 'retired-supply', label: '历史下架补品', url: 'cleaning/synthetic/retired.jpg' },
+      { id: 'living-modern', task_id: 'cleaning-1', source: 'completion', area: 'living', url: 'cleaning/synthetic/living.jpg' },
+      { id: 'living-legacy', task_id: 'cleaning-1', source: 'consumable', area: 'living', url: 'cleaning/synthetic/living.jpg' },
+      { id: 'remote', task_id: 'cleaning-1', source: 'consumable', item_id: 'remote_tv', url: 'cleaning/synthetic/remote.jpg' },
+      { id: 'vacuum', task_id: 'cleaning-1', source: 'consumable', item_id: 'vacuum_used_photo', url: 'cleaning/synthetic/vacuum.jpg' },
+      { id: 'shower', task_id: 'cleaning-1', source: 'consumable', item_id: 'shower_drain_photo_1', url: 'cleaning/synthetic/shower.jpg' },
+      { id: 'kitchen-current', task_id: 'cleaning-1', source: 'consumable', item_id: 'cutlery_drawer_photo_v2', url: 'cleaning/synthetic/kitchen-current.jpg' },
+      { id: 'kitchen-legacy', task_id: 'cleaning-1', source: 'consumable', item_id: 'coffee_machine_photo', url: 'cleaning/synthetic/kitchen-legacy.jpg' },
+      { id: 'inspection-living', task_id: 'inspection-1', source: 'inspection', area: 'living', url: 'cleaning/synthetic/inspection-living.jpg' },
+    ],
+  })
+
+  try {
+    const Screen = require('./InspectionPanelScreen').default
+    const ui = render(<I18nProvider><Screen navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }} route={{ key: 'classified-history', name: 'InspectionPanel', params: { taskId: 'w-inspection', readOnly: true } }} /></I18nProvider>)
+
+    await waitFor(() => {
+      expect(ui.getByText('卷纸')).toBeTruthy()
+      expect(ui.getByText('已保存数量：1')).toBeTruthy()
+      expect(ui.getByText('历史下架补品')).toBeTruthy()
+      expect(ui.getAllByText('已保存状态：未记录').length).toBeGreaterThanOrEqual(1)
+    })
+    expect(ui.queryByTestId('inspection-read-only-cleaner-completion')).toBeNull()
+    expect(ui.queryByTestId('inspection-cleaner-completion-living-0')).toBeNull()
+    expect(ui.queryByTestId('inspection-cleaner-completion-remote_tv-0')).toBeNull()
+    expect(ui.queryByTestId('inspection-cleaner-completion-vacuum_used-0')).toBeNull()
+    expect(ui.queryByTestId('inspection-cleaner-completion-shower_drain-0')).toBeNull()
+    expect(ui.queryByTestId('inspection-cleaner-completion-kitchen-0')).toBeNull()
+    expect(ui.queryByText('remote_tv')).toBeNull()
+    expect(ui.queryByText('vacuum_used_photo')).toBeNull()
+    expect(ui.queryByText('shower_drain_photo_1')).toBeNull()
+    expect(ui.queryByText('cutlery_drawer_photo_v2')).toBeNull()
+    expect(ui.queryByText('coffee_machine_photo')).toBeNull()
+    expect(ui.getByTestId('inspection-photo-living-0')).toBeTruthy()
+    expect(ui.queryByTestId('inspection-add-other-restock')).toBeNull()
+    expect(ui.queryByText('拍照上传')).toBeNull()
+    expect(ui.queryByText('提交本页检查与补充')).toBeNull()
+    expect(ui.queryByText('现场够用')).toBeNull()
+    const rendered = JSON.stringify(ui.toJSON())
+    expect(rendered).not.toContain('cleaning/synthetic/living.jpg')
+    expect(rendered).not.toContain('cleaning/synthetic/remote.jpg')
+    expect(rendered).not.toContain('cleaning/synthetic/vacuum.jpg')
+    expect(rendered).not.toContain('cleaning/synthetic/shower.jpg')
+    expect(rendered).not.toContain('cleaning/synthetic/kitchen-current.jpg')
+    expect(rendered).not.toContain('cleaning/synthetic/kitchen-legacy.jpg')
+    expect(rendered).toContain('cleaning/synthetic/inspection-living.jpg')
+  } finally {
+    mockSnapshot.items[0] = previous
+    api.getWorkTaskFormPhotos.mockReset().mockResolvedValue({ items: [] })
+  }
+})
+
 test('检查人员可打开检查与补充页面并看到四个核心步骤', async () => {
   const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const api = require('../../lib/api')
+  api.getWorkTaskFormPhotos.mockClear()
   const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
   const ui = render(
     <I18nProvider>
@@ -188,6 +256,7 @@ test('检查人员可打开检查与补充页面并看到四个核心步骤', as
     expect(ui.getByText('5. 标记已完成')).toBeTruthy()
     expect(ui.getByTestId('inspection-sync-status-card')).toBeTruthy()
   }, { timeout: 5_000 })
+  expect(api.getWorkTaskFormPhotos).not.toHaveBeenCalled()
 }, 10_000)
 
 test('历史检查记录的问题反馈入口位于照片区域之前', async () => {
@@ -395,7 +464,7 @@ test('完成任务仍可只读查看已同步检查照片，且不显示修改�
   )
 
   await waitFor(() => {
-    expect(api.getWorkTaskFormPhotos).toHaveBeenCalledWith('test-token', 'w-inspection', ['cleaning-1'], 'inspector', { includeVideos: true })
+    expect(api.getWorkTaskFormPhotos).toHaveBeenCalledWith('test-token', 'w-inspection', ['cleaning-1'], 'inspector')
     expect(ui.getByTestId('inspection-read-only-banner')).toBeTruthy()
     expect(ui.getByTestId('inspection-read-only-complete-hint')).toBeTruthy()
     expect(ui.getAllByText('1/3')).toHaveLength(2)
@@ -518,6 +587,94 @@ test('只读工作记录缺少精确媒体来源时关闭图库且不回退旧�
     expect(ui.queryByTestId('inspection-read-only-key-media')).toBeNull()
   } finally {
     mockSnapshot.items[0] = before
+  }
+})
+
+test('历史检查页按投影权限拒绝钥匙照和挂钥匙视频但仍显示检查员自己的照片', async () => {
+  const before = { ...mockSnapshot.items[0] }
+  mockSnapshot.items[0] = {
+    ...before,
+    status: 'done',
+    work_record_read_only: true,
+    source_ids: ['cleaning-1'],
+    read_only_views: {
+      media_scope: 'inspector',
+      media_source_ids: ['cleaning-1'],
+      guest_key_photo: false,
+      lockbox_video: false,
+    },
+  } as any
+  const api = require('../../lib/api')
+  api.getWorkTaskFormPhotos.mockClear()
+  api.getWorkTaskFormPhotos.mockResolvedValue({
+    items: [
+      { id: 'key-1', task_id: 'cleaning-1', source: 'key', url: 'cleaning/synthetic/key.jpg' },
+      { id: 'video-1', task_id: 'cleaning-1', source: 'lockbox_video', url: 'cleaning/synthetic/key-video.mp4' },
+      { id: 'inspection-1', task_id: 'cleaning-1', source: 'inspection', area: 'living', url: 'cleaning/synthetic/inspection.jpg' },
+    ],
+  })
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-read-only-capabilities-off', name: 'InspectionPanel', params: { taskId: 'w-inspection', readOnly: true } }} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(ui.getByTestId('inspection-photo-living-0')).toBeTruthy())
+    expect(api.getWorkTaskFormPhotos).toHaveBeenCalledWith('test-token', 'w-inspection', ['cleaning-1'], 'inspector')
+    expect(ui.queryByTestId('inspection-read-only-key-media')).toBeNull()
+    expect(ui.queryByTestId('inspection-read-only-key-photo')).toBeNull()
+    expect(ui.queryByTestId('inspection-read-only-lockbox-video')).toBeNull()
+    ui.unmount()
+  } finally {
+    mockSnapshot.items[0] = before
+    api.getWorkTaskFormPhotos.mockReset().mockResolvedValue({ items: [] })
+  }
+})
+
+test('历史检查页仅在投影授权时请求并显示钥匙照和挂钥匙视频', async () => {
+  const before = { ...mockSnapshot.items[0] }
+  mockSnapshot.items[0] = {
+    ...before,
+    status: 'done',
+    work_record_read_only: true,
+    source_ids: ['cleaning-1'],
+    read_only_views: {
+      media_scope: 'inspector',
+      media_source_ids: ['cleaning-1'],
+      guest_key_photo: true,
+      lockbox_video: true,
+    },
+  } as any
+  const api = require('../../lib/api')
+  api.getWorkTaskFormPhotos.mockClear()
+  api.getWorkTaskFormPhotos.mockResolvedValue({
+    items: [
+      { id: 'key-1', task_id: 'cleaning-1', source: 'key', url: 'cleaning/synthetic/key.jpg' },
+      { id: 'video-1', task_id: 'cleaning-1', source: 'lockbox_video', url: 'cleaning/synthetic/key-video.mp4' },
+    ],
+  })
+  const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <InspectionPanelScreen navigation={navigation} route={{ key: 'inspection-read-only-capabilities-on', name: 'InspectionPanel', params: { taskId: 'w-inspection', readOnly: true } }} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(ui.getByTestId('inspection-read-only-key-media')).toBeTruthy())
+    expect(api.getWorkTaskFormPhotos).toHaveBeenCalledWith('test-token', 'w-inspection', ['cleaning-1'], 'inspector', { includeVideos: true })
+    expect(ui.getByTestId('inspection-read-only-key-photo')).toBeTruthy()
+    expect(ui.getByTestId('inspection-read-only-lockbox-video')).toBeTruthy()
+    ui.unmount()
+  } finally {
+    mockSnapshot.items[0] = before
+    api.getWorkTaskFormPhotos.mockReset().mockResolvedValue({ items: [] })
   }
 })
 

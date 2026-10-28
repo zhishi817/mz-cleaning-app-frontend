@@ -462,7 +462,14 @@ test('普通同日检查历史沿用清洁只读页面，不套用自完成挂�
     items: [
       { id: 'key', task_id: 'cleaning-1', source: 'key', area: 'guest_key', url: 'cleaning/media/key.jpg' },
       { id: 'completion', task_id: 'cleaning-1', source: 'completion', area: 'living', url: 'cleaning/media/living.jpg' },
+      { id: 'legacy-living', task_id: 'cleaning-1', source: 'consumable', area: 'living', url: 'cleaning/media/living.jpg' },
+      { id: 'remote-scene', task_id: 'cleaning-1', source: 'consumable', item_id: 'remote_tv', url: 'cleaning/media/remote.jpg' },
+      { id: 'vacuum-scene', task_id: 'cleaning-1', source: 'consumable', item_id: 'vacuum_used_photo', url: 'cleaning/media/vacuum.jpg' },
+      { id: 'shower-scene', task_id: 'cleaning-1', source: 'consumable', item_id: 'shower_drain_photo_1', url: 'cleaning/media/shower.jpg' },
+      { id: 'kitchen-current', task_id: 'cleaning-1', source: 'consumable', item_id: 'cutlery_drawer_photo_v2', url: 'cleaning/media/kitchen-current.jpg' },
+      { id: 'kitchen-legacy', task_id: 'cleaning-1', source: 'consumable', item_id: 'coffee_machine_photo', url: 'cleaning/media/kitchen-legacy.jpg' },
       { id: 'consumable', task_id: 'cleaning-1', source: 'consumable', item_id: 'paper', label: '卷纸', url: 'cleaning/media/consumable-paper.jpg' },
+      { id: 'retired-consumable', task_id: 'cleaning-1', source: 'consumable', item_id: 'retired-supply', label: '历史下架补品', url: 'cleaning/media/retired-supply.jpg' },
       { id: 'restock', task_id: 'cleaning-1', source: 'restock', item_id: 'paper', label: '卷纸', url: 'cleaning/media/restock-paper.jpg' },
       { id: 'inspection', task_id: 'cleaning-1', source: 'inspection', area: 'kitchen', url: 'cleaning/media/inspection-must-not-show.jpg' },
       { id: 'video', task_id: 'cleaning-1', source: 'lockbox_video', area: 'key_handover', url: 'cleaning/media/video-must-not-be-required.mov' },
@@ -482,13 +489,26 @@ test('普通同日检查历史沿用清洁只读页面，不套用自完成挂�
     await waitFor(() => {
       expect(ui.getByTestId('cleaning-history-key-photo')).toBeTruthy()
       expect(ui.getByTestId('completion-photo-living-0')).toBeTruthy()
+      expect(ui.queryByTestId('completion-photo-living-1')).toBeNull()
+      expect(ui.getByTestId('completion-photo-remote_tv-0')).toBeTruthy()
+      expect(ui.getByTestId('completion-photo-vacuum_used-0')).toBeTruthy()
+      expect(ui.getByTestId('completion-photo-shower_drain-0')).toBeTruthy()
+      expect(ui.getByTestId('completion-photo-kitchen-0')).toBeTruthy()
+      expect(ui.getByTestId('completion-photo-kitchen-1')).toBeTruthy()
       expect(ui.getByText('已保存数量：2')).toBeTruthy()
       expect(ui.getByText('已保存数量：0')).toBeTruthy()
       expect(ui.getByText('备注：已补两卷')).toBeTruthy()
       expect(ui.getByText('卷纸')).toBeTruthy()
       expect(ui.getByText('洗手液')).toBeTruthy()
       expect(ui.getByText('毛巾')).toBeTruthy()
+      expect(ui.getByText('历史下架补品')).toBeTruthy()
+      expect(ui.getAllByText('待确认').length).toBeGreaterThanOrEqual(1)
     })
+    expect(ui.queryByText('remote_tv')).toBeNull()
+    expect(ui.queryByText('vacuum_used_photo')).toBeNull()
+    expect(ui.queryByText('shower_drain_photo_1')).toBeNull()
+    expect(ui.queryByText('cutlery_drawer_photo_v2')).toBeNull()
+    expect(ui.queryByText('coffee_machine_photo')).toBeNull()
     expect(ui.queryByText('已保存数量：1')).toBeNull()
     expect(ui.queryByTestId('self-restock-paper-sufficient')).toBeNull()
     expect(ui.queryByTestId('self-restock-paper-restocked')).toBeNull()
@@ -500,6 +520,7 @@ test('普通同日检查历史沿用清洁只读页面，不套用自完成挂�
     expect(ui.queryByText('继续拍凭证 (1)')).toBeNull()
     expect(ui.queryByText('提交消耗品补充')).toBeNull()
     expect(ui.queryByText('当前目录新品')).toBeNull()
+    expect(ui.getAllByText('现场够用')).toHaveLength(1)
     expect(ui.queryByTestId('completion-photo-sofa-0')).toBeNull()
     expect(ui.queryByText('挂钥匙视频')).toBeNull()
     expect(ui.queryByText('未满足')).toBeNull()

@@ -4,6 +4,8 @@ import { fireEvent, render } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 import MeScreen from './MeScreen'
 
+const mockOpenAppUpdate = jest.fn()
+
 jest.mock('@react-navigation/native', () => ({
   useFocusEffect: jest.fn(),
 }))
@@ -35,6 +37,15 @@ jest.mock('../../lib/roles', () => ({
   hasAnyPermission: jest.fn(() => false),
 }))
 
+jest.mock('../../components/AppUpdateNoticeProvider', () => ({
+  useAppUpdateNotice: () => ({
+    label: '应用更新',
+    detail: '已下载 · 下次打开可能生效',
+    status: 'pending',
+    open: mockOpenAppUpdate,
+  }),
+}))
+
 test('我页的退出登录文字在红色按钮内垂直和水平居中', () => {
   const navigate = jest.fn()
   const ui = render(
@@ -58,4 +69,7 @@ test('我页的退出登录文字在红色按钮内垂直和水平居中', () =>
 
   fireEvent.press(ui.getByTestId('me-personnel-settlement'))
   expect(navigate).toHaveBeenCalledWith('PersonnelSettlement')
+  fireEvent.press(ui.getByTestId('me-app-update'))
+  expect(mockOpenAppUpdate).toHaveBeenCalledTimes(1)
+  expect(ui.getByText('已下载 · 下次打开可能生效')).toBeTruthy()
 })

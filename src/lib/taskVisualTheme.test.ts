@@ -124,6 +124,52 @@ test('merged inspection task shows pending inspection after cleaning is complete
   expect(meta).toEqual({ text: '待检查', tone: 'pending' })
 })
 
+test('BO717 authoritative self-complete progress is not replaced by its incoming pending inspection', () => {
+  const task = makeTask({
+    task_kind: 'inspection',
+    task_type: 'turnover',
+    status: 'to_inspect',
+    inspection_mode: 'self_complete',
+    cleaning_status: 'done',
+    inspection_status: 'assigned',
+    cleaner_id: 'cleaner-simon',
+    inspector_id: null,
+    active_source_ids: ['bo717-checkout', 'bo717-checkin'],
+    self_complete_progress: {
+      authoritative: true,
+      source_task_id: 'bo717-checkout',
+      source_task_ids: ['bo717-checkout', 'bo717-checkin'],
+      status: 'to_hang_keys',
+    },
+  } as any)
+
+  expect(getTaskStatusMeta(task, ['admin'], 'manager-1')).toEqual({ text: '待挂钥匙', tone: 'pending' })
+})
+
+test('self-complete progress fails closed for missing authority, source mismatch, conflict and ordinary inspection', () => {
+  const base = makeTask({
+    task_kind: 'inspection',
+    task_type: 'turnover',
+    status: 'to_inspect',
+    inspection_mode: 'self_complete',
+    cleaning_status: 'done',
+    inspection_status: 'assigned',
+    active_source_ids: ['checkout-1', 'checkin-1'],
+    self_complete_progress: {
+      authoritative: true,
+      source_task_id: 'checkout-1',
+      source_task_ids: ['checkout-1', 'checkin-1'],
+      status: 'to_hang_keys',
+    },
+  } as any)
+
+  expect(getTaskStatusMeta({ ...base, self_complete_progress: null } as any, ['admin'])).toEqual({ text: '待检查', tone: 'pending' })
+  expect(getTaskStatusMeta({ ...base, active_source_ids: ['checkout-1', 'different-checkin'] } as any, ['admin'])).toEqual({ text: '待检查', tone: 'pending' })
+  expect(getTaskStatusMeta({ ...base, inspection_assignment_conflict: { reasons: ['assignee_mismatch'] } } as any, ['admin'])).toEqual({ text: '待检查', tone: 'pending' })
+  expect(getTaskStatusMeta({ ...base, inspection_mode: 'same_day' } as any, ['admin'])).toEqual({ text: '待检查', tone: 'pending' })
+  expect(getTaskStatusMeta({ ...base, status: 'cancelled' } as any, ['admin'])).toEqual({ text: '已取消', tone: 'neutral' })
+})
+
 test('inspector lockbox video does not mark unfinished cleaning complete', () => {
   const meta = getTaskStatusMeta(
     makeTask({
