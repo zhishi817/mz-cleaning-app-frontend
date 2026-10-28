@@ -1,5 +1,111 @@
 # Change Release Ledger
 
+## CRL-20261028-005 — 人员结算补发回归去除重复整屏渲染
+
+- **Repository:** `mobile`
+- **Status:** pushed to the authorized new GitHub branch after exact range audit and independent push review GO; draft PR pending; not merged, deployed, or published
+- **Updated:** 2026-10-28 UTC
+- **Request:** 继续修复 `mobile/CRL-20261028-004` 合并后仍在 Root 完整回归并行 Jest worker 中触发的 `PersonnelSettlementScreen.test.tsx` 默认 5000ms 超时；不得增加时限、跳过测试、削弱补发/GST/汇总断言或修改结算业务。
+- **Outcome:** 把独立补发用例的全部数据和断言并入既有“上一完整周核对并提交”真实屏幕流程，使同一次真实 `PersonnelSettlementScreen` 渲染同时覆盖基础工作量、补贴、付款后补发、来源周、税前/GST 拆分、周汇总和二次确认；移除的只是重复的第二次整屏渲染，不移除任何受保护断言。
+
+### Implementation
+
+- Previous behavior: `mobile/CRL-20261028-004` 已把三次文本查找限制到补发子树，但仍为同一结算核对页面单独执行一次完整渲染。Mobile PR runner 以 `jest --runInBand` 运行时该文件为 18.965 秒且通过；Root 完整门禁的 `check:mobile` 直接运行 `jest` 多 worker，同一文件增至 46.587 秒，独立补发用例仍超过 5000ms。
+- New behavior: 复用既有完整两步核对用例的页面渲染，在其预览中增加同一付款后补发行，并保留原补发分栏、来源账单周、税前/GST 文案、调整汇总 testID、`adjustment_cents=2200` 及最终提交断言。总额同步从 `$45.00` 调整为包含 `$22.00` 补发后的 `$67.00`。
+- Root-cause boundary: 远端证据证明两条 CI 路径的执行模型不同；本次不再把先前本机/单 worker 通过解释为完整门禁已修复。候选必须以多 worker 压力对照、Mobile `check:ci` 和 Root 完整命令全部通过后才可称为修复完成。
+- Key decisions: 不修改 Jest timeout、worker 数、Root CI 策略、产品组件/API/权限/金额算法，不 mock 掉真实屏幕，不删除补发/GST/汇总或二次确认断言。
+
+### Files / Areas
+
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — modified: 将付款后补发样本和完整断言合并到既有真实两步核对流程，删除重复整屏渲染用例。
+- `docs/feature-regression-registry.md` — modified: 记录多 worker 完整门禁和单次真实屏幕覆盖约束。
+- `docs/change-release-ledger.md` — modified: 记录远端失败证据、修复范围、验证边界和发布限制。
+
+### Impact / Dependencies
+
+- Application runtime / user-visible behavior: unchanged; only test source and governance metadata change.
+- Roles / permissions / API / navigation / settlement state / amount / GST / document selection: unchanged.
+- Database / migration / backfill / production data: none.
+- Native config / Expo dependency / plugin / runtime / EAS channel: unchanged.
+- Base: `origin/Dev@61ffa855e1fa5bff68a197c0f53183988dc0db40`, which contains merged Mobile PR #69.
+- Authorized publication boundary: a new small Mobile fix branch and draft PR targeting `Dev`; no automatic merge, Root/main mutation, Render/Vercel deployment, EAS Build, OTA, production API/database access, or changes to the three prepared compatibility candidates.
+
+### Validation
+
+- Remote failure evidence: Root run `40652280544`, attempt 3, checked out Mobile `61ffa855e1fa5bff68a197c0f53183988dc0db40`; `PersonnelSettlementScreen.test.tsx:434` exceeded 5000ms, with 81/82 suites and 723/724 tests passing.
+- Execution-model comparison: Mobile PR run `40676288597` used `jest --runInBand`, passed 82/82 suites and 724/724 tests, and completed `PersonnelSettlementScreen.test.tsx` in 18.965 seconds. Root run invoked plain `jest` through `check:mobile`, ran workers in parallel, and reported the same file at 46.587 seconds before the timeout failure.
+- Dependency install safety: root package defines no `preinstall`, `install`, `postinstall` or `prepare`; `npm ci` installed the exact lockfile and npm did not execute the two dependency install scripts absent from its allowlist. No database, API, external synchronization or production operation ran.
+- Focused settlement file with `CI=true`, `--runInBand --no-cache`: PASS, 1 suite / 30 tests; the combined real-screen test completed in 95ms, and the full file completed in 16.434 seconds.
+- Root `check:mobile`-equivalent command `CI=true npm test`: PASS, 82/82 suites and 723/723 tests using plain multi-worker Jest; `PersonnelSettlementScreen.test.tsx` completed in 17.423 seconds. This is the execution shape that failed before the candidate.
+- Additional cold-cache pressure diagnostic `CI=true npm test -- --no-cache`: the target settlement file passed in 21.364 seconds, while two unrelated screen tests exceeded 5000ms under the intentionally harsher local transform pressure. A subsequent exact Root command without the non-production `--no-cache` addition passed all suites, so no unrelated timeout was modified or waived.
+- Full Mobile `CI=true npm run check:ci`: PASS; ledger auditor tests 44/44, ledger coverage 3/3, TypeScript, lint 0 errors / 879 existing warnings, button audit, fast regression 8 suites / 135 tests, and serial complete regression 82 suites / 723 tests. The settlement file completed in 10.954 seconds.
+- `git diff --check` and Mobile ledger coverage audit: PASS.
+- Independent read-only review: GO for the exact commit action; no P0/P1/P2 findings. The reviewer recomputed candidate fingerprint `f0a28dee547b919f90489b1589a45ffdead9d62256b28f6e86185d6954e74a1d`, confirmed all protected supplement/GST/summary/submission assertions remain, and found no runtime, production-write, secret or repository-boundary risk.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared scope committed as the exact three-file candidate; pre-commit gate and formal independent commit review GO.
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `201b3b52d1388bc614cc772fb79adf677074cac4bbb49fd6af86f614ee7044ee`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `2850f6bacf340fbf9e1e880da798e4d1ac3ec161c314da808904035e3e362c43`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `418598fbb8065d23a36868ccaf99a047569c991535722f65acbfb6444400af16`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `455269e066ff83510686ebbb84674196f95e52b2376aa41816c0028527034f13`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `4efc9f33c4fcbaa82ad7ee055ad9982bb4f3291f10028b966c231979502d4463`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `adc37d3005c77c32dc15dfdf0c84ee6cbf5f3e8566033fd1cb2a29d28ae6f478`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `db3a22664dda1030e058c1474521068acf1e4d3e3f38e74cdee32171b359d015`
+- `docs/feature-regression-registry.md` — SHA-256: `ca1b92f97ffc7a7d05db0575b709f7c72cfcb7708ab56da24442e9fa3030b39a`
+- `docs/change-release-ledger.md` — release-attempt bookkeeping for this CRL; excluded from the candidate patch fingerprint to avoid self-reference.
+- **Untracked review:** `git status --short` lists only the three intended tracked modifications; ignored lockfile dependencies are not selected for commit.
+
+### Release Attempts
+
+#### RA-20261028-005
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261028-005`
+- Selected CRL identities: `mobile/CRL-20261028-005`
+- Intended action: `commit`
+- Branch: `codex/personnel-settlement-timeout-fix-v2`
+- Base: `origin/Dev@61ffa855e1fa5bff68a197c0f53183988dc0db40`; fetched at `2026-10-28T12:44:13Z` by read-only remote ref verification, matching the locally fetched `origin/Dev`.
+- Target branch preflight: read-only `ls-remote` confirmed `codex/personnel-settlement-timeout-fix-v2` absent at `2026-10-28T12:44:21Z`; publication must create this branch and must not update another ref.
+- Candidate patch SHA-256: `f0a28dee547b919f90489b1589a45ffdead9d62256b28f6e86185d6954e74a1d`, computed from `origin/Dev...working-tree` excluding `docs/change-release-ledger.md`.
+- Commit SHA: `cb929fd6060ff41cff835645379a581b69c82a69`; GitHub candidate content commit with tree `d965ff1574c74d887d3ad8d374f805399a2864fb`.
+- Dependencies: none.
+- Required validation: PASS; focused settlement 30/30, Root-shape plain multi-worker Jest 82 suites / 723 tests, Mobile `check:ci` including typecheck/lint/button/ledger/fast/serial full checks, and ledger coverage audit all passed.
+- Shared-hunk review: PASS in preliminary independent read-only review; every protected supplement/GST/summary/submission assertion moved into the existing real-screen two-step flow, and arithmetic remains `6091 + 609 = 6700` cents.
+- Generated-file review: PASS; candidate paths are one TSX test and two Markdown governance files. Ignored `node_modules` is not selected; no generated artifact, environment file, cache, credential, media or log is included.
+- Technical state: committed GitHub candidate object; the equivalent local range completed exact release audit before object publication.
+- User authorization: selected-for-commit and approved-for-push; on 2026-10-28 the user authorized continuing this test fix, installing exact lockfile dependencies in the isolated v2 worktree, preparing a new branch, pushing it and creating a draft PR to `Dev`. Merge, main, production, deployment and OTA remain excluded.
+- Independent review: GO for commit only; no P0/P1/P2. The reviewer recomputed the exact staged non-ledger fingerprint, confirmed 8 selected hunks, no untracked files, arithmetic conservation, and no lost protected assertion. This review does not authorize push, PR, merge, deployment or OTA.
+- Action conclusion: completed candidate commit action; GitHub commit `cb929fd6060ff41cff835645379a581b69c82a69` preserves the reviewed non-ledger tree and candidate fingerprint.
+
+#### RA-20261028-006
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261028-005`
+- Selected CRL identities: `mobile/CRL-20261028-005`
+- Intended action: `push`
+- Branch: `codex/personnel-settlement-timeout-fix-v2`
+- Base: `origin/Dev@61ffa855e1fa5bff68a197c0f53183988dc0db40`; fetched at `2026-10-28T12:44:13Z` by read-only remote ref verification, matching the locally fetched `origin/Dev`.
+- Target branch preflight: read-only `ls-remote` confirmed `codex/personnel-settlement-timeout-fix-v2` absent at `2026-10-28T12:44:21Z`; publication must create this branch and must not update another ref.
+- Candidate patch SHA-256: `f0a28dee547b919f90489b1589a45ffdead9d62256b28f6e86185d6954e74a1d`.
+- Commit SHA: `cb929fd6060ff41cff835645379a581b69c82a69`; GitHub candidate content commit. The equivalent local range audit at `95cbe7c6bbb424031af649457cc71ce99444595d` was GO before GitHub object preparation.
+- Dependencies: none.
+- Required validation: PASS; focused settlement 30/30, Root-shape plain multi-worker Jest 82 suites / 723 tests, Mobile `check:ci`, ledger coverage and exact committed-range report all passed.
+- Shared-hunk review: PASS; all 8 selected non-ledger hunks retain the protected supplement/GST/summary/submission coverage and remove only a duplicate real-screen render.
+- Generated-file review: PASS; exact range contains one TSX test and two Markdown governance files, no generated or sensitive category, and no ignored dependency content.
+- Technical state: pushed to `codex/personnel-settlement-timeout-fix-v2`; draft PR pending.
+- User authorization: approved-for-push; on 2026-10-28 the user explicitly authorized continuing this exact v2 fix on a new branch, pushing it and creating a draft PR to `Dev`. Merge, main, production, deployment and OTA remain excluded.
+- Independent review: GO for the exact new-branch push plus draft PR; no P0/P1/P2. The reviewer independently recomputed range fingerprint `f0a28dee547b919f90489b1589a45ffdead9d62256b28f6e86185d6954e74a1d`, reconfirmed `Dev` at the selected base, verified the target branch remains absent, and found no coverage, generated-file, sensitive-information or production-write issue. This review does not authorize merge, deployment or OTA.
+- Remote evidence: GitHub created `codex/personnel-settlement-timeout-fix-v2` from receipt commit `8a51a379142ef27c7e2de9fd2a48b25bd3976a14`; read-only `ls-remote` confirmed the branch at that exact SHA after creation. The branch did not pre-exist and no existing ref was updated.
+- Action conclusion: new-branch push completed; this ledger receipt may advance only that branch by ordinary expected-SHA update before opening the authorized draft PR to `Dev`.
+
+### Risks / Release Notes
+
+- Risk: 合并后的综合用例覆盖更多结算类别；任何金额样本变化必须继续保持税前、GST、总额和分类汇总守恒。
+- Rollback: revert this three-file CRL unit to restore the separate render test; no runtime or data rollback is required.
+- Sensitive-information review: no credentials, tokens, `.env` values, production payloads, private media, screenshots, database URLs or device logs are read or selected.
+
 ## CRL-20261028-004 — 人员结算补发断言查询范围稳定性修复
 
 - **Repository:** `mobile`

@@ -431,44 +431,6 @@ test('检查周明细固定显示周一到周日并把计薪、清洁、补贴�
   })
 })
 
-test('下一周把已付差额显示为独立补发明细并保留税前和 GST 拆分', async () => {
-  ;(listMyPersonnelSettlements as jest.Mock).mockResolvedValueOnce([])
-  ;(getMyPersonnelSettlementSubmissionPreview as jest.Mock).mockResolvedValueOnce({
-    week_start: '2026-09-07', week_end: '2026-09-13', status: 'not_submitted', settlement: null,
-    subtotal_cents: 2000, gst_cents: 200, total_cents: 2200, line_count: 1,
-    confirmation_token: 'c'.repeat(64), calculation_status: 'complete', pending_pricing_count: 0,
-    pending_pricing_items: [], blocking_issues: [], work_checklist: [],
-    lines: [{
-      id: 'carry-1', component_type: 'post_payment_adjustment', service_date: '2026-09-07',
-      source_type: 'post_payment_adjustment', source_id: 'carry-1',
-      description: 'Paid settlement supplement · 2026-08-31 to 2026-09-06',
-      quantity_numerator: 1, quantity_denominator: 1, unit_rate_cents: 2200,
-      subtotal_cents: 2000, gst_cents: 200, total_cents: 2200,
-      price_basis: 'inclusive_gst', evidence_count: 0,
-      calculation_snapshot: { carry_adjustment: {
-        source_settlement_id: 'paid-week', source_adjustment_id: 'adjustment-1',
-        source_week_start: '2026-08-31', source_week_end: '2026-09-06',
-        recorded_subtotal_difference_cents: 2000, recorded_gst_difference_cents: 200,
-        recorded_total_difference_cents: 2200,
-        previously_applied_subtotal_cents: 0, previously_applied_gst_cents: 0,
-        previously_applied_total_cents: 0,
-        applied_subtotal_cents: 2000, applied_gst_cents: 200, applied_total_cents: 2200,
-      } },
-    }],
-  })
-  const ui = renderPersonnelSettlementScreen()
-  fireEvent.press(ui.getByTestId('personnel-settlements-tab'))
-  await waitFor(() => expect(ui.getByTestId('weekly-submission-preview')).toBeTruthy())
-  fireEvent.press(ui.getByTestId('weekly-submission-review'))
-  const adjustmentSection = within(ui.getByTestId('weekly-submission-day-2026-09-07-adjustment'))
-  expect(adjustmentSection.getByText('上周补发／抵扣')).toBeTruthy()
-  expect(adjustmentSection.getByText('原账单 2026-08-31 至 2026-09-06')).toBeTruthy()
-  expect(adjustmentSection.getByText('原已付金额保持不变 · 税前 $20.00 · GST $2.00')).toBeTruthy()
-  expect(ui.getByTestId('weekly-submission-adjustment-total')).toBeTruthy()
-  expect(personnelSettlementCategoryTotals((await (getMyPersonnelSettlementSubmissionPreview as jest.Mock).mock.results[0].value).lines)).toEqual(expect.objectContaining({ adjustment_cents: 2200 }))
-  ui.unmount()
-})
-
 test('工作时长使用小时和分钟显示且不暴露浮点小数', () => {
   expect(formatPersonnelDuration(370)).toBe('6 小时 10 分钟')
   expect(formatPersonnelDuration(360)).toBe('6 小时')
@@ -1137,7 +1099,7 @@ test('移动端显示费用反馈入口并以工作量及金额正确作为确�
   await waitFor(() => expect(mockConfirm).toHaveBeenCalledWith('token-1', 'settlement-1'))
 })
 
-test('上一完整周必须先核对明细并二次确认才提交给财务', async () => {
+test('上一完整周必须先核对明细、补发拆分并二次确认才提交给财务', async () => {
   ;(listMyPersonnelClaims as jest.Mock).mockResolvedValueOnce([{
     id: 'pending-subsidy', status: 'submitted', service_date: '2026-09-11', claim_type: 'subsidy_amount',
     requested_amount_cents: 1000, note: '交通补贴', evidence_count: 1,
@@ -1145,7 +1107,7 @@ test('上一完整周必须先核对明细并二次确认才提交给财务', as
   ;(listMyPersonnelSettlements as jest.Mock).mockResolvedValueOnce([])
   ;(getMyPersonnelSettlementSubmissionPreview as jest.Mock).mockResolvedValueOnce({
     week_start: '2026-09-07', week_end: '2026-09-13', status: 'not_submitted', settlement: null,
-    subtotal_cents: 4091, gst_cents: 409, total_cents: 4500, line_count: 2,
+    subtotal_cents: 6091, gst_cents: 609, total_cents: 6700, line_count: 3,
     confirmation_token: 'a'.repeat(64),
     blocking_issues: [],
     work_checklist: [{
@@ -1166,6 +1128,22 @@ test('上一完整周必须先核对明细并二次确认才提交给财务', as
       description: '交通补贴', quantity_numerator: 1, quantity_denominator: 1,
       unit_rate_cents: 1000, subtotal_cents: 909, gst_cents: 91, total_cents: 1000,
       price_basis: 'inclusive_gst', evidence_count: 1,
+    }, {
+      id: 'carry-1', component_type: 'post_payment_adjustment', service_date: '2026-09-07',
+      source_type: 'post_payment_adjustment', source_id: 'carry-1',
+      description: 'Paid settlement supplement · 2026-08-31 to 2026-09-06',
+      quantity_numerator: 1, quantity_denominator: 1, unit_rate_cents: 2200,
+      subtotal_cents: 2000, gst_cents: 200, total_cents: 2200,
+      price_basis: 'inclusive_gst', evidence_count: 0,
+      calculation_snapshot: { carry_adjustment: {
+        source_settlement_id: 'paid-week', source_adjustment_id: 'adjustment-1',
+        source_week_start: '2026-08-31', source_week_end: '2026-09-06',
+        recorded_subtotal_difference_cents: 2000, recorded_gst_difference_cents: 200,
+        recorded_total_difference_cents: 2200,
+        previously_applied_subtotal_cents: 0, previously_applied_gst_cents: 0,
+        previously_applied_total_cents: 0,
+        applied_subtotal_cents: 2000, applied_gst_cents: 200, applied_total_cents: 2200,
+      } },
     }],
   })
   const ui = renderPersonnelSettlementScreen()
@@ -1184,6 +1162,13 @@ test('上一完整周必须先核对明细并二次确认才提交给财务', as
   expect(ui.queryByTestId('weekly-submission-unincluded-claims')).toBeNull()
   expect(ui.getByText('以下基础工作量、额外工作、补贴和上周补发／抵扣均已计入本次确认总额')).toBeTruthy()
   expect(ui.getByTestId('weekly-submission-subsidy-total')).toBeTruthy()
+  const adjustmentSection = within(ui.getByTestId('weekly-submission-day-2026-09-07-adjustment'))
+  expect(adjustmentSection.getByText('上周补发／抵扣')).toBeTruthy()
+  expect(adjustmentSection.getByText('原账单 2026-08-31 至 2026-09-06')).toBeTruthy()
+  expect(adjustmentSection.getByText('原已付金额保持不变 · 税前 $20.00 · GST $2.00')).toBeTruthy()
+  expect(ui.getByTestId('weekly-submission-adjustment-total')).toBeTruthy()
+  expect(personnelSettlementCategoryTotals((await (getMyPersonnelSettlementSubmissionPreview as jest.Mock).mock.results[0].value).lines))
+    .toEqual(expect.objectContaining({ adjustment_cents: 2200 }))
   expect(ui.queryByText('本周房源工作清单（1）')).toBeNull()
   fireEvent.press(ui.getByTestId('weekly-submission-day-2026-09-10-history-toggle'))
   expect(ui.getByText('DELAY01 · 未完成')).toBeTruthy()
@@ -1194,8 +1179,9 @@ test('上一完整周必须先核对明细并二次确认才提交给财务', as
   expect(ui.getByTestId('weekly-submission-submit').props.accessibilityState.disabled).toBe(true)
   expect(ui.getByText('1 项（已包含）')).toBeTruthy()
   expect(ui.getByTestId('weekly-submission-confirmation-subsidy-total')).toBeTruthy()
+  expect(ui.getByTestId('weekly-submission-confirmation-adjustment-total')).toBeTruthy()
   expect(StyleSheet.flatten(ui.getByTestId('weekly-submission-checkbox').props.style)).toEqual(expect.objectContaining({ width: 24, height: 24, flexShrink: 0 }))
-  expect(ui.getAllByText('$45.00')).toHaveLength(2)
+  expect(ui.getAllByText('$67.00')).toHaveLength(2)
   fireEvent.press(ui.getByTestId('weekly-submission-acknowledgement'))
   fireEvent.press(ui.getByTestId('weekly-submission-submit'))
   await waitFor(() => expect(mockSubmitSettlementWeek).toHaveBeenCalledWith('token-1', '2026-09-07', 'a'.repeat(64)))
