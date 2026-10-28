@@ -69,6 +69,7 @@
 - Candidate patch SHA-256: `6adae44a6b6178970e1db36d9913e5a6f7424aa9d3219891c83d2442257938c4`; ledger metadata excluded
 - Commit SHA: `008fe603a1be532a9a180b9375e9cef6a7e7c123`
 - Dependencies: `root/CRL-20261025-004@71a24b143b553835c214091d9a89b4666c1a95db`
+- Cross-repository dependency verification: `PASS`; paired Root exact release report audited `c0f56c9a2232193e4b0937cea7b1169976a80a91...04e3b24042137430ebc58362a263d138f77b1338`, contains the declared content commit `71a24b143b553835c214091d9a89b4666c1a95db`, retained candidate fingerprint `e53b3ca4ae55eb5e808a00723b95ca6dbe4edfef3e3b6a1dc83893d1d4ebac21`, and concluded `GO`; Root remains a later deployment prerequisite, but no deployment is part of this push
 - Required validation: PASS; combined `npm run check:ci` passed 82 suites / 724 tests with TypeScript, lint 0 errors, button, fast, ledger and registry gates; focused MZ-075 tests passed 3 suites / 122 tests
 - Shared-hunk review: PASS; independent review verified MZ-075/082/083/085/086 joint behavior and found no permission expansion, active write regression, proactive OTA operation, notice data loss or self-complete fallback conflict
 - Generated-file review: PASS; temporary dependency symlink and all preview/test output were removed, with no native, generated, cache or media file selected
