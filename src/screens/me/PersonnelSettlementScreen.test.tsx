@@ -1,5 +1,5 @@
 import React from 'react'
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native'
 import { Alert, AppState, Keyboard, Share, StyleSheet } from 'react-native'
 import {
   getMyPersonnelClaim,
@@ -460,10 +460,10 @@ test('下一周把已付差额显示为独立补发明细并保留税前和 GST 
   fireEvent.press(ui.getByTestId('personnel-settlements-tab'))
   await waitFor(() => expect(ui.getByTestId('weekly-submission-preview')).toBeTruthy())
   fireEvent.press(ui.getByTestId('weekly-submission-review'))
-  expect(ui.getByTestId('weekly-submission-day-2026-09-07-adjustment')).toBeTruthy()
-  expect(ui.getByText('上周补发／抵扣')).toBeTruthy()
-  expect(ui.getByText('原账单 2026-08-31 至 2026-09-06')).toBeTruthy()
-  expect(ui.getByText('原已付金额保持不变 · 税前 $20.00 · GST $2.00')).toBeTruthy()
+  const adjustmentSection = within(ui.getByTestId('weekly-submission-day-2026-09-07-adjustment'))
+  expect(adjustmentSection.getByText('上周补发／抵扣')).toBeTruthy()
+  expect(adjustmentSection.getByText('原账单 2026-08-31 至 2026-09-06')).toBeTruthy()
+  expect(adjustmentSection.getByText('原已付金额保持不变 · 税前 $20.00 · GST $2.00')).toBeTruthy()
   expect(ui.getByTestId('weekly-submission-adjustment-total')).toBeTruthy()
   expect(personnelSettlementCategoryTotals((await (getMyPersonnelSettlementSubmissionPreview as jest.Mock).mock.results[0].value).lines)).toEqual(expect.objectContaining({ adjustment_cents: 2200 }))
   ui.unmount()

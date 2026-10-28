@@ -1,5 +1,88 @@
 # Change Release Ledger
 
+## CRL-20261028-004 — 人员结算补发断言查询范围稳定性修复
+
+- **Repository:** `mobile`
+- **Status:** local validated candidate selected for commit and approved for exact branch push plus draft PR; push-focused review passed and publication is pending; not yet committed, pushed, merged, deployed, or published
+- **Updated:** 2026-10-28 UTC
+- **Request:** 修复 Mobile Dev 合并后 Root 完整回归中 `PersonnelSettlementScreen.test.tsx:434` 连续两次触发 Jest 默认 5000ms 总时限的问题；不得跳过测试、削弱业务断言或只增加超时。
+- **Outcome:** 同一用例继续渲染真实人员结算页面并验证“上周补发／抵扣”、来源周、税前/GST 拆分、周汇总入口和调整净额；三条文本断言改为在已定位的补发子树内查询，避免反复扫描完整大型 React Native 渲染树。未修改 Jest 时限、产品运行时代码、业务规则或断言内容。
+
+### Implementation
+
+- Previous behavior: 用例先定位 `weekly-submission-day-2026-09-07-adjustment`，随后三次使用全局 `ui.getByText` 从完整结算页面根节点遍历；本机单用例约 3.2–3.3 秒，GitHub runner 在相同 5 秒默认预算下连续两次超时。
+- New behavior: 使用 Testing Library `within` 将相同三条文本断言限制在已存在的补发分栏 testID 子树；真实屏幕、异步预览、交互顺序、文本、汇总 testID 和金额计算断言保持不变。
+- Root-cause evidence: 修复前目标单用例 `--detectOpenHandles` PASS 且耗时 3310ms，整文件开放句柄诊断也未报告句柄；修复后普通 CI 同形单用例为 1628ms，说明阻塞来自全树查询成本而非产品异步泄漏。GitHub 两次失败均停在同一用例的外层 5000ms 总预算。
+- Key decisions: 不增加局部或全局 timeout，不添加 sleep，不 mock 掉真实页面，不删减 UI/税额/汇总断言，不改变组件、API、权限、结算状态或付款调整口径。
+
+### Files / Areas
+
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — modified: 引入 `within` 并把三条补发文本断言限制在已定位的补发分栏子树。
+- `docs/feature-regression-registry.md` — modified: 为 FR-P1-FIN-03 记录查询范围稳定性保护和最新 CRL。
+- `docs/change-release-ledger.md` — modified: 记录根因、范围、验证、风险和发布边界。
+
+### Impact / Dependencies
+
+- Application runtime / user-visible behavior: unchanged; test source and governance metadata only.
+- Roles / permissions / API / navigation / settlement state / amount / GST / document selection: unchanged.
+- Database / migration / backfill / production data: none.
+- Native config / Expo dependency / plugin / runtime / EAS channel: unchanged.
+- Dependencies: none; Mobile base `origin/Dev@5109f9d07908f3e902f7b6b77bf9522ff900d1b2`.
+- Authorized publication boundary: only the new Mobile feature branch `codex/personnel-settlement-timeout-fix` and a draft PR targeting `Dev`; Root code, production API/database access, merge, Render/Vercel deployment, EAS Build, OTA and changes to the three previously prepared compatibility candidates remain excluded.
+
+### Validation
+
+- Pre-fix reproduction: target test with `CI=true`, `--runInBand --no-cache --detectOpenHandles` — PASS 1/1 at 3310ms; no open handle reported, confirming the local runner is faster but the test had little 5000ms headroom.
+- Post-fix target test — PASS 1/1 at 1628ms with the same default Jest timeout and all assertions retained.
+- Post-fix target test repeated five fresh-process runs — PASS 5/5; each complete Jest process finished in 3.80–3.90 seconds including startup.
+- Full `PersonnelSettlementScreen.test.tsx` — PASS 31/31; target 1586ms in normal mode.
+- Full file with `--detectOpenHandles` — PASS 31/31; no open handles reported.
+- `npm run check:ci` in the Mobile candidate — PASS: ledger-range 44/44, ledger coverage PASS, typecheck PASS, lint 0 errors (existing warnings only), fast regression 8 suites / 135 tests, complete regression 82 suites / 724 tests; target suite completed in 12.828 seconds.
+- Root CI-equivalent `npm run check:full` against Root `origin/Dev@56124ad9b5f2c3418c947eed4939e15a9c8619f9` plus this Mobile candidate — PASS: dev-preview guards, Root ledger audit, feature-registry audit (36 FRs / 293 mappings), backend checks/build, frontend lint/tests/build (56 files / 299 tests), and Mobile 82 suites / 724 tests. The first sandboxed run was stopped after a loopback-only test server received `listen EPERM`; the same suite was rerun with loopback permission and passed without production access.
+- Mobile ledger audit — PASS (coverage 3/3). Root feature-registry audit — PASS (36 FRs / 293 mappings) against Root's registry while the local Mobile checkout supplied the mapped test paths. Mobile does not define a standalone `check:feature-registry` package script, so the edited Mobile FR-P1-FIN-03 entry was verified by exact diff/scope review rather than claimed as input to that Root auditor.
+- Complete Mobile Jest still prints its pre-existing generic worker force-exit warning after all 82 suites pass; the affected settlement file separately passed with `--detectOpenHandles` and reported no open handle, so this candidate does not claim to resolve unrelated suite-wide teardown noise.
+- Independent read-only review — GO for commit and the authorized push workflow; no P0/P1/P2 findings. Publication still requires the exact committed-range release report before creating the remote branch.
+- Remote GitHub rerun, native simulator/device and real OTA delivery — not run in this local candidate.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared for exact three-file local candidate; final index audit GO.
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `abdb42dd46382327b82fa048a0702783fd9968bffcf61a613b0f34a932e52ba4`
+- `src/screens/me/PersonnelSettlementScreen.test.tsx` — SHA-256: `c94f8711dee378dc46749201df7940bf7043a752ff3d3cff81789ed6d4a1f94a`
+- `docs/feature-regression-registry.md` — SHA-256: `553f030a0128f65246833716b44ae0423a7e0f0a418299b3250291a069c6c279`
+- `docs/feature-regression-registry.md` — SHA-256: `7093736c58f5b39533d16a2e15ebe666eb31ea1f05c29caaa44db2eeccdf2d49`
+- `docs/feature-regression-registry.md` — SHA-256: `809927de19e1896f6e69bf9f8289775fbc57b5b30f21cb896541d018408407fa`
+- **Untracked review:** PASS; the temporary ignored `node_modules` validation symlink was removed, and `git status --short` lists only the three intended tracked modifications.
+
+### Release Attempts
+
+#### RA-20261028-004
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261028-004`
+- Selected CRL identities: `mobile/CRL-20261028-004`
+- Intended action: `push`
+- Branch: `codex/personnel-settlement-timeout-fix`
+- Base: `origin/Dev@5109f9d07908f3e902f7b6b77bf9522ff900d1b2`; fetched at `2026-10-28T08:05:28Z` (shared clone evidence) and confirmed by read-only `ls-remote` at `2026-10-28T09:57:52Z`
+- Target branch preflight: read-only GitHub branch search confirmed `codex/personnel-settlement-timeout-fix` absent at `2026-10-28T10:40:30Z`; publication must create it from the exact audited candidate and must not update another ref.
+- Candidate patch SHA-256: `c4f66f4c1fbc7fa43cd2b2c22ad87cce7f3794413d6e212c1d5902f21f90cfd5`
+- Commit SHA: `200dfe12e4ec8e147b8c9bf2381e6004d288236b`
+- Dependencies: none
+- Required validation: PASS; targeted timing checks, Mobile `check:ci`, Root+Mobile `check:full`, ledger audit and feature-registry audit passed.
+- Shared-hunk review: PASS; exact non-ledger fingerprints include only the test query hunk and FR-P1-FIN-03 metadata hunks selected by this CRL; no other FR or business implementation hunk is included.
+- Generated-file review: PASS; no tracked generated artifact or untracked path is selected, and the temporary dependency symlink was removed before staging.
+- Technical state: committed; GitHub candidate content commit `200dfe12e4ec8e147b8c9bf2381e6004d288236b` points to the exact reviewed tree `fab319645d8ec85ce4d712c6b4deae0512aedf4b` and is approved for publication on `codex/personnel-settlement-timeout-fix`, with a draft PR targeting `Dev`.
+- User authorization: approved-for-push; on 2026-10-28 the user explicitly approved committing and pushing this exact three-file fix to the new branch, creating a draft PR to `Dev`, and checking remote CI. Merge, deployment, OTA and production access remain excluded.
+- Independent review: GO for the authorized push workflow with no P0/P1/P2 findings. The reviewer confirmed the exact three-file scope, five non-ledger hunks, candidate fingerprint, absent target branch, public-repository authorization, and continued exclusion of merge/deployment/OTA/production access.
+- Action conclusion: GO for the exact new-branch push plus draft PR after this ledger-only receipt is committed and the resulting committed-range release report confirms the same candidate fingerprint and scope.
+
+### Risks / Release Notes
+
+- Risk: scoped queries could accidentally target the wrong subtree if the testID contract changes; the assertion still first requires the exact dated adjustment testID and then checks all original strings inside it.
+- Rollback: revert the `within` import/scoped-query hunk and this CRL/FR metadata; no runtime or data rollback is required.
+- Sensitive-information review: no credentials, tokens, .env values, production payloads, private media, screenshots, database URLs or device logs are read or selected.
+
 ## CRL-20261027-001 — MZ-075 延期入住合卡标题真实模式补漏
 
 - **Repository:** `mobile`
