@@ -3,12 +3,9 @@ import { Alert, Dimensions, Platform, StyleSheet } from 'react-native'
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 import * as api from '../../lib/api'
+import { taskBusinessDateKey } from '../../lib/taskBusinessDate'
 
-const mockTodayKey = (() => {
-  const now = new Date()
-  const pad2 = (value: number) => String(value).padStart(2, '0')
-  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`
-})()
+const mockTodayKey = taskBusinessDateKey()
 
 const mockTask: any = {
   id: 'manager-ready-task',
