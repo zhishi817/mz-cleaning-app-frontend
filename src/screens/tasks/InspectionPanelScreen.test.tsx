@@ -1,5 +1,6 @@
 import React from 'react'
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
+import { StyleSheet } from 'react-native'
 import { I18nProvider } from '../../lib/i18n'
 
 const mockSnapshot = {
@@ -23,6 +24,7 @@ const mockSuppliesCatalogItems = [
 
 let inspectionQueueListener: (() => void) | null = null
 const mockGetInspectionPanelBatch = jest.fn(async (_taskId?: string) => null)
+let mockResponsiveImageGridProps: any[] = []
 
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
@@ -116,6 +118,7 @@ jest.mock('../../components/CleaningMediaPreview', () => (props: any) => {
 })
 jest.mock('../../components/ui/ResponsiveImageGrid', () => (props: any) => {
   const mockReact = require('react')
+  mockResponsiveImageGridProps.push(props)
   return mockReact.createElement(
     mockReact.Fragment,
     null,
@@ -231,6 +234,7 @@ test('历史检查页不展示清洁房间完成照，仍保留真实补品与�
 })
 
 test('检查人员可打开检查与补充页面并看到四个核心步骤', async () => {
+  mockResponsiveImageGridProps = []
   const InspectionPanelScreen = require('./InspectionPanelScreen').default as React.ComponentType<any>
   const api = require('../../lib/api')
   api.getWorkTaskFormPhotos.mockClear()
@@ -256,6 +260,12 @@ test('检查人员可打开检查与补充页面并看到四个核心步骤', as
     expect(ui.getByText('5. 标记已完成')).toBeTruthy()
     expect(ui.getByTestId('inspection-sync-status-card')).toBeTruthy()
   }, { timeout: 5_000 })
+  const roomGrid = mockResponsiveImageGridProps.find((props) => props.testID === 'inspection-room-photo-grid')
+  expect(roomGrid).toEqual(expect.objectContaining({ compactColumns: 1, phoneColumns: 2 }))
+  const livingCardStyle = StyleSheet.flatten(ui.getByTestId('inspection-photo-card-living').props.style)
+  expect(livingCardStyle).toEqual(expect.objectContaining({ width: '100%', alignSelf: 'flex-start' }))
+  expect(livingCardStyle.flexGrow).toBeUndefined()
+  expect(livingCardStyle.flexBasis).toBeUndefined()
   expect(api.getWorkTaskFormPhotos).not.toHaveBeenCalled()
 }, 10_000)
 
@@ -797,6 +807,11 @@ test('点击全屏照片内容区域可以关闭预览', async () => {
   await waitFor(() => expect(ui.getByText('点击任意位置关闭')).toBeTruthy())
 
   fireEvent.press(ui.getByTestId('inspection-photo-viewer'))
+  await waitFor(() => expect(ui.queryByText('点击任意位置关闭')).toBeNull())
+
+  fireEvent.press(ui.getByTestId('inspection-photo-living-0'))
+  await waitFor(() => expect(ui.getByText('点击任意位置关闭')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('inspection-photo-viewer-mask'))
   await waitFor(() => expect(ui.queryByText('点击任意位置关闭')).toBeNull())
 })
 

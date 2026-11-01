@@ -1,5 +1,46 @@
 # Design QA
 
+## 2026-10-28 — MZ-078 / MZ-090
+
+- Source reference: `libfile_d1a95f307f3c81918d02454ff1953214` (ordinary cleaning read-only details)
+- Source reference: `libfile_c8272d8a3d8c8191a51c1ce0e0ada9c8` (inspector photo layout)
+- Target widths: 320, 360, 375, 390, and 430 px; font scale 1.0, 1.2, and 1.35.
+
+### Source findings
+
+- MZ-078: empty bathroom, sofa, and bedroom cards appear in an ordinary cleaning history even though they are not cleaner-required capture items.
+- MZ-090: a photo-heavy bedroom card determines the row height in a three-column phone grid, stretches neighboring cards into large blank columns, and pushes later rooms far down the page.
+
+### Candidate review
+
+- The implementation narrows only ordinary-cleaning history presentation while preserving the existing eight-item active completion gate for ordinary direct entry, self-complete, and stayover; nonempty legacy media remains in a read-only extra-history section.
+- The inspection candidate uses one compact column, two phone columns, top-aligned natural-height cards, and responsive square thumbnails.
+- Permissions, media sources, upload/delete behavior, video, task actions, and persistence contracts remain outside the visual change.
+
+### Executed component fixture
+
+- With user authorization, dependencies were installed from `package-lock.json` using `npm ci --ignore-scripts --no-audit --no-fund`; no root lifecycle script exists, and the two dependency install scripts flagged by the lockfile were not executed.
+- A temporary Expo Web fixture rendered the production `ResponsiveImageGrid` and the production cleaning-mode schema with React Native components and synthetic media only. It did not use static HTML, production APIs, credentials, or real task/media data. The temporary fixture and `App.tsx` switch were removed after capture and are not part of the candidate.
+- Executed widths: 320, 360, 375, 390, and 430 px. Executed text scales: 1.0, 1.2, and 1.35. Every one of the 15 combinations had no horizontal overflow; 320 px rendered one inspection-card column and 360–430 px rendered two.
+- The first rendered attempt exposed a real breakpoint bug: the nested grid's padded container width caused 360/375/390 px phones to remain one column. The production grid now uses viewport width only to choose the custom one/two-column policy while continuing to use measured container width for item sizing.
+- The inspection fixture covered cards with 0, 1, 2, 3, and 8 photos. Measured card styles remained `alignSelf: flex-start`, and card heights remained content-dependent rather than equalized. Activity/read-only switching removed add controls in read-only mode.
+- The cleaning fixture covered ordinary history, self-complete, stayover cleaning, and ordinary legacy history. Ordinary history rendered only its five applicable display groups; all active completion gates retained the original eight items; legacy bathroom/sofa/bedroom media appeared only in the read-only “其他历史照片” section.
+- The viewer was opened, closed, reopened, and closed again in the browser; the same repeat cycle is also covered by focused Jest tests for both cleaning and inspection viewers.
+
+### Captured evidence
+
+- `/tmp/mz078-mz090-final-320-fs135.png` — corrected fixture, 320 px at 1.35 text scale: active ordinary/self-complete/stayover remain eight items, ordinary history is a five-group projection, and the inspection grid is one column without horizontal clipping.
+- `/tmp/mz078-mz090-final-375-fs12.png` — corrected fixture, 375 px at 1.2 text scale: two columns and natural-height cards.
+- `/tmp/mz078-mz090-final-430-fs1.png` — corrected fixture, 430 px at 1.0 text scale: two columns and the 0/1/2/3/8-photo matrix.
+- `/tmp/mz078-final-history-390-fs12.png` — corrected 390 px read-only state: add controls are absent and the ordinary-history/legacy-extra contract is stated in the rendered fixture.
+- `/tmp/mz078-mz090-ios-simulator.png` — the same no-login synthetic fixture rendered in the already-installed Expo Go 54.0.7 on the already-booted iPhone 17 / iOS 26.3 simulator. It visibly preserves the 8/5/8/8 split and two natural-height phone columns.
+- Browser console: 0 errors; three React Native Web development warnings. Screenshots and CLI session logs remain temporary local evidence and are not selected for commit.
+- Browser interaction: five add controls in activity mode and zero in read-only mode; the synthetic viewer completed open/close/reopen/close. Real-screen Jest separately covers the cleaning and inspection viewers' repeated close behavior.
+- iOS interaction boundary: native rendering passed, but the Mac was locked and the native UI automation layer could not attach, so simulator tap/scroll/viewer interaction was not claimed. Camera/gallery, long-press deletion and physical-device behavior remain untested.
+- Android boundary: the SDK contains `adb`, but no emulator binary and no AVD directory are installed, so no Android emulator run was possible without installing system-level tooling (explicitly excluded).
+
+final result: pass for Expo Web synthetic-component QA and iOS simulator rendering; native simulator interaction, Android, and physical-device validation remain unrun
+
 ## 2026-09-14 — 工作量反馈列表优先与按日分组
 
 - Source visual truth: `/Users/zhishi/.codex/generated_images/01a08935-889d-7353-a5b7-d510e6683deb/exec-52f90bf6-e5aa-47e9-927f-55f5d4c79545.png`

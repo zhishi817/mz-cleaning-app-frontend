@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, AppState, Image, Linking, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
+import { Alert, AppState, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
@@ -59,7 +59,7 @@ import {
   turnoverDisplayOf,
 } from '../../lib/turnoverDisplay'
 import { getInspectionModeTone, getInspectionScopeTone, getKeyHandoverPendingNotice, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
-import { guestReadyNotificationForActiveRole, guestReadyOperationId, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, navigationForWorkTaskRolePage, primaryActionsForTask } from '../../lib/workTaskActions'
+import { availableActionsForTask, guestReadyMutationTarget, guestReadyNotificationForActiveRole, guestReadyOperationId, isGuestReadyNotificationStatusAction, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, navigationForWorkTaskRolePage, primaryActionsForTask, workTaskMatchesGuestReadyTarget } from '../../lib/workTaskActions'
 import { dailyTaskCurrentIdentityKey, dailyTaskGroupCounts, dailyTaskPhaseHistoryLines, dailyTaskStatusCounts, isDailyTaskKeyHandoverStage, partitionDailyTasks, reconcileDailyTaskDisplay } from '../../lib/dailyTaskPresentation'
 import { millisecondsUntilNextTaskBusinessDate, shouldFollowTaskBusinessDate, taskBusinessDateKey } from '../../lib/taskBusinessDate'
 import { formatTaskLoadDiagnosticsText } from '../../lib/taskLoadDiagnostics'
@@ -98,6 +98,10 @@ const QUICK_CREATE_OFFLINE_TASK_TYPES: { key: QuickCreateOfflineTaskType; label:
 
 function quickCreateUserName(user: QuickCreateUserOption) {
   return String(user.display_name || user.username || user.id || '').trim() || user.id
+}
+
+export function quickCreateKeyboardBehavior(os: string = Platform.OS): 'padding' | 'height' {
+  return os === 'ios' ? 'padding' : 'height'
 }
 
 function pad2(n: number) {
@@ -653,6 +657,7 @@ export default function TasksScreen(props: Props) {
   const [orderMarks, setOrderMarks] = useState<Record<string, string>>({})
   const [orderList, setOrderList] = useState<string[]>([])
   const [savingOrder, setSavingOrder] = useState(false)
+  const savingOrderRef = useRef(false)
   const [, bump] = useState(0)
   const notifiedInspectionsRef = useRef<Record<string, boolean>>({})
   const [banner, setBanner] = useState<{ title: string; message: string } | null>(null)
@@ -686,6 +691,7 @@ export default function TasksScreen(props: Props) {
   const [quickCreateUsers, setQuickCreateUsers] = useState<QuickCreateUserOption[]>([])
   const [quickCreateAssigneeId, setQuickCreateAssigneeId] = useState<string | null>(null)
   const [quickCreateAssigneeOpen, setQuickCreateAssigneeOpen] = useState(false)
+  const quickCreateSubmitInFlightRef = useRef(false)
   const bannerTimerRef = useRef<any>(null)
   const [search, setSearch] = useState('')
   const weekRowRef = useRef<ScrollView>(null)
@@ -1587,28 +1593,34 @@ export default function TasksScreen(props: Props) {
     [selectedDate, selectedTasks],
   )
 
-  const canReorder = useMemo(() => {
-    const writableTasks = selectedTasks.filter((task) => task.work_record_read_only !== true)
-    if (!writableTasks.length) return false
-    if (roleNames.includes('cleaner') || roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')) return true
+  const isReorderableTask = useCallback((task: WorkTaskItem) => {
+    if (task.work_record_read_only === true) return false
     if (canManagerMode && mode === 'manager') return false
-    return writableTasks.some((task) => !isCleaningExecutionTask(task) && !isInspectionExecutionTask(task) && !isKeyHandoverExecutionTask(task))
-  }, [canManagerMode, mode, selectedTasks, roleNames.join('|')])
-
-  const isReorderableTask = useMemo(() => {
-    return (task: WorkTaskItem) => {
-      if (task.work_record_read_only === true) return false
-      const cleaning = isCleaningExecutionTask(task)
-      const inspection = isInspectionExecutionTask(task)
-      const handover = isKeyHandoverExecutionTask(task)
-      if (handover) return false
-      if (!cleaning && !inspection) return !(canManagerMode && mode === 'manager')
-      if (roleNames.includes('cleaner_inspector')) return cleaning || inspection
-      if (roleNames.includes('cleaning_inspector')) return inspection
-      if (roleNames.includes('cleaner')) return cleaning
-      return false
+    const cleaning = isCleaningExecutionTask(task)
+    const inspection = isInspectionExecutionTask(task)
+    const handover = isKeyHandoverExecutionTask(task)
+    if (handover) {
+      const currentUserId = String((user as any)?.id || '').trim()
+      const executorId = String((task as any).executor_id || task.assignee_id || '').trim()
+      const executionState = String((task as any).execution_state || '').trim().toLowerCase()
+      return isPasswordOnlyInspectionTask(task)
+        && (task as any).executor_reorderable === true
+        && !isDoneLikeStatus(String(task.status || ''), task)
+        && (!executionState || executionState === 'active')
+        && !!currentUserId
+        && executorId === currentUserId
     }
-  }, [canManagerMode, mode, roleNames.join('|')])
+    if (!cleaning && !inspection) return true
+    if (roleNames.includes('cleaner_inspector')) return cleaning || inspection
+    if (roleNames.includes('cleaning_inspector')) return inspection
+    if (roleNames.includes('cleaner')) return cleaning
+    return false
+  }, [canManagerMode, mode, roleNames, user])
+
+  const canReorder = useMemo(
+    () => selectedTasks.some(isReorderableTask),
+    [isReorderableTask, selectedTasks],
+  )
 
   useEffect(() => {
     if (!reorderMode) return
@@ -2049,11 +2061,8 @@ function showBanner(title: string, message: string) {
 
   async function toggleGuestReadyNotification(task: WorkTaskItem, action: WorkTaskAvailableAction) {
     if (activeRole !== 'customer_service' || !token || !user?.id || guestReadyPendingMap[task.id]) return
-    const notification = task.guest_ready_notification
-    const outsideKey = task.guest_ready_outside_key
-    const orderId = String(notification?.order_id || outsideKey?.order_id || action.source_id || task.order_id_checkin || '').trim()
-    const expectedVersion = notification?.version ?? outsideKey?.version
-    if (!orderId || expectedVersion == null) {
+    const target = guestReadyMutationTarget(task, action)
+    if (!target) {
       showBanner('失败', '入住订单已变化，请刷新后重试')
       return
     }
@@ -2064,7 +2073,7 @@ function showBanner(title: string, message: string) {
         : action.id === 'cancel_guest_ready_outside_key'
           ? 'cancel_outside_key'
           : 'mark'
-    const operationId = guestReadyOperationId({ orderId, action: mutationAction, expectedVersion })
+    const operationId = guestReadyOperationId({ sourceType: target.sourceType, sourceId: target.sourceId, action: mutationAction, expectedVersion: target.expectedVersion })
     if (!operationId) {
       showBanner('失败', '入住订单已变化，请刷新后重试')
       return
@@ -2072,13 +2081,14 @@ function showBanner(title: string, message: string) {
     setGuestReadyPendingMap((prev) => ({ ...prev, [task.id]: true }))
     try {
       const receipt = await changeGuestReadyNotification(token, {
-        order_id: orderId,
+        source_type: target.sourceType,
+        ...(target.sourceType === 'cleaning_tasks' ? { task_id: target.sourceId } : { order_id: target.sourceId }),
         action: mutationAction,
         operation_id: operationId,
-        expected_version: expectedVersion,
+        expected_version: target.expectedVersion,
       })
       const patches = (getWorkTasksSnapshot().items || [])
-        .filter((item) => String(item.order_id_checkin || '') === orderId)
+        .filter((item) => workTaskMatchesGuestReadyTarget(item, target.sourceType, target.sourceId, target.expectedVersion))
         .map((item) => ({
           id: item.id,
           patch: {
@@ -2131,6 +2141,7 @@ function showBanner(title: string, message: string) {
   }
 
   function openQuickCreate(mode0: QuickCreateMode = 'checkin') {
+    if (quickCreateBusy || quickCreateSubmitInFlightRef.current) return
     setQuickCreateMode(mode0)
     setQuickCreateDate(selectedDate)
     setQuickCreateTime(mode0 === 'checkout' ? '10am' : '3pm')
@@ -2148,6 +2159,12 @@ function showBanner(title: string, message: string) {
     setQuickCreateOpen(true)
   }
 
+  function closeQuickCreate() {
+    Keyboard.dismiss()
+    setQuickCreateAssigneeOpen(false)
+    setQuickCreateOpen(false)
+  }
+
   function resolveQuickCreateProperty(value: string) {
     const raw = String(value || '').trim()
     if (!raw) return null
@@ -2156,15 +2173,17 @@ function showBanner(title: string, message: string) {
   }
 
   async function submitQuickCreate() {
-    if (!token || !user?.id) return
+    if (!token || !user?.id || quickCreateSubmitInFlightRef.current) return
+    Keyboard.dismiss()
+    quickCreateSubmitInFlightRef.current = true
+    setQuickCreateBusy(true)
     const property = String(quickCreateProperty || '').trim()
     const date = String(quickCreateDate || '').trim()
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      Alert.alert(t('common_error'), '日期格式应为 YYYY-MM-DD')
-      return
-    }
     try {
-      setQuickCreateBusy(true)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        Alert.alert(t('common_error'), '日期格式应为 YYYY-MM-DD')
+        return
+      }
       if (quickCreateMode === 'offline') {
         const title = String(quickCreateOfflineTitle || '').trim()
         if (!title) {
@@ -2220,10 +2239,16 @@ function showBanner(title: string, message: string) {
       }
       setQuickCreateOpen(false)
       showBanner('已新增', quickCreateMode === 'offline' ? '线下任务已新增。' : '清洁任务已新增，订单同步后会自动关联。')
-      await refreshTasksData({ silent: true, preserveError: true })
+      try {
+        await refreshTasksData({ silent: true, preserveError: true })
+      } catch {
+        // Creation already succeeded. The list refresh reports its own error
+        // state and must not turn a successful create into “新增失败”.
+      }
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '新增失败'))
     } finally {
+      quickCreateSubmitInFlightRef.current = false
       setQuickCreateBusy(false)
     }
   }
@@ -2432,6 +2457,8 @@ function showBanner(title: string, message: string) {
 
   async function onSaveOrder() {
     if (!token || !user?.id) return
+    if (savingOrderRef.current) return
+    savingOrderRef.current = true
     try {
       setSavingOrder(true)
       const reorderable = renderTasks.filter(isReorderableTask)
@@ -2450,10 +2477,16 @@ function showBanner(title: string, message: string) {
         if (!task) throw new Error('排序选择包含无效任务')
         marks.push({ task, mark: i + 1 })
       }
-      const reorderItems: { kind: 'work' | 'cleaner' | 'inspector'; ids: string[]; sort_index: number }[] = []
+      const reorderItems: { kind: 'work' | 'cleaner' | 'inspector' | 'executor'; ids: string[]; sort_index: number }[] = []
       const localPatches: { id: string; patch: Partial<WorkTaskItem> }[] = []
       for (const { task, mark } of marks) {
         if (!isReorderableTask(task)) continue
+        if (isPasswordOnlyInspectionTask(task)) {
+          const ids = executionTaskIdsForRole(task)
+          if (ids.length) reorderItems.push({ kind: 'executor', ids, sort_index: mark })
+          localPatches.push({ id: String(task.id), patch: { sort_index: mark, sort_index_inspector: mark } as Partial<WorkTaskItem> })
+          continue
+        }
         const cleaning = isCleaningExecutionTask(task)
         const inspection = isInspectionExecutionTask(task)
         if (!cleaning && !inspection) {
@@ -2491,6 +2524,7 @@ function showBanner(title: string, message: string) {
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
     } finally {
+      savingOrderRef.current = false
       setSavingOrder(false)
     }
   }
@@ -2797,8 +2831,10 @@ function showBanner(title: string, message: string) {
           <View style={styles.sectionRight}>
             {canManagerMode && mode === 'manager' ? (
               <Pressable
+                testID="quick-create-open"
+                disabled={quickCreateBusy}
                 onPress={() => openQuickCreate('checkin')}
-                style={({ pressed }) => [styles.addTaskBtn, pressed ? styles.segmentPressed : null]}
+                style={({ pressed }) => [styles.addTaskBtn, pressed ? styles.segmentPressed : null, quickCreateBusy ? styles.actionBtnDisabled : null]}
               >
                 <Ionicons name="add" size={moderateScale(15)} color="#FFFFFF" />
                 <Text style={styles.addTaskBtnText}>新增</Text>
@@ -2972,14 +3008,30 @@ function showBanner(title: string, message: string) {
           </View>
         </Modal>
 
-        <Modal visible={quickCreateOpen} transparent animationType="fade" onRequestClose={() => setQuickCreateOpen(false)}>
-          <View style={styles.modalBackdrop}>
-            <View style={styles.createTaskModal}>
+        <Modal visible={quickCreateOpen} transparent animationType="fade" onRequestClose={closeQuickCreate}>
+          <KeyboardAvoidingView
+            testID="quick-create-keyboard-avoider"
+            style={styles.modalBackdrop}
+            behavior={quickCreateKeyboardBehavior()}
+          >
+            <Pressable testID="quick-create-dismiss-keyboard-backdrop" accessible={false} style={StyleSheet.absoluteFill} onPress={Keyboard.dismiss} />
+            <View testID="quick-create-modal-card" style={styles.createTaskModal}>
               <View style={styles.transferHeader}>
                 <Text style={styles.transferTitle}>新增任务</Text>
-                <Pressable onPress={() => setQuickCreateOpen(false)} disabled={quickCreateBusy} style={({ pressed }) => [styles.transferClose, pressed ? styles.segmentPressed : null]}>
-                  <Ionicons name="close" size={moderateScale(18)} color="#111827" />
-                </Pressable>
+                <View style={styles.createHeaderActions}>
+                  <Pressable
+                    testID="quick-create-dismiss-keyboard"
+                    accessibilityRole="button"
+                    accessibilityLabel="收起键盘"
+                    onPress={Keyboard.dismiss}
+                    style={({ pressed }) => [styles.createKeyboardDismiss, pressed ? styles.segmentPressed : null]}
+                  >
+                    <Text style={styles.createKeyboardDismissText}>收起键盘</Text>
+                  </Pressable>
+                  <Pressable accessibilityLabel="关闭新增任务" onPress={closeQuickCreate} disabled={quickCreateBusy} style={({ pressed }) => [styles.transferClose, pressed ? styles.segmentPressed : null]}>
+                    <Ionicons name="close" size={moderateScale(18)} color="#111827" />
+                  </Pressable>
+                </View>
               </View>
               <View style={styles.createModeRow}>
                 {[
@@ -2991,6 +3043,7 @@ function showBanner(title: string, message: string) {
                     key={item.key}
                     disabled={quickCreateBusy}
                     onPress={() => {
+                      Keyboard.dismiss()
                       const mode0 = item.key as QuickCreateMode
                       setQuickCreateMode(mode0)
                       setQuickCreateTime(mode0 === 'checkout' ? '10am' : '3pm')
@@ -3002,10 +3055,17 @@ function showBanner(title: string, message: string) {
                   </Pressable>
                 ))}
               </View>
-              <ScrollView style={styles.createTaskBody} contentContainerStyle={{ gap: 12 }} keyboardShouldPersistTaps="handled">
+              <ScrollView
+                testID="quick-create-scroll"
+                style={styles.createTaskBody}
+                contentContainerStyle={styles.createTaskBodyContent}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                onScrollBeginDrag={Keyboard.dismiss}
+              >
                 <View style={styles.createField}>
                   <Text style={styles.createLabel}>日期</Text>
-                  <TextInput value={quickCreateDate} onChangeText={setQuickCreateDate} editable={!quickCreateBusy} style={styles.createInput} placeholder="YYYY-MM-DD" placeholderTextColor="#9CA3AF" />
+                  <TextInput accessibilityLabel="quick-create-date" value={quickCreateDate} onChangeText={setQuickCreateDate} editable={!quickCreateBusy} style={styles.createInput} placeholder="YYYY-MM-DD" placeholderTextColor="#9CA3AF" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
                 </View>
                 {quickCreateMode === 'offline' ? (
                   <View style={styles.createField}>
@@ -3030,7 +3090,7 @@ function showBanner(title: string, message: string) {
                       ? (quickCreateOfflineTaskType === 'property' ? '房号' : '房号（可选）')
                       : '房号'}
                   </Text>
-                  <TextInput value={quickCreateProperty} onChangeText={setQuickCreateProperty} editable={!quickCreateBusy} style={styles.createInput} placeholder="例如 2607" placeholderTextColor="#9CA3AF" autoCapitalize="characters" />
+                  <TextInput accessibilityLabel="quick-create-property" value={quickCreateProperty} onChangeText={setQuickCreateProperty} editable={!quickCreateBusy} style={styles.createInput} placeholder="例如 2607" placeholderTextColor="#9CA3AF" autoCapitalize="characters" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
                   {quickCreatePropertyMatches.length ? (
                     <View style={styles.propertySuggestList}>
                       {quickCreatePropertyMatches.map((item) => (
@@ -3051,11 +3111,11 @@ function showBanner(title: string, message: string) {
                   <>
                     <View style={styles.createField}>
                       <Text style={styles.createLabel}>标题</Text>
-                      <TextInput value={quickCreateOfflineTitle} onChangeText={setQuickCreateOfflineTitle} editable={!quickCreateBusy} style={styles.createInput} placeholder="例如 临时送物 / 联系客人" placeholderTextColor="#9CA3AF" />
+                      <TextInput accessibilityLabel="quick-create-offline-title" value={quickCreateOfflineTitle} onChangeText={setQuickCreateOfflineTitle} editable={!quickCreateBusy} style={styles.createInput} placeholder="例如 临时送物 / 联系客人" placeholderTextColor="#9CA3AF" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
                     </View>
                     <View style={styles.createField}>
                       <Text style={styles.createLabel}>内容</Text>
-                      <TextInput value={quickCreateOfflineContent} onChangeText={setQuickCreateOfflineContent} editable={!quickCreateBusy} style={[styles.createInput, styles.createTextArea]} placeholder="补充说明" placeholderTextColor="#9CA3AF" multiline />
+                      <TextInput accessibilityLabel="quick-create-offline-content" value={quickCreateOfflineContent} onChangeText={setQuickCreateOfflineContent} editable={!quickCreateBusy} style={[styles.createInput, styles.createTextArea]} placeholder="补充说明" placeholderTextColor="#9CA3AF" multiline returnKeyType="default" submitBehavior="newline" />
                     </View>
                     <View style={styles.createField}>
                       <Text style={styles.createLabel}>执行人</Text>
@@ -3122,11 +3182,11 @@ function showBanner(title: string, message: string) {
                   <>
                     <View style={styles.createField}>
                       <Text style={styles.createLabel}>{quickCreateMode === 'checkout' ? '退房时间' : '入住时间'}</Text>
-                      <TextInput value={quickCreateTime} onChangeText={setQuickCreateTime} editable={!quickCreateBusy} style={styles.createInput} placeholder={quickCreateMode === 'checkout' ? '10am' : '3pm'} placeholderTextColor="#9CA3AF" />
+                      <TextInput accessibilityLabel="quick-create-time" value={quickCreateTime} onChangeText={setQuickCreateTime} editable={!quickCreateBusy} style={styles.createInput} placeholder={quickCreateMode === 'checkout' ? '10am' : '3pm'} placeholderTextColor="#9CA3AF" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
                     </View>
                     <View style={styles.createField}>
                       <Text style={styles.createLabel}>{quickCreateMode === 'checkout' ? '旧密码' : '新密码'}</Text>
-                      <TextInput value={quickCreateMode === 'checkout' ? quickCreateOldCode : quickCreateNewCode} onChangeText={quickCreateMode === 'checkout' ? setQuickCreateOldCode : setQuickCreateNewCode} editable={!quickCreateBusy} style={styles.createInput} placeholder={quickCreateMode === 'checkout' ? '旧密码' : '新密码'} placeholderTextColor="#9CA3AF" />
+                      <TextInput accessibilityLabel="quick-create-lock-code" value={quickCreateMode === 'checkout' ? quickCreateOldCode : quickCreateNewCode} onChangeText={quickCreateMode === 'checkout' ? setQuickCreateOldCode : setQuickCreateNewCode} editable={!quickCreateBusy} style={styles.createInput} placeholder={quickCreateMode === 'checkout' ? '旧密码' : '新密码'} placeholderTextColor="#9CA3AF" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
                     </View>
                     {quickCreateMode === 'checkin' ? (
                       <>
@@ -3163,21 +3223,22 @@ function showBanner(title: string, message: string) {
                     ) : null}
                     <View style={styles.createField}>
                       <Text style={styles.createLabel}>客人需求</Text>
-                      <TextInput value={quickCreateGuestNote} onChangeText={setQuickCreateGuestNote} editable={!quickCreateBusy} style={[styles.createInput, styles.createTextArea]} placeholder="需要同步给现场的信息" placeholderTextColor="#9CA3AF" multiline />
+                      <TextInput accessibilityLabel="quick-create-guest-note" value={quickCreateGuestNote} onChangeText={setQuickCreateGuestNote} editable={!quickCreateBusy} style={[styles.createInput, styles.createTextArea]} placeholder="需要同步给现场的信息" placeholderTextColor="#9CA3AF" multiline returnKeyType="default" submitBehavior="newline" />
                     </View>
                     <Text style={styles.createHint}>手动新增的入住/退房任务会保持待同步；订单同步后自动关联。</Text>
                   </>
                 )}
               </ScrollView>
               <Pressable
+                testID="quick-create-submit"
                 disabled={quickCreateBusy}
-                onPress={submitQuickCreate}
+                onPress={() => { void submitQuickCreate() }}
                 style={({ pressed }) => [styles.createSubmitBtn, pressed ? styles.segmentPressed : null, quickCreateBusy ? styles.actionBtnDisabled : null]}
               >
                 <Text style={[styles.actionText, quickCreateBusy ? { color: '#6B7280' } : null]}>{quickCreateBusy ? '新增中' : '确认新增'}</Text>
               </Pressable>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         <Modal
@@ -3354,7 +3415,9 @@ function showBanner(title: string, message: string) {
               const isManager = canManagerMode && mode === 'manager'
               const isInspectorUser = roleNames.includes('cleaning_inspector') || roleNames.includes('cleaner_inspector')
               const taskPrimaryActions = task.work_record_read_only === true
-                ? []
+                ? availableActionsForTask(task, { roleNames, activeRole })
+                  .filter(isGuestReadyNotificationStatusAction)
+                  .slice(0, 1)
                 : primaryActionsForTask(task, { roleNames, activeRole, limit: 2 })
               const renderPrimaryAction = (action: WorkTaskAvailableAction) => {
                 const checkedOutVisual = action.id === 'mark_guest_checkout' && !!checkedOutAt
@@ -3698,6 +3761,13 @@ function showBanner(title: string, message: string) {
                         </Text>
                       </View>
                     ) : null}
+              {guestReadyNotification?.prior_task_notification ? (
+                <View style={taskTagStylePair('info').container} testID={`task-prior-guest-ready-${task.id}`}>
+                  <Text style={taskTagStylePair('info').text}>
+                    {guestReadyNotification.prior_task_notification.status === 'notified' ? '关联前已通知' : '关联前记录已撤销'}
+                  </Text>
+                </View>
+              ) : null}
                   </View>
 
                   {deferredInspectionMergeDateText ? (
@@ -4332,8 +4402,12 @@ const styles = StyleSheet.create({
   transferOptionBody: { flex: 1, minWidth: 0 },
   transferOptionName: { color: '#111827', fontWeight: '900', fontSize: moderateScale(14), lineHeight: moderateScale(18) },
   transferOptionRole: { marginTop: 2, color: '#6B7280', fontWeight: '700', fontSize: moderateScale(12), lineHeight: moderateScale(16) },
-  createTaskModal: { maxHeight: '86%', backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14 },
-  createTaskBody: { marginTop: 12, maxHeight: 520 },
+  createTaskModal: { width: '100%', maxHeight: '86%', flexShrink: 1, backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14 },
+  createTaskBody: { marginTop: 12, flexGrow: 0, flexShrink: 1 },
+  createTaskBodyContent: { gap: 12, paddingBottom: 2 },
+  createHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  createKeyboardDismiss: { minHeight: 44, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' },
+  createKeyboardDismissText: { color: '#1D4ED8', fontSize: moderateScale(11), fontWeight: '900' },
   createModeRow: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   createModeBtn: { flexGrow: 1, minHeight: layoutTokens.button.height, paddingHorizontal: layoutTokens.button.horizontalPadding, paddingVertical: 0, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   createModeBtnOn: { backgroundColor: '#DBEAFE', borderWidth: hairline(), borderColor: '#93C5FD' },

@@ -32,7 +32,7 @@ import {
   updateInspectionMediaItem,
   type InspectionMediaQueueItem,
 } from '../../lib/inspectionMediaQueue'
-import { effectiveInspectionMode } from '../../lib/cleaningInspection'
+import { effectiveInspectionMode, type InspectionMode } from '../../lib/cleaningInspection'
 import { classifyHistoricalCleaningCompletionPhoto, classifyLegacyConsumableScenePhoto } from '../../lib/cleaningScenePhotoTemplate'
 import { isDailyTaskKeyHandoverStage } from '../../lib/dailyTaskPresentation'
 import { useI18n } from '../../lib/i18n'
@@ -58,6 +58,7 @@ import { layoutTokens } from '../../lib/theme'
 type Props = NativeStackScreenProps<TasksStackParamList, 'CleaningSelfComplete'>
 
 type PhotoArea = 'toilet' | 'living' | 'sofa' | 'bedroom' | 'kitchen' | 'shower_drain' | 'remote_tv' | 'vacuum_used'
+type CompletionAreaConfig = { area: PhotoArea; title: string; hint: string; required?: boolean }
 
 type ViewerItem = {
   reference: string
@@ -85,7 +86,7 @@ const STATUS_TONE_COLORS: Record<StatusTone, { bg: string; border: string; text:
   neutral: { bg: '#F3F4F6', border: '#D1D5DB', text: '#6B7280' },
 }
 
-const COMPLETION_AREAS: { area: PhotoArea; title: string; hint: string; required?: boolean }[] = [
+const SELF_COMPLETE_COMPLETION_AREAS: CompletionAreaConfig[] = [
   { area: 'toilet', title: '浴室', hint: '至少 1 张' },
   { area: 'shower_drain', title: '浴室下水口', hint: '至少 1 张' },
   { area: 'living', title: '客厅', hint: '拍整体照片（至少 1 张）' },
@@ -95,6 +96,20 @@ const COMPLETION_AREAS: { area: PhotoArea; title: string; hint: string; required
   { area: 'remote_tv', title: '电视和空调遥控器', hint: '两种遥控器同框拍 1 张（必拍）' },
   { area: 'vacuum_used', title: '吸尘器使用后', hint: '至少 1 张' },
 ]
+
+const NORMAL_CLEANING_HISTORY_AREAS: CompletionAreaConfig[] = [
+  { area: 'shower_drain', title: '浴室下水口', hint: '至少 1 张' },
+  { area: 'living', title: '客厅', hint: '本次保存记录' },
+  { area: 'kitchen', title: '厨房', hint: '本次保存记录' },
+  { area: 'remote_tv', title: '电视和空调遥控器', hint: '两种遥控器同框拍 1 张（必拍）' },
+  { area: 'vacuum_used', title: '吸尘器使用后', hint: '至少 1 张' },
+]
+
+export function completionPhotoAreaConfigsForMode(inspectionMode: InspectionMode, isStayoverTask: boolean, readOnly = false) {
+  return readOnly && inspectionMode !== 'self_complete' && !isStayoverTask
+    ? NORMAL_CLEANING_HISTORY_AREAS
+    : SELF_COMPLETE_COMPLETION_AREAS
+}
 
 function normalizeDraftItems(list: SupplyItemState[]): CleaningConsumablesDraftItem[] {
   return list.map((item) => ({
@@ -267,6 +282,11 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   const inspectionMode = effectiveInspectionMode(task as any)
   const requiresConsumables = !isStayoverTask
   const requiresLockboxVideo = !isStayoverTask && inspectionMode === 'self_complete'
+  const completionAreaConfigs = useMemo(
+    () => completionPhotoAreaConfigsForMode(inspectionMode, isStayoverTask, readOnly),
+    [inspectionMode, isStayoverTask, readOnly],
+  )
+  const usesFullCompletionChecklist = completionAreaConfigs === SELF_COMPLETE_COMPLETION_AREAS
 
   const [completion, setCompletion] = useState<Record<PhotoArea, string[]>>(emptyCompletionPhotos)
   const completionRef = useRef(completion)
@@ -307,8 +327,11 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       && viewerHistoricalBinding.generation === historicalViewGeneration))
   const visibleViewerItems = viewerVisible ? viewerItems : []
 
-  const completionAreas = useMemo(() => COMPLETION_AREAS.map((item) => item.area), [])
-  const requiredAreas = useMemo(() => COMPLETION_AREAS.filter((item) => item.required !== false).map((item) => item.area), [])
+  const completionAreas = useMemo(() => SELF_COMPLETE_COMPLETION_AREAS.map((item) => item.area), [])
+  const requiredAreas = useMemo(
+    () => completionAreaConfigs.filter((item) => item.required !== false).map((item) => item.area),
+    [completionAreaConfigs],
+  )
 
   const visibleCompletion = useMemo(
     () => historicalMediaVisible ? completion : emptyCompletionPhotos(),
@@ -319,6 +342,11 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     () => completionAreas.reduce((count, area) => count + (visibleCompletion[area] || []).length, 0),
     [completionAreas, visibleCompletion],
   )
+  const extraHistoricalAreaConfigs = useMemo(() => {
+    if (!readOnly || usesFullCompletionChecklist) return []
+    const primaryAreas = new Set(completionAreaConfigs.map((item) => item.area))
+    return SELF_COMPLETE_COMPLETION_AREAS.filter((item) => !primaryAreas.has(item.area) && (visibleCompletion[item.area] || []).length > 0)
+  }, [completionAreaConfigs, readOnly, usesFullCompletionChecklist, visibleCompletion])
 
   const [suppliesSubmitted, setSuppliesSubmitted] = useState(false)
   const [supplies, setSupplies] = useState<SupplyItemState[]>([])
@@ -1630,7 +1658,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                         : <Text style={styles.mutedSmall}>本次任务没有已保存的完成照片。</Text>
                 ) : completionOk ? <Text style={styles.ok}>已满足</Text> : <Text style={styles.warn}>未满足</Text>}
               </View>
-              {COMPLETION_AREAS.map(({ area, title, hint }) => {
+              {completionAreaConfigs.map(({ area, title, hint }) => {
                 const list = visibleCompletion[area] || []
                 const singlePhotoArea = area === 'remote_tv'
                 const historicalAreaPending = readOnly && historicalLoadState !== 'loaded'
@@ -1697,6 +1725,43 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                   </View>
                 )
               })}
+              {extraHistoricalAreaConfigs.length ? (
+                <View testID="cleaning-other-history-photos" style={styles.subSection}>
+                  <Text style={styles.subSectionTitle}>其他历史照片</Text>
+                  <Text style={styles.subSectionHint}>这些是旧记录中已保存的额外照片，仅保留查看，不会作为普通清洁的必拍项目。</Text>
+                  {extraHistoricalAreaConfigs.map(({ area, title }) => {
+                    const list = visibleCompletion[area] || []
+                    return (
+                      <View key={`historical-extra:${area}`} style={styles.photoAreaCard}>
+                        <View style={styles.photoAreaHead}>
+                          <View style={styles.photoAreaCopy}>
+                            <Text style={styles.areaTitle}>{title}</Text>
+                            <Text style={styles.photoAreaHint}>历史额外记录</Text>
+                          </View>
+                          <StatusPill label={`${list.length} 张`} tone="success" />
+                        </View>
+                        <ResponsiveImageGrid
+                          items={list}
+                          fixedItemWidth={96}
+                          keyExtractor={(u, idx) => `${u}:${idx}`}
+                          renderItem={(u, idx) => (
+                            <View style={styles.thumbWrap}>
+                              <Pressable testID={`completion-photo-${area}-${idx}`} onPress={() => openViewer(list, idx)} style={({ pressed }) => [styles.thumbPress, pressed ? styles.pressed : null]}>
+                                <CleaningMediaImage
+                                  token={token}
+                                  remoteReference={u}
+                                  {...historicalMediaAccess}
+                                  style={styles.thumb}
+                                />
+                              </Pressable>
+                            </View>
+                          )}
+                        />
+                      </View>
+                    )
+                  })}
+                </View>
+              ) : null}
             </>
           ) : null}
         </View>

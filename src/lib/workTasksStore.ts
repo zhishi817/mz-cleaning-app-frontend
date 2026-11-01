@@ -649,12 +649,31 @@ export function redactReadOnlyWorkRecord(task: WorkTaskItem): WorkTaskItem {
   const maintenanceWorkflow = task.maintenance_workflow && typeof task.maintenance_workflow === 'object'
     ? { ...task.maintenance_workflow, available_actions: [] }
     : task.maintenance_workflow
-  const feedbackActions = (Array.isArray(task.available_actions) ? task.available_actions : [])
+  const orderIdCheckin = String((task as any).order_id_checkin || '').trim()
+  const guestReadySourceType = String(task.guest_ready_notification?.source_type || (orderIdCheckin ? 'orders' : '')).trim()
+  const guestReadySourceId = String(task.guest_ready_notification?.source_id || orderIdCheckin).trim()
+  const guestReadyTaskId = String(task.guest_ready_notification?.task_id || '').trim()
+  const hasExactGuestReadyAuthority = (
+    guestReadySourceType === 'orders'
+      ? Boolean(orderIdCheckin) && guestReadySourceId === orderIdCheckin
+      : guestReadySourceType === 'cleaning_tasks'
+        ? !orderIdCheckin && Boolean(guestReadySourceId) && guestReadyTaskId === guestReadySourceId
+        : false
+  )
+  const workRecordState = String(task.work_record_state || '').trim().toLowerCase()
+  const canRetainGuestReadyStatusAction = canReadGuestContext
+    && ['completed', 'pending_review'].includes(workRecordState)
+    && hasExactGuestReadyAuthority
+  const recordActions = (Array.isArray(task.available_actions) ? task.available_actions : [])
     .filter((action) => (
-      action?.id === 'report_issue'
-      && action.enabled === true
-      && String(action.source_type || '').trim() === 'cleaning_tasks'
-      && Boolean(String(action.source_id || '').trim())
+      (action?.id === 'report_issue'
+        && action.enabled === true
+        && String(action.source_type || '').trim() === 'cleaning_tasks'
+        && Boolean(String(action.source_id || '').trim()))
+      || (canRetainGuestReadyStatusAction
+        && (action?.id === 'record_guest_ready_notified' || action?.id === 'revoke_guest_ready_notified')
+        && String(action.source_type || '').trim() === guestReadySourceType
+        && String(action.source_id || '').trim() === guestReadySourceId)
     ))
   const isReassignedRecord = String(task.work_record_state || '').trim().toLowerCase() === 'reassigned'
   const keepAttributedWorkRecordMedia = isReassignedRecord && task.work_record_media_attributed === true
@@ -671,7 +690,7 @@ export function redactReadOnlyWorkRecord(task: WorkTaskItem): WorkTaskItem {
     guest_ready_outside_key: canReadGuestContext ? task.guest_ready_outside_key ?? null : null,
     participants: null,
     capabilities: null,
-    available_actions: feedbackActions,
+    available_actions: recordActions,
     maintenance_workflow: maintenanceWorkflow,
     turnover_display: turnoverDisplay,
     display_conflicts: redactWorkRecordConflicts(task.display_conflicts),

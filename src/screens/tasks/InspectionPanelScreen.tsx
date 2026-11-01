@@ -1744,10 +1744,13 @@ export default function InspectionPanelScreen(props: Props) {
                   </View>
                 ) : null}
                 <ResponsiveImageGrid
+                  compactColumns={1}
                   items={ROOM_AREAS}
                   keyExtractor={(item) => item.key}
+                  phoneColumns={2}
+                  testID="inspection-room-photo-grid"
                   renderItem={(area) => (
-                    <View style={[styles.photoCard, draftValidationIssue?.section === 'photos' && draftValidationIssue.room_area === area.key ? styles.validationPhotoCard : null]}>
+                    <View testID={`inspection-photo-card-${area.key}`} style={[styles.photoCard, draftValidationIssue?.section === 'photos' && draftValidationIssue.room_area === area.key ? styles.validationPhotoCard : null]}>
                       <View style={styles.photoHeadRow}>
                         <Text style={styles.photoLabel}>{area.label}</Text>
                         <Text style={styles.photoCount}>{(roomPhotos[area.key] || []).length
@@ -2113,14 +2116,14 @@ const styles = StyleSheet.create({
   postSubmitIssueActions: { marginTop: 12, gap: 8 },
   uncleanThumbWrap: { width: 96, height: 96, borderRadius: 12, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   uncleanThumb: { width: '100%', height: '100%' },
-  photoCard: { flexBasis: '47%', flexGrow: 1, minWidth: 120, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6', borderRadius: 14, padding: 10 },
+  photoCard: { width: '100%', alignSelf: 'flex-start', backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#EEF0F6', borderRadius: 14, padding: 10 },
   validationPhotoCard: { borderColor: '#F59E0B', backgroundColor: '#FFF7ED' },
   photoHeadRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   photoLabel: { flex: 1, minWidth: 0, fontWeight: '900', color: '#111827' },
   photoCount: { color: '#6B7280', fontWeight: '900', fontSize: 12 },
   photoHint: { marginTop: 4, minHeight: 16, color: '#6B7280', fontWeight: '700', fontSize: 11, lineHeight: 15 },
   thumbRow: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  thumbMiniWrap: { width: 96, height: 96, borderRadius: 10, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
+  thumbMiniWrap: { width: '47%', aspectRatio: 1, minWidth: 56, maxWidth: 96, borderRadius: 10, overflow: 'hidden', borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6' },
   thumbMini: { width: '100%', height: '100%' },
   thumbMiniEmpty: { width: 96, height: 96, borderRadius: 10, borderWidth: hairline(), borderColor: '#EEF0F6', backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', gap: 2 },
   photoEmptyText: { color: '#9CA3AF', fontWeight: '800', fontSize: 11 },

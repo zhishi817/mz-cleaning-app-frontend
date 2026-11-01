@@ -1,6 +1,6 @@
 import React from 'react'
 import { Alert, Dimensions, Platform, StyleSheet } from 'react-native'
-import { fireEvent, render, waitFor } from '@testing-library/react-native'
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 import * as api from '../../lib/api'
 
@@ -28,6 +28,7 @@ const mockTask: any = {
   end_time: '1pm',
   old_code: 'old-code',
   new_code: 'new-code',
+  password_authority: { old_code_status: 'needs_review', new_code_status: 'source_linked' },
   guest_special_request: '保留原位',
   keys_required_checkin: 2,
   status: 'assigned',
@@ -96,6 +97,15 @@ jest.mock('../../lib/api', () => ({
   getWorkTaskFormPhotos: jest.fn(async () => ({ items: [] })),
   markGuestCheckedOutByOrder: jest.fn(),
   markGuestCheckedOutByTasks: jest.fn(),
+  previewCleaningTaskPasswordAuthority: jest.fn(async () => ({
+    selected_task_ids: ['cleaning-1'],
+    fields: ['old_code', 'new_code'],
+    same_order_checkout_task_ids: ['checkout-1'],
+    dependent_checkin_task_ids: ['next-checkin-1'],
+    manual_task_ids: [],
+    requires_manual_source_confirmation: false,
+    note: null,
+  })),
   saveGuestLuggageNotice: jest.fn(),
   updateCleaningTaskManagerFields: jest.fn(),
   uploadMzappMedia: jest.fn(),
@@ -405,6 +415,52 @@ test('manager history renders the temporary notice only in the canonical lower s
   }
 })
 
+test('completed key-handover work record keeps the authorized guest-notified button', async () => {
+  const before = { ...mockTask }
+  Object.assign(mockTask, {
+    id: 'completed-key-handover-record',
+    status: 'done',
+    work_record_read_only: true,
+    work_record_state: 'completed',
+    order_id_checkin: 'checkin-order-1',
+    read_only_views: {
+      guest_context: true,
+      media_scope: 'manager',
+      media_source_ids: ['cleaning-1'],
+    },
+    available_actions: [{
+      id: 'record_guest_ready_notified',
+      label: '已通知客人',
+      placement: 'primary',
+      enabled: true,
+      target: 'TaskDetail',
+      intent: 'manager',
+      source_type: 'orders',
+      source_id: 'checkin-order-1',
+    }],
+  })
+
+  try {
+    const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+    const ui = render(
+      <I18nProvider>
+        <ManagerDailyTaskScreen
+          navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+          route={{ key: 'manager-completed-key-handover', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+        />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(ui.getByTestId('work-record-read-only-info')).toBeTruthy())
+    expect(ui.getByTestId('manager-guest-ready-action-record_guest_ready_notified')).toBeTruthy()
+    expect(ui.queryByText('保存修改')).toBeNull()
+    ui.unmount()
+  } finally {
+    for (const key of Object.keys(mockTask)) delete mockTask[key]
+    Object.assign(mockTask, before)
+  }
+})
+
 test('manager history without exact media capability never falls back to live media endpoints', async () => {
   const before = { ...mockTask }
   Object.assign(mockTask, {
@@ -515,6 +571,98 @@ test('key count stays local through note keyboard and scrolling, cancel keeps th
     }),
   ))
   expect(api.updateCleaningTaskManagerFields).toHaveBeenCalledTimes(1)
+})
+
+test('password authority shows review state and same-value verification previews impact before an atomic save', async () => {
+  const alertSpy = jest.spyOn(Alert, 'alert')
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <ManagerDailyTaskScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'manager-password-authority', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  expect(ui.getByTestId('manager-old-code-authority').props.children).toBe('待核对')
+  expect(ui.getByTestId('manager-new-code-authority').props.children).toBe('已关联来源')
+  const store = jest.requireMock('../../lib/workTasksStore') as any
+  store.requestWorkTasksRefresh.mockResolvedValueOnce(false)
+  fireEvent.press(ui.getByTestId('manager-password-authority-verify'))
+
+  await waitFor(() => expect(api.previewCleaningTaskPasswordAuthority).toHaveBeenCalledWith(
+    mockAuthState.token,
+    { task_ids: ['cleaning-1'], fields: ['old_code', 'new_code'] },
+  ))
+  const confirmation = alertSpy.mock.calls.find((call) => call[0] === '确认核对密码来源？')
+  expect(String(confirmation?.[1] || '')).toContain('关联更新：2 条')
+  const confirmButton = (confirmation?.[2] as any[])?.find((button) => button.text === '确认核对')
+  await act(async () => {
+    confirmButton.onPress()
+  })
+
+  await waitFor(() => expect(api.updateCleaningTaskManagerFields).toHaveBeenCalledWith(
+    mockAuthState.token,
+    expect.objectContaining({
+      task_ids: ['cleaning-1'],
+      password_verification: expect.objectContaining({ fields: ['old_code', 'new_code'], client: 'mobile' }),
+    }),
+  ))
+  const submitted = (api.updateCleaningTaskManagerFields as jest.Mock).mock.calls.at(-1)?.[1]
+  expect(submitted).not.toHaveProperty('old_code')
+  expect(submitted).not.toHaveProperty('new_code')
+  expect(store.requestWorkTasksRefresh).toHaveBeenCalledWith(expect.objectContaining({ mode: 'force', reason: 'manager_task_saved' }))
+  await waitFor(() => expect(alertSpy).toHaveBeenCalledWith(
+    expect.any(String),
+    expect.stringContaining('权威状态刷新失败'),
+  ))
+  for (const [, patch] of store.patchWorkTaskItem.mock.calls) {
+    expect(patch).not.toHaveProperty('old_code')
+    expect(patch).not.toHaveProperty('new_code')
+  }
+  ui.unmount()
+})
+
+test('changed password previews the affected chain and requires explicit confirmation before save', async () => {
+  const alertSpy = jest.spyOn(Alert, 'alert')
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <ManagerDailyTaskScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'manager-password-change-preview', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  fireEvent.changeText(ui.getByPlaceholderText('旧密码'), 'changed-old-code')
+  fireEvent.press(ui.getByText('保存修改'))
+
+  await waitFor(() => expect(api.previewCleaningTaskPasswordAuthority).toHaveBeenCalledWith(
+    mockAuthState.token,
+    { task_ids: ['cleaning-1'], fields: ['old_code'] },
+  ))
+  expect(api.updateCleaningTaskManagerFields).not.toHaveBeenCalled()
+
+  const confirmation = alertSpy.mock.calls.find((call) => call[0] === '确认保存密码修改？')
+  expect(String(confirmation?.[1] || '')).toContain('关联更新：2 条')
+  const confirmButton = (confirmation?.[2] as any[])?.find((button) => button.text === '确认保存')
+  await act(async () => {
+    confirmButton.onPress()
+  })
+
+  await waitFor(() => expect(api.updateCleaningTaskManagerFields).toHaveBeenCalledWith(
+    mockAuthState.token,
+    expect.objectContaining({
+      task_ids: ['cleaning-1'],
+      old_code: 'changed-old-code',
+      password_verification: expect.objectContaining({ fields: ['old_code'], client: 'mobile' }),
+    }),
+  ))
+  const submitted = (api.updateCleaningTaskManagerFields as jest.Mock).mock.calls.at(-1)?.[1]
+  expect(submitted).not.toHaveProperty('new_code')
+  ui.unmount()
 })
 
 test.each([

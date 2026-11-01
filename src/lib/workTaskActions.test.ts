@@ -1,4 +1,5 @@
-import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyNotificationForActiveRole, guestReadyOperationId, guestReadyOutsideKeyForActiveRole, isGuestReadyNotificationAction, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, navigationForWorkTaskEntry, navigationForWorkTaskRolePage, preferredNoticeActionForTask } from './workTaskActions'
+import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyMutationTarget, guestReadyNotificationForActiveRole, guestReadyOperationId, guestReadyOutsideKeyForActiveRole, isGuestReadyNotificationAction, isGuestReadyNotificationStatusAction, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, navigationForWorkTaskEntry, navigationForWorkTaskRolePage, preferredNoticeActionForTask, primaryActionsForTask, workTaskMatchesGuestReadyTarget } from './workTaskActions'
+import { taskBusinessDateKey } from './taskBusinessDate'
 
 test('任务卡恢复进入各角色原页面，历史记录保持只读', () => {
   const base = {
@@ -105,13 +106,20 @@ test('只读工作记录只接受服务端绑定准确源任务的报修和补�
     status: 'pending_review',
     work_record_visible: true,
     work_record_read_only: true,
+    work_record_state: 'completed',
+    scheduled_date: taskBusinessDateKey(),
+    order_id_checkin: 'checkin-order-1',
+    read_only_views: { guest_context: true },
     available_actions: [
       { id: 'fill_supplies', label: '补品记录', placement: 'primary', enabled: false, disabled_reason: 'task_completed', read_only: true, target: 'SuppliesForm', intent: 'cleaning', source_type: 'cleaning_tasks', source_id: 'cleaning-task-1' },
       { id: 'report_issue', label: '问题反馈与报修记录', placement: 'more', enabled: true, read_only: false, target: 'FeedbackForm', intent: 'issue', source_type: 'cleaning_tasks', source_id: 'cleaning-task-1' },
+      { id: 'record_guest_ready_notified', label: '已通知客人', placement: 'primary', enabled: true, target: 'TaskDetail', intent: 'manager', source_type: 'orders', source_id: 'checkin-order-1' },
       { id: 'complete_cleaning', label: '完成', placement: 'primary', enabled: true, target: 'CleaningSelfComplete', intent: 'completion' },
     ],
   }
   expect(availableActionsForTask(task, { roleNames: ['admin'] }).map((action) => action.id)).toEqual(['fill_supplies', 'report_issue'])
+  expect(availableActionsForTask(task, { roleNames: ['customer_service'], activeRole: 'customer_service' }).map((action) => action.id)).toEqual(['fill_supplies', 'report_issue', 'record_guest_ready_notified'])
+  expect(availableActionsForTask(task, { roleNames: ['customer_service'], activeRole: 'admin' }).map((action) => action.id)).toEqual(['fill_supplies', 'report_issue'])
   expect(navigationForWorkTaskAction(task, availableActionsForTask(task)[0])).toEqual({
     screen: 'SuppliesForm',
     params: { taskId: 'mq801-record', readOnly: true },
@@ -128,6 +136,94 @@ test('只读工作记录只接受服务端绑定准确源任务的报修和补�
     ...task,
     available_actions: [{ ...task.available_actions[1], source_id: null }],
   }, { roleNames: ['customer_service'] })).toEqual([])
+})
+
+test('所有订单绑定入住执行类型都保留服务端授权的通知按钮，完成记录只保留状态动作', () => {
+  const notificationAction: any = {
+    id: 'record_guest_ready_notified',
+    label: '已通知客人',
+    placement: 'primary',
+    enabled: true,
+    target: 'TaskDetail',
+    intent: 'manager',
+    source_type: 'orders',
+    source_id: 'checkin-order-1',
+  }
+  const fixtures = [
+    { id: 'ordinary', task_kind: 'cleaning', task_type: 'checkin_clean' },
+    { id: 'checkin-only', task_kind: 'inspection', task_type: 'checkin_clean' },
+    { id: 'merged', task_kind: 'cleaning', task_type: 'turnover', order_id_checkout: 'checkout-order-1' },
+    { id: 'deferred', task_kind: 'inspection', task_type: 'turnover', deferred_inspection_merged: true },
+    { id: 'password-only', task_kind: 'inspection', task_type: 'checkin_clean', inspection_scope: 'password_only' },
+  ]
+  for (const fixture of fixtures) {
+    const task: any = {
+      ...fixture,
+      source_type: 'cleaning_tasks',
+      source_id: `${fixture.id}-source`,
+      order_id_checkin: 'checkin-order-1',
+      status: 'ready',
+      available_actions: [notificationAction],
+    }
+    expect(primaryActionsForTask(task, { roleNames: ['customer_service'], activeRole: 'customer_service', limit: 2 }).some(isGuestReadyNotificationStatusAction)).toBe(true)
+    expect(availableActionsForTask(task, { roleNames: ['admin'], activeRole: 'admin' }).some(isGuestReadyNotificationStatusAction)).toBe(false)
+  }
+
+  const completed: any = {
+    ...fixtures[2],
+    source_type: 'cleaning_tasks',
+    source_id: 'merged-source',
+    order_id_checkin: 'checkin-order-1',
+    status: 'done',
+    work_record_read_only: true,
+    work_record_state: 'completed',
+    scheduled_date: taskBusinessDateKey(),
+    read_only_views: { guest_context: true },
+    guest_ready_notification: {
+      source_type: 'orders',
+      source_id: 'checkin-order-1',
+      order_id: 'checkin-order-1',
+      task_id: null,
+      association_state: 'order_bound',
+      status: 'not_notified',
+      version: 0,
+    },
+    available_actions: [
+      notificationAction,
+      { ...notificationAction, id: 'register_guest_ready_outside_key', placement: 'more' },
+      { ...notificationAction, source_id: 'wrong-order' },
+    ],
+  }
+  expect(availableActionsForTask(completed, { roleNames: ['customer_service'], activeRole: 'customer_service' }).map((action) => action.id)).toEqual(['record_guest_ready_notified'])
+  expect(availableActionsForTask({ ...completed, work_record_state: 'pending_review' }, { roleNames: ['customer_service'], activeRole: 'customer_service' }).map((action) => action.id)).toEqual(['record_guest_ready_notified'])
+  expect(availableActionsForTask({ ...completed, work_record_state: 'reassigned' }, { roleNames: ['customer_service'], activeRole: 'customer_service' })).toEqual([])
+  expect(availableActionsForTask({ ...completed, order_id_checkin: null }, { roleNames: ['customer_service'], activeRole: 'customer_service' })).toEqual([])
+  expect(availableActionsForTask({ ...completed, scheduled_date: '2026-01-01' }, { roleNames: ['customer_service'], activeRole: 'customer_service' })).toEqual([])
+
+  const manualCompleted: any = {
+    ...completed,
+    id: 'manual-checkin-record',
+    source_id: 'manual-checkin-1',
+    source_ids: ['manual-checkin-1'],
+    order_id_checkin: null,
+    guest_ready_notification: {
+      source_type: 'cleaning_tasks',
+      source_id: 'manual-checkin-1',
+      order_id: null,
+      task_id: 'manual-checkin-1',
+      association_state: 'manual_unlinked',
+      status: 'not_notified',
+      version: 0,
+    },
+    available_actions: [
+      { ...notificationAction, source_type: 'cleaning_tasks', source_id: 'manual-checkin-1' },
+      { ...notificationAction, source_type: 'cleaning_tasks', source_id: 'wrong-task' },
+      notificationAction,
+    ],
+  }
+  expect(availableActionsForTask(manualCompleted, { roleNames: ['customer_service'], activeRole: 'customer_service' }).map((action) => action.source_id)).toEqual(['manual-checkin-1'])
+  expect(availableActionsForTask({ ...manualCompleted, guest_ready_notification: { ...manualCompleted.guest_ready_notification, task_id: 'wrong-task' } }, { roleNames: ['customer_service'], activeRole: 'customer_service' })).toEqual([])
+  expect(availableActionsForTask({ ...manualCompleted, order_id_checkin: 'checkin-order-1' }, { roleNames: ['customer_service'], activeRole: 'customer_service' })).toEqual([])
 })
 
 test('自完成挂钥匙动作直接进入视频页且跳过检查照片', () => {
@@ -289,10 +385,46 @@ test('客人通知标签和服务端缓存动作只跟随当前生效的客服�
 
 test('客人通知操作在同一服务端版本上复用幂等键', () => {
   expect(guestReadyOperationId({ orderId: 'order-1', action: 'mark', expectedVersion: 4 }))
-    .toBe('guest-ready:mark:4:order-1')
+    .toBe('guest-ready:orders:mark:4:order-1')
   expect(guestReadyOperationId({ orderId: 'order-1', action: 'mark', expectedVersion: 5 }))
-    .toBe('guest-ready:mark:5:order-1')
+    .toBe('guest-ready:orders:mark:5:order-1')
+  expect(guestReadyOperationId({ sourceType: 'cleaning_tasks', sourceId: 'manual-checkin-1', action: 'mark', expectedVersion: 0 }))
+    .toBe('guest-ready:cleaning_tasks:mark:0:manual-checkin-1')
   expect(guestReadyOperationId({ orderId: '', action: 'mark', expectedVersion: 4 })).toBeNull()
+})
+
+test('无订单手工入住使用精确任务目标并只刷新同一来源卡片', () => {
+  const task: any = {
+    id: 'manual-card',
+    source_type: 'cleaning_tasks',
+    source_id: 'manual-checkin-1',
+    source_ids: ['manual-checkin-1'],
+    active_source_ids: ['manual-checkin-1'],
+    guest_ready_notification: {
+      source_type: 'cleaning_tasks', source_id: 'manual-checkin-1', task_id: 'manual-checkin-1', order_id: null, version: 0,
+    },
+  }
+  const action: any = { id: 'record_guest_ready_notified', source_type: 'cleaning_tasks', source_id: 'manual-checkin-1' }
+  expect(guestReadyMutationTarget(task, action)).toEqual({ sourceType: 'cleaning_tasks', sourceId: 'manual-checkin-1', expectedVersion: 0 })
+  expect(workTaskMatchesGuestReadyTarget(task, 'cleaning_tasks', 'manual-checkin-1', 0)).toBe(true)
+  expect(workTaskMatchesGuestReadyTarget({ ...task, source_id: 'other', source_ids: ['other'], active_source_ids: ['other'] }, 'cleaning_tasks', 'manual-checkin-1', 0)).toBe(true)
+  expect(workTaskMatchesGuestReadyTarget({ ...task, guest_ready_notification: { ...task.guest_ready_notification, version: 1 } }, 'cleaning_tasks', 'manual-checkin-1', 0)).toBe(false)
+  const linkedAfterRequest = {
+    ...task,
+    order_id_checkin: 'order-1',
+    guest_ready_notification: {
+      ...task.guest_ready_notification,
+      source_type: 'orders',
+      source_id: 'order-1',
+      order_id: 'order-1',
+      task_id: null,
+      association_state: 'order_bound',
+    },
+  }
+  expect(workTaskMatchesGuestReadyTarget(linkedAfterRequest as any, 'cleaning_tasks', 'manual-checkin-1', 0)).toBe(false)
+  expect(guestReadyMutationTarget(linkedAfterRequest as any, action)).toBeNull()
+  expect(actionDisabledReasonText('key_handover_incomplete')).toBe('请先完成挂钥匙')
+  expect(actionDisabledReasonText('task_linked_to_order')).toBe('任务已关联订单，请刷新后使用订单通知状态')
 })
 
 test('入住时间变化立即让旧通知缓存失效，但钥匙外挂要求继续保留', () => {
@@ -308,8 +440,17 @@ test('入住时间变化立即让旧通知缓存失效，但钥匙外挂要求�
   }
   expect(guestReadyCachePatchAfterCheckinTimeChange(earlyOnly, '3pm')).toEqual({
     turnover_display: { checkin_time: '3pm', is_early_checkin: false, is_late_checkin: false },
-    guest_ready_notification: null,
+    guest_ready_notification: {
+      status: 'not_notified',
+      notified_at: null,
+      notified_by_user_id: null,
+      notified_by_name: null,
+      requirement_reasons: [],
+      automatic_early_arrival: false,
+      outside_key_required: false,
+    },
     available_actions: [
+      { id: 'record_guest_ready_notified', label: '已通知客人', placement: 'primary', enabled: true, intent: 'manager' },
       { id: 'register_guest_ready_outside_key', label: '登记钥匙外挂', placement: 'more', enabled: true, intent: 'manager' },
     ],
   })
@@ -354,6 +495,14 @@ test('入住时间变化立即让旧通知缓存失效，但钥匙外挂要求�
       { id: 'record_guest_ready_notified', label: '已通知客人', placement: 'primary', enabled: true, intent: 'manager' },
       { id: 'register_guest_ready_outside_key', label: '登记钥匙外挂', placement: 'more', enabled: true, intent: 'manager' },
     ],
+  })
+
+  const manualTask = {
+    ...earlyOnly,
+    guest_ready_notification: { ...earlyOnly.guest_ready_notification, source_type: 'cleaning_tasks' },
+  }
+  expect(guestReadyCachePatchAfterCheckinTimeChange(manualTask as any, '4pm')).toEqual({
+    turnover_display: { checkin_time: '4pm', is_early_checkin: false, is_late_checkin: false },
   })
 })
 

@@ -8,6 +8,7 @@ import {
   isStayoverTaskType,
 } from './cleaningInspection'
 import type { WorkTaskItem } from './workTasksStore'
+import { taskBusinessDateKey } from './taskBusinessDate'
 import { isEarlyCheckinTime, isLateCheckinTime } from './taskTime'
 
 function cleanText(value: any) {
@@ -31,6 +32,8 @@ export function actionDisabledReasonText(reason: any) {
   if (value === 'property_not_ready') return '房屋尚未设为可入住'
   if (value === 'no_checkin_order') return '没有本次入住订单'
   if (value === 'checkin_order_changed') return '入住订单已变化，请刷新后重试'
+  if (value === 'key_handover_incomplete') return '请先完成挂钥匙'
+  if (value === 'task_linked_to_order') return '任务已关联订单，请刷新后使用订单通知状态'
   return value
 }
 
@@ -61,7 +64,7 @@ export function isGuestReadyNotificationAction(action: WorkTaskAvailableAction) 
     || action.id === 'cancel_guest_ready_outside_key'
 }
 
-function isGuestReadyNotificationStatusAction(action: WorkTaskAvailableAction) {
+export function isGuestReadyNotificationStatusAction(action: WorkTaskAvailableAction) {
   return action.id === 'record_guest_ready_notified' || action.id === 'revoke_guest_ready_notified'
 }
 
@@ -74,14 +77,72 @@ export function guestReadyOutsideKeyForActiveRole<T>(outsideKey: T | null | unde
 }
 
 export function guestReadyOperationId(params: {
-  orderId: unknown
+  orderId?: unknown
+  sourceType?: unknown
+  sourceId?: unknown
   action: 'mark' | 'revoke' | 'register_outside_key' | 'cancel_outside_key'
   expectedVersion: unknown
 }) {
-  const orderId = cleanText(params.orderId)
+  const sourceType = cleanText(params.sourceType || 'orders')
+  const sourceId = cleanText(params.sourceId ?? params.orderId)
   const expectedVersion = Number(params.expectedVersion)
-  if (!orderId || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) return null
-  return `guest-ready:${params.action}:${expectedVersion}:${orderId}`
+  if (!['orders', 'cleaning_tasks'].includes(sourceType)
+    || !sourceId
+    || !Number.isSafeInteger(expectedVersion)
+    || expectedVersion < 0) return null
+  return `guest-ready:${sourceType}:${params.action}:${expectedVersion}:${sourceId}`
+}
+
+function guestReadyNotificationAuthority(task: WorkTaskItem) {
+  const notification = task.guest_ready_notification
+  const orderIdCheckin = cleanText(task.order_id_checkin)
+  const sourceType = cleanText(notification?.source_type || (orderIdCheckin ? 'orders' : ''))
+  const sourceId = cleanText(notification?.source_id || (sourceType === 'orders' ? orderIdCheckin : notification?.task_id))
+  if (sourceType === 'orders') {
+    return orderIdCheckin && sourceId === orderIdCheckin
+      ? { sourceType: 'orders' as const, sourceId }
+      : null
+  }
+  if (sourceType === 'cleaning_tasks') {
+    return !orderIdCheckin && sourceId && cleanText(notification?.task_id) === sourceId
+      ? { sourceType: 'cleaning_tasks' as const, sourceId }
+      : null
+  }
+  return null
+}
+
+export function guestReadyMutationTarget(task: WorkTaskItem, action: WorkTaskAvailableAction) {
+  const notification = task.guest_ready_notification
+  const outsideKey = task.guest_ready_outside_key
+  const notificationStatusAction = isGuestReadyNotificationStatusAction(action)
+  const notificationAuthority = guestReadyNotificationAuthority(task)
+  const outsideKeyOrderId = cleanText(outsideKey?.order_id)
+  const outsideKeyAuthority = outsideKeyOrderId && outsideKeyOrderId === cleanText(task.order_id_checkin)
+    ? { sourceType: 'orders' as const, sourceId: outsideKeyOrderId }
+    : null
+  const authority = notificationStatusAction ? notificationAuthority : outsideKeyAuthority
+  if (!authority
+    || (cleanText(action.source_type) && cleanText(action.source_type) !== authority.sourceType)
+    || (cleanText(action.source_id) && cleanText(action.source_id) !== authority.sourceId)) return null
+  const expectedVersion = notification?.version ?? outsideKey?.version
+  if (expectedVersion == null) return null
+  return { ...authority, expectedVersion }
+}
+
+export function workTaskMatchesGuestReadyTarget(
+  task: WorkTaskItem,
+  sourceType: 'orders' | 'cleaning_tasks',
+  sourceId: string,
+  expectedVersion: unknown,
+) {
+  const authority = guestReadyNotificationAuthority(task)
+  const currentVersion = task.guest_ready_notification?.version ?? task.guest_ready_outside_key?.version
+  const expected = Number(expectedVersion)
+  return authority?.sourceType === sourceType
+    && authority.sourceId === sourceId
+    && Number.isSafeInteger(expected)
+    && expected >= 0
+    && Number(currentVersion) === expected
 }
 
 export function withoutGuestReadyNotificationStatusActions(actions: WorkTaskAvailableAction[] | null | undefined) {
@@ -114,10 +175,7 @@ export function guestReadyCachePatchAfterCheckinTimeChange(task: WorkTaskItem, n
       }
     : {}
   if (previousCheckinTime === normalizedNextCheckinTime) return patch
-  if (!automaticEarlyArrival && !outsideKeyRequired) {
-    patch.guest_ready_notification = null
-    patch.available_actions = withoutGuestReadyNotificationStatusActions(task.available_actions)
-  } else if (task.guest_ready_notification) {
+  if (task.guest_ready_notification && task.guest_ready_notification.source_type !== 'cleaning_tasks') {
     patch.guest_ready_notification = {
       ...task.guest_ready_notification,
       status: 'not_notified',
@@ -173,22 +231,35 @@ function legacyAction(params: Omit<WorkTaskAvailableAction, 'enabled'> & { enabl
 
 export function availableActionsForTask(task: WorkTaskItem | null | undefined, options?: { roleNames?: string[]; activeRole?: string | null }): WorkTaskAvailableAction[] {
   if (!task) return []
-  if (task.work_record_read_only === true) {
-    return (Array.isArray((task as any).available_actions) ? (task as any).available_actions : [])
-      .filter((action: WorkTaskAvailableAction) => (
-        ((action?.id === 'report_issue' && action.enabled === true)
-          || (action?.id === 'fill_supplies'
-            && action.read_only === true
-            && action.disabled_reason === 'task_completed'))
-        && cleanText(action.source_type) === 'cleaning_tasks'
-        && !!cleanText(action.source_id)
-      ))
-  }
   const roleNames = options?.roleNames || []
-  const isCleaningSource = task.source_type === 'cleaning_tasks'
   const isCustomerService = options?.activeRole != null
     ? lower(options.activeRole) === 'customer_service'
     : roleNames.includes('customer_service') && !roleNames.includes('admin') && !roleNames.includes('offline_manager')
+  if (task.work_record_read_only === true) {
+    const guestReadyAuthority = guestReadyNotificationAuthority(task)
+    const workRecordDate = cleanText((task as any).work_record_date || task.scheduled_date || (task as any).date).slice(0, 10)
+    const workRecordState = lower((task as any).work_record_state)
+    const canUseGuestReadyStatus = isCustomerService
+      && (task as any).read_only_views?.guest_context === true
+      && ['completed', 'pending_review'].includes(workRecordState)
+      && !!guestReadyAuthority
+      && workRecordDate === taskBusinessDateKey()
+    return (Array.isArray((task as any).available_actions) ? (task as any).available_actions : [])
+      .filter((action: WorkTaskAvailableAction) => {
+        const isReadOnlyCleaningAction = (action?.id === 'report_issue' && action.enabled === true)
+          || (action?.id === 'fill_supplies'
+            && action.read_only === true
+            && action.disabled_reason === 'task_completed')
+        if (isReadOnlyCleaningAction) {
+          return cleanText(action.source_type) === 'cleaning_tasks' && !!cleanText(action.source_id)
+        }
+        return canUseGuestReadyStatus
+          && isGuestReadyNotificationStatusAction(action)
+          && cleanText(action.source_type) === guestReadyAuthority?.sourceType
+          && cleanText(action.source_id) === guestReadyAuthority?.sourceId
+      })
+  }
+  const isCleaningSource = task.source_type === 'cleaning_tasks'
   const isManager = roleNames.includes('admin') || roleNames.includes('offline_manager') || roleNames.includes('customer_service')
 
   // Customer service has a historical manager-only entrypoint even for older

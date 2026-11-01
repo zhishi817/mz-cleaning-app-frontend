@@ -1,6 +1,6 @@
 import React from 'react'
-import { AppState, RefreshControl } from 'react-native'
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
+import { Alert, AppState, Keyboard, Modal, Platform, RefreshControl } from 'react-native'
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native'
 import * as Clipboard from 'expo-clipboard'
 import { I18nProvider } from '../../lib/i18n'
 
@@ -991,6 +991,273 @@ test('offline task creation can select and submit an executor', async () => {
   mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
 })
 
+test('quick create uses a keyboard-safe shared shell and preserves drafts while dismissing the keyboard', async () => {
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const dismissKeyboard = jest.spyOn(Keyboard, 'dismiss').mockImplementation(() => {})
+
+  const tasksModule = require('./TasksScreen') as typeof import('./TasksScreen')
+  const TasksScreen = tasksModule.default as React.ComponentType<any>
+  expect(tasksModule.quickCreateKeyboardBehavior('ios')).toBe('padding')
+  expect(tasksModule.quickCreateKeyboardBehavior('android')).toBe('height')
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-keyboard-safe', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByText('新增')).toBeTruthy())
+  fireEvent.press(ui.getByText('新增'))
+
+  const keyboardAvoider = ui.getByTestId('quick-create-keyboard-avoider')
+  const modalCard = ui.getByTestId('quick-create-modal-card')
+  const formScroll = ui.getByTestId('quick-create-scroll')
+  expect(keyboardAvoider).toBeTruthy()
+  expect(formScroll.props.keyboardDismissMode).toBe(Platform.OS === 'ios' ? 'interactive' : 'on-drag')
+  expect(formScroll.props.keyboardShouldPersistTaps).toBe('handled')
+  expect(flattenTestStyle(modalCard.props.style)).toEqual(expect.objectContaining({ maxHeight: '86%', flexShrink: 1 }))
+  expect(flattenTestStyle(formScroll.props.style)).toEqual(expect.objectContaining({ flexShrink: 1 }))
+  expect(ui.getByTestId('quick-create-submit')).toBeTruthy()
+
+  fireEvent.press(ui.getByText('线下任务'))
+  fireEvent.changeText(ui.getByLabelText('quick-create-offline-title'), '修门锁')
+  fireEvent.changeText(ui.getByLabelText('quick-create-offline-content'), '中文拼音候选展开时仍保留的内容')
+  expect(ui.getByLabelText('quick-create-offline-content').props.submitBehavior).toBe('newline')
+  fireEvent.press(ui.getByText('房源任务'))
+  fireEvent.press(ui.getByText('公司任务'))
+  fireEvent.press(ui.getByText('其他任务'))
+  expect(ui.getByDisplayValue('中文拼音候选展开时仍保留的内容')).toBeTruthy()
+
+  fireEvent.press(ui.getByText('待同步退房'))
+  expect(ui.getByLabelText('quick-create-time')).toBeTruthy()
+  fireEvent.press(ui.getByText('待同步入住'))
+  expect(ui.getByLabelText('quick-create-guest-note')).toBeTruthy()
+  fireEvent.press(ui.getByText('线下任务'))
+  expect(ui.getByDisplayValue('修门锁')).toBeTruthy()
+  expect(ui.getByDisplayValue('中文拼音候选展开时仍保留的内容')).toBeTruthy()
+
+  dismissKeyboard.mockClear()
+  fireEvent(ui.getByLabelText('quick-create-offline-title'), 'submitEditing')
+  fireEvent(ui.getByTestId('quick-create-scroll'), 'scrollBeginDrag')
+  fireEvent.press(ui.getByTestId('quick-create-dismiss-keyboard-backdrop'))
+  fireEvent.press(ui.getByTestId('quick-create-dismiss-keyboard'))
+  expect(dismissKeyboard).toHaveBeenCalledTimes(4)
+  expect(ui.getByDisplayValue('中文拼音候选展开时仍保留的内容')).toBeTruthy()
+  expect(ui.getByTestId('quick-create-submit')).toBeTruthy()
+
+  fireEvent.press(ui.getByLabelText('关闭新增任务'))
+  expect(dismissKeyboard).toHaveBeenCalledTimes(5)
+  await waitFor(() => expect(ui.queryByTestId('quick-create-keyboard-avoider')).toBeNull())
+
+  fireEvent.press(ui.getByText('新增'))
+  expect(ui.getByTestId('quick-create-keyboard-avoider')).toBeTruthy()
+  fireEvent.press(ui.getByText('线下任务'))
+  expect(ui.getByLabelText('quick-create-offline-title').props.value).toBe('')
+  expect(ui.getByLabelText('quick-create-offline-content').props.value).toBe('')
+  expect(ui.getByTestId('quick-create-submit')).toBeTruthy()
+  fireEvent.press(ui.getByLabelText('关闭新增任务'))
+
+  dismissKeyboard.mockRestore()
+  mockAuthState.user = previousUser
+  mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+  mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+})
+
+test('quick create ignores repeated saves and keeps input after an async failure', async () => {
+  const api = require('../../lib/api')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const createOfflineMock = api.createCleaningOfflineTask as jest.Mock
+  createOfflineMock.mockClear()
+  let rejectCreate!: (reason: Error) => void
+  createOfflineMock.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+    rejectCreate = reject
+  }))
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-single-flight', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByText('新增')).toBeTruthy())
+  fireEvent.press(ui.getByText('新增'))
+  fireEvent.press(ui.getByText('线下任务'))
+  fireEvent.changeText(ui.getByLabelText('quick-create-offline-title'), '修门锁')
+  fireEvent.changeText(ui.getByLabelText('quick-create-offline-content'), '保存失败后不能丢失')
+
+  const submit = ui.getByTestId('quick-create-submit')
+  fireEvent.press(submit)
+  fireEvent.press(submit)
+  expect(createOfflineMock).toHaveBeenCalledTimes(1)
+
+  await act(async () => {
+    rejectCreate(new Error('mocked create failed'))
+    await Promise.resolve()
+  })
+  await waitFor(() => expect(ui.getByText('确认新增')).toBeTruthy())
+  expect(ui.getByDisplayValue('修门锁')).toBeTruthy()
+  expect(ui.getByDisplayValue('保存失败后不能丢失')).toBeTruthy()
+  expect(ui.getByTestId('quick-create-submit').props.accessibilityState?.disabled).not.toBe(true)
+
+  createOfflineMock.mockResolvedValueOnce({})
+  fireEvent.press(ui.getByTestId('quick-create-submit'))
+  await waitFor(() => expect(createOfflineMock).toHaveBeenCalledTimes(2))
+  expect(createOfflineMock).toHaveBeenLastCalledWith('local:test', expect.objectContaining({
+    title: '修门锁',
+    content: '保存失败后不能丢失',
+  }))
+
+  mockAuthState.user = previousUser
+  mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+  mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+})
+
+test('quick create cannot reopen during its post-create refresh and Android back can close while busy', async () => {
+  const api = require('../../lib/api')
+  const store = require('../../lib/workTasksStore')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const createOfflineMock = api.createCleaningOfflineTask as jest.Mock
+  const refreshMock = store.requestWorkTasksRefresh as jest.Mock
+  createOfflineMock.mockClear()
+  refreshMock.mockClear()
+  let finishCreate!: (value: Record<string, never>) => void
+  let finishRefresh!: (value: boolean) => void
+  createOfflineMock.mockImplementationOnce(() => new Promise<Record<string, never>>((resolve) => {
+    finishCreate = resolve
+  }))
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-refresh-lock', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(refreshMock).toHaveBeenCalled())
+    refreshMock.mockClear()
+    refreshMock.mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+      finishRefresh = resolve
+    }))
+
+    fireEvent.press(ui.getByTestId('quick-create-open'))
+    fireEvent.press(ui.getByText('线下任务'))
+    fireEvent.changeText(ui.getByLabelText('quick-create-offline-title'), '挂锁后刷新')
+    fireEvent.press(ui.getByTestId('quick-create-submit'))
+    await waitFor(() => expect(createOfflineMock).toHaveBeenCalledTimes(1))
+
+    const visibleBusyModal = ui.UNSAFE_getAllByType(Modal).find((modal) => modal.props.visible === true)
+    expect(visibleBusyModal).toBeTruthy()
+    act(() => visibleBusyModal?.props.onRequestClose())
+    await waitFor(() => expect(ui.queryByTestId('quick-create-keyboard-avoider')).toBeNull())
+
+    await act(async () => {
+      finishCreate({})
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1))
+    const openWhileRefreshing = ui.getByTestId('quick-create-open')
+    expect(openWhileRefreshing.props.accessibilityState?.disabled ?? openWhileRefreshing.props.disabled).toBe(true)
+    fireEvent.press(openWhileRefreshing)
+    expect(ui.queryByTestId('quick-create-keyboard-avoider')).toBeNull()
+
+    await act(async () => {
+      finishRefresh(true)
+      await Promise.resolve()
+    })
+    await waitFor(() => {
+      const openAfterRefresh = ui.getByTestId('quick-create-open')
+      expect(openAfterRefresh.props.accessibilityState?.disabled ?? openAfterRefresh.props.disabled).not.toBe(true)
+    })
+    fireEvent.press(ui.getByTestId('quick-create-open'))
+    expect(ui.getByTestId('quick-create-keyboard-avoider')).toBeTruthy()
+    const visibleIdleModal = ui.UNSAFE_getAllByType(Modal).find((modal) => modal.props.visible === true)
+    act(() => visibleIdleModal?.props.onRequestClose())
+    await waitFor(() => expect(ui.queryByTestId('quick-create-keyboard-avoider')).toBeNull())
+  } finally {
+    ui.unmount()
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('a failed post-create refresh does not report creation failure or leave quick create locked', async () => {
+  const api = require('../../lib/api')
+  const store = require('../../lib/workTasksStore')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const createOfflineMock = api.createCleaningOfflineTask as jest.Mock
+  const refreshMock = store.requestWorkTasksRefresh as jest.Mock
+  const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+  createOfflineMock.mockClear()
+  createOfflineMock.mockResolvedValueOnce({})
+  refreshMock.mockClear()
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-refresh-failure', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(refreshMock).toHaveBeenCalled())
+    refreshMock.mockClear()
+    refreshMock.mockRejectedValueOnce(new Error('mocked refresh failed after create'))
+
+    fireEvent.press(ui.getByTestId('quick-create-open'))
+    fireEvent.press(ui.getByText('线下任务'))
+    fireEvent.changeText(ui.getByLabelText('quick-create-offline-title'), '已创建但刷新失败')
+    fireEvent.press(ui.getByTestId('quick-create-submit'))
+
+    await waitFor(() => expect(ui.queryByTestId('quick-create-keyboard-avoider')).toBeNull())
+    await waitFor(() => {
+      const openAfterFailure = ui.getByTestId('quick-create-open')
+      expect(openAfterFailure.props.accessibilityState?.disabled ?? openAfterFailure.props.disabled).not.toBe(true)
+    })
+    expect(ui.getByText('已新增')).toBeTruthy()
+    expect(alertSpy).not.toHaveBeenCalledWith(expect.anything(), expect.stringContaining('新增失败'))
+
+    fireEvent.press(ui.getByTestId('quick-create-open'))
+    expect(ui.getByTestId('quick-create-keyboard-avoider')).toBeTruthy()
+    fireEvent.press(ui.getByLabelText('关闭新增任务'))
+  } finally {
+    ui.unmount()
+    alertSpy.mockRestore()
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
 test('saving order keeps offline tasks in the same cleaning execution sequence', async () => {
   const api = require('../../lib/api')
   const store = require('../../lib/workTasksStore')
@@ -1090,6 +1357,334 @@ test('saving order keeps offline tasks in the same cleaning execution sequence',
   ])
 
   snapshot.items = previousItems
+})
+
+test('password-only check-in execution joins the owner mixed order and shows a selectable order circle', async () => {
+  const api = require('../../lib/api')
+  const store = require('../../lib/workTasksStore')
+  const reorderMixedWorkTasksMock = api.reorderMixedWorkTasks as jest.Mock
+  const patchWorkTaskItemsMock = store.patchWorkTaskItems as jest.Mock
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  reorderMixedWorkTasksMock.mockClear()
+  patchWorkTaskItemsMock.mockClear()
+  snapshot.items = [
+    {
+      ...previousItems[0],
+      id: 'clean-owner',
+      task_kind: 'cleaning',
+      execution_role: 'cleaning',
+      source_type: 'cleaning_tasks',
+      source_id: 'ct-clean-owner',
+      active_source_ids: ['ct-clean-owner'],
+      title: 'A 清洁',
+      scheduled_date: mockTodayKey,
+      assignee_id: 'u1',
+      cleaner_id: 'u1',
+      inspector_id: null,
+      status: 'assigned',
+      property: { ...previousItems[0].property, id: 'p-clean', code: 'A1001' },
+      date: mockTodayKey,
+    },
+    {
+      ...previousItems[0],
+      id: 'password-owner',
+      task_kind: 'execution',
+      execution_role: 'execution',
+      execution_semantics: 'key_or_password_action',
+      task_type: 'checkin_clean',
+      inspection_scope: 'password_only',
+      source_type: 'cleaning_tasks',
+      source_id: 'ct-password-owner',
+      active_source_ids: ['ct-password-owner'],
+      title: 'B 仅改密码',
+      scheduled_date: mockTodayKey,
+      assignee_id: 'u1',
+      executor_id: 'u1',
+      executor_reorderable: true,
+      execution_state: 'active',
+      cleaner_id: null,
+      inspector_id: null,
+      status: 'assigned',
+      property: { ...previousItems[0].property, id: 'p-password', code: 'B1002' },
+      date: mockTodayKey,
+    },
+    {
+      id: 'offline-owner',
+      task_kind: 'offline',
+      source_type: 'cleaning_offline_tasks',
+      source_id: 'offline-owner-source',
+      title: 'C 线下',
+      summary: '买耗材',
+      scheduled_date: mockTodayKey,
+      start_time: '',
+      end_time: '',
+      assignee_id: 'u1',
+      assignee_name: 'tester',
+      status: 'assigned',
+      urgency: 'medium',
+      property: null,
+      date: mockTodayKey,
+    },
+  ]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-password-only-mixed-reorder', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => {
+      expect(ui.getByText('排序')).toBeTruthy()
+      expect(ui.getByLabelText('task-card-password-owner')).toBeTruthy()
+    })
+    expect(within(ui.getByLabelText('task-card-password-owner')).getByText('·')).toBeTruthy()
+
+    fireEvent.press(ui.getByText('排序'))
+    fireEvent.press(ui.getByLabelText('task-card-password-owner'))
+    fireEvent.press(ui.getByLabelText('task-card-offline-owner'))
+    fireEvent.press(ui.getByLabelText('task-card-clean-owner'))
+    fireEvent.press(ui.getByText('保存顺序'))
+
+    await waitFor(() => {
+      expect(reorderMixedWorkTasksMock).toHaveBeenCalledWith('local:test', {
+        date: mockTodayKey,
+        items: [
+          { kind: 'executor', ids: ['ct-password-owner'], sort_index: 1 },
+          { kind: 'work', ids: ['offline-owner'], sort_index: 2 },
+          { kind: 'cleaner', ids: ['ct-clean-owner'], sort_index: 3 },
+        ],
+      })
+    })
+    expect(patchWorkTaskItemsMock).toHaveBeenCalledWith([
+      { id: 'password-owner', patch: { sort_index: 1, sort_index_inspector: 1 } },
+      { id: 'offline-owner', patch: { sort_index: 2 } },
+      { id: 'clean-owner', patch: { sort_index: 3, sort_index_cleaner: 3 } },
+    ])
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+  }
+})
+
+test('another executor password-only task stays visible but cannot be reordered', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  snapshot.items = [{
+    ...previousItems[0],
+    id: 'password-other',
+    task_kind: 'execution',
+    execution_role: 'execution',
+    execution_semantics: 'key_or_password_action',
+    task_type: 'checkin_clean',
+    inspection_scope: 'password_only',
+    source_type: 'cleaning_tasks',
+    source_id: 'ct-password-other',
+    active_source_ids: ['ct-password-other'],
+    title: '他人仅改密码',
+    scheduled_date: mockTodayKey,
+    assignee_id: 'other-user',
+    executor_id: 'other-user',
+    executor_reorderable: true,
+    execution_state: 'active',
+    cleaner_id: null,
+    inspector_id: null,
+    status: 'assigned',
+    date: mockTodayKey,
+  }]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-password-only-other-owner', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByLabelText('task-card-password-other')).toBeTruthy())
+    expect(ui.queryByText('排序')).toBeNull()
+    expect(within(ui.getByLabelText('task-card-password-other')).queryByText('·')).toBeNull()
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+  }
+})
+
+test('legacy password-only executor fallback stays visible without receiving source-assignee reorder ownership', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  snapshot.items = [{
+    ...previousItems[0],
+    id: 'password-legacy-fallback',
+    task_kind: 'execution',
+    execution_role: 'execution',
+    execution_semantics: 'key_or_password_action',
+    task_type: 'checkin_clean',
+    inspection_scope: 'password_only',
+    source_type: 'cleaning_tasks',
+    source_id: 'ct-password-legacy-fallback',
+    active_source_ids: ['ct-password-legacy-fallback'],
+    title: '兼容执行人仅改密码',
+    scheduled_date: mockTodayKey,
+    assignee_id: 'u1',
+    executor_id: 'u1',
+    executor_reorderable: false,
+    execution_state: 'active',
+    cleaner_id: null,
+    inspector_id: 'u1',
+    status: 'assigned',
+    date: mockTodayKey,
+  }]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-password-only-legacy-fallback', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByLabelText('task-card-password-legacy-fallback')).toBeTruthy())
+    expect(ui.queryByText('排序')).toBeNull()
+    expect(within(ui.getByLabelText('task-card-password-legacy-fallback')).queryByText('·')).toBeNull()
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+  }
+})
+
+test('a terminal password-only card never shows the reorder circle even with a stale reorder capability', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  snapshot.items = [{
+    ...previousItems[0],
+    id: 'password-terminal',
+    task_kind: 'execution',
+    execution_role: 'execution',
+    execution_semantics: 'key_or_password_action',
+    task_type: 'checkin_clean',
+    inspection_scope: 'password_only',
+    source_type: 'cleaning_tasks',
+    source_id: 'ct-password-terminal',
+    active_source_ids: ['ct-password-terminal'],
+    title: '已完成仅改密码',
+    scheduled_date: mockTodayKey,
+    assignee_id: 'u1',
+    executor_id: 'u1',
+    executor_reorderable: true,
+    execution_state: 'active',
+    cleaner_id: null,
+    inspector_id: null,
+    status: 'done',
+    date: mockTodayKey,
+  }]
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-password-only-terminal', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByLabelText('task-card-password-terminal')).toBeTruthy())
+    expect(ui.queryByText('排序')).toBeNull()
+    expect(within(ui.getByLabelText('task-card-password-terminal')).queryByText('·')).toBeNull()
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+  }
+})
+
+test('password-only reorder suppresses a duplicate save and applies no local order after an API failure', async () => {
+  const api = require('../../lib/api')
+  const store = require('../../lib/workTasksStore')
+  const reorderMixedWorkTasksMock = api.reorderMixedWorkTasks as jest.Mock
+  const patchWorkTaskItemsMock = store.patchWorkTaskItems as jest.Mock
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  reorderMixedWorkTasksMock.mockClear()
+  patchWorkTaskItemsMock.mockClear()
+  snapshot.items = [{
+    ...previousItems[0],
+    id: 'password-retry',
+    task_kind: 'execution',
+    execution_role: 'execution',
+    execution_semantics: 'key_or_password_action',
+    task_type: 'checkin_clean',
+    inspection_scope: 'password_only',
+    source_type: 'cleaning_tasks',
+    source_id: 'ct-password-retry',
+    active_source_ids: ['ct-password-retry'],
+    title: '重试仅改密码',
+    scheduled_date: mockTodayKey,
+    assignee_id: 'u1',
+    executor_id: 'u1',
+    executor_reorderable: true,
+    execution_state: 'active',
+    cleaner_id: null,
+    inspector_id: null,
+    status: 'assigned',
+    date: mockTodayKey,
+  }]
+
+  let rejectSave!: (error: Error) => void
+  reorderMixedWorkTasksMock.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+    rejectSave = reject
+  }))
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-password-only-retry', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByText('排序')).toBeTruthy())
+    fireEvent.press(ui.getByText('排序'))
+    fireEvent.press(ui.getByLabelText('task-card-password-retry'))
+    fireEvent.press(ui.getByText('保存顺序'))
+    fireEvent.press(ui.getByText('保存顺序'))
+    expect(reorderMixedWorkTasksMock).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      rejectSave(new Error('offline'))
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(ui.getByText('保存顺序')).toBeTruthy())
+    expect(patchWorkTaskItemsMock).not.toHaveBeenCalled()
+
+    reorderMixedWorkTasksMock.mockResolvedValueOnce({})
+    fireEvent.press(ui.getByText('保存顺序'))
+    await waitFor(() => expect(reorderMixedWorkTasksMock).toHaveBeenCalledTimes(2))
+    expect(patchWorkTaskItemsMock).toHaveBeenCalledWith([
+      { id: 'password-retry', patch: { sort_index: 1, sort_index_inspector: 1 } },
+    ])
+  } finally {
+    reorderMixedWorkTasksMock.mockImplementation(async () => ({}))
+    ui.unmount()
+    snapshot.items = previousItems
+  }
 })
 
 test('a day containing only read-only work records does not offer task reordering', async () => {
@@ -2583,6 +3178,57 @@ test('marking guest checkout changes the action to a gray checked-out state', as
   mockAuthState.user = previousUser
   if (previousPatchImplementation) patchWorkTaskItemMock.mockImplementation(previousPatchImplementation)
   else patchWorkTaskItemMock.mockReset()
+})
+
+test('completed key-handover card still exposes the exact order-bound guest-notified action', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'cs-completed', username: 'customer-service', role: 'customer_service', roles: ['customer_service'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  snapshot.items[0] = {
+    ...previousTask,
+    task_kind: 'execution',
+    task_type: 'checkin_clean',
+    source_type: 'cleaning_tasks',
+    source_id: 'checkin-source',
+    status: 'done',
+    order_id_checkin: 'checkin-order-1',
+    work_record_visible: true,
+    work_record_read_only: true,
+    work_record_state: 'completed',
+    read_only_views: { guest_context: true },
+    available_actions: [
+      { id: 'record_guest_ready_notified', label: '已通知客人', placement: 'primary', enabled: true, target: 'TaskDetail', intent: 'manager', source_type: 'orders', source_id: 'checkin-order-1' },
+      { id: 'report_issue', label: '问题反馈', placement: 'more', enabled: true, target: 'FeedbackForm', intent: 'issue', source_type: 'cleaning_tasks', source_id: 'checkin-source' },
+    ],
+  }
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-completed-key-handover', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByLabelText('task-collapse-w1')).toBeTruthy())
+    expandTask(ui, 'w1')
+    await waitFor(() => expect(ui.getByTestId('task-action-w1-record_guest_ready_notified')).toBeTruthy())
+    expect(ui.queryByTestId('task-action-w1-report_issue')).toBeNull()
+  } finally {
+    ui.unmount()
+    snapshot.items[0] = previousTask
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
 })
 
 test('customer-service merged task card submits the guest-checkout action source ID instead of its top-level source', async () => {

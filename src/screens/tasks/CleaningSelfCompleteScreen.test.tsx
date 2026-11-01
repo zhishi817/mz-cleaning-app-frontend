@@ -154,6 +154,28 @@ beforeEach(() => {
   mockLockboxQueueItems = []
 })
 
+test('普通清洁仅在历史页收窄为五个适用分组，所有活动完成门槛保持原八项', () => {
+  const { completionPhotoAreaConfigsForMode } = require('./CleaningSelfCompleteScreen')
+  const normalActive = completionPhotoAreaConfigsForMode('same_day', false, false)
+  const normalHistory = completionPhotoAreaConfigsForMode('same_day', false, true)
+  const selfComplete = completionPhotoAreaConfigsForMode('self_complete', false, false)
+  const stayover = completionPhotoAreaConfigsForMode('same_day', true, false)
+
+  expect(normalHistory.map((item: any) => item.area)).toEqual([
+    'shower_drain',
+    'living',
+    'kitchen',
+    'remote_tv',
+    'vacuum_used',
+  ])
+  expect(normalActive).toHaveLength(8)
+  expect(selfComplete).toHaveLength(8)
+  expect(stayover).toHaveLength(8)
+  expect(normalActive.every((item: any) => item.required !== false)).toBe(true)
+  expect(selfComplete.every((item: any) => item.required !== false)).toBe(true)
+  expect(stayover.every((item: any) => item.required !== false)).toBe(true)
+})
+
 test('任务执行人看到清洁完成的照片和完成门槛', async () => {
   const CleaningSelfCompleteScreen = require('./CleaningSelfCompleteScreen').default as React.ComponentType<any>
   const navigation = { navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }
@@ -522,11 +544,60 @@ test('普通同日检查历史沿用清洁只读页面，不套用自完成挂�
     expect(ui.queryByText('当前目录新品')).toBeNull()
     expect(ui.getAllByText('现场够用')).toHaveLength(1)
     expect(ui.queryByTestId('completion-photo-sofa-0')).toBeNull()
+    expect(ui.queryByText('浴室')).toBeNull()
+    expect(ui.queryByText('沙发')).toBeNull()
+    expect(ui.queryByText('卧室')).toBeNull()
+    expect(ui.queryByTestId('cleaning-other-history-photos')).toBeNull()
     expect(ui.queryByText('挂钥匙视频')).toBeNull()
     expect(ui.queryByText('未满足')).toBeNull()
     expect(ui.queryByText('未提交')).toBeNull()
     expect(ui.getByText('普通同日检查任务由检查流程负责挂钥匙；清洁历史这里只展示清洁本人已保存的内容。')).toBeTruthy()
     expect(JSON.stringify(ui.toJSON())).not.toContain('inspection-must-not-show.jpg')
+  } finally {
+    mockSnapshot.items[0] = previousTask
+  }
+})
+
+test('普通清洁历史把旧模式额外照片集中为只读记录且不恢复必拍卡片', async () => {
+  mockInspectionMode = 'same_day'
+  const previousTask = { ...mockSnapshot.items[0] }
+  mockSnapshot.items[0] = {
+    ...previousTask,
+    task_type: 'checkout_clean',
+    status: 'done',
+    work_record_read_only: true,
+    read_only_views: { media_scope: 'cleaner', media_source_ids: ['cleaning-1'], cleaner_photos: true },
+  } as any
+  const api = require('../../lib/api')
+  api.getWorkTaskFormPhotos.mockResolvedValue({
+    items: [
+      { id: 'legacy-bathroom', task_id: 'cleaning-1', source: 'completion', area: 'toilet', url: 'cleaning/media/legacy-bathroom.jpg' },
+      { id: 'legacy-sofa', task_id: 'cleaning-1', source: 'completion', area: 'sofa', url: 'cleaning/media/legacy-sofa.jpg' },
+      { id: 'legacy-bedroom', task_id: 'cleaning-1', source: 'completion', area: 'bedroom', url: 'cleaning/media/legacy-bedroom.jpg' },
+    ],
+  })
+  const CleaningSelfCompleteScreen = require('./CleaningSelfCompleteScreen').default as React.ComponentType<any>
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <CleaningSelfCompleteScreen navigation={navigation} route={{ key: 'ordinary-history-extra', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning', readOnly: true } }} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(ui.getByTestId('cleaning-other-history-photos')).toBeTruthy()
+      expect(ui.getByTestId('completion-photo-toilet-0')).toBeTruthy()
+      expect(ui.getByTestId('completion-photo-sofa-0')).toBeTruthy()
+      expect(ui.getByTestId('completion-photo-bedroom-0')).toBeTruthy()
+    })
+    expect(ui.getByText('其他历史照片')).toBeTruthy()
+    expect(ui.getByText('这些是旧记录中已保存的额外照片，仅保留查看，不会作为普通清洁的必拍项目。')).toBeTruthy()
+    expect(ui.getAllByText('历史额外记录')).toHaveLength(3)
+    expect(ui.queryByTestId('completion-photo-toilet-capture')).toBeNull()
+    expect(ui.queryByTestId('completion-photo-sofa-capture')).toBeNull()
+    expect(ui.queryByTestId('completion-photo-bedroom-capture')).toBeNull()
   } finally {
     mockSnapshot.items[0] = previousTask
   }
@@ -904,6 +975,12 @@ test('本地完成照片打开大图时显示同一水印，并可重拍单一�
     expect(ui.getByText('左右滑动查看')).toBeTruthy()
     expect(ui.getByText(/TEST-1[\s\S]*executor/)).toBeTruthy()
   })
+  fireEvent.press(ui.getByLabelText('关闭照片预览'))
+  await waitFor(() => expect(ui.queryByTestId('self-complete-photo-viewer-mask')).toBeNull())
+  fireEvent.press(ui.getByTestId('completion-photo-remote_tv-0'))
+  await waitFor(() => expect(ui.getByTestId('self-complete-photo-viewer-mask')).toBeTruthy())
+  fireEvent.press(ui.getByLabelText('关闭照片预览'))
+  await waitFor(() => expect(ui.queryByTestId('self-complete-photo-viewer-mask')).toBeNull())
 })
 
 test('补充与完成入口恢复只点过一项的草稿时，其余补品仍待确认', async () => {
