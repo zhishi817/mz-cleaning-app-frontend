@@ -16477,7 +16477,7 @@
 - **Status:** prepared
 - **Untracked review:** none; 20 exact tracked paths were staged explicitly after the changed-password preview repair, with no untracked, generated native, dependency-tree, preview or device-log content.
 - `design-qa.md` — SHA-256: `90544bccadadb363afe4cb7f8054aeae39eb8b5e29106091d66a422e9d882a46`
-- `docs/feature-regression-registry.md` — SHA-256: `206599c3394a999b0651df44578daa2288d4d485f03aa5527079bca390af3af9`
+- `docs/feature-regression-registry.md` — SHA-256: `f94c31582fc149089753653590c29933fc92425e00c60fae1b74e135fc280f6d`
 - `src/components/ui/ResponsiveImageGrid.test.tsx` — SHA-256: `0c734054041f052a41076f8fc3aa21b7f0f718ecf845abd82a06889a44afc6d4`
 - `src/components/ui/ResponsiveImageGrid.test.tsx` — SHA-256: `b150e77300e0de3e882812e9e6f4c4bc92729cb7bb20b2b0755448369d0ef63f`
 - `src/components/ui/ResponsiveImageGrid.tsx` — SHA-256: `05b07fa92d7573fa66789a469e4fc7b79a6c742d7e360de548fc10d8fb8c99bf`
@@ -16538,10 +16538,10 @@
 - `src/lib/workTasksStore.ts` — SHA-256: `831cdd7433bb7f643f3130787b1939aed2f95f2e1ee4ede8d2d4a229d18f1b03`
 - `src/lib/workTasksStore.ts` — SHA-256: `8e7e2011234abaeaa41b193bcfc22daf0a3bca31b0a339f81a62fd861bd0f322`
 - `src/lib/workTasksStore.ts` — SHA-256: `c1ff6a03ff0af943f972a4a265abd81e605cc29d55ae2841a9ff00f39f4091cd`
-- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `50cdab0b6c65b4d1d1bf053d15c550bd099dff5e65b4d550d2e8f2fe84d60733`
-- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `63b523028f66383647e3a7623c17dcdc40f58b410e9b09ab70fe882b7713681d`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `28cc320b9ee15ef487c21a77d87769e8053445352cd959ca499427a346072492`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `afaac5f350a95b7fcd81a4f14f6ea8c9a1a0689b25dc5cfd3b4c6be7943367cd`
 - `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `6439a1a0e5a141c46e30971b96deb757abd1e0dfde1bbdba5affa341c05aef40`
-- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `f82895b67171468873f387327fb3f391b0b4d1c1405dfbb97bc939e07e018319`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `60d8af11a94884a84179962b7e423bc2b9e1dde56ea991672ae07a07d3357689`
 - `src/screens/tabs/TasksScreen.tsx` — SHA-256: `0ed74a373be9efb6d6b64de79fca62e5f1b2571583afb213966b213219d4049a`
 - `src/screens/tabs/TasksScreen.tsx` — SHA-256: `12a2909ccb369ee0d1ab1c3972014b9b0bf0434141f07fdd78e63fa726624bde`
 - `src/screens/tabs/TasksScreen.tsx` — SHA-256: `1608fbafb316e5e7d96714b6e23af9635f4dc0b14e17202e8e1e851511dc0fda`
@@ -16676,7 +16676,7 @@
 ## CRL-20261101-005 — 七项 Draft PR CI 稳定与 MZ-091 注册表校正
 
 - **Repository:** `mobile`
-- **Status:** verified follow-up candidate for the existing Draft PR; not committed or pushed
+- **Status:** exact follow-up content committed locally for the existing Draft PR; not pushed
 - **Updated:** 2026-11-01 UTC
 - **Request:** 修复七项 Mobile Draft PR #71 首次 GitHub Actions 中唯一的异步等待超时，并处理独立审查发现的 MZ-091 回归注册表状态与 CRL 关联过期问题；不得改变运行时代码或扩大发布权限。
 - **Outcome:** MZ-096 的“创建成功、后续刷新失败”回归改用五秒的显式等待窗口，避免 GitHub Runner 上同一状态更新超过默认一秒时误报；MZ-091 注册表改为当前功能分支/Draft PR 状态，并关联精确的 Root/Mobile `CRL-20261101-004`。运行时代码、API、角色、数据与发布行为均不变。
@@ -16707,30 +16707,31 @@
 - **Repository:** `mobile`
 - **Status:** prepared
 - **Untracked review:** none; ignored dependency symlink is test infrastructure only and is not staged.
-- `docs/feature-regression-registry.md` — SHA-256: `933d83002256986583cbfd94e0dc09bdda7f2af3988c121402ed3a8b921f3ee4`
-- `docs/feature-regression-registry.md` — SHA-256: `fb7a7a354b9f3b08c7db9cc4f3e931087011f4719941d6d82dcc49286da9d6fa`
-- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `e85d3eb74cbf282f4e5488b88b89ad200b753f663a121e4e425f3946f93748bf`
+- `docs/feature-regression-registry.md` — SHA-256: `f94c31582fc149089753653590c29933fc92425e00c60fae1b74e135fc280f6d`
+- `docs/feature-regression-registry.md` — SHA-256: `f94c31582fc149089753653590c29933fc92425e00c60fae1b74e135fc280f6d`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `28cc320b9ee15ef487c21a77d87769e8053445352cd959ca499427a346072492`
 
 ### Release Attempts
 
 #### RA-20261101-002
 
 - Repository: `mobile`
-- Selected CRLs: `CRL-20261101-005`
-- Selected CRL identities: `mobile/CRL-20261101-005`
-- Intended action: `commit`, then normal fast-forward update of the existing Draft PR branch and rerun CI
-- Branch: `codex/mz-seven-item-bundle-20261101`; existing Draft PR #71 targets `Dev`
-- Base: existing remote branch head `795bc58af5ad24c7efd51f78d3d423f578018b34`; PR base remains `origin/Dev@1689187fb556e3cb4c00ef68b162b6f8610c942d`
-- Candidate patch SHA-256: `57ec1a9e87b4d67d9641fc90e68256b3eeb2c594e74d9ef32c9063e1b9583e86`
-- Commit SHA: `not committed`
-- Dependencies: paired Root Draft PR #431 and `root/CRL-20261101-004@8bf9ab535c0744e8f5a26cb3e64e8b3b1b90a48b`
+- Selected CRLs: `CRL-20261101-001`, `CRL-20261101-002`, `CRL-20261101-003`, `CRL-20261028-006`, `CRL-20261101-004`, `CRL-20261101-005`
+- Selected CRL identities: `mobile/CRL-20261101-001`; `mobile/CRL-20261101-002`; `mobile/CRL-20261101-003`; `mobile/CRL-20261028-006`; `mobile/CRL-20261101-004`; `mobile/CRL-20261101-005`
+- Intended action: `push`
+- Branch: `codex/mz-seven-item-bundle-20261101`
+- Base: `origin/Dev@1689187fb556e3cb4c00ef68b162b6f8610c942d`; fetched at `2026-11-01T10:43:57Z`
+- Candidate patch SHA-256: `6a1ba9180b4ebf65b356c5d6bd8974b90b74e77569e14cd9e8ea8e9f177afae2`
+- Commit SHA: `7cbabe4857708d3bd4b16cf8eb14d61a49760796`; candidate content commit, with the audit head supplied by the release-report command
+- Dependencies: `root/CRL-20261101-002@8bf9ab535c0744e8f5a26cb3e64e8b3b1b90a48b`; `root/CRL-20261101-003@8bf9ab535c0744e8f5a26cb3e64e8b3b1b90a48b`; `root/CRL-20261101-004@8bf9ab535c0744e8f5a26cb3e64e8b3b1b90a48b`
 - Required validation: `PASS`; evidence: exact post-repair checks above, including 82 suites / 748 tests
 - Shared-hunk review: `PASS`; runtime files are unchanged, and the two non-ledger edits are limited to one MZ-096 test wait plus MZ-091 registry metadata
+- Hunk reconciliation: `docs/feature-regression-registry.md#206599c3394a999b0651df44578daa2288d4d485f03aa5527079bca390af3af9 -> f94c31582fc149089753653590c29933fc92425e00c60fae1b74e135fc280f6d`; evidence: the follow-up metadata edits combine with the original newly-added registry section | `docs/feature-regression-registry.md#933d83002256986583cbfd94e0dc09bdda7f2af3988c121402ed3a8b921f3ee4 -> f94c31582fc149089753653590c29933fc92425e00c60fae1b74e135fc280f6d`; evidence: the first metadata correction is inside the same final registry hunk | `docs/feature-regression-registry.md#fb7a7a354b9f3b08c7db9cc4f3e931087011f4719941d6d82dcc49286da9d6fa -> f94c31582fc149089753653590c29933fc92425e00c60fae1b74e135fc280f6d`; evidence: the second metadata correction is inside the same final registry hunk | `src/screens/tabs/TasksScreen.test.tsx#50cdab0b6c65b4d1d1bf053d15c550bd099dff5e65b4d550d2e8f2fe84d60733 -> 28cc320b9ee15ef487c21a77d87769e8053445352cd959ca499427a346072492`; evidence: the timeout edit is inside the original MZ-096 quick-create test hunk | `src/screens/tabs/TasksScreen.test.tsx#e85d3eb74cbf282f4e5488b88b89ad200b753f663a121e4e425f3946f93748bf -> 28cc320b9ee15ef487c21a77d87769e8053445352cd959ca499427a346072492`; evidence: the incremental timeout hunk is absorbed into the final MZ-096 quick-create test hunk | `src/screens/tabs/TasksScreen.test.tsx#63b523028f66383647e3a7623c17dcdc40f58b410e9b09ab70fe882b7713681d -> afaac5f350a95b7fcd81a4f14f6ea8c9a1a0689b25dc5cfd3b4c6be7943367cd`; evidence: following line offsets change the adjacent MZ-093 test hunk fingerprint without content change | `src/screens/tabs/TasksScreen.test.tsx#f82895b67171468873f387327fb3f391b0b4d1c1405dfbb97bc939e07e018319 -> 60d8af11a94884a84179962b7e423bc2b9e1dde56ea991672ae07a07d3357689`; evidence: following line offsets change the adjacent MZ-010 test hunk fingerprint without content change
 - Generated-file review: `PASS`; no generated, native, dependency, cache, preview, screenshot, device-log, environment, secret, deployment, migration, or production-data path is selected
-- Technical state: `verified`
+- Technical state: `committed`
 - User authorization: `approved-for-push`; evidence: the selected seven-item branch/Draft PR scope is already authorized, and the current task explicitly requires repairing failures within that same scope and rerunning CI; merge, deployment, migration and OTA remain excluded
-- Independent review: `GO for the exact staged commit and conditional branch fast-forward`; evidence: independent read-only review matched the three staged files, fingerprint `57ec1a9e87b4d67d9641fc90e68256b3eeb2c594e74d9ef32c9063e1b9583e86`, pre-commit gate, validation and release boundaries, with P0/P1/P2=0
-- Action conclusion: `GO` for the exact commit; normal fast-forward of the existing Draft PR branch is permitted only after the committed fingerprint/range audit passes and a live ref check still finds `795bc58af5ad24c7efd51f78d3d423f578018b34`; no merge, deployment, migration or OTA
+- Independent review: `GO for the exact full-range push and conditional branch fast-forward`; evidence: the original full-range review verified the 20-path branch content and paired Root dependency, while the follow-up read-only review matched the three-file repair and incremental fingerprint `57ec1a9e87b4d67d9641fc90e68256b3eeb2c594e74d9ef32c9063e1b9583e86`; combined P0/P1/P2=0
+- Action conclusion: `GO` for this ledger-only receipt; normal fast-forward of the existing Draft PR branch remains conditional on the exact committed fingerprint/range audit and a live ref check still finding `795bc58af5ad24c7efd51f78d3d423f578018b34`; no merge, deployment, migration or OTA
 
 ### Risks / Release Notes
 
