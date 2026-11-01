@@ -16777,15 +16777,17 @@
 - Selected CRL identities: `mobile/CRL-20261101-006`
 - Intended action: `commit`, normal feature-branch push, repair PR to `Dev`, and merge only after exact-head CI succeeds
 - Branch: `codex/mz-seven-item-postmerge-ci-repair`
-- Base: `origin/Dev@8e4977b48e98f5189c6c518697da907331cfb729`; fetched after the authorized seven-item merge
+- Base: `origin/Dev@8e4977b48e98f5189c6c518697da907331cfb729`; fetched at `2026-11-01T13:03:01Z`
 - Candidate patch SHA-256: `aec6d6adc36b47356b2c358761818e76cc55357b58e2f0b954aae17d32d22663`, excluding `docs/change-release-ledger.md`
-- Commit SHA: pending the exact local test-only content commit
+- Commit SHA: `360fc2056c0b86520a9580d07dfba2422b07852b`; exact local test-only content commit
+- Dependencies: none
 - Required validation: `PASS` locally; focused MZ-010 test, complete manager render file 18/18, ledger tests 44/44, ledger coverage, typecheck, lint with 0 errors, strict button contract, fast regression 138/138, and complete `CI=true npm run check:ci` 82 suites / 748 tests all passed. Exact remote PR/push CI remains required before merge.
 - Shared-hunk review: `PASS`; the only non-ledger hunk changes one immediate async query into a bounded wait for the identical assertion
 - Generated-file review: `PASS`; no generated, native, dependency, cache, preview, screenshot, environment, secret, migration or production-data file is selected
-- User authorization: `approved-for-current-scope-CI-repair`; evidence: the user authorized merging the exact two seven-item PRs to `Dev`, and the delegated release task explicitly requires diagnosis and repair of failures caused by this merge range without production deployment, migration or OTA
-- Technical state: `candidate`; dedicated repair branch only
-- Action conclusion: conditional `GO` after the complete local gate and independent review; no direct `Dev` push, production deployment, database migration, EAS or OTA is authorized
+- User authorization: `approved-for-push`; evidence: the user authorized merging the exact two seven-item PRs to `Dev`, and the delegated release task explicitly requires diagnosis and repair of failures caused by this merge range without production deployment, migration or OTA
+- Independent review: `GO`; the exact staged two-file candidate passed the pre-commit ledger gate, independently matched non-ledger fingerprint `aec6d6adc36b47356b2c358761818e76cc55357b58e2f0b954aae17d32d22663`, preserved the identical button assertion, and had P0/P1/P2=0.
+- Technical state: `committed`; exact content commit recorded above, with this ledger-only receipt pending commit
+- Action conclusion: `GO` for normal feature-branch push and a repair PR to `Dev`; merge remains conditional on exact-head CI success and fresh mergeability verification. No direct `Dev` push, production deployment, database migration, EAS or OTA is authorized.
 
 ### Risks / Release Notes
 
