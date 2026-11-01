@@ -16745,19 +16745,24 @@
 - **Status:** exact post-merge CI-stability candidate prepared on a dedicated repair branch
 - **Updated:** 2026-11-01 UTC
 - **Request:** 修复七项合并到 `Dev` 后 Mobile push 质量门禁 `41309054721` 的唯一失败；不得改动 MZ-010 运行时、业务断言、权限、API 或发布行为。
-- **Outcome:** `completed key-handover work record keeps the authorized guest-notified button` 继续断言相同的只读工作记录、客服通知按钮与“无保存修改”边界，只把通知按钮这一异步状态的等待窗口显式设为五秒。运行时代码和全局 Jest 配置均未修改。
+- **Outcome:** 将测试夹具的“今天”改为复用运行时同一 `Australia/Melbourne` 业务日期函数 `taskBusinessDateKey()`，并恢复通知按钮的同步断言。运行时代码、业务规则、权限、API 和全局 Jest 配置均未修改。
 
 ### Files / Areas
 
-- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — modified: wait up to five seconds for the identical authorized guest-notified button assertion.
-- `docs/change-release-ledger.md` — modified: record the exact post-merge CI failure, bounded test-only repair, validation and delivery boundary.
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — modified: derive the synthetic current task date from `taskBusinessDateKey()` instead of the runner's host-local calendar date.
+- `docs/change-release-ledger.md` — modified: record the exact post-merge CI failure, rejected timeout attempt, business-time-zone root cause, validation and delivery boundary.
 
 ### Evidence / Scope
 
-- 合并前同一精确功能 HEAD 的 PR CI `41308680245` 为 82 suites / 748 tests 全通过；合并后 push CI `41309054721` 为 81 suites、747 tests 通过，仅该按钮在只读容器先出现后尚未完成异步渲染时立即查询失败。
-- 修复前本机精确测试可通过但耗时曾达到约 2.5 秒，证明立即查询存在共享 runner 时序竞争；修复后聚焦测试与完整 `ManagerDailyTaskScreen.render.test.tsx` 18/18 均通过。
-- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `a13d927cf5c9d35e85cffdce3bd1e273a0761793126e6fad89e7d096ec458fb8`
-- Candidate patch SHA-256 excluding this ledger: `aec6d6adc36b47356b2c358761818e76cc55357b58e2f0b954aae17d32d22663`
+- 合并前同一精确功能 HEAD 的 PR CI `41308680245` 为 82 suites / 748 tests 全通过；合并后 push CI `41309054721` 为 81 suites、747 tests 通过，唯一失败是该按钮未渲染。
+- 失败日志时间为 `2026-11-01T13:02Z`；此时运行器宿主 UTC 日期仍为 `2026-11-01`，但 `Australia/Melbourne` 已为 `2026-11-02`。原夹具用宿主 `Date#getFullYear/getMonth/getDate` 生成 `scheduled_date=2026-11-01`，运行时 `availableActionsForTask` 用 `taskBusinessDateKey()` 判定当天工作记录，因日期不相等而按规则隐藏按钮。这是确定性时区边界错误，不是异步渲染变慢。
+- 首个远端修复尝试把同一断言改为五秒等待；PR #72 exact head `267d1e10b9559127a4beb1e395fbaeae09bcb5e2` 的 CI `41310019777` 证明该方向无效：等待不会改变错误业务日期，并与 Jest 默认五秒单测上限冲突；首测超时后共享 `mockTask` 未及时复原，连带产生 8 个同文件失败。该 timeout 修复已撤回。
+- 改用业务日期后，在同一时区边界 (`TZ=UTC`, UTC `2026-11-01T13:19Z`, Melbourne `2026-11-02`) 运行完整 `ManagerDailyTaskScreen.render.test.tsx`，18/18 通过，按钮断言保持同步且未放宽。
+- Final test file SHA-256: `e267a99965a759b6cefb0e715f6435c08b7be06111d20eb140a448dcec74c1f7`.
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx#fb80cbb30bdd2b180ee7d8b3fd9ec31d8f57d19e151fce514d694382d9f4a51b` — import the production business-date helper.
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx#a1fc7e28a75703b84a2c7bef917ea82e141ac606ccf4579f94c6820223d0c99a` — replace host-local calendar construction with `taskBusinessDateKey()`.
+- Incremental correction hunk `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx#9f7df59ca9672f3498cfe94c5d2116067d5b3546b95bb835c0a202a2719f9e5a` reverted the rejected wait from RA-20261101-003; it cancels against `origin/Dev` and therefore is intentionally absent from the final exact `origin/Dev...head` content scope.
+- Candidate patch SHA-256 excluding this ledger: `7f4977abbc5da7b7574279206d8e950e8d4a3618e86cf667e63c3a773d830b34`
 - Runtime / API / database / migration / roles / navigation / native dependency / OTA behavior: unchanged.
 - Generated / secret / environment / dependency scope: none selected; the ignored `node_modules` symlink is isolated test infrastructure only.
 
@@ -16766,7 +16771,8 @@
 - **Repository:** `mobile`
 - **Status:** prepared
 - **Untracked review:** PASS; no untracked path is selected or present, and the ignored dependency symlink is test infrastructure only.
-- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `7b09aa4f7d0021c2df6ad21d147c444839c746e4ac24103803a10253de69c7b8`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `a1fc7e28a75703b84a2c7bef917ea82e141ac606ccf4579f94c6820223d0c99a`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `fb80cbb30bdd2b180ee7d8b3fd9ec31d8f57d19e151fce514d694382d9f4a51b`
 
 ### Release Attempts
 
@@ -16788,8 +16794,30 @@
 - Independent review: `GO`; the exact staged two-file candidate passed the pre-commit ledger gate, independently matched non-ledger fingerprint `aec6d6adc36b47356b2c358761818e76cc55357b58e2f0b954aae17d32d22663`, preserved the identical button assertion, and had P0/P1/P2=0.
 - Technical state: `committed`; exact content commit recorded above, with this ledger-only receipt pending commit
 - Action conclusion: `GO` for normal feature-branch push and a repair PR to `Dev`; merge remains conditional on exact-head CI success and fresh mergeability verification. No direct `Dev` push, production deployment, database migration, EAS or OTA is authorized.
+- Remote outcome: `BLOCKED`; remote branch head `267d1e10b9559127a4beb1e395fbaeae09bcb5e2`, Draft PR #72, and CI `41310019777` failed 8 tests because the timeout attempt did not address the business-date mismatch and caused shared-fixture cascade. This attempt is superseded by `RA-20261101-004`.
+
+#### RA-20261101-004
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261101-006`
+- Selected CRL identities: `mobile/CRL-20261101-006`
+- Intended action: `push`
+- Delivery target: update the existing normal feature branch and Draft PR #72 to `Dev`; merge remains a separate user decision after exact-head CI succeeds
+- Branch: `codex/mz-seven-item-postmerge-ci-repair`
+- Base: `origin/Dev@8e4977b48e98f5189c6c518697da907331cfb729`; fetched at `2026-11-01T13:03:01Z`
+- Candidate patch SHA-256: `7f4977abbc5da7b7574279206d8e950e8d4a3618e86cf667e63c3a773d830b34`, excluding `docs/change-release-ledger.md`
+- Commit SHA: `296e6ed9a6b62a58f4a6fcdbd83adf5a1c533892`; exact corrected test-and-ledger content commit
+- Dependencies: none
+- Required validation: `PASS` locally; boundary reproduction and complete manager render file 18/18, formerly failing Personnel Settlement file 30/30, ledger tests 44/44, ledger coverage, typecheck, lint with 0 errors, strict button contract, fast regression 138/138, and complete `TZ=UTC CI=true npm run check:ci` 82 suites / 748 tests all passed. Exact remote PR CI remains required.
+- Shared-hunk review: `PASS`; the timeout edit is fully reverted and the only final non-ledger hunk replaces host-local test date construction with the production business-date helper.
+- Generated-file review: `PASS`; no generated, native, dependency, cache, preview, screenshot, environment, secret, migration or production-data file is selected.
+- User authorization: `approved-for-push`; evidence: after the failed `Dev` checks and branch diagnosis, the user explicitly said to continue repairing the test failures and preparing safe branch synchronization, while production merge/deployment/migration/OTA remain excluded.
+- Independent review: `GO` for corrected commit and normal feature-branch update; independent review matched base-range non-ledger fingerprint `7f4977abbc5da7b7574279206d8e950e8d4a3618e86cf667e63c3a773d830b34`, final test file SHA-256 `e267a99965a759b6cefb0e715f6435c08b7be06111d20eb140a448dcec74c1f7`, exact staged scope and all validation evidence, with P0/P1/P2=0.
+- Technical state: `pushed`; corrected content commit `296e6ed9a6b62a58f4a6fcdbd83adf5a1c533892` and test blob `51d7908423eab0b88a111f18a11a50ffbd211104` are on the normal feature branch; this ledger receipt follows on the same branch.
+- Remote evidence: Draft PR #72 remains open/draft against `Dev`; exact final branch head and CI are verified externally after this receipt commit.
+- Action conclusion: corrected content push completed on the existing normal feature branch / Draft PR #72; exact-head remote CI must pass before any merge decision. No direct `Dev`/`main` push, merge, production deployment, database migration, EAS or OTA is authorized.
 
 ### Risks / Release Notes
 
-- A missing notification button still fails after five seconds; no assertion is removed, skipped or retried.
+- The notification button assertion is unchanged and synchronous; a future mismatch between fixture and business date fails directly rather than being masked by a timeout.
 - This is test-only CI stabilization and must not be represented as an app behavior change or Mobile release.
