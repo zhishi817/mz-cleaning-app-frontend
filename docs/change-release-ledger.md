@@ -16739,3 +16739,55 @@
 - Real Chinese IME, Android, physical-device, camera/gallery, long-press, weak-network, EAS/native build and OTA acceptance remain pending.
 - Rollback: revert this three-file follow-up commit; no data rollback is required.
 - No production API/database access, migration, deployment, EAS, OTA, PR approval or merge is included.
+## CRL-20261101-006 — MZ-010 合并后 Mobile CI 异步断言稳定
+
+- **Repository:** `mobile`
+- **Status:** exact post-merge CI-stability candidate prepared on a dedicated repair branch
+- **Updated:** 2026-11-01 UTC
+- **Request:** 修复七项合并到 `Dev` 后 Mobile push 质量门禁 `41309054721` 的唯一失败；不得改动 MZ-010 运行时、业务断言、权限、API 或发布行为。
+- **Outcome:** `completed key-handover work record keeps the authorized guest-notified button` 继续断言相同的只读工作记录、客服通知按钮与“无保存修改”边界，只把通知按钮这一异步状态的等待窗口显式设为五秒。运行时代码和全局 Jest 配置均未修改。
+
+### Files / Areas
+
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — modified: wait up to five seconds for the identical authorized guest-notified button assertion.
+- `docs/change-release-ledger.md` — modified: record the exact post-merge CI failure, bounded test-only repair, validation and delivery boundary.
+
+### Evidence / Scope
+
+- 合并前同一精确功能 HEAD 的 PR CI `41308680245` 为 82 suites / 748 tests 全通过；合并后 push CI `41309054721` 为 81 suites、747 tests 通过，仅该按钮在只读容器先出现后尚未完成异步渲染时立即查询失败。
+- 修复前本机精确测试可通过但耗时曾达到约 2.5 秒，证明立即查询存在共享 runner 时序竞争；修复后聚焦测试与完整 `ManagerDailyTaskScreen.render.test.tsx` 18/18 均通过。
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `a13d927cf5c9d35e85cffdce3bd1e273a0761793126e6fad89e7d096ec458fb8`
+- Candidate patch SHA-256 excluding this ledger: `aec6d6adc36b47356b2c358761818e76cc55357b58e2f0b954aae17d32d22663`
+- Runtime / API / database / migration / roles / navigation / native dependency / OTA behavior: unchanged.
+- Generated / secret / environment / dependency scope: none selected; the ignored `node_modules` symlink is isolated test infrastructure only.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** PASS; no untracked path is selected or present, and the ignored dependency symlink is test infrastructure only.
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `7b09aa4f7d0021c2df6ad21d147c444839c746e4ac24103803a10253de69c7b8`
+
+### Release Attempts
+
+#### RA-20261101-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261101-006`
+- Selected CRL identities: `mobile/CRL-20261101-006`
+- Intended action: `commit`, normal feature-branch push, repair PR to `Dev`, and merge only after exact-head CI succeeds
+- Branch: `codex/mz-seven-item-postmerge-ci-repair`
+- Base: `origin/Dev@8e4977b48e98f5189c6c518697da907331cfb729`; fetched after the authorized seven-item merge
+- Candidate patch SHA-256: `aec6d6adc36b47356b2c358761818e76cc55357b58e2f0b954aae17d32d22663`, excluding `docs/change-release-ledger.md`
+- Commit SHA: pending the exact local test-only content commit
+- Required validation: `PASS` locally; focused MZ-010 test, complete manager render file 18/18, ledger tests 44/44, ledger coverage, typecheck, lint with 0 errors, strict button contract, fast regression 138/138, and complete `CI=true npm run check:ci` 82 suites / 748 tests all passed. Exact remote PR/push CI remains required before merge.
+- Shared-hunk review: `PASS`; the only non-ledger hunk changes one immediate async query into a bounded wait for the identical assertion
+- Generated-file review: `PASS`; no generated, native, dependency, cache, preview, screenshot, environment, secret, migration or production-data file is selected
+- User authorization: `approved-for-current-scope-CI-repair`; evidence: the user authorized merging the exact two seven-item PRs to `Dev`, and the delegated release task explicitly requires diagnosis and repair of failures caused by this merge range without production deployment, migration or OTA
+- Technical state: `candidate`; dedicated repair branch only
+- Action conclusion: conditional `GO` after the complete local gate and independent review; no direct `Dev` push, production deployment, database migration, EAS or OTA is authorized
+
+### Risks / Release Notes
+
+- A missing notification button still fails after five seconds; no assertion is removed, skipped or retried.
+- This is test-only CI stabilization and must not be represented as an app behavior change or Mobile release.

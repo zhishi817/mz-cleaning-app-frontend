@@ -452,7 +452,7 @@ test('completed key-handover work record keeps the authorized guest-notified but
     )
 
     await waitFor(() => expect(ui.getByTestId('work-record-read-only-info')).toBeTruthy())
-    expect(ui.getByTestId('manager-guest-ready-action-record_guest_ready_notified')).toBeTruthy()
+    await waitFor(() => expect(ui.getByTestId('manager-guest-ready-action-record_guest_ready_notified')).toBeTruthy(), { timeout: 5_000 })
     expect(ui.queryByText('保存修改')).toBeNull()
     ui.unmount()
   } finally {
