@@ -2,11 +2,11 @@
 
 ## FR-P1-TSK-09 — 客服密码来源状态与权威刷新
 
-- **Status:** active; MZ-091 isolated local candidate, not committed or released.
-- **Maintenance scope:** Mobile `ManagerDailyTaskScreen`, MZ App password preview/save contract, and work-task cache reconciliation; paired Root authority is `root/CRL-20261101-001`.
+- **Status:** active; MZ-091 is committed and pushed on the coordinated feature branch with Draft PR #71 open against `Dev`; not merged or released.
+- **Maintenance scope:** Mobile `ManagerDailyTaskScreen`, MZ App password preview/save contract, and work-task cache reconciliation; paired Root authority is `root/CRL-20261101-004`.
 - **Last reviewed:** 2026-11-01 UTC
 - **Business outcome:** 客服、admin 和线下经理在每日任务详情必须看到旧/新密码的“待核对、系统生成、已关联来源、已人工核对”状态。修改密码或显式同值核对前，客户端发送唯一 request ID；“核对密码来源”必须先读取不含密码值的影响预览并明确确认，手工任务提示只确认人工来源而不猜订单。保存后必须强制读取 Root 权威状态，不能把本地输入或不完整实时事件直接写成已核对；保存/传播失败必须显示错误，刷新明确返回 `false` 或未返回目标任务时也按失败处理并恢复保存前权威显示。未核对只限制“密码已核对”的声明，不阻断其他客服字段或整项任务。
-- **Related CRLs:** `root/CRL-20261101-001` / `mobile/CRL-20261101-001`.
+- **Related CRLs:** `root/CRL-20261101-004` / `mobile/CRL-20261101-004`.
 
 ### Test-to-invariant mapping
 

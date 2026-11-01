@@ -16673,3 +16673,68 @@
 
 - Root migrations/backend must be planned and delivered before any matching OTA; this commit does not deploy Root or publish Mobile.
 - Real Chinese IME, Android, physical-device, camera/gallery, long-press, weak-network, EAS/native build and OTA acceptance remain pending.
+## CRL-20261101-005 — 七项 Draft PR CI 稳定与 MZ-091 注册表校正
+
+- **Repository:** `mobile`
+- **Status:** verified follow-up candidate for the existing Draft PR; not committed or pushed
+- **Updated:** 2026-11-01 UTC
+- **Request:** 修复七项 Mobile Draft PR #71 首次 GitHub Actions 中唯一的异步等待超时，并处理独立审查发现的 MZ-091 回归注册表状态与 CRL 关联过期问题；不得改变运行时代码或扩大发布权限。
+- **Outcome:** MZ-096 的“创建成功、后续刷新失败”回归改用五秒的显式等待窗口，避免 GitHub Runner 上同一状态更新超过默认一秒时误报；MZ-091 注册表改为当前功能分支/Draft PR 状态，并关联精确的 Root/Mobile `CRL-20261101-004`。运行时代码、API、角色、数据与发布行为均不变。
+
+### Files / Areas
+
+- `src/screens/tabs/TasksScreen.test.tsx` — modified: only the failing refresh-error assertion timeout changes from the testing-library default to five seconds.
+- `docs/feature-regression-registry.md` — modified: correct MZ-091 delivery state and paired CRL identities.
+- `docs/change-release-ledger.md` — modified: record the failed run, repair scope, validation and release boundary.
+
+### Impact / Dependencies
+
+- Runtime / API / role / navigation / database / migration / native dependency / OTA behavior: unchanged.
+- Existing Draft PR: Mobile #71 on `codex/mz-seven-item-bundle-20261101`, base `Dev`.
+- Paired Root dependency: Draft PR #431 and `root/CRL-20261101-004@8bf9ab535c0744e8f5a26cb3e64e8b3b1b90a48b`.
+- First Mobile PR CI: run `41307738772` failed 1/748 at the default one-second wait; 747 tests passed.
+
+### Validation
+
+- `CI=true npx jest src/screens/tabs/TasksScreen.test.tsx --runInBand --testNamePattern "a failed post-create refresh|quick create cannot reopen"` — PASS, 2/2 selected tests.
+- `CI=true npx jest src/screens/tabs/TasksScreen.test.tsx --runInBand` — PASS, 81/81 tests before the timeout edit; the exact edited assertion also passed in the focused run.
+- `CI=true npm run check:ci` — PASS after repair: ledger tests 44/44, typecheck, lint with 0 errors, button contract, fast regression 138/138, and 82 suites / 748 tests.
+- `git diff --check` — PASS.
+- Candidate patch SHA-256 excluding this ledger: `57ec1a9e87b4d67d9641fc90e68256b3eeb2c594e74d9ef32c9063e1b9583e86`.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; ignored dependency symlink is test infrastructure only and is not staged.
+- `docs/feature-regression-registry.md` — SHA-256: `933d83002256986583cbfd94e0dc09bdda7f2af3988c121402ed3a8b921f3ee4`
+- `docs/feature-regression-registry.md` — SHA-256: `fb7a7a354b9f3b08c7db9cc4f3e931087011f4719941d6d82dcc49286da9d6fa`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `e85d3eb74cbf282f4e5488b88b89ad200b753f663a121e4e425f3946f93748bf`
+
+### Release Attempts
+
+#### RA-20261101-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261101-005`
+- Selected CRL identities: `mobile/CRL-20261101-005`
+- Intended action: `commit`, then normal fast-forward update of the existing Draft PR branch and rerun CI
+- Branch: `codex/mz-seven-item-bundle-20261101`; existing Draft PR #71 targets `Dev`
+- Base: existing remote branch head `795bc58af5ad24c7efd51f78d3d423f578018b34`; PR base remains `origin/Dev@1689187fb556e3cb4c00ef68b162b6f8610c942d`
+- Candidate patch SHA-256: `57ec1a9e87b4d67d9641fc90e68256b3eeb2c594e74d9ef32c9063e1b9583e86`
+- Commit SHA: `not committed`
+- Dependencies: paired Root Draft PR #431 and `root/CRL-20261101-004@8bf9ab535c0744e8f5a26cb3e64e8b3b1b90a48b`
+- Required validation: `PASS`; evidence: exact post-repair checks above, including 82 suites / 748 tests
+- Shared-hunk review: `PASS`; runtime files are unchanged, and the two non-ledger edits are limited to one MZ-096 test wait plus MZ-091 registry metadata
+- Generated-file review: `PASS`; no generated, native, dependency, cache, preview, screenshot, device-log, environment, secret, deployment, migration, or production-data path is selected
+- Technical state: `verified`
+- User authorization: `approved-for-push`; evidence: the selected seven-item branch/Draft PR scope is already authorized, and the current task explicitly requires repairing failures within that same scope and rerunning CI; merge, deployment, migration and OTA remain excluded
+- Independent review: `GO for the exact staged commit and conditional branch fast-forward`; evidence: independent read-only review matched the three staged files, fingerprint `57ec1a9e87b4d67d9641fc90e68256b3eeb2c594e74d9ef32c9063e1b9583e86`, pre-commit gate, validation and release boundaries, with P0/P1/P2=0
+- Action conclusion: `GO` for the exact commit; normal fast-forward of the existing Draft PR branch is permitted only after the committed fingerprint/range audit passes and a live ref check still finds `795bc58af5ad24c7efd51f78d3d423f578018b34`; no merge, deployment, migration or OTA
+
+### Risks / Release Notes
+
+- This follow-up stabilizes test timing and corrects governance metadata only. It must not be represented as a runtime fix or release.
+- Real Chinese IME, Android, physical-device, camera/gallery, long-press, weak-network, EAS/native build and OTA acceptance remain pending.
+- Rollback: revert this three-file follow-up commit; no data rollback is required.
+- No production API/database access, migration, deployment, EAS, OTA, PR approval or merge is included.

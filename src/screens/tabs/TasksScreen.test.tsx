@@ -1238,7 +1238,10 @@ test('a failed post-create refresh does not report creation failure or leave qui
     fireEvent.changeText(ui.getByLabelText('quick-create-offline-title'), '已创建但刷新失败')
     fireEvent.press(ui.getByTestId('quick-create-submit'))
 
-    await waitFor(() => expect(ui.queryByTestId('quick-create-keyboard-avoider')).toBeNull())
+    await waitFor(
+      () => expect(ui.queryByTestId('quick-create-keyboard-avoider')).toBeNull(),
+      { timeout: 5_000 },
+    )
     await waitFor(() => {
       const openAfterFailure = ui.getByTestId('quick-create-open')
       expect(openAfterFailure.props.accessibilityState?.disabled ?? openAfterFailure.props.disabled).not.toBe(true)
