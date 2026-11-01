@@ -387,10 +387,13 @@ test('keeps synthetic lock codes only for an authorized immutable cleaning recor
     guest_special_request: 'leave luggage first',
     order_note: 'call before entry',
     guest_luggage: { id: 'luggage-1', note: 'two bags' },
+    order_id_checkin: 'order-1',
     guest_ready_notification: { status: 'notified', order_id: 'order-1', version: 1 },
     available_actions: [
       { id: 'complete', label: '完成', enabled: true },
       { id: 'report_issue', label: '问题反馈与报修记录', enabled: true, source_type: 'cleaning_tasks', source_id: 'cleaning-1' },
+      { id: 'revoke_guest_ready_notified', label: '撤销已通知客人', placement: 'primary', enabled: true, source_type: 'orders', source_id: 'order-1' },
+      { id: 'record_guest_ready_notified', label: '错误订单', placement: 'primary', enabled: true, source_type: 'orders', source_id: 'order-2' },
       { id: 'report_issue', label: '错误来源', enabled: true, source_type: 'work_tasks', source_id: 'work-1' },
     ],
     property: {
@@ -418,6 +421,7 @@ test('keeps synthetic lock codes only for an authorized immutable cleaning recor
     },
     available_actions: [
       { id: 'report_issue', label: '问题反馈与报修记录', enabled: true, source_type: 'cleaning_tasks', source_id: 'cleaning-1' },
+      { id: 'revoke_guest_ready_notified', label: '撤销已通知客人', placement: 'primary', enabled: true, source_type: 'orders', source_id: 'order-1' },
     ],
     turnover_display: {
       old_code: '1357',
@@ -429,7 +433,13 @@ test('keeps synthetic lock codes only for an authorized immutable cleaning recor
   expect(redactReadOnlyWorkRecord({ ...completed, work_record_state: 'reassigned', status: 'assigned' } as any)).toMatchObject({
     old_code: '1357',
     new_code: '2468',
+    available_actions: [
+      { id: 'report_issue', source_type: 'cleaning_tasks', source_id: 'cleaning-1' },
+    ],
   })
+  expect(redactReadOnlyWorkRecord({ ...completed, work_record_state: 'pending_review', status: 'pending_review' } as any).available_actions).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: 'revoke_guest_ready_notified', source_type: 'orders', source_id: 'order-1' }),
+  ]))
 
   for (const denied of [
     { read_only_views: { ...completed.read_only_views, lock_codes: false, property_access: false, guest_context: false } },
@@ -444,10 +454,70 @@ test('keeps synthetic lock codes only for an authorized immutable cleaning recor
       guest_special_request: null,
       order_note: null,
       property: { wifi_ssid: null, wifi_password: null },
+      available_actions: [
+        { id: 'report_issue', source_type: 'cleaning_tasks', source_id: 'cleaning-1' },
+      ],
       turnover_display: { old_code: null, new_code: null },
     })
     expect(canViewReadOnlyWorkRecordLockCodes({ ...completed, ...denied } as any)).toBe(false)
   }
+})
+
+test('retains only the exact task-bound notification action for an unlinked completed check-in record', () => {
+  const manualCheckin = makeTask({
+    id: 'cleaning_tasks_customer_service:manual-checkin-1::record:completed:2026-11-01',
+    source_type: 'cleaning_tasks',
+    source_id: 'manual-checkin-1',
+    source_ids: ['manual-checkin-1'],
+    order_id_checkin: null,
+    work_record_read_only: true,
+    work_record_visible: true,
+    work_record_state: 'completed',
+    status: 'done',
+    read_only_views: {
+      property_access: true,
+      guest_context: true,
+      lock_codes: false,
+      cleaner_photos: false,
+      inspection_photos: false,
+      guest_key_photo: true,
+      media_scope: 'customer_service',
+    },
+    guest_ready_notification: {
+      source_type: 'cleaning_tasks',
+      source_id: 'manual-checkin-1',
+      order_id: null,
+      task_id: 'manual-checkin-1',
+      association_state: 'manual_unlinked',
+      status: 'not_notified',
+      version: 0,
+    },
+    available_actions: [
+      { id: 'record_guest_ready_notified', label: '已通知客人', enabled: true, source_type: 'cleaning_tasks', source_id: 'manual-checkin-1' },
+      { id: 'record_guest_ready_notified', label: '错误任务', enabled: true, source_type: 'cleaning_tasks', source_id: 'manual-checkin-2' },
+      { id: 'record_guest_ready_notified', label: '错误订单', enabled: true, source_type: 'orders', source_id: 'order-1' },
+    ],
+  } as any)
+
+  expect(redactReadOnlyWorkRecord(manualCheckin).available_actions).toEqual([
+    expect.objectContaining({
+      id: 'record_guest_ready_notified',
+      source_type: 'cleaning_tasks',
+      source_id: 'manual-checkin-1',
+    }),
+  ])
+  expect(redactReadOnlyWorkRecord({
+    ...manualCheckin,
+    guest_ready_notification: { ...manualCheckin.guest_ready_notification, task_id: 'manual-checkin-2' },
+  } as any).available_actions).toEqual([])
+  expect(redactReadOnlyWorkRecord({
+    ...manualCheckin,
+    order_id_checkin: 'order-1',
+  } as any).available_actions).toEqual([])
+  expect(redactReadOnlyWorkRecord({
+    ...manualCheckin,
+    read_only_views: { ...manualCheckin.read_only_views, guest_context: false },
+  } as any).available_actions).toEqual([])
 })
 
 test('revokes cached read-only capabilities before a membership refresh that fails', async () => {
@@ -1318,6 +1388,12 @@ test('treats key re-upload as an incremental event so existing consumable photos
     change_scope: 'list',
     changed_fields: ['guest_ready_notification', 'available_actions'],
     payload: { patch: { guest_ready_notification: { status: 'notified' } } },
+  })).toBe(false)
+  expect(isSafePatchEvent({
+    event_type: 'TASK_UPDATED',
+    change_scope: 'detail',
+    changed_fields: ['old_code', 'password_authority'],
+    payload: { patch: { password_authority: { old_code_status: 'manual_confirmed' } } },
   })).toBe(false)
   expect(eventRequiresGuestReadyAuthorityRefresh({
     event_type: 'TASK_UPDATED',

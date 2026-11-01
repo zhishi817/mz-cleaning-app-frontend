@@ -298,6 +298,7 @@ test('cleaner completed record keeps property access and shows only cleaner phot
       notified_at: '2026-10-21T01:00:00.000Z',
       notified_by_name: 'Support',
       version: 1,
+      requirement_reasons: ['early_arrival'],
     },
   }
   api.getWorkTaskFormPhotos.mockResolvedValueOnce({
@@ -331,6 +332,105 @@ test('cleaner completed record keeps property access and shows only cleaner phot
       expect(ui.getByText('只读查看，不提供删除、重拍或补传操作。')).toBeTruthy()
       expect(ui.queryByText(/上传钥匙/i)).toBeNull()
     })
+  } finally {
+    snapshot.items[0] = previousTask
+    mockAuthState.user = previousUser
+  }
+})
+
+test('non-customer-service read-only record does not reveal the new ordinary check-in notification projection', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = { ...mockAuthState.user }
+  mockAuthState.user = { id: 'u1', username: 'tester', role: 'cleaner' }
+  snapshot.items[0] = {
+    ...previousTask,
+    work_record_read_only: true,
+    work_record_visible: true,
+    work_record_state: 'completed',
+    completed_by_user_id: 'u1',
+    execution_role: 'cleaning',
+    available_actions: [],
+    read_only_views: { guest_context: true, media_scope: 'cleaner', media_source_ids: [] },
+    guest_ready_notification: {
+      order_id: 'order-ordinary',
+      status: 'notified',
+      notified_at: '2026-11-01T01:00:00.000Z',
+      notified_by_name: 'Support',
+      version: 1,
+      requirement_reasons: [],
+    },
+  }
+
+  try {
+    const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'ordinary-notification-role-boundary', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+    await waitFor(() => expect(ui.getByText('只读工作记录')).toBeTruthy())
+    expect(ui.queryByText(/客人入住通知/)).toBeNull()
+    expect(ui.queryByText('已通知客人')).toBeNull()
+  } finally {
+    snapshot.items[0] = previousTask
+    mockAuthState.user = previousUser
+  }
+})
+
+test('non-customer-service special read-only status never reveals linked-before task notification history', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = { ...mockAuthState.user }
+  mockAuthState.user = { id: 'u1', username: 'tester', role: 'cleaner' }
+  snapshot.items[0] = {
+    ...previousTask,
+    work_record_read_only: true,
+    work_record_visible: true,
+    work_record_state: 'completed',
+    completed_by_user_id: 'u1',
+    execution_role: 'cleaning',
+    available_actions: [],
+    read_only_views: { guest_context: true, media_scope: 'cleaner', media_source_ids: [] },
+    guest_ready_notification: {
+      source_type: 'orders',
+      source_id: 'order-special',
+      order_id: 'order-special',
+      task_id: null,
+      association_state: 'order_bound',
+      status: 'notified',
+      notified_at: '2026-11-01T01:00:00.000Z',
+      notified_by_name: 'Support',
+      version: 1,
+      requirement_reasons: ['early_arrival'],
+      prior_task_notification: {
+        task_id: 'manual-checkin-1',
+        status: 'notified',
+        notified_at: '2026-11-01T00:30:00.000Z',
+        notified_by_user_id: 'cs-1',
+        notified_by_name: 'Private Support',
+        version: 1,
+        last_action: 'mark',
+        last_action_at: '2026-11-01T00:30:00.000Z',
+        last_actor_user_id: 'cs-1',
+        last_actor_name: 'Private Support',
+        read_only_reason: 'linked_to_order',
+      },
+    },
+  }
+
+  try {
+    const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'special-notification-role-boundary', name: 'TaskDetail', params: { id: 'w1' } } as any} />
+      </I18nProvider>,
+    )
+    await waitFor(() => expect(ui.getByText(/客人入住通知：已由 Support/)).toBeTruthy())
+    expect(ui.queryByTestId('guest-ready-prior-task-record')).toBeNull()
+    expect(ui.queryByText(/Private Support/)).toBeNull()
   } finally {
     snapshot.items[0] = previousTask
     mockAuthState.user = previousUser

@@ -651,7 +651,11 @@ export type WorkTaskParticipant = {
 }
 
 export type GuestReadyNotification = {
-  order_id: string
+  source_type?: 'orders' | 'cleaning_tasks'
+  source_id?: string
+  order_id: string | null
+  task_id?: string | null
+  association_state?: 'order_bound' | 'manual_unlinked'
   status: 'not_notified' | 'notified'
   notified_at: string | null
   notified_by_user_id: string | null
@@ -661,7 +665,20 @@ export type GuestReadyNotification = {
   automatic_early_arrival: boolean
   outside_key_required: boolean
   eligible: boolean
-  disabled_reason?: 'property_not_ready' | 'no_checkin_order' | 'checkin_order_changed' | null
+  disabled_reason?: 'property_not_ready' | 'no_checkin_order' | 'checkin_order_changed' | 'key_handover_incomplete' | 'task_linked_to_order' | null
+  prior_task_notification?: {
+    task_id: string
+    status: 'not_notified' | 'notified'
+    notified_at: string | null
+    notified_by_user_id: string | null
+    notified_by_name: string | null
+    version: number
+    last_action: 'mark' | 'revoke'
+    last_action_at: string
+    last_actor_user_id: string
+    last_actor_name: string
+    read_only_reason: 'linked_to_order'
+  } | null
 }
 
 export type GuestReadyOutsideKey = {
@@ -743,6 +760,7 @@ export type WorkTask = {
   task_type?: string | null
   assignee_id: string | null
   executor_id?: string | null
+  executor_reorderable?: boolean
   cleaner_id?: string | null
   inspector_id?: string | null
   inspection_mode?: 'pending_decision' | 'same_day' | 'deferred' | 'self_complete' | 'checked_done' | null
@@ -781,6 +799,13 @@ export type WorkTask = {
   photo_urls?: string[] | null
   old_code?: string | null
   new_code?: string | null
+  password_authority?: {
+    old_code_status?: 'needs_review' | 'auto_derived' | 'source_linked' | 'manual_confirmed' | 'not_applicable' | string | null
+    new_code_status?: 'needs_review' | 'auto_derived' | 'source_linked' | 'manual_confirmed' | 'not_applicable' | string | null
+    old_code_source_task_id?: string | null
+    old_code_source_order_id?: string | null
+    old_code_source_field?: 'old_code' | 'new_code' | 'manual' | string | null
+  } | null
   guest_special_request?: string | null
   guest_request_checkout?: string | null
   guest_request_checkin?: string | null
@@ -873,6 +898,11 @@ export async function updateCleaningTaskManagerFields(
     new_code?: string | null
     guest_special_request?: string | null
     keys_required?: 1 | 2 | null
+    password_verification?: {
+      fields: Array<'old_code' | 'new_code'>
+      request_id: string
+      client: 'mobile'
+    }
   },
 ) {
   const urls = buildUrlCandidates('mzapp/cleaning-tasks/manager-fields')
@@ -902,6 +932,35 @@ export async function updateCleaningTaskManagerFields(
     throw new Error(msg)
   }
   return (await parseJsonOrThrow(res)) as any
+}
+
+export async function previewCleaningTaskPasswordAuthority(
+  token: string,
+  params: { task_ids: string[]; fields: Array<'old_code' | 'new_code'> },
+) {
+  const urls = buildUrlCandidates('mzapp/cleaning-tasks/manager-fields/password-preview')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404 && lastRes.status !== 405) break
+  }
+  if (!lastRes || lastRes.status === 404 || lastRes.status === 405) throw new Error('后端未部署“密码来源核对”接口，请更新后端后重试')
+  if (!lastRes.ok) throw new Error(await parseErrorMessage(lastRes))
+  return (await parseJsonOrThrow(lastRes)) as {
+    selected_task_ids: string[]
+    fields: Array<'old_code' | 'new_code'>
+    same_order_checkout_task_ids: string[]
+    dependent_checkin_task_ids: string[]
+    blocked_source_order_ids?: string[]
+    manual_task_ids: string[]
+    requires_manual_source_confirmation: boolean
+    note?: string | null
+  }
 }
 
 export async function createManualCleaningTask(
@@ -1192,9 +1251,19 @@ export async function listWorkTasks(token: string, params: { date_from: string; 
 
 export async function changeGuestReadyNotification(
   token: string,
-  params: { order_id: string; action: 'mark' | 'revoke' | 'register_outside_key' | 'cancel_outside_key'; operation_id: string; expected_version: number },
+  params: {
+    source_type?: 'orders' | 'cleaning_tasks'
+    order_id?: string
+    task_id?: string
+    action: 'mark' | 'revoke' | 'register_outside_key' | 'cancel_outside_key'
+    operation_id: string
+    expected_version: number
+  },
 ) {
-  const urls = buildUrlCandidates('mzapp/guest-ready-notifications')
+  const sourceType = params.source_type === 'cleaning_tasks' ? 'cleaning_tasks' : 'orders'
+  const urls = buildUrlCandidates(sourceType === 'cleaning_tasks'
+    ? 'mzapp/guest-ready-task-notifications'
+    : 'mzapp/guest-ready-notifications')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
   for (const url of urls) {
@@ -1203,7 +1272,19 @@ export async function changeGuestReadyNotification(
       {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(params),
+        body: JSON.stringify(sourceType === 'cleaning_tasks'
+          ? {
+              task_id: params.task_id,
+              action: params.action,
+              operation_id: params.operation_id,
+              expected_version: params.expected_version,
+            }
+          : {
+              order_id: params.order_id,
+              action: params.action,
+              operation_id: params.operation_id,
+              expected_version: params.expected_version,
+            }),
       },
       15000,
     )
@@ -3379,7 +3460,7 @@ export async function reorderWorkTasks(
 }
 
 export type MixedWorkTaskReorderItem = {
-  kind: 'work' | 'cleaner' | 'inspector'
+  kind: 'work' | 'cleaner' | 'inspector' | 'executor'
   ids: string[]
   sort_index: number
 }
@@ -3394,7 +3475,7 @@ export async function reorderMixedWorkTasks(
       ids: Array.from(new Set((Array.isArray(item.ids) ? item.ids : []).map((x) => String(x || '').trim()).filter(Boolean))),
       sort_index: Number(item.sort_index),
     }))
-    .filter((item) => (item.kind === 'work' || item.kind === 'cleaner' || item.kind === 'inspector') && item.ids.length && Number.isInteger(item.sort_index) && item.sort_index > 0)
+    .filter((item) => (item.kind === 'work' || item.kind === 'cleaner' || item.kind === 'inspector' || item.kind === 'executor') && item.ids.length && Number.isInteger(item.sort_index) && item.sort_index > 0)
   if (!items.length) throw new Error('缺少任务顺序')
   const urls = buildUrlCandidates('mzapp/work-tasks/mixed-reorder')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')

@@ -18,6 +18,7 @@ import {
   getWorkTaskFormPhotos,
   markGuestCheckedOutByOrder,
   markGuestCheckedOutByTasks,
+  previewCleaningTaskPasswordAuthority,
   saveGuestLuggageNotice,
   updateCleaningTaskManagerFields,
   uploadMzappMedia,
@@ -31,7 +32,7 @@ import { hasAnyRole, roleNamesOf } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getEffectiveTaskStatus, guestCheckoutCanDriveTaskStatus, hasAuthoritativeKeyHandoverProjection, hasCompletedKeyHandover, isTaskWorkflowProgressStatus } from '../../lib/taskVisualTheme'
 import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, patchWorkTaskItems, requestWorkTasksRefresh, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
-import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyOperationId, isGuestReadyNotificationAction, mergeGuestReadyNotificationActions, navigationForWorkTaskAction } from '../../lib/workTaskActions'
+import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyMutationTarget, guestReadyOperationId, isGuestReadyNotificationAction, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, workTaskMatchesGuestReadyTarget } from '../../lib/workTaskActions'
 import { buildCleaningMediaVideoSource } from '../../lib/cleaningMedia'
 import { CLEANING_SCENE_PHOTO_IDS, CLEANING_SCENE_PHOTO_LABEL } from '../../lib/cleaningScenePhotoTemplate'
 import {
@@ -53,6 +54,19 @@ import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 import WorkRecordReadOnlyInfo from '../../components/WorkRecordReadOnlyInfo'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'ManagerDailyTask'>
+
+function passwordAuthorityRequestId() {
+  return `mobile-password-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function passwordAuthorityLabel(status: unknown) {
+  const value = String(status || '').trim().toLowerCase()
+  if (value === 'manual_confirmed') return '已人工核对'
+  if (value === 'source_linked') return '已关联来源'
+  if (value === 'auto_derived') return '系统生成，待现场确认'
+  if (value === 'not_applicable') return '不适用'
+  return '待核对'
+}
 
 const PHOTO_LOAD_FOCUS_REUSE_MS = 30_000
 
@@ -558,7 +572,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     return unsub
   }, [loadTaskPhotos, props.navigation])
 
-  async function onSave() {
+  async function onSave(options?: { verifyFields?: Array<'old_code' | 'new_code'> }) {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!task) return
     if (!canEditManagerFields || workRecordReadOnly) return
@@ -598,6 +612,18 @@ export default function ManagerDailyTaskScreen(props: Props) {
       const nextKeysValue = nextKeys >= 2 ? 2 : 1
 
       if (needKeysUpdate) payload.keys_required = nextKeysValue
+      const changedPasswordFields: Array<'old_code' | 'new_code'> = [
+        ...(payload.old_code !== undefined ? ['old_code' as const] : []),
+        ...(payload.new_code !== undefined ? ['new_code' as const] : []),
+      ]
+      const verificationFields = Array.from(new Set([...(options?.verifyFields || []), ...changedPasswordFields]))
+      if (verificationFields.length) {
+        payload.password_verification = {
+          fields: verificationFields,
+          request_id: passwordAuthorityRequestId(),
+          client: 'mobile',
+        }
+      }
       const keysForOtherFields = Object.keys(payload).filter((k) => k !== 'task_ids')
       let saveResult: any = null
       if (keysForOtherFields.length) {
@@ -606,8 +632,6 @@ export default function ManagerDailyTaskScreen(props: Props) {
       }
       setCheckoutTime(payload.checkout_time !== undefined ? String(payload.checkout_time || '').trim() : String(prevCheckout || '').trim())
       setCheckinTime(payload.checkin_time !== undefined ? String(payload.checkin_time || '').trim() : String(prevCheckin || '').trim())
-      setOldCode(payload.old_code !== undefined ? String(payload.old_code || '').trim() : String(prevOldCode || '').trim())
-      setNewCode(payload.new_code !== undefined ? String(payload.new_code || '').trim() : String(prevNewCode || '').trim())
       setGuestNote(payload.guest_special_request !== undefined ? String(payload.guest_special_request || '').trim() : String(prevGuest || '').trim())
       setKeysRequired(nextKeysValue)
       setKeysEditorOpen(false)
@@ -616,8 +640,9 @@ export default function ManagerDailyTaskScreen(props: Props) {
       const fmt = (label: string, next: any, prev: any) => `${label}：${norm(next) || '-'}（原：${norm(prev) || '-'}）`
       if (payload.checkout_time !== undefined) changedLines.push(fmt('退房时间', payload.checkout_time, prevCheckout))
       if (payload.checkin_time !== undefined) changedLines.push(fmt('入住时间', payload.checkin_time, prevCheckin))
-      if (payload.old_code !== undefined) changedLines.push(fmt('旧密码', payload.old_code, prevOldCode))
-      if (payload.new_code !== undefined) changedLines.push(fmt('新密码', payload.new_code, prevNewCode))
+      if (payload.old_code !== undefined) changedLines.push('旧密码：已更新（值已隐藏）')
+      if (payload.new_code !== undefined) changedLines.push('新密码：已更新（值已隐藏）')
+      if (options?.verifyFields?.length && payload.old_code === undefined && payload.new_code === undefined) changedLines.push('密码来源：已重新核对')
       if (payload.guest_special_request !== undefined) changedLines.push(fmt('客人需求', payload.guest_special_request, prevGuest))
       if (needKeysUpdate) changedLines.push(fmt('需挂钥匙套数', nextKeysValue, prevKeys))
 
@@ -627,8 +652,6 @@ export default function ManagerDailyTaskScreen(props: Props) {
         if (payload.checkin_time !== undefined) Object.assign(patch, checkinTimeDisplayPatch(task, payload.checkin_time))
         if (payload.checkout_time !== undefined) patch.checkout_time = payload.checkout_time
         if (payload.checkin_time !== undefined) patch.checkin_time = payload.checkin_time
-        if (payload.old_code !== undefined) patch.old_code = payload.old_code
-        if (payload.new_code !== undefined) patch.new_code = payload.new_code
         if (payload.guest_special_request !== undefined) patch.guest_special_request = payload.guest_special_request
         if (needKeysUpdate) {
           const checkout0 = Number((task as any)?.keys_required_checkout ?? 1)
@@ -655,8 +678,9 @@ export default function ManagerDailyTaskScreen(props: Props) {
           JSON.stringify({
             checkout_time: payload.checkout_time !== undefined ? payload.checkout_time : prevCheckout,
             checkin_time: payload.checkin_time !== undefined ? payload.checkin_time : prevCheckin,
-            old_code: payload.old_code !== undefined ? payload.old_code : prevOldCode,
-            new_code: payload.new_code !== undefined ? payload.new_code : prevNewCode,
+            old_code_changed: payload.old_code !== undefined,
+            new_code_changed: payload.new_code !== undefined,
+            password_verified: !!options?.verifyFields?.length,
             guest_special_request: payload.guest_special_request !== undefined ? payload.guest_special_request : prevGuest,
             keys_required: needKeysUpdate ? nextKeysValue : prevKeys,
           }),
@@ -690,19 +714,88 @@ export default function ManagerDailyTaskScreen(props: Props) {
       if (token && user?.id) {
         const { date_from, date_to } = buildDetailFallbackRange()
         try {
-          await requestWorkTasksRefresh({ token, userId: String(user.id), date_from, date_to, view: 'all', mode: 'force', reason: 'manager_task_saved' })
+          const refreshResult = await requestWorkTasksRefresh({ token, userId: String(user.id), date_from, date_to, view: 'all', mode: 'force', reason: 'manager_task_saved' })
+          if (refreshResult === false) throw new Error('authoritative_refresh_rejected')
+          const refreshed = findWorkTaskItemByAnyId(String(task.id || ''))
+          if (!refreshed) throw new Error('authoritative_task_missing')
+          setOldCode(String((refreshed as any).old_code || '').trim())
+          setNewCode(String((refreshed as any).new_code || '').trim())
         } catch {
           refreshFailed = true
+          setOldCode(String(prevOldCode || '').trim())
+          setNewCode(String(prevNewCode || '').trim())
         }
       }
       setKeysDirty(false)
       const skippedAll = !saveResult || saveResult?.skipped
-      Alert.alert(t('common_ok'), refreshFailed ? '已保存；通知状态刷新失败，请稍后重试' : skippedAll ? '已保存（无变化）' : '已保存')
+      Alert.alert(t('common_ok'), refreshFailed ? '已保存；权威状态刷新失败，当前密码显示已恢复为刷新前状态，请稍后重试' : skippedAll ? '已保存（无变化）' : '已保存')
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
     } finally {
       setSaving(false)
     }
+  }
+
+  function changedPasswordFieldsForSave(): Array<'old_code' | 'new_code'> {
+    const norm = (value: any) => String(value ?? '').replace(/\s+/g, ' ').trim()
+    return [
+      ...(norm(oldCode) !== norm((task as any)?.old_code) ? ['old_code' as const] : []),
+      ...(norm(newCode) !== norm((task as any)?.new_code) ? ['new_code' as const] : []),
+    ]
+  }
+
+  async function previewPasswordAuthorityAndConfirm(params: {
+    fields: Array<'old_code' | 'new_code'>
+    title: string
+    confirmLabel: string
+    onConfirm: () => void
+  }) {
+    if (!token || !task || saving || workRecordReadOnly) return
+    const taskIds = executionTaskIdsForRole(task, task.task_kind)
+    if (!taskIds.length) return Alert.alert('无法核对', '缺少任务 ID')
+    try {
+      setSaving(true)
+      const preview = await previewCleaningTaskPasswordAuthority(token, {
+        task_ids: taskIds,
+        fields: params.fields,
+      })
+      const impacts = preview.same_order_checkout_task_ids.length + preview.dependent_checkin_task_ids.length
+      const lines = [
+        `当前任务：${preview.selected_task_ids.length} 条`,
+        `关联更新：${impacts} 条`,
+        preview.blocked_source_order_ids?.length ? `有 ${preview.blocked_source_order_ids.length} 个来源存在歧义或缺少边界，将保持待核对。` : '',
+        preview.requires_manual_source_confirmation ? '包含手工任务：将仅标记为人工核对，不会猜测订单来源。' : '',
+        preview.note || '',
+      ].filter(Boolean).join('\n')
+      Alert.alert(params.title, lines, [
+        { text: '取消', style: 'cancel' },
+        { text: params.confirmLabel, onPress: params.onConfirm },
+      ])
+    } catch (error: any) {
+      Alert.alert(t('common_error'), String(error?.message || '核对预览失败'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function onSaveWithPasswordPreview() {
+    const changedFields = changedPasswordFieldsForSave()
+    if (!changedFields.length) return onSave()
+    await previewPasswordAuthorityAndConfirm({
+      fields: changedFields,
+      title: '确认保存密码修改？',
+      confirmLabel: '确认保存',
+      onConfirm: () => void onSave(),
+    })
+  }
+
+  async function onVerifyPasswordAuthority() {
+    await previewPasswordAuthorityAndConfirm({
+      fields: ['old_code', 'new_code'],
+      title: '确认核对密码来源？',
+      confirmLabel: '确认核对',
+      onConfirm: () => void onSave({ verifyFields: ['old_code', 'new_code'] }),
+    })
   }
 
   async function addLuggagePhotos(source: 'camera' | 'library') {
@@ -837,6 +930,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const canEditGeneralInfo = canEditManagerFields && !saving && !isHistoricalTask && !workRecordReadOnly
   const canEditLuggage = hasAnyRole(user, ['customer_service', 'admin', 'offline_manager']) && isTodayTask && !workRecordReadOnly
   const canEditKeysOnly = canEditManagerFields && !saving && !workRecordReadOnly
+  const oldCodeAuthorityLabel = passwordAuthorityLabel((task as any)?.password_authority?.old_code_status)
+  const newCodeAuthorityLabel = passwordAuthorityLabel((task as any)?.password_authority?.new_code_status)
   const luggagePhotoItems = managerGuestLuggagePhotoDisplayItems(
     luggagePhotoUrls,
     luggageLocalPreviewByUrl,
@@ -940,11 +1035,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
       if (disabledReason) Alert.alert('暂不可操作', disabledReason)
       return
     }
-    const notification = task.guest_ready_notification
-    const outsideKey = task.guest_ready_outside_key
-    const orderId = String(notification?.order_id || outsideKey?.order_id || action.source_id || task.order_id_checkin || '').trim()
-    const expectedVersion = notification?.version ?? outsideKey?.version
-    if (!orderId || expectedVersion == null) {
+    const target = guestReadyMutationTarget(task, action)
+    if (!target) {
       Alert.alert(t('common_error'), '入住订单已变化，请刷新后重试')
       return
     }
@@ -955,7 +1047,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
         : action.id === 'cancel_guest_ready_outside_key'
           ? 'cancel_outside_key'
           : 'mark'
-    const operationId = guestReadyOperationId({ orderId, action: mutationAction, expectedVersion })
+    const operationId = guestReadyOperationId({ sourceType: target.sourceType, sourceId: target.sourceId, action: mutationAction, expectedVersion: target.expectedVersion })
     if (!operationId) {
       Alert.alert(t('common_error'), '入住订单已变化，请刷新后重试')
       return
@@ -963,13 +1055,14 @@ export default function ManagerDailyTaskScreen(props: Props) {
     setGuestReadyPending(true)
     try {
       const receipt = await changeGuestReadyNotification(token, {
-        order_id: orderId,
+        source_type: target.sourceType,
+        ...(target.sourceType === 'cleaning_tasks' ? { task_id: target.sourceId } : { order_id: target.sourceId }),
         action: mutationAction,
         operation_id: operationId,
-        expected_version: expectedVersion,
+        expected_version: target.expectedVersion,
       })
       const patches = (getWorkTasksSnapshot().items || [])
-        .filter((item) => String(item.order_id_checkin || '') === orderId)
+        .filter((item) => workTaskMatchesGuestReadyTarget(item, target.sourceType, target.sourceId, target.expectedVersion))
         .map((item) => ({
           id: item.id,
           patch: {
@@ -1065,10 +1158,12 @@ export default function ManagerDailyTaskScreen(props: Props) {
             <View style={styles.formHalf}>
               <Text style={styles.label}>旧密码</Text>
               <TextInput value={oldCode} onChangeText={setOldCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="旧密码" placeholderTextColor="#9CA3AF" />
+              <Text testID="manager-old-code-authority" style={styles.fieldHint}>{oldCodeAuthorityLabel}</Text>
             </View>
             <View style={styles.formHalf}>
               <Text style={styles.label}>新密码</Text>
               <TextInput value={newCode} onChangeText={setNewCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="新密码" placeholderTextColor="#9CA3AF" />
+              <Text testID="manager-new-code-authority" style={styles.fieldHint}>{newCodeAuthorityLabel}</Text>
             </View>
           </View>
           <View style={styles.fieldCompact}>
@@ -1140,13 +1235,25 @@ export default function ManagerDailyTaskScreen(props: Props) {
             </View>
           ) : null}
           {!workRecordReadOnly ? (
-            <Pressable
-              onPress={onSave}
-              disabled={!canEditManagerFields || saving}
-              style={({ pressed }) => [styles.primaryBtnFull, !canEditManagerFields || saving ? styles.primaryBtnDisabled : null, pressed ? styles.pressed : null]}
-            >
-              <Text style={styles.primaryText}>{saving ? t('common_loading') : '保存修改'}</Text>
-            </Pressable>
+            <View style={styles.luggageActions}>
+              <Pressable
+                testID="manager-password-authority-verify"
+                accessibilityRole="button"
+                accessibilityLabel="预览并核对密码来源"
+                onPress={() => void onVerifyPasswordAuthority()}
+                disabled={!canEditGeneralInfo || saving}
+                style={({ pressed }) => [styles.grayBtnFull, !canEditGeneralInfo || saving ? styles.primaryBtnDisabled : null, pressed ? styles.pressed : null]}
+              >
+                <Text style={styles.grayText}>核对密码来源</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => void onSaveWithPasswordPreview()}
+                disabled={!canEditManagerFields || saving}
+                style={({ pressed }) => [styles.primaryBtnFull, !canEditManagerFields || saving ? styles.primaryBtnDisabled : null, pressed ? styles.pressed : null]}
+              >
+                <Text style={styles.primaryText}>{saving ? t('common_loading') : '保存修改'}</Text>
+              </Pressable>
+            </View>
           ) : null}
           {guestReadyActions.map((action) => (
             <Pressable

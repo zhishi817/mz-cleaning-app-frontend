@@ -44,7 +44,7 @@ import CleaningMediaImage from '../../components/CleaningMediaImage'
 import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 import AppButton from '../../components/ui/AppButton'
 import AppIconButton from '../../components/ui/AppIconButton'
-import { actionDisabledReasonText, availableActionsForTask, guestReadyNotificationForActiveRole, guestReadyOperationId, guestReadyOutsideKeyForActiveRole, mergeGuestReadyNotificationActions, navigationForWorkTaskAction } from '../../lib/workTaskActions'
+import { actionDisabledReasonText, availableActionsForTask, guestReadyMutationTarget, guestReadyNotificationForActiveRole, guestReadyOperationId, guestReadyOutsideKeyForActiveRole, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, workTaskMatchesGuestReadyTarget } from '../../lib/workTaskActions'
 import type { WorkTaskAvailableAction } from '../../lib/api'
 import { draftFileExists, persistCompressedDraftMedia } from '../../lib/localMediaDrafts'
 import {
@@ -1253,11 +1253,8 @@ export default function TaskDetailScreen(props: Props) {
 
   async function onToggleGuestReadyNotification(action: WorkTaskAvailableAction) {
     if (activeRole !== 'customer_service' || !task || !token || guestReadyPending) return
-    const notification = task.guest_ready_notification
-    const outsideKey = task.guest_ready_outside_key
-    const orderId = String(notification?.order_id || outsideKey?.order_id || action.source_id || task.order_id_checkin || '').trim()
-    const expectedVersion = notification?.version ?? outsideKey?.version
-    if (!orderId || expectedVersion == null) {
+    const target = guestReadyMutationTarget(task, action)
+    if (!target) {
       Alert.alert(t('common_error'), '入住订单已变化，请刷新后重试')
       return
     }
@@ -1268,7 +1265,7 @@ export default function TaskDetailScreen(props: Props) {
         : action.id === 'cancel_guest_ready_outside_key'
           ? 'cancel_outside_key'
           : 'mark'
-    const operationId = guestReadyOperationId({ orderId, action: mutationAction, expectedVersion })
+    const operationId = guestReadyOperationId({ sourceType: target.sourceType, sourceId: target.sourceId, action: mutationAction, expectedVersion: target.expectedVersion })
     if (!operationId) {
       Alert.alert(t('common_error'), '入住订单已变化，请刷新后重试')
       return
@@ -1276,13 +1273,14 @@ export default function TaskDetailScreen(props: Props) {
     setGuestReadyPending(true)
     try {
       const receipt = await changeGuestReadyNotification(token, {
-        order_id: orderId,
+        source_type: target.sourceType,
+        ...(target.sourceType === 'cleaning_tasks' ? { task_id: target.sourceId } : { order_id: target.sourceId }),
         action: mutationAction,
         operation_id: operationId,
-        expected_version: expectedVersion,
+        expected_version: target.expectedVersion,
       })
       const patches = (getWorkTasksSnapshot().items || [])
-        .filter((item) => String(item.order_id_checkin || '') === orderId)
+        .filter((item) => workTaskMatchesGuestReadyTarget(item, target.sourceType, target.sourceId, target.expectedVersion))
         .map((item) => ({
           id: item.id,
           patch: {
@@ -1443,12 +1441,19 @@ export default function TaskDetailScreen(props: Props) {
   const taskActions = availableActionsForTask(task, { roleNames, activeRole })
   const feedbackTaskAction = taskActions.find((action) => action.id === 'report_issue') || null
   const executionTaskActions = taskActions.filter((action) => action.id !== 'report_issue')
-  const guestReadyNotification = workRecordReadOnly && readOnlyViews?.guest_context === true
-    ? task.guest_ready_notification || null
-    : guestReadyNotificationForActiveRole(task.guest_ready_notification, activeRole)
-  const guestReadyOutsideKey = workRecordReadOnly && readOnlyViews?.guest_context === true
-    ? task.guest_ready_outside_key || null
-    : guestReadyOutsideKeyForActiveRole(task.guest_ready_outside_key, activeRole)
+  const roleScopedGuestReadyNotification = guestReadyNotificationForActiveRole(task.guest_ready_notification, activeRole)
+  const roleScopedGuestReadyOutsideKey = guestReadyOutsideKeyForActiveRole(task.guest_ready_outside_key, activeRole)
+  const legacySpecialReadOnlyGuestReadyNotification = workRecordReadOnly
+    && readOnlyViews?.guest_context === true
+    && (task.guest_ready_notification?.requirement_reasons?.length || 0) > 0
+    ? { ...task.guest_ready_notification!, prior_task_notification: null }
+    : null
+  const guestReadyNotification = roleScopedGuestReadyNotification
+    || legacySpecialReadOnlyGuestReadyNotification
+  const guestReadyOutsideKey = roleScopedGuestReadyOutsideKey
+    || (workRecordReadOnly && readOnlyViews?.guest_context === true && task.guest_ready_outside_key?.required === true
+      ? task.guest_ready_outside_key
+      : null)
   const completionPhotoAppendAction = taskActions.find((action) => action.id === 'append_completion_photo') || null
   const canAppendCompletionPhotos = !workRecordReadOnly && !isMaintenanceTask && isAlreadyDone && completionPhotoAppendAction?.enabled === true
   const canEditTaskHandling = !workRecordReadOnly && ((!isMaintenanceTask && !isAlreadyDone) || maintenanceCanAct)
@@ -1892,6 +1897,15 @@ export default function TaskDetailScreen(props: Props) {
               {guestReadyNotification.status === 'notified'
                 ? `客人入住通知：已由 ${guestReadyNotification.notified_by_name || guestReadyNotification.notified_by_user_id || '-'} 于 ${guestReadyNotification.notified_at ? new Date(guestReadyNotification.notified_at).toLocaleString() : '-'} 记录`
                 : '客人入住通知：尚未记录（本操作只记录人工通知状态，不会发送消息）'}
+            </Text>
+          </View>
+        ) : null}
+
+        {guestReadyNotification?.prior_task_notification ? (
+          <View style={styles.row} testID="guest-ready-prior-task-record">
+            <Ionicons name="time-outline" size={moderateScale(14)} color="#9CA3AF" />
+            <Text style={styles.rowText}>
+              {`关联订单前任务记录：${guestReadyNotification.prior_task_notification.status === 'notified' ? '已通知客人' : '已撤销'}；由 ${guestReadyNotification.prior_task_notification.notified_by_name || guestReadyNotification.prior_task_notification.last_actor_name || '-'} 于 ${new Date(guestReadyNotification.prior_task_notification.notified_at || guestReadyNotification.prior_task_notification.last_action_at).toLocaleString()} 记录。该历史不会自动覆盖当前订单状态。`}
             </Text>
           </View>
         ) : null}

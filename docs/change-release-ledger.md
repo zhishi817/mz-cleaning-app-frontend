@@ -16172,3 +16172,570 @@
 - Library upload was not performed; local PNG artifacts contain only explicit synthetic fixtures.
 - Resolved follow-up P2: cleaner completed-record media and consumables now share one exact-source form-photo response on initial entry. In-flight requests are coalesced; focus/return still refreshes; failures remain retryable; displayed media/supplies and the full-screen viewer are synchronously bound to the current exact-source view generation; and both key plus refresh sequence must match before a response may update state.
 - No upload/replay/queue clear, production API/database write, commit, push or publish occurred.
+## CRL-20261101-001 — MZ-096 新增任务弹窗键盘避让与可保存性修复
+
+- **Repository:** `mobile`
+- **Status:** exact isolated code candidate independently reviewed GO after the first review finding was fixed; native-device acceptance pending; not committed, pushed, merged, deployed, or published
+- **Board item:** `MZ-096`
+- **Updated:** 2026-11-01 UTC
+- **Request:** 修复首页“新增任务”弹窗在 iOS 中文扩展候选键盘出现时遮住内容输入框和确认按钮、缺少可靠键盘收起入口并导致任务无法保存的问题；同一共享弹窗的待同步入住、待同步退房和线下任务均需可滚动、可收键盘、可到达保存按钮，并保留既有草稿和业务提交语义。
+- **Outcome:** 新增任务弹窗现在由跨平台键盘避让容器约束；表单滚动区可随小屏和键盘高度收缩，确认新增按钮固定在滚动区外且位于避让后的可见区域。用户可使用显式“收起键盘”、单行键盘完成键、拖动表单、点击弹窗外遮罩、关闭按钮或 Android 返回键收起键盘；多行内容仍保留换行。Tab／任务类型切换、仅收键盘和模拟异步失败不会清空输入；保存增加同步 single-flight 防线，快速重复点击不会并发创建两条任务。提交成功后的刷新期间禁止重开，Android 返回仍可关闭忙碌弹窗；刷新异常不会把已成功创建误报为“新增失败”，刷新结束后入口可靠解锁。
+
+### Implementation
+
+- Previous behavior: `Modal` 直接在固定居中的普通 `View` 中渲染，表单 `ScrollView` 使用 `maxHeight: 520`，而确认按钮位于滚动区外；键盘和中文候选栏增高时，弹窗既不缩高也不把当前输入或按钮滚入可见区域。除系统键盘自身控件外没有 App 内收起入口，提交只依赖异步 `quickCreateBusy` 重渲染防重，极快重复点击存在进入两次请求的窗口。
+- New behavior: 共享弹窗使用 `KeyboardAvoidingView`（iOS `padding`、Android `height`），卡片和滚动区使用 `flexShrink` 响应剩余高度；滚动手势、遮罩、明确按钮、单行完成键、关闭和返回路径统一调用 `Keyboard.dismiss()`。多行内容继续使用 `submitBehavior="newline"`。`quickCreateSubmitInFlightRef` 在请求前同步上锁，打开函数和“新增”入口在提交/刷新期间使用同一门禁，Android `onRequestClose` 仍可安全关闭 UI；失败在 `finally` 解锁且不改受控输入。创建成功与后续列表刷新错误被分离，刷新失败保留成功提示且不产生错误的创建失败告警。
+- Protected behavior: 保留三种创建模式、三种线下任务类型、房源解析、执行人、日期/时间/密码/天数/客需字段、请求 payload、服务端权限、成功后刷新和错误提示；不新增角色入口，不修改 API、状态机、订单同步、导航、数据库或生产数据。
+
+### Files / Areas
+
+- `src/screens/tabs/TasksScreen.tsx` — modified: 键盘避让、可收缩滚动区、收起入口、输入提交行为和同步防重复保存。
+- `src/screens/tabs/TasksScreen.test.tsx` — modified: iOS/Android 避让策略、三 Tab／三线下类型、小屏收缩结构、中文多行草稿、关闭重开、各收键盘入口、快速重复点击、异步失败保留输入、成功后刷新期间禁止重开、忙碌 Android 返回和刷新异常解锁的 mock 回归。
+- `docs/change-release-ledger.md` — modified: 记录根因、范围、验证、风险、发布边界和真机缺口。
+
+### Impact / Dependencies
+
+- Roles / permissions / API / payload / navigation / task state / order sync: unchanged.
+- Database / migration / backfill / production task write: none; all automated tests use existing mocked API functions and synthetic text.
+- Native config / Expo dependency / plugin / runtime: unchanged. This is a JavaScript-only Mobile change and is technically OTA-compatible, but no OTA, EAS build, merge or publication is authorized by this work item.
+- Base: `origin/Dev@1689187fb556e3cb4c00ef68b162b6f8610c942d`, fetched on 2026-11-01 UTC into an isolated worktree; no MZ-091/094/023/078/090 workspace changes were copied.
+- Related but excluded: `MZ-010` guest-notified action timing is a separate historical workflow and must use its own CRL/candidate; no MZ-010 code or test is part of this change.
+
+### Validation
+
+- Source evidence: user-provided `IMG_9219.png` was materialized from ChatGPT Library ID `libfile_be5f3ba7dba481919addc364b3bd8de9` and inspected at 945×2048; it shows the iOS expanded Chinese candidate keyboard covering the “内容” field and the off-screen confirm action. The screenshot is retained outside the Git worktree and is not selected for commit.
+- Focused quick-create regression: `CI=true npm test -- --runInBand src/screens/tabs/TasksScreen.test.tsx -t 'quick create'` — PASS, 4/4 tests; mock-only, no production API call.
+- Complete task-screen regression: `CI=true npm test -- --runInBand src/screens/tabs/TasksScreen.test.tsx` — PASS, 75/75 tests.
+- `npm run typecheck` — PASS.
+- Scoped ESLint for implementation and test — PASS with 0 errors; reported warnings are the file's existing warning classes, including established test `require()` style.
+- Complete `CI=true npm run check:ci` — PASS: ledger auditor 44/44, ledger coverage 3/3, TypeScript, lint with 0 errors / 888 warnings, button contract, fast regression 8 suites / 135 tests, and complete regression 82 suites / 727 tests.
+- `git diff --check` and Mobile ledger coverage audit — PASS.
+- First independent read-only review — found P2=1: successful creation closed the modal before a still-awaited refresh released busy/ref, while the underlying open button remained active, allowing a temporarily uncloseable disabled modal to reopen. The open guard/button disable, busy Android close path and refresh-error semantics above resolve that exact finding.
+- Final independent read-only review — exact code candidate GO; P0=0, P1=0, P2=0. The reviewer recomputed the fingerprint below, confirmed the original P2 is closed across the synchronous ref/state race, busy Android return, refresh unlock and refresh-error paths, and found no API, payload, role, permission, production-write or dependency-scope expansion.
+- Exact non-ledger candidate SHA-256 after the P2 correction: `9af197e6fc702f2ed7005a1ecdf987f6cac2c941297d9b9d07d4cb584ff83c83`.
+- iOS simulator, Android emulator, physical iOS/Android, native build and real Chinese keyboard candidate-height acceptance: pending.
+
+### Risks / Release Notes
+
+- Remaining native risk: React Native component tests verify the layout contract and both platform branches, but cannot prove the OS keyboard frame, Chinese expanded-candidate height, caret autoscroll or gesture animation on a real device. Release acceptance must exercise a small iPhone and Android screen with the real IME before publication.
+- Rollback: revert the two TasksScreen files and this CRL; no data rollback or cleanup is required.
+- Sensitive-information review: no `.env`, token, credential, database URL, device log, production payload or real task was read, written, logged, staged or selected. The screenshot contains the user-supplied UI reproduction only and remains outside the repository candidate.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; the exact candidate has no untracked files and ignored dependency trees are excluded.
+
+### Release Attempts
+
+- Combined exact attempt is recorded under `mobile/CRL-20261101-004`.
+
+## CRL-20261101-002 — MZ-010 全入住通知按钮与挂钥匙后可操作（mobile）
+
+- **Status:** expanded exact local candidate verified; paired Root PostgreSQL/authenticated HTTP integration, full Root/Web/Mobile gates and final independent review GO (P0/P1/P2=0); release remains NO-GO until device verification and explicit delivery authorization
+- **Repository:** `mobile`
+- **Updated:** 2026-11-01 UTC
+- **Request:** 修复 MZ-010：所有入住任务都要有服务端授权的“已通知客人”按钮，包括无订单手工入住，并在挂完钥匙转为完成记录后仍能从任务卡和原客服页面标记；不得客户端造 action、真实通知客人、扩大角色或放宽订单/任务权威与挂钥匙约束。
+- **Outcome:** 订单绑定入住继续消费精确订单动作；Melbourne 当天已挂钥匙的无订单手工入住消费 Root 返回的精确 `cleaning_tasks` mark/revoke。任务后来关联订单时，当前按钮自动切换到订单链，并把关联前任务留痕作为明确只读历史展示，不迁移或覆盖订单状态。历史/取消/替代、错误 source、无访客上下文和非当前客服角色继续隐藏。
+
+### Implementation
+
+- Previous behavior: store redaction、`availableActionsForTask` 和任务列表分别过滤/清空只读记录的 guest-ready 动作，所以 Root 即使提供动作，挂钥匙完成后仍不可达；入住时间从早改为普通时客户端还会把通知投影整段清空。
+- New behavior: 只读 redaction 仅为 `completed` 或真实挂钥匙证据对应的 `pending_review` 保留服务端授权、source 精确匹配当前订单或任务的 mark/revoke；`reassigned` 历史明确移除。动作层再要求当前客服、访客上下文和 Melbourne 当天，任务列表与原客服详情都复用同一精确 mutation target。入住时间变化只失效订单绑定 marker；独立任务 marker 由 Root 任务权威决定，客户端不合成或搬移。异步回执只在缓存仍为请求发出时的相同 source 与相同版本时落地，实时事件/其他页面已推进版本时跳过旧回执。
+- Read-only status boundary: 非客服详情只继续展示修复前已有、带早入住/钥匙外挂 `requirement_reasons` 的特殊状态；本次新增的普通入住空原因投影只对当前客服展示，避免角色切换或旧缓存扩大状态/记录人/时间可见范围。
+- Key decisions: 不保留完成后的钥匙外挂登记/取消，也不恢复清洁/检查/媒体写动作；列表只为完成记录渲染 guest notification status action，反馈和补品仍按原只读入口呈现。无订单动作仍完全由服务端授权；关联订单后的任务历史只读展示“不会自动覆盖当前订单状态”。
+
+### Files / Areas
+
+- `src/lib/api.ts` — modified: route exact order/task mutation target to the paired Root endpoint without sending unrelated identifiers.
+- `src/lib/workTaskActions.ts` — modified: exact source target generation/matching, task marker cache semantics and role/date/source-scoped completed-record action.
+- `src/lib/workTaskActions.test.ts` — modified: order/task targeting, ordinary/checkin-only/merged/deferred/password-only, completed, historical, wrong-source, repeated/no-op and active-role synthetic coverage.
+- `src/lib/workTasksStore.ts` — modified: retain only exact-source guest notification mark/revoke through authorized read-only redaction.
+- `src/lib/workTasksStore.test.ts` — modified: guest-context preservation and cancelled/replaced redaction coverage.
+- `src/screens/tabs/TasksScreen.tsx` — modified: expose only the status action on completed record cards instead of clearing every action.
+- `src/screens/tabs/TasksScreen.test.tsx` — modified: completed order/task action reachability, exact task payload and feedback exclusion.
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — modified: original customer-service page keeps both exact order and task buttons after completion while manager fields remain read-only.
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — modified: order/task mutation consumes exact source and version-bound cache patching.
+- `src/screens/tasks/TaskDetailScreen.tsx` — modified: role-scoped order/task notification state plus explicit linked-before task history.
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — modified: customer-service order/task projection, linked-before history and non-customer-service visibility boundaries.
+- `docs/change-release-ledger.md` — modified: record this Mobile release unit and paired delivery boundary.
+
+### Impact / Dependencies
+
+- API / payload: consumes Root's explicit `source_type/source_id`; order actions keep the existing endpoint, while task actions use `/mzapp/guest-ready-task-notifications` with exact `task_id`. No client-synthesized action or cross-source payload.
+- Database / migration / production data: paired Root task-state migration is required before compatible Root/Mobile delivery; Mobile tests use synthetic fixtures/mocked API and no mutation was sent.
+- Roles / permissions: unchanged; active `customer_service`, server `available_actions`, guest-context capability, exact order source and Root ready/current/version checks remain mandatory.
+- Native / config: unchanged; implementation is JavaScript/TypeScript-only and is an OTA-capable candidate after paired Root/migration readiness, but OTA is not authorized. User-authorized `npm ci` installed exact-lockfile test dependencies locally; lockfiles and runtime declarations are unchanged.
+- Related units: paired `root/CRL-20261101-002`, prior `mobile/CRL-20261011-002`, original-page restoration `mobile/CRL-20261025-003`.
+- Base: `origin/Dev@1689187fb556e3cb4c00ef68b162b6f8610c942d`.
+
+### Validation
+
+- `npm test -- --runInBand src/lib/workTaskActions.test.ts src/lib/workTasksStore.test.ts src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx src/screens/tasks/TaskDetailScreen.test.tsx src/screens/tabs/TasksScreen.test.tsx` — PASS: 5 suites / 209 tests.
+- `npm run typecheck` — PASS in both the Mobile standalone and paired Root complete gates.
+- Expanded Root backend build, Web production build and focused Root/Web suites — PASS.
+- Standalone `npm run check:ci` — PASS: ledger auditor 44/44, ledger 12/12, TypeScript, lint 0 errors / 885 existing warnings, button audit, fast regression 8 suites / 138 tests, and serial complete regression 82 suites / 730 tests.
+- Complete paired Root `npm run check:full` — PASS, including the same Mobile source in plain multi-worker mode: 82 suites / 730 tests. Existing teardown/`act(...)` console warnings remain baseline, with no failed assertion.
+- Final paired Root `npm run check:full` rerun after both backend P2 corrections and the authenticated HTTP harness addition — PASS again, including this unchanged Mobile source: typecheck, lint 0 errors / 885 existing warnings, 82 suites / 730 tests.
+- Paired Root PostgreSQL 16.15 synthetic integration — PASS for migration/constraints/generation/idempotency and two-connection locks; real local Express/JWT/PostgreSQL route integration — PASS for 401/403, customer-service mark/replay/revoke, stale version, later order link, current database role revocation and append-only no-message audit. Both random schemas were confirmed removed and both localhost servers stopped; no shared/production service was contacted.
+- `git diff --check`, Mobile ledger coverage and exact non-ledger fingerprint `33694df97dd0b66825ca1436baa8613f68a74490388e051a2def33a66f9c33e9` — PASS.
+- Final exact-candidate independent review — `GO` for local code/synthetic-integration, P0=0 / P1=0 / P2=0. The reviewer independently matched this Mobile fingerprint and paired Root fingerprint `6742f116477fbd02fae92ad6c74b02d6baa614658e6c1c18c918c6da0d4de721`, and confirmed exact source/version cache gates, current-customer-service/date/guest-context boundaries, no generated/secret/MZ-096 contamination and the paired Root authority/lock/no-message protections. Commit, push, migration, deployment, OTA/store release and device verification remain separate and unauthorized/unperformed.
+- Device inventory — iOS 26.3 has one booted iPhone 17 simulator, but its only matching user app is Expo Go; no MZ binary is installed. The repository has no local UI fixture server, and its default development API points to a remote Render service while the app manifest enables Expo updates, so the candidate was deliberately not launched merely to obtain a visual claim or risk contacting a real service. Android SDK has no emulator binary and `adb devices -l` reports no attached device. Physical iOS/Android, MZ simulator rendering, weak-network retry, EAS/native build and OTA remain pending/not run. Root/Mobile local mocked automated integration passed; no real backend/database/device environment was used.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; only the intended tracked files are staged and ignored exact-lockfile dependencies are excluded.
+
+### Release Attempts
+
+- None. Exact candidate fingerprint is recorded above; user authorization is `not-selected`, and staging/commit/push/PR/merge/OTA remain unauthorized.
+
+### Risks / Release Notes
+
+- Root and Mobile are an inseparable behavior pair; Mobile must not release before exact Root contract verification/deployment planning, and Root must not be treated as user-visible until matching Mobile delivery.
+- Rollback: revert this CRL together with paired `root/CRL-20261101-002`; paired task-state audit data should be retained unless a separately reviewed database-retention rollback is approved.
+- Sensitive-information review: synthetic IDs/content only; no token, credential, environment value, production payload, media or customer data.
+- Git state: isolated detached worktree, uncommitted, not pushed; no PR, merge, OTA, build or device verification.
+
+## CRL-20261101-003 — MZ-093 仅改密码入住任务显示排序圆圈并参与本人混合排序
+
+- **Repository:** `mobile`
+- **Status:** verified local paired candidate; focused TasksScreen regression, TypeScript and full Mobile/paired Root quality gates passed; not committed, pushed, merged, deployed, or published
+- **Board item:** `MZ-093`
+- **Updated:** 2026-11-01 UTC
+- **Request:** 仅改密码的入住执行任务也加入可排序优化，显示排序圆圈并能和本人其他任务一起调整顺序；保持任务类型、计费、负责人和现有权限，等之后确认的更新一起发布 OTA。
+- **Outcome:** 当前用户本人负责的 `checkin_clean + password_only` 执行卡现在与清洁、检查和线下任务共享排序入口、序号圆圈和全局点选顺序，并提交独立 `executor` 条目。其他人的仅改密码任务、普通挂钥匙执行卡、经理全部视图、完成/历史只读记录仍不可排序；保存失败不写本地顺序，快速重复保存只发送一个在途请求。
+
+### Implementation
+
+- Previous behavior: `isKeyHandoverExecutionTask` 覆盖仅改密码卡，而 TasksScreen 明确把所有该类 execution 卡排除排序；mixed API 类型也只接受 `work|cleaner|inspector`，所以本人密码任务没有圆圈且无法落库。
+- New behavior: 仅当 `isPasswordOnlyInspectionTask(task)`、Root 明确下发 `executor_reorderable=true`、任务仍为 active 非终态且当前用户是准确 executor 时，execution 卡进入同一排序集合；这使 legacy inspector fallback / manual action grant 保持可见或可执行但没有排序圆圈。保存时用 active source IDs 生成 `kind=executor`，成功后才本地更新 `sort_index` / `sort_index_inspector`；失败保留点选状态供重试。
+- Duplicate/concurrency behavior: 同步 ref 锁在 React disabled 状态提交前即阻断第二次调用，避免双击并发；finally 释放后允许失败重试。
+- Key decisions: 普通挂钥匙 execution 继续不可排序；经理模式不开放；不修改 server-authoritative `available_actions`、导航、任务状态、角色、计费或房数。
+
+### Files / Areas
+
+- `src/screens/tabs/TasksScreen.tsx` — modified: 本人密码任务排序资格、圆圈、executor payload、本地成功补丁与在途请求锁。
+- `src/screens/tabs/TasksScreen.test.tsx` — modified: 混合任务顺序/圆圈、本人和他人边界、双击、失败不落本地及重试覆盖。
+- `src/lib/api.ts` — modified: mixed reorder item 类型和运行时过滤接受 `executor`。
+- `docs/change-release-ledger.md` — modified: 登记 Mobile 候选、Root 依赖和发布边界。
+
+### Impact / Dependencies
+
+- API: `reorderMixedWorkTasks` 可提交新 `kind=executor`; 旧请求/响应不变。
+- Database / migration / backfill / production data: none in Mobile; no real API or shared data write was run.
+- Roles / permissions: only exact current assignee becomes reorderable; no manager/all-view, other-user or permission-code expansion.
+- Task semantics / billing / navigation / media / cache: unchanged except successful response后的本地排序字段补丁；既有权威刷新仍执行。
+- Native config / dependency / Expo runtime: unchanged.
+- Dependencies: paired `root/CRL-20261101-003` must be deployed before the matching OTA is published; otherwise Root would reject the new `executor` kind. MZ-092 backend repair remains independent and unchanged.
+
+### Validation
+
+- `npm test -- --runInBand --no-cache src/screens/tabs/TasksScreen.test.tsx` — PASS on the final source: 1 suite / 76 tests, including mixed owner ordering/circle, other user, legacy inspector/manual fallback without reorder ownership, stale terminal capability, double-save suppression, failure no-local-patch and retry.
+- `npm run typecheck` — PASS.
+- Dependency install safety: package defines no project `preinstall`, `install`, `postinstall` or `prepare`; user-authorized `npm ci --ignore-scripts` installed the exact lockfile in this isolated candidate only.
+- `CI=true npm run check:ci` — PASS on the final hardened source: ledger auditor 44/44, ledger coverage, TypeScript, lint with zero errors / 887 baseline warnings, strict button audit, fast regression 135/135, and full Jest 82 suites / 728 tests. Existing unrelated `act(...)` console warnings remain non-blocking baseline output.
+- Paired Root `CI=true npm run check:full` — PASS on the final hardened source: full backend suite, frontend lint/tests/build (56 files / 299 tests), and this Mobile tree's typecheck/lint/tests (82 suites / 728 tests).
+- Independent read-only paired-candidate review — GO for the uncommitted local candidate; P0/P1/P2 = 0 after legacy fallback/manual grant ownership, superseded/terminal and validation-residue findings were fixed and re-reviewed. This does not authorize commit, push, PR, merge, deployment or OTA.
+- iOS simulator, Android emulator, physical iOS, physical Android, EAS/native build, weak-network device flow and OTA — not run.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; the exact tracked candidate is staged and installed dependencies remain ignored.
+
+### Release Attempts
+
+- None. User selected a later combined OTA outcome, not commit or push of this exact candidate.
+
+### Risks / Release Notes
+
+- Runtime risk: OTA must not precede the paired Root deployment that accepts `kind=executor`.
+- Rollback: revert the TasksScreen/API changes; password-only cards return to their prior non-sortable behavior without data migration.
+- Sensitive-information review: synthetic fixture IDs only; no secrets, `.env`, tokens, credentials, production payloads, device logs or caches added.
+- Git state: isolated branch `codex/mz093-password-only-reorder`; uncommitted, not pushed, no PR, not merged, not deployed, OTA not published, device/production verification not run.
+
+## CRL-20261028-006 — MZ-078 普通清洁照片清单与 MZ-090 检查照片响应式布局
+
+- **Repository:** `mobile`
+- **Status:** local uncommitted verified candidate; focused/static/Expo Web fixture validation and full repository CI passed
+- **Updated:** 2026-11-01 UTC
+- **Request:** 修复普通清洁历史详情误显示浴室、沙发、卧室等自完成照片空卡的问题，同时保留旧记录中的已有额外照片；不得借历史展示修复改变任何活动任务的必拍门槛。修复检查人员照片在手机三列布局中被多照片卡片拉出大面积空白的问题。只允许本地修改、测试和真实页面预览；不得提交、推送、创建 PR、发布 OTA 或访问生产 API/数据库。
+- **Outcome:** 仅收窄普通清洁历史的照片展示为五个适用分组；所有活动任务继续沿用原八项完成门槛，不改变普通清洁 `SuppliesFormScreen` 的客厅、浴室下水口、厨房、吸尘器和电视遥控器校验，也不改变自完成或入住中清洁规则。旧浴室/沙发/卧室照片集中在只读“其他历史照片”中，不删除或重写媒体。检查照片网格在窄屏为一列、普通手机为两列，卡片和网格顶部对齐且卡片按自身内容高度展示；缩略图在卡内自适应两列并保持点击大图及长按删除行为。
+
+### Implementation
+
+- MZ-078: 新增只读历史照片区域配置。普通 `same_day` / `deferred` / `pending_decision` / `checked_done` 仅在 `readOnly` 历史页显示五个适用分组；活动普通直达、自完成和入住中清洁继续返回原完整八项并保留原完成校验。持久化仍遍历完整区域集合，避免旧草稿或媒体被意外丢弃。
+- MZ-078 history: 普通清洁只读页不再渲染无照片的浴室/沙发/卧室卡片；这些区域如存在 legacy 已保存媒体，只读归入“其他历史照片”，仍使用原精确来源鉴权和大图查看，不提供拍照或删除入口。
+- MZ-090: `ResponsiveImageGrid` 增加可选的窄屏/手机列数策略并统一 `alignItems/alignSelf: flex-start`；默认调用方列数不变。自定义策略按真实 viewport 选择 `<360px` 一列、`360–767px` 两列，再按内层容器实测宽度计算卡片尺寸，避免页面 padding 把 360/375/390px 手机误判为窄屏；平板继续沿用既有响应式列数。
+- MZ-090 cards: 检查房间卡片移除嵌套固定宽度网格内的 `flexBasis/flexGrow/minWidth`，改为 `width: 100%` 和顶部对齐；照片缩略图改为卡内约两列的等比方形，保留顺序、数量上限、添加、长按删除、只读和大图查看。
+
+### Files / Areas
+
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — modified: 只读历史照片 schema、活动八项门槛保护和 legacy 额外历史照片区。
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — modified: 活动普通/自完成/入住中八项门槛保护、普通历史五分组、空卡隐藏与 legacy 媒体保留回归。
+- `src/components/ui/ResponsiveImageGrid.tsx` — modified: 可选手机列数、viewport/容器宽度分工和顶部对齐契约。
+- `src/components/ui/ResponsiveImageGrid.test.tsx` — modified: 320/360/375/390/430 屏幕宽度与更窄内层容器的列数、尺寸和顶部对齐回归。
+- `src/screens/tasks/InspectionPanelScreen.tsx` — modified: 检查照片一/两列策略、自然高度卡片和自适应缩略图。
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — modified: 检查网格策略与卡片无 flex 拉伸回归。
+- `design-qa.md` — modified: 记录真实 Expo Web 组件夹具、15 组宽度/字号矩阵、像素截图和 native 边界。
+- `docs/change-release-ledger.md` — modified: 本 CRL 的范围、验证边界、风险与回滚。
+
+### Impact / Dependencies
+
+- Roles / permissions / available_actions / task transitions / API payload / upload / retry / local cleanup / media authentication: unchanged.
+- Ordinary-cleaning `SuppliesFormScreen`, self-complete key material, lockbox video, all active eight-item completion requirements, roles, and stayover-clean behavior: preserved.
+- Existing historical media: not deleted, moved, rewritten or re-uploaded; only presentation grouping changes.
+- Database / migration / backfill / production API / synchronization: none; no production connection attempted.
+- Native config / Expo dependency / plugin / runtime / EAS build: unchanged. This remains JS-only if later selected for OTA.
+- Base: clean clone of `origin/Dev@1689187` (`1689187 Merge pull request #70 from zhishi817/codex/personnel-settlement-timeout-fix-v2`).
+- Publication boundary: no commit, push, PR, merge, build or OTA is authorized in this turn.
+
+### Validation
+
+- `git diff --check`: PASS.
+- Remote duplicate check: PASS. A read-only `git ls-remote origin refs/heads/Dev` on 2026-11-01 returned `1689187fb556e3cb4c00ef68b162b6f8610c942d`, equal to the candidate base. `24b5d26` already provides the ordinary-history read-only route and guest-key-photo display; the present uncommitted delta is the additional mode-specific checklist, legacy-extra grouping, and inspection layout fix, so it is not already covered upstream.
+- Dependency safety: PASS. Root package has no `preinstall`/`install`/`postinstall`; only `fsevents` and `unrs-resolver` were flagged with install scripts in the lockfile, and installation used `--ignore-scripts`.
+- Business-rule re-review: PASS after correction. The first candidate incorrectly treated ordinary living/kitchen evidence as optional. Existing `SuppliesFormScreen` validation requires living, bathroom drain, kitchen, vacuum, and TV-remote evidence, while prior ledger evidence preserves eight cleaning-completion required areas. That rule change was removed: only ordinary read-only history uses the five-group projection, and all active direct-entry/self-complete/stayover paths retain the original eight-item completion gate.
+- Static source review: PASS for read-only-only history schema, unchanged active required areas, full-area persistence, read-only-only legacy section, preserved media access props, inspection card removal of flex growth, viewport-driven 320–430 column policy, and container-driven item sizing.
+- Focused Jest (`ResponsiveImageGrid`, `CleaningSelfCompleteScreen`, `InspectionPanelScreen`): PASS after the business-rule correction, 3 suites / 58 tests. The run retains existing React async `act(...)` warnings and has no failed assertion.
+- `npm run typecheck`: PASS.
+- `npm run lint`: PASS with 0 errors and 882 existing repository warnings.
+- `npm run check:buttons`: PASS; 27 documented legacy exceptions remain outside complete 44pt proof.
+- Expo Web synthetic-component fixture: PASS across 320/360/375/390/430 px and font scales 1.0/1.2/1.35. All 15 combinations had zero horizontal overflow; 320 px used one column, 360–430 px used two, and the 8-photo card remained taller than the 0-photo card rather than equalizing row height. Every corrected render exposed ordinary active/self-complete/stayover as 8 items and ordinary read-only history as 5 display groups. Activity/read-only switching changed synthetic add controls from 5 to 0, and the synthetic viewer completed open/close/reopen/close. Browser console had 0 errors and three React Native Web development warnings.
+- Corrected visual evidence: `/tmp/mz078-mz090-final-320-fs135.png`, `/tmp/mz078-mz090-final-375-fs12.png`, `/tmp/mz078-mz090-final-430-fs1.png`, and `/tmp/mz078-final-history-390-fs12.png`. The earlier three ordinary screenshots are rejected/superseded and are not final evidence.
+- iOS simulator rendering: PASS in the already-booted iPhone 17 / iOS 26.3 simulator using the already-installed Expo Go 54.0.7; `/tmp/mz078-mz090-ios-simulator.png` visibly shows the corrected 8/5/8/8 split and two natural-height columns. The Mac was locked, so the native UI automation layer could not attach for tap/scroll/viewer interaction; no native interaction pass is claimed.
+- Android simulator: NOT RUN because the installed SDK has `adb` but no emulator executable and no AVD directory. No system-level tool was installed. Physical iOS/Android, camera/gallery, long-press deletion and weak-network validation were not run.
+- `python3 scripts/audit_change_release_ledger.py`: PASS; 8 changed paths / 8 recorded paths.
+- `CI=true npm run check:ci`: PASS after the business-rule correction: 44 ledger-auditor tests, ledger coverage 8/8, TypeScript PASS, lint 0 errors / 882 existing warnings, button contract PASS with 27 documented legacy exceptions, 8 fast suites / 135 tests, and full Jest 82 suites / 730 tests.
+- Independent second review: GO for this local candidate with no P0/P1/P2 finding. The initial “ordinary 5 items / only 3 required” interpretation was rejected because it conflicted with `SuppliesFormScreen` validation and prior eight-area completion evidence. The corrected candidate changes only ordinary read-only history presentation; active ordinary direct entry, self-complete and stayover all retain the original eight required completion areas. No role, permission, `available_actions`, transition, API payload, upload/retry/cleanup or production-write contract changes.
+- EAS native build: NOT RUN.
+- Production writes / migrations / API side effects: none.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; the exact eight-file unit is staged with no environment, cache, dependency, generated native output, private media or device log.
+
+### Release Attempts
+
+- None. The combined exact attempt is recorded under `mobile/CRL-20261101-004`.
+
+### Risks / Release Notes
+
+- Risk: ordinary history projection must remain presentation-only. Any future reuse for an active task would require a separately approved business-rule change; current tests enforce the original eight-item active gate.
+- Risk: Expo Web synthetic-component QA and iOS simulator rendering passed, but simulator UI interaction, Android, camera/gallery interaction, long-press deletion, weak-network behavior and physical-device rendering remain unverified.
+- Rollback: revert this eight-file CRL unit; no data or native rollback is required.
+- Sensitive-information review: reference screenshots were inspected locally but are not copied into the repository; no secrets, user tokens, production URLs, private payloads or media are recorded.
+
+## CRL-20261101-004 — MZ-091 移动端密码来源核对与权威刷新
+
+- **Repository:** `mobile`
+- **Status:** isolated verified local candidate; refresh finding remediated, exact final Mobile/paired Root gates passed and paired runtime review has no remaining P0/P1; not committed, pushed, merged, built, or released
+- **Updated:** 2026-11-01 UTC
+- **Request:** 配合 Root 修复旧密码来源错误：展示密码权威状态，修改/同值核对时先预览影响并明确确认，保存与服务端传播失败可见，保存后重取服务端状态；不得在客户端猜来源、局部伪造成功或记录密码原文。
+- **Outcome:** `ManagerDailyTaskScreen` 在旧/新密码输入下显示“待核对/系统生成/已关联来源/已人工核对”，新增“核对密码来源”按钮。按钮先调用 code-free 预览，再发送 `password_verification`（字段、request ID、client）；普通保存只对实际改变的密码字段附带核对元数据。密码值不再写入本地 optimistic patch 或本地通知摘要/hash，保存后强制刷新并从权威任务缓存重载；刷新明确返回 false 或找不到任务均显示失败，并把密码输入恢复为刷新前权威值。带 `password_authority` 的实时事件继续 fail-closed 为完整刷新。
+
+### Files / Areas
+
+- `src/lib/api.ts` — modified: `password_authority` projection、preview API 和 verification payload 类型。
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — modified: authority labels、impact preview/confirmation、request ID、safe local notice and authoritative post-save refresh.
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — modified: preview-before-confirm, same-value verification, no local password patch and refresh regression.
+- `src/lib/workTasksStore.test.ts` — modified: password-authority event is not safe for partial patching.
+- `docs/feature-regression-registry.md` — modified: FR-P1-TSK-09.
+- `docs/change-release-ledger.md` — modified: this record.
+
+### Impact / Dependencies
+
+- Requires paired Root migration/backend/Web from `root/CRL-20261101-004`; Mobile first or alone will receive “接口未部署” and must not be released in that order.
+- Roles/navigation/task workflow/media/upload queues/native dependencies/runtime/channel unchanged.
+- No production database/API write, cache clearing, task replay, real-account login, OTA, EAS build or deployment occurred.
+
+### Validation
+
+- `npm run typecheck` — PASS.
+- `npm test -- --runInBand src/lib/workTasksStore.test.ts src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — PASS, 2 suites / 71 tests.
+- `CI=true npm run check:ci` — exact final candidate PASS: ledger-range/coverage audits, TypeScript, lint with 0 errors, button contract, fast regression (8 suites / 135 tests) and serial complete regression (82 suites / 724 tests).
+- Paired Root `CI=true npm run check:full` — exact final combined candidate PASS: full backend suite, Web lint/tests/build (56 files / 299 tests), and paired Mobile typecheck/lint/tests (82 suites / 724 tests).
+- Independent review — Root/Mobile combined review identified a refresh gap where `false` or a missing task could still report success. The candidate now treats both as failure and restores the prior display. The final paired runtime review found no remaining P0/P1; real device/weak-network validation remains pending.
+- Commit-candidate review repair — the first integrated staged review found that changed password fields could call save without the code-free impact preview. The shared preview/confirmation helper now gates both changed-password save and same-value verification; non-password-only saves keep the existing direct path. Focused manager-detail regression passed 18/18 including “change password → preview → explicit confirm → atomic save”, and TypeScript passed. The exact full gates and renewed independent review remain required before commit.
+- Real iOS/Android + protected production account + weak network — NOT RUN.
+
+### Release Boundary
+
+- Branch: `codex/mz-seven-item-bundle-20261101`, combined release worktree based on freshly fetched `origin/Dev@1689187fb556e3cb4c00ef68b162b6f8610c942d`.
+- No commit, push, PR, merge, OTA, EAS build or native release is authorized or performed.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; 20 exact tracked paths were staged explicitly after the changed-password preview repair, with no untracked, generated native, dependency-tree, preview or device-log content.
+- `design-qa.md` — SHA-256: `90544bccadadb363afe4cb7f8054aeae39eb8b5e29106091d66a422e9d882a46`
+- `docs/feature-regression-registry.md` — SHA-256: `f94c31582fc149089753653590c29933fc92425e00c60fae1b74e135fc280f6d`
+- `src/components/ui/ResponsiveImageGrid.test.tsx` — SHA-256: `0c734054041f052a41076f8fc3aa21b7f0f718ecf845abd82a06889a44afc6d4`
+- `src/components/ui/ResponsiveImageGrid.test.tsx` — SHA-256: `b150e77300e0de3e882812e9e6f4c4bc92729cb7bb20b2b0755448369d0ef63f`
+- `src/components/ui/ResponsiveImageGrid.tsx` — SHA-256: `05b07fa92d7573fa66789a469e4fc7b79a6c742d7e360de548fc10d8fb8c99bf`
+- `src/components/ui/ResponsiveImageGrid.tsx` — SHA-256: `07d1e6c6f2fa767df52c1b7ba37064cb04992a3bcf3a72f3681bd691061bf7fd`
+- `src/components/ui/ResponsiveImageGrid.tsx` — SHA-256: `1efaecf9a325542eff809f5e09a2f0cdb94b847221c22836121aabac266dfe6e`
+- `src/components/ui/ResponsiveImageGrid.tsx` — SHA-256: `2c5bb14d6963b1aef95814c7a725597375767d69330ad246e8b312bc6f77ed3c`
+- `src/components/ui/ResponsiveImageGrid.tsx` — SHA-256: `3b2a8d645b81e5b7763b5e601aa526cafde35f55a926b44f2bdef179f3ba9b74`
+- `src/components/ui/ResponsiveImageGrid.tsx` — SHA-256: `5308a59c316649e3e32c56a9caca17390e48fc284b3cd97d977d3842de22ad69`
+- `src/components/ui/ResponsiveImageGrid.tsx` — SHA-256: `ad26681a2ad4b2b342888b27f290663d64e71ec5d4e3533de1c3c5c1430bd38f`
+- `src/components/ui/ResponsiveImageGrid.tsx` — SHA-256: `b1924620903afce85e8e538b741edb31a1cb890dbd78c43a8dce58d2ef66569c`
+- `src/components/ui/ResponsiveImageGrid.tsx` — SHA-256: `c79b26e8e12ddd8bf6c03030c252335eb401cd160dc3bad94a4c6fc06a23e16a`
+- `src/components/ui/ResponsiveImageGrid.tsx` — SHA-256: `cb6bf5d6a2191ceb9806a4564292025bf5027b98062ac405bdf730ade0d8eac3`
+- `src/components/ui/ResponsiveImageGrid.tsx` — SHA-256: `dc50f513fec6e29366b965dd071a3114158c048e37c865b84c9b2022c77b28b6`
+- `src/components/ui/ResponsiveImageGrid.tsx` — SHA-256: `f26a5c18125cb67600d4037005390759d0a0e05fee8f3447de64ad64da3b5662`
+- `src/lib/api.ts` — SHA-256: `0d2f5c18023d4d794bf65688657c47cabbdf2bc3bf53446745d359f7188d42d1`
+- `src/lib/api.ts` — SHA-256: `17b2ee8744c0971c802b711dc077f50112a8195f2e04f302a4d14ff1182a60d9`
+- `src/lib/api.ts` — SHA-256: `1d98067aaa222d051b2e6c11810c2bb3f03d75592eca8e49844094e53ab27cfa`
+- `src/lib/api.ts` — SHA-256: `453665ae67837b0d2ea5a28ebc27457ed8fd21eca08a7237806eb73710ed632b`
+- `src/lib/api.ts` — SHA-256: `544d3d024e7579451ce087d1f98434db7330353d505099200703381746b8aa83`
+- `src/lib/api.ts` — SHA-256: `6ac8f12174d2f8ff65cd7fef4af9be40175adf1dd378e89c1f70cabf0157f172`
+- `src/lib/api.ts` — SHA-256: `72e27f4ccaaeee26160270f33e335162711e60827e81d1b6470b3cd7363476ee`
+- `src/lib/api.ts` — SHA-256: `80d232bbdae76f0bb8ee0c794a92a3ba44f45e7e3ae30ee137fb600ea77612bf`
+- `src/lib/api.ts` — SHA-256: `8bf2b22ea310b1d3c4bd1521471832189723ce073fd0267d98e0ec571d1c3254`
+- `src/lib/api.ts` — SHA-256: `ba0ae38d863a507520744071d0a7d535de13b35588c453b5ad5ed4d8a1470fee`
+- `src/lib/api.ts` — SHA-256: `e64799cdc1cdd5a0fbdb62d5151eb90db9c681a97c9f9c84a8807dc84e33db9d`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `0a6c6ac10459a824115058fbd7142c80462e42da6d54fb40b522345b528a5442`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `0d3cf81001fb9bf317f8adcc55d7c7a0582b10d7ab3ecea6e1f39ce9e6deeb08`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `0dbe7a9f1ea4b6cdd7faabfbde7cdf6cf04fbda2c9d3823bf1a4edea4f3be63f`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `1a4f1d8af5f6acc27de70829c01221a74e1762e59d1a25d52871b317f5007bed`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `62130b2530d43e93a8d7f35209ae12eccc063a5ed8da95771bdd44b50683190c`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `b0fd010d8a0687915bb34d0c162c46ccc2d92fa6d782771af4ee4f3482439551`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `bd28167445e8468f8da5c8bfdc99774d419446abe7c7ab4e4b2545b7afa0d135`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `c25c42884283b38f2eb89d748ede8c5ca82ceafff386a2361c5a437cc08dea21`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `ded08709ce8d3bc4c2d1760441426e30472587cbb7deb59f06f8499d0d27600c`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `f1386a56bf46b6c8f1fa21f3bb9aeccaead93c81491286f4b4d94f66f26084d9`
+- `src/lib/workTaskActions.test.ts` — SHA-256: `f964a401e9df2c2b211457782fcbe1919b07749b056171d0a2e2cf4846d0c829`
+- `src/lib/workTaskActions.ts` — SHA-256: `228e1ff03113edb40f684966e9536874ccc104b729aab5c92d33494690b475d6`
+- `src/lib/workTaskActions.ts` — SHA-256: `24f4cfc05caecba5cf7cd991af1d6014abc194482559253bd976b59d2e199029`
+- `src/lib/workTaskActions.ts` — SHA-256: `2db07230e13a017d038b4f95577649de99b8a40bca981a2648e0485cd71adebb`
+- `src/lib/workTaskActions.ts` — SHA-256: `2e825c88555c07a12b80bd04ab8e54f7a5228bdc5befe2a37e1d0dd3e204c81c`
+- `src/lib/workTaskActions.ts` — SHA-256: `3b6848fa4f6d16d73c4cda98e5dbb70200422088d50b250e7fb3943632055202`
+- `src/lib/workTaskActions.ts` — SHA-256: `5fddaaaee45dd2f479ff69b913fdc640243811e122e979c378bd0e04545b9f21`
+- `src/lib/workTaskActions.ts` — SHA-256: `67d013f48729dc9b22a4226c48a9a4f3c50b2f71f0e363c7b11253ba6d649285`
+- `src/lib/workTaskActions.ts` — SHA-256: `6d8408e2814bb786f8ae16b1926f965c105c42959470a9ba48fb2cbe81d34bab`
+- `src/lib/workTaskActions.ts` — SHA-256: `ad2d9eead41cc378e2fce1cd5e1be299c13571a8ef95830ed3253dc8cac611ea`
+- `src/lib/workTaskActions.ts` — SHA-256: `bd08e137e8520c3c6b4fbf22d72a32c15f7e151d00683326552641a963c46e79`
+- `src/lib/workTaskActions.ts` — SHA-256: `cd34f66b51f02d9346267e31b929e833155cc8418b5514678c34d51d996b4189`
+- `src/lib/workTaskActions.ts` — SHA-256: `e7ed12508ef8d60d323a879f57e69e6e045a1803704a972d924acd8064833717`
+- `src/lib/workTaskActions.ts` — SHA-256: `f601a52e0cd6f9dfaaa9ec7d890b82d64a1b6aa2bca11531ae1be9a1cb2d3667`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `10c245d4208a1defda8c277dc0312031164587599fe40c931b947e1c48658c77`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `141d4f8216dfc376a696805a2f43dd473a3a05e996d1d870ec0982232f2b80b7`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `701fb6e25f12decf65bae19332e7b446228a7863844097e4829ee65f16ce3932`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `727b613fa5a04f8a8cb00c830d1ad1cb076c26f4280b5e2027250fa19dd0498f`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `acfbaf18ed5d55e113af4d4d5d823f9dbe1df83a662e2bf4edd4bb5dd7eb3f06`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `c4cd61f2bfb8ee6527065936c3566f7aa9256f025ebc09c393ff02010cefccbf`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `d5b79ba383b929cea74de71a209ebb3ac8d8875fef31879d02e6f3f0128e3e16`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `d9a1712371a5fa70312253d86690244bd2bad93b41d1a59bdfe2876b9db6b6f2`
+- `src/lib/workTasksStore.ts` — SHA-256: `831cdd7433bb7f643f3130787b1939aed2f95f2e1ee4ede8d2d4a229d18f1b03`
+- `src/lib/workTasksStore.ts` — SHA-256: `8e7e2011234abaeaa41b193bcfc22daf0a3bca31b0a339f81a62fd861bd0f322`
+- `src/lib/workTasksStore.ts` — SHA-256: `c1ff6a03ff0af943f972a4a265abd81e605cc29d55ae2841a9ff00f39f4091cd`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `28cc320b9ee15ef487c21a77d87769e8053445352cd959ca499427a346072492`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `afaac5f350a95b7fcd81a4f14f6ea8c9a1a0689b25dc5cfd3b4c6be7943367cd`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `6439a1a0e5a141c46e30971b96deb757abd1e0dfde1bbdba5affa341c05aef40`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `60d8af11a94884a84179962b7e423bc2b9e1dde56ea991672ae07a07d3357689`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `0ed74a373be9efb6d6b64de79fca62e5f1b2571583afb213966b213219d4049a`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `12a2909ccb369ee0d1ab1c3972014b9b0bf0434141f07fdd78e63fa726624bde`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `1608fbafb316e5e7d96714b6e23af9635f4dc0b14e17202e8e1e851511dc0fda`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `2b4fef806e91303569a07b6e49b5dd3430e114322bb075cb81182a3404d3cb44`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `2b76a3df4ff2acc7f8b7b7206b76026b0cc50d239e9ab65b758cd3245b671b14`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `32e3b4a5e824a20ff58e4f4f6cc7f10e40a263241ab05c148d1df504a3db568a`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `342795505d27c0d8a4fbd97b2d62bde6f68d914a226b25626eceaf637c38c60d`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `35f43f672108e07651b956ad62f7a793cf0c11f8a720cdbc87d014a43bb85303`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `394d4166e1bb69de460c1b3f4f90e0090af92d439b12ae2cbbbb31cda5b26d41`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `3a4eb3c3f7f770e493e0464cb3cd2248c95bbb4bbf5b2bd219dc68c245a77080`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `3b6f71d3354357db91190925f05b28956a0ef4c82522a4098c3e8d49742e6d0d`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `3d57a768a56adf2dfe4bba80461ec1cc6312f15b4c5e6b29bf384d66f5b075aa`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `3f13560acf68dcf42562c0f5fe6fc7c11ef6da0fa839b06df437c943661e8c32`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `48593abe9f268cc41d722b475601ae032a8aed50e517dc3a78198ce4ed0e4e97`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `4c576824edacbaa209259b0a3165ae9df7f4deaa4818c652a5da17755dd45307`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `50a6b10c50e7582b903e1fd9252b80f53d0de472b187d9da86ba696e61ae55f3`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `51233f16a57d87a69f41f19cea4c392aac45cfd52a21eacfd93b6458d01833c2`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `6843bfd90651279e0af220c6c5545e1acb6e9875253f41ab723fb71e897bf67d`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `751aeb6ffe756ccf159ea05d934d01c1738233137e76d1cccb5ed6e52728da7a`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `7c64f8b2ec1f761f07ca73c705fde046677338247cca32646591c45fffaa0fcd`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `8043fd96e85f0541eac36a1bbbbdac94827fe1797ced5df4fd8870259764fa8c`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `883a4f24ee9dff4b419ad635764db54d733cfe9d940cd17622a785f2d93e8d62`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `987bccbf047457ddc171fe2d3080638e2660c8b77dbe6bbe8505eaf6eb10f817`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `9cd59d14ac12c97e83c3bb38c14abb6e3feb8b08d0d4dbf26d4c3956559c7173`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `9d38cd059d66ddb21d79b0f8786c0106eeb2f68e676ccda9e251a6a0a3d026ae`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `a14560ffdceaba8cf85d95f1cab68292fe71016afe22c6d7199cc943741e05dc`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `a438aeef971f15a6cc30f48986c28166ed2dd032ac93e570ed550990b4212603`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `a4c6620b79daaaeeb70aadfb92622bc62d5db22f8559b2370af4883cecf5e016`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `a60c8aa4e9117944d5f863fa071c4e888427a0b6833735e4788145ab708580dc`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `b1233654ae53d1c5846ec7d0fcd98ffda4ea936cd4a397346e670a403190b967`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `c6b57c191c49082a870dc8fac7716c2caaad62b4eaa01a5ec1ff7057636f00c6`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `c7521a290bf08fd4fb96a4a597c2b58440ed5f189c85db119949cf6911d16273`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `cc7e4f6b6874d390f9525265e1e25e68c8b5682169856390bb5ccc208c7ae77d`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `cf35c89ed73e23771e9ee0bc6ce854449e140ad2ab94e96238118d3917147403`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `d2791bf1f7de8f3245c58ddb85fd96bf4c5d214e2d6f1f003bfbb89c846d7c17`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `d950a306568110f2a406ac4b5f73cb5dc9450363ddff1992a4c578ad8a9fc561`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `db315e16312c3b6ee0e9c78adfc504af843b9e261f3b47c7f9c7865c846c3e66`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `ddc0aa4525e8cf024d543cca015d053c8002b4033fbd8b5b29a3672605225f33`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `ec927013d785d0470a40efc7a8adac01e1eea44f3526ea4604418889dcceee53`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `f53ff446914d7203c654e19d686021eb6bf11dd32640a204a57adffbcbe53711`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `f5fff82ead8f2a25901da8a27d3845710275bfc4d205685fd16fd6f3e0fb5c27`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `f618e0a0091f9f665adcddcec879dcbbd8a85b37b62b0828881c050eda7c26ac`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `f830ec32d8a33a9b6778b890a56ab8067ede3cb642027eeecea33cc47b70a45d`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `6024f79a073b8187ce0fc46ff8b85801dc6afbaed3395b6c7062cb9bdb21db09`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `9fc81b36e939600d623d792879eb8aaf5421dbd0f581f604ad9536c4fb1fee0b`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `b4ed61834404fe8f0a3f6f517bfb238cdab26844991fa7e76fec8202e218b92c`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `d2ee2cd7c2c57144c09d3c0a603147054bb8632ff67860312f094718e3631dcb`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `58fc7f6b99a0d517f1a47baf5b2e7cececd27063e22afd6a72bb8c41fe2ff2cb`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `6aa4d077cd25be5e3b903692784fe99c11da8544d2e261649346f32c5d01aa2c`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `85b65d9d2db4f2138bca440a7e314f8c74cf26ef8bfaff37a6e48d707c8b923d`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `91bfb3a6ad9723f44562a162f51896a88c8d883c6e1d4d55c7e9cd29dae88a14`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `92f6ee7140bbc29eab5a55903a13a861dbf14724025b4988442fcfb34488783a`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `a6077792619f7acfa9aa9018b1c7ab1e3b596a89ccc5286ac99a38ab0b8caeb4`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `c445dc2fdbbe9781584a01475b005f9fa9f4ca846241601178cdf4ff9924829f`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `ccc9ced6731cf8abc4ef00134c9ff121a25d0ff21b20b0b7c4a278dd9b9af4f8`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `dd47bd81142fc9f9049529501686576ee3c9a53b573e2a4028916cb787f0cec0`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `0dda8cfd8363fc9a679d0f305f550dbade280e39bb39d2677bfc6e5c401add05`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `14a4cedbe901e43954e6c6e844bbb2eb3c093c171e45693168a3a742946a0e9d`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `3cc594e619bb63115f968c35e9f013bf2b8cfb5fc62adac0e4dbfdae73d0b75c`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `76b1d83d80ca5d5c5f083476e0e10548e5dd3163f07e93d6f0ead5b33306d43a`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `cdaeb04da3f1eb1e9a51c16ca8ccc8fcb3d006da27a863b2760c03c044f42435`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `e33c4abe48b11d1f5b43e1df1e6f2304521372a11f2f5473cd060d4b96b8c325`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `27c68689e13f33e0c0f12d031df3680830bd8a90920d437326dd6c4c196c3df5`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `5c0aba3c8906b4d090a0e120b13ea83b8fac35630d0836eaff704975dabeea8e`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `7ad0a8ceb8efd283577b5532daa9cdd887c4e8438a7da0e5ca23095edcc79cf1`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `9a148b424f75bd689bbd73e2a962a7a89316c45b16ccba8131f274e15263b50a`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `a464aca47c53a4754abb857065cae23a5bd432dc756323309ce569caadad19e3`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `19deea86ade4ed8b1cfecb12b60ac9f916d5f33e549a48469728ac5de598a0e3`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `3b4104deacb4cb7cdaf0529e88624b269678d9f14f230f9208ce5d3d44fa8def`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `70295822cbf81233e445235c1b647091d7989987ed3ef444bc904a3d7d22fe29`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `8c953e0915d09bff57ba3b1298bccb210d535f1ec52b4b40f62549ea74ccaa90`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `c4825102ed0d5f4bb6a5f97f3292d7c003a20ce4fc79387d0f2bdd7ce0e93894`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `0186a46986371cc6efa6fcff5bb13913fe4160f9e8e665db9a0ed0d46ae039f7`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `0b4e417647f08570c2f7d7fb1f9fd9f367f75759e50deeaa5fbd4eb0421b6538`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `323e10d9fa39023c03df14b5ed18eb08a936b66b354e239a15b2bd3d6606eb11`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `38273456fbd237f5400ae423acfcffc3bb0f4d0da3c681302516afdbdeac439f`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `3d6bf93a33364447b9f1e4fb44df1f7d954c20321df5afa06507ab1a60d3e73a`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `440c8c882a3549d6d0193e12a573ebca33ff65994e47e9e0a2af1aac7d2df119`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `4e50c051d0c59421cc530d8ea8049a3d21803aec8912cece85113c9756943bf1`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `51cad8efe2f07273a6912c5400e66fe9406ced24aae52a381721fc79922dfa1a`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `56d0c80d1d6fead74d0451d79dc994e6f4184c44e8ae61af108404e8d83ae92c`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `5e6153aa97f9d73240c4b529f42dcd9ec820dcc0c5d6d6732807f112506b4c1a`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `5f8183074fa4b8e23cb188cdd768d5f951bfc15caef140cf49818907d2223065`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `696ca49963cb4b566982b96aca01d3a2c5e853d184f4200126402faff1ca0bf0`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `76815e05ea7f973ad4f692eaa1b4d0fe3cbeada39545aa4c02aba0c1ff42a49f`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `7a566c4317fb08bbdf7430f2dbd2aab983f81f9c588d5d0c268a05dbabe2c278`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `7ca9727f8d58632cff1d343e0891275187da7186bbf31dbaad51689b25a99e1f`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `88fa67c57caf32450b90510e34bcea09577ecb2040e9f588b3d711662bc6f818`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `89871b1c6a3c802199bf428b6b4b909866fb30bc3172869111a4f1867a32472f`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `8a5b8b1bd54e7fb30c7b63bcbc1e665ea4b712403a0ed3588c3359f23515bffc`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `9b7278c6a6d890329a9e7b3ae726ae6f66f9ea46cc4f0ca0b7de2a9bdd2b2d0c`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `b4ae061ee064bb9c41dd155ba51dab2b21ade22ecd452c06ba55887d136dc352`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `bddd05a9cd0c67e39973aa2b36e5b6ab492674b935350dd624bfa33d77aa137b`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `c1ca0320b00bf5986f2fa8a241c46539e3fd5e6db648cebb2480155114ae0b73`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `ae582cb4793a2aa1573854bebaa5bfa0db756cd6015c04abb618b4467035aad4`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `c4f93b3761d0cd3a148b988d492b32926fda51305a769969b6301e75bd96a2c1`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `11c83f70b1c17b92dba0a3f70638435ddd45b417935e11b54b1ddb14ac1f8a1a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `31be547af0fdf2a3c0b6165bdaefc7bcc881ff079a26748a470da2eed1f0d94d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `37054fa61fb2d077fa322b92ca7e1e9b665bf05f69452f553475cf55c2673355`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3e4af7e2bbb6fdf3d45d39e07c8610d69fb2faa95704da0dfbc2379bf6d8a300`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7dbfc357244aa6837198775fd6677b5c1df0b20ef759ca2d4c195e8827c3d716`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `8360991e409664469d78514eeeb8535232599686e5a1b64f256b349f699da4db`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `9684993ed30196356e2009cb7ee6258acc9dc05b679bf92a0db1404ca378626f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `fc8ec048104dcbdc68175813033afab9f17733a5d34b1ac21f02f92b8949840b`
+
+### Release Attempts
+
+#### RA-20261101-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261101-001`, `CRL-20261101-002`, `CRL-20261101-003`, `CRL-20261028-006`, `CRL-20261101-004`
+- Selected CRL identities: `mobile/CRL-20261101-001`; `mobile/CRL-20261101-002`; `mobile/CRL-20261101-003`; `mobile/CRL-20261028-006`; `mobile/CRL-20261101-004`
+- Intended action: `push`
+- Branch: `codex/mz-seven-item-bundle-20261101`
+- Base: `origin/Dev@1689187fb556e3cb4c00ef68b162b6f8610c942d`; fetched at `2026-11-01T10:43:57Z`
+- Candidate patch SHA-256: `9a63b20b01752d31a1a1220ce11d48ff3997e6cd870c4ca91d272ec149175523`
+- Commit SHA: `6a7cf4fa7de25363b1e3d44030882f18ca4c8822`
+- Dependencies: `root/CRL-20261101-002@8bf9ab535c0744e8f5a26cb3e64e8b3b1b90a48b`; `root/CRL-20261101-003@8bf9ab535c0744e8f5a26cb3e64e8b3b1b90a48b`; `root/CRL-20261101-004@8bf9ab535c0744e8f5a26cb3e64e8b3b1b90a48b`
+- Cross-repository dependency verification: Root content commit `8bf9ab535c0744e8f5a26cb3e64e8b3b1b90a48b` binds the paired Root CRLs and passed its exact staged review/gate; the single-repository Mobile release auditor cannot resolve Root objects and must disclose that limitation.
+- Required validation: `PASS`; after the review repair, exact `CI=true npm run check:ci` and paired Root `CI=true npm run check:full` both passed with Mobile full 82 suites / 748 tests; focused manager-detail 18/18 and TypeScript also passed.
+- Shared-hunk review: `PASS`; TasksScreen, API, store and manager-detail hunks were reconciled semantically across MZ-096/010/093/091 and fingerprinted exactly.
+- Generated-file review: `PASS`; no generated native output, dependency tree, cache, preview artifact, screenshot or device log is selected.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: user explicitly requested the seven items be committed together and previously requested push plus Draft PR.
+- Independent review: `GO for push`; renewed independent read-only review matched base, content commit, ledger receipt, 20 selected paths, 170 non-ledger hunks, paired Root dependency and fingerprint `9a63b20b01752d31a1a1220ce11d48ff3997e6cd870c4ca91d272ec149175523`; live remote freshness was checked, with P0/P1/P2=0.
+- Action conclusion: `GO` for one normal non-force push to `origin/codex/mz-seven-item-bundle-20261101`; blockers: none for that push. Draft PR remains the next separately verified action; merge, backend migration/deployment and OTA remain unapproved.
+
+### Risks / Release Notes
+
+- Root migrations/backend must be planned and delivered before any matching OTA; this commit does not deploy Root or publish Mobile.
+- Real Chinese IME, Android, physical-device, camera/gallery, long-press, weak-network, EAS/native build and OTA acceptance remain pending.
+## CRL-20261101-005 — 七项 Draft PR CI 稳定与 MZ-091 注册表校正
+
+- **Repository:** `mobile`
+- **Status:** exact follow-up content committed locally for the existing Draft PR; not pushed
+- **Updated:** 2026-11-01 UTC
+- **Request:** 修复七项 Mobile Draft PR #71 首次 GitHub Actions 中唯一的异步等待超时，并处理独立审查发现的 MZ-091 回归注册表状态与 CRL 关联过期问题；不得改变运行时代码或扩大发布权限。
+- **Outcome:** MZ-096 的“创建成功、后续刷新失败”回归改用五秒的显式等待窗口，避免 GitHub Runner 上同一状态更新超过默认一秒时误报；MZ-091 注册表改为当前功能分支/Draft PR 状态，并关联精确的 Root/Mobile `CRL-20261101-004`。运行时代码、API、角色、数据与发布行为均不变。
+
+### Files / Areas
+
+- `src/screens/tabs/TasksScreen.test.tsx` — modified: only the failing refresh-error assertion timeout changes from the testing-library default to five seconds.
+- `docs/feature-regression-registry.md` — modified: correct MZ-091 delivery state and paired CRL identities.
+- `docs/change-release-ledger.md` — modified: record the failed run, repair scope, validation and release boundary.
+
+### Impact / Dependencies
+
+- Runtime / API / role / navigation / database / migration / native dependency / OTA behavior: unchanged.
+- Existing Draft PR: Mobile #71 on `codex/mz-seven-item-bundle-20261101`, base `Dev`.
+- Paired Root dependency: Draft PR #431 and `root/CRL-20261101-004@8bf9ab535c0744e8f5a26cb3e64e8b3b1b90a48b`.
+- First Mobile PR CI: run `41307738772` failed 1/748 at the default one-second wait; 747 tests passed.
+
+### Validation
+
+- `CI=true npx jest src/screens/tabs/TasksScreen.test.tsx --runInBand --testNamePattern "a failed post-create refresh|quick create cannot reopen"` — PASS, 2/2 selected tests.
+- `CI=true npx jest src/screens/tabs/TasksScreen.test.tsx --runInBand` — PASS, 81/81 tests before the timeout edit; the exact edited assertion also passed in the focused run.
+- `CI=true npm run check:ci` — PASS after repair: ledger tests 44/44, typecheck, lint with 0 errors, button contract, fast regression 138/138, and 82 suites / 748 tests.
+- `git diff --check` — PASS.
+- Candidate patch SHA-256 excluding this ledger: `57ec1a9e87b4d67d9641fc90e68256b3eeb2c594e74d9ef32c9063e1b9583e86`.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; ignored dependency symlink is test infrastructure only and is not staged.
+- `docs/feature-regression-registry.md` — SHA-256: `f94c31582fc149089753653590c29933fc92425e00c60fae1b74e135fc280f6d`
+- `docs/feature-regression-registry.md` — SHA-256: `f94c31582fc149089753653590c29933fc92425e00c60fae1b74e135fc280f6d`
+- `src/screens/tabs/TasksScreen.test.tsx` — SHA-256: `28cc320b9ee15ef487c21a77d87769e8053445352cd959ca499427a346072492`
+
+### Release Attempts
+
+#### RA-20261101-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261101-001`, `CRL-20261101-002`, `CRL-20261101-003`, `CRL-20261028-006`, `CRL-20261101-004`, `CRL-20261101-005`
+- Selected CRL identities: `mobile/CRL-20261101-001`; `mobile/CRL-20261101-002`; `mobile/CRL-20261101-003`; `mobile/CRL-20261028-006`; `mobile/CRL-20261101-004`; `mobile/CRL-20261101-005`
+- Intended action: `push`
+- Branch: `codex/mz-seven-item-bundle-20261101`
+- Base: `origin/Dev@1689187fb556e3cb4c00ef68b162b6f8610c942d`; fetched at `2026-11-01T10:43:57Z`
+- Candidate patch SHA-256: `6a1ba9180b4ebf65b356c5d6bd8974b90b74e77569e14cd9e8ea8e9f177afae2`
+- Commit SHA: `7cbabe4857708d3bd4b16cf8eb14d61a49760796`; candidate content commit, with the audit head supplied by the release-report command
+- Dependencies: `root/CRL-20261101-002@8bf9ab535c0744e8f5a26cb3e64e8b3b1b90a48b`; `root/CRL-20261101-003@8bf9ab535c0744e8f5a26cb3e64e8b3b1b90a48b`; `root/CRL-20261101-004@8bf9ab535c0744e8f5a26cb3e64e8b3b1b90a48b`
+- Required validation: `PASS`; evidence: exact post-repair checks above, including 82 suites / 748 tests
+- Shared-hunk review: `PASS`; runtime files are unchanged, and the two non-ledger edits are limited to one MZ-096 test wait plus MZ-091 registry metadata
+- Hunk reconciliation: `docs/feature-regression-registry.md#206599c3394a999b0651df44578daa2288d4d485f03aa5527079bca390af3af9 -> f94c31582fc149089753653590c29933fc92425e00c60fae1b74e135fc280f6d`; evidence: the follow-up metadata edits combine with the original newly-added registry section | `docs/feature-regression-registry.md#933d83002256986583cbfd94e0dc09bdda7f2af3988c121402ed3a8b921f3ee4 -> f94c31582fc149089753653590c29933fc92425e00c60fae1b74e135fc280f6d`; evidence: the first metadata correction is inside the same final registry hunk | `docs/feature-regression-registry.md#fb7a7a354b9f3b08c7db9cc4f3e931087011f4719941d6d82dcc49286da9d6fa -> f94c31582fc149089753653590c29933fc92425e00c60fae1b74e135fc280f6d`; evidence: the second metadata correction is inside the same final registry hunk | `src/screens/tabs/TasksScreen.test.tsx#50cdab0b6c65b4d1d1bf053d15c550bd099dff5e65b4d550d2e8f2fe84d60733 -> 28cc320b9ee15ef487c21a77d87769e8053445352cd959ca499427a346072492`; evidence: the timeout edit is inside the original MZ-096 quick-create test hunk | `src/screens/tabs/TasksScreen.test.tsx#e85d3eb74cbf282f4e5488b88b89ad200b753f663a121e4e425f3946f93748bf -> 28cc320b9ee15ef487c21a77d87769e8053445352cd959ca499427a346072492`; evidence: the incremental timeout hunk is absorbed into the final MZ-096 quick-create test hunk | `src/screens/tabs/TasksScreen.test.tsx#63b523028f66383647e3a7623c17dcdc40f58b410e9b09ab70fe882b7713681d -> afaac5f350a95b7fcd81a4f14f6ea8c9a1a0689b25dc5cfd3b4c6be7943367cd`; evidence: following line offsets change the adjacent MZ-093 test hunk fingerprint without content change | `src/screens/tabs/TasksScreen.test.tsx#f82895b67171468873f387327fb3f391b0b4d1c1405dfbb97bc939e07e018319 -> 60d8af11a94884a84179962b7e423bc2b9e1dde56ea991672ae07a07d3357689`; evidence: following line offsets change the adjacent MZ-010 test hunk fingerprint without content change
+- Generated-file review: `PASS`; no generated, native, dependency, cache, preview, screenshot, device-log, environment, secret, deployment, migration, or production-data path is selected
+- Technical state: `committed`
+- User authorization: `approved-for-push`; evidence: the selected seven-item branch/Draft PR scope is already authorized, and the current task explicitly requires repairing failures within that same scope and rerunning CI; merge, deployment, migration and OTA remain excluded
+- Independent review: `GO for the exact full-range push and conditional branch fast-forward`; evidence: the original full-range review verified the 20-path branch content and paired Root dependency, while the follow-up read-only review matched the three-file repair and incremental fingerprint `57ec1a9e87b4d67d9641fc90e68256b3eeb2c594e74d9ef32c9063e1b9583e86`; combined P0/P1/P2=0
+- Action conclusion: `GO` for this ledger-only receipt; normal fast-forward of the existing Draft PR branch remains conditional on the exact committed fingerprint/range audit and a live ref check still finding `795bc58af5ad24c7efd51f78d3d423f578018b34`; no merge, deployment, migration or OTA
+
+### Risks / Release Notes
+
+- This follow-up stabilizes test timing and corrects governance metadata only. It must not be represented as a runtime fix or release.
+- Real Chinese IME, Android, physical-device, camera/gallery, long-press, weak-network, EAS/native build and OTA acceptance remain pending.
+- Rollback: revert this three-file follow-up commit; no data rollback is required.
+- No production API/database access, migration, deployment, EAS, OTA, PR approval or merge is included.
