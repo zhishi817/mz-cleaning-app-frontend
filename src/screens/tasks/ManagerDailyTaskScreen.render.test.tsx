@@ -3,12 +3,9 @@ import { Alert, Dimensions, Platform, StyleSheet } from 'react-native'
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 import * as api from '../../lib/api'
+import { taskBusinessDateKey } from '../../lib/taskBusinessDate'
 
-const mockTodayKey = (() => {
-  const now = new Date()
-  const pad2 = (value: number) => String(value).padStart(2, '0')
-  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`
-})()
+const mockTodayKey = taskBusinessDateKey()
 
 const mockTask: any = {
   id: 'manager-ready-task',
@@ -452,7 +449,7 @@ test('completed key-handover work record keeps the authorized guest-notified but
     )
 
     await waitFor(() => expect(ui.getByTestId('work-record-read-only-info')).toBeTruthy())
-    await waitFor(() => expect(ui.getByTestId('manager-guest-ready-action-record_guest_ready_notified')).toBeTruthy(), { timeout: 5_000 })
+    expect(ui.getByTestId('manager-guest-ready-action-record_guest_ready_notified')).toBeTruthy()
     expect(ui.queryByText('保存修改')).toBeNull()
     ui.unmount()
   } finally {
