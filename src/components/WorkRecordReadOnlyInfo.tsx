@@ -3,7 +3,7 @@ import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import GuestLuggageCard from './GuestLuggageCard'
 import { moderateScale, hairline } from '../lib/scale'
-import { guestRequestForDisplay } from '../lib/turnoverDisplay'
+import { guestRequestForDisplay, newCodeForDisplay, oldCodeForDisplay } from '../lib/turnoverDisplay'
 import { normalizeHttpUrl } from '../lib/urls'
 
 type Props = {
@@ -41,8 +41,8 @@ export default function WorkRecordReadOnlyInfo({ task, token, showGuestLuggage =
   const guideUrl = propertyAccess ? normalizeHttpUrl(task?.property?.access_guide_link) : null
   const guestRequest = guestContext ? guestRequestForDisplay(task) : ''
   const orderNote = guestContext ? cleanText(task?.order_note) : ''
-  const oldCode = lockCodes ? cleanText(task?.old_code || task?.turnover_display?.old_code) : ''
-  const newCode = lockCodes ? cleanText(task?.new_code || task?.turnover_display?.new_code) : ''
+  const oldCode = lockCodes ? oldCodeForDisplay(task) : ''
+  const newCode = lockCodes ? newCodeForDisplay(task) : ''
   const recordDate = cleanText(task?.actual_date || task?.date || task?.completed_at).slice(0, 10)
   const originalDate = cleanText(task?.original_scheduled_date || task?.scheduled_date).slice(0, 10)
 

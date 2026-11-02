@@ -39,6 +39,7 @@ import AppText from '../../components/ui/AppText'
 import SafeAreaBottomBar from '../../components/ui/SafeAreaBottomBar'
 import { layoutTokens } from '../../lib/theme'
 import { actionDisabledReasonText } from '../../lib/workTaskActions'
+import { newCodeForDisplay, oldCodeForDisplay } from '../../lib/turnoverDisplay'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'InspectionComplete'>
 
@@ -132,8 +133,8 @@ export default function InspectionCompleteScreen(props: Props) {
   const isPasswordOnlyInspection = isPasswordOnlyInspectionTask(task as any)
   const skipInspectionPhotos = isPasswordOnlyInspection || isSelfCompleteKeyHandover
   const inspectionScopeNoticeStyles = noticeToneStylePair(getInspectionScopeTone(isPasswordOnlyInspection))
-  const oldCode = String((task as any)?.old_code || '').trim()
-  const newCode = String((task as any)?.new_code || '').trim()
+  const oldCode = oldCodeForDisplay(task)
+  const newCode = newCodeForDisplay(task)
   const accessVideoDeniedReason = serverActions
     ? accessVideoAction?.enabled
       ? ''

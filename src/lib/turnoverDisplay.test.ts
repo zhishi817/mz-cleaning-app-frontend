@@ -1,4 +1,4 @@
-import { checkoutTimeForDisplay, cleanGuestRequestText, guestRequestForDisplay, isLateCheckoutDisplay } from './turnoverDisplay'
+import { checkoutTimeForDisplay, cleanGuestRequestText, guestRequestForDisplay, isLateCheckoutDisplay, newCodeForDisplay, oldCodeForDisplay } from './turnoverDisplay'
 
 describe('guest request display', () => {
   it('treats placeholder guest request values as empty', () => {
@@ -38,5 +38,67 @@ describe('guest request display', () => {
     }
     expect(checkoutTimeForDisplay(task)).toBe('10am')
     expect(isLateCheckoutDisplay(task)).toBe(true)
+  })
+
+  it('treats a null turnover password projection as authoritative over stale cached top-level values', () => {
+    const task = {
+      old_code: 'stale-old',
+      new_code: 'stale-new',
+      turnover_display: { old_code: null, new_code: null },
+    }
+    expect(oldCodeForDisplay(task)).toBe('')
+    expect(newCodeForDisplay(task)).toBe('')
+  })
+
+  it('clears a legacy cached old password after the authoritative API projection arrives empty', () => {
+    const legacyCachedTask = { old_code: 'cached-current-task-value' }
+    expect(oldCodeForDisplay(legacyCachedTask)).toBe('cached-current-task-value')
+
+    const refreshedTask = {
+      ...legacyCachedTask,
+      turnover_display: {
+        old_code: null,
+        old_code_authority_status: 'missing_authority',
+      },
+    }
+    expect(oldCodeForDisplay(refreshedTask)).toBe('')
+  })
+
+  it('uses the gated top-level value only when the server did not provide a turnover projection', () => {
+    expect(oldCodeForDisplay({ task_type: 'checkout_clean', old_code: 'manual-current' })).toBe('manual-current')
+    expect(newCodeForDisplay({ new_code: 'new-current' })).toBe('new-current')
+    expect(newCodeForDisplay({ task_type: 'checkin_clean', new_code: 'checkin-new-current' })).toBe('checkin-new-current')
+  })
+
+  it('never displays an old password on a pure check-in task', () => {
+    expect(oldCodeForDisplay({
+      task_type: 'checkin_clean',
+      old_code: 'legacy-checkin-old',
+      turnover_display: { old_code: 'legacy-checkin-old' },
+    })).toBe('')
+  })
+
+  it('never displays a stale new password on a checkout-only task', () => {
+    expect(newCodeForDisplay({
+      task_type: 'checkout_clean',
+      new_code: 'legacy-checkout-new',
+      turnover_display: { new_code: 'legacy-checkout-new' },
+    })).toBe('')
+  })
+
+  it('uses turnover side metadata even when a legacy payload omitted task_type', () => {
+    expect(newCodeForDisplay({
+      new_code: 'stale-checkout-new',
+      turnover_display: { checkout_order_id: 'checkout-order', new_code: 'stale-checkout-new' },
+    })).toBe('')
+    expect(oldCodeForDisplay({
+      old_code: 'stale-checkin-old',
+      turnover_display: { checkin_order_id: 'checkin-order', old_code: 'stale-checkin-old' },
+    })).toBe('')
+    expect(newCodeForDisplay({
+      turnover_display: { new_code_task_id: 'orderless-checkin-task', new_code: 'orderless-new' },
+    })).toBe('orderless-new')
+    expect(newCodeForDisplay({ new_code: 'legacy-new-without-side-metadata' })).toBe('legacy-new-without-side-metadata')
+    expect(oldCodeForDisplay({ old_code: 'legacy-old-without-side-metadata' })).toBe('legacy-old-without-side-metadata')
   })
 })

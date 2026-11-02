@@ -37,6 +37,8 @@ import {
   isEarlyCheckinDisplay,
   isLateCheckinDisplay,
   isLateCheckoutDisplay,
+  newCodeForDisplay,
+  oldCodeForDisplay,
   turnoverDisplayOf,
 } from '../../lib/turnoverDisplay'
 import { getInspectionModeTone, getInspectionScopeTone, getKeyHandoverPendingNotice, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
@@ -1365,8 +1367,8 @@ export default function TaskDetailScreen(props: Props) {
   const isCheckoutTask = taskType === 'checkout_clean' || !!checkoutTime
   const turnoverDisplay = turnoverDisplayOf(task)
   const canViewLockCodes = canViewReadOnlyWorkRecordLockCodes(task)
-  const oldCode = canViewLockCodes ? String(turnoverDisplay?.old_code || (task as any).old_code || '').trim() : ''
-  const newCode = canViewLockCodes ? String(turnoverDisplay?.new_code || (task as any).new_code || '').trim() : ''
+  const oldCode = canViewLockCodes ? oldCodeForDisplay(task) : ''
+  const newCode = canViewLockCodes ? newCodeForDisplay(task) : ''
   const guestSpecialRequest = guestRequestForDisplay(task)
   const orderNote = String((task as any)?.order_note || '').trim()
   const urgency = urgencyMeta(task.urgency)
