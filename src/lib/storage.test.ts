@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { getJson, isStorageFullError, setJson } from './storage'
+import { getJson, isStorageFullError, readJsonState, setJson } from './storage'
 
 beforeEach(async () => {
   jest.restoreAllMocks()
@@ -14,6 +14,16 @@ test('recognizes Android SQLite full errors without classifying unrelated failur
   expect(isStorageFullError(new Error('database or disk is full (code 13 SQLITE_FULL)'))).toBe(true)
   expect(isStorageFullError({ code: 'SQLITE_FULL', message: 'write failed' })).toBe(true)
   expect(isStorageFullError(new Error('network timeout'))).toBe(false)
+})
+
+test('distinguishes missing, valid and corrupt JSON without deleting storage', async () => {
+  await AsyncStorage.setItem('valid-json', JSON.stringify({ ok: true }))
+  await AsyncStorage.setItem('corrupt-json', '{not-json')
+
+  await expect(readJsonState('missing-json')).resolves.toEqual({ status: 'missing', value: null })
+  await expect(readJsonState<{ ok: boolean }>('valid-json')).resolves.toEqual({ status: 'valid', value: { ok: true } })
+  await expect(readJsonState('corrupt-json')).resolves.toEqual({ status: 'invalid', value: null })
+  expect(await AsyncStorage.getItem('corrupt-json')).toBe('{not-json')
 })
 
 test('reclaims only downloadable caches and retries a durable write once after SQLITE_FULL', async () => {

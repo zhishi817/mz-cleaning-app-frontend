@@ -47,6 +47,21 @@ export async function getJson<T>(key: string): Promise<T | null> {
   }
 }
 
+export type JsonStorageRead<T> =
+  | { status: 'missing'; value: null }
+  | { status: 'valid'; value: T }
+  | { status: 'invalid'; value: null }
+
+export async function readJsonState<T>(key: string): Promise<JsonStorageRead<T>> {
+  const raw = await AsyncStorage.getItem(key)
+  if (raw === null) return { status: 'missing', value: null }
+  try {
+    return { status: 'valid', value: JSON.parse(raw) as T }
+  } catch {
+    return { status: 'invalid', value: null }
+  }
+}
+
 export async function remove(key: string) {
   await AsyncStorage.removeItem(key)
 }
