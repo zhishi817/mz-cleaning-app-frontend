@@ -1,5 +1,115 @@
 # Change Release Ledger
 
+## CRL-20261102-001 — MZ-091 移动端同订单密码空值权威显示
+
+- **Repository:** `mobile`
+- **Status:** verified isolated local correction candidate; focused 31-test password regression, affected 158-test UI regression, full Mobile gate and paired independent review passed; not committed, pushed, merged, built, OTA-published or released
+- **Updated:** 2026-11-02 UTC
+- **Request:** 配合 Root 更正密码链：退房旧密码只取同订单入住新密码；来源未填/清空时旧密码为空，不能显示上一笔或更早退房旧密码。手动改当前旧密码只纠正当前任务。Root 明确返回空值时 Mobile 不得因顶层缓存或合卡 fallback 又把历史值显示回来。
+- **Outcome:** 共享 `turnoverDisplay` helper 把 Root `turnover_display` 视为完整权威投影；其中 `old_code/new_code` 即使为 `null` 也停止 fallback。任务列表、详情、只读历史、检查完成、管理详情和通知入口统一使用该 helper；纯入住隐藏旧密码、纯退房隐藏新密码，管理详情也不渲染/预览/提交不适用字段。角色分拆合卡的密码预览/保存使用 checkout/checkin 精确来源任务并集，不再受当前角色卡限制。完全缺少任务类型与 `turnover_display` 的旧 payload 才保留顶层兼容。
+
+### Implementation
+
+- Previous behavior: Mobile 在部分列表、详情、通知与经理日任务路径里仍可在服务端 `turnover_display` 明确给出空值时回退本地或顶层陈旧密码。
+- New behavior: Mobile 把服务端权威投影作为唯一显示来源；`source_linked` 显示同订单入住新密码，`manual_confirmed` 仅显示当前退房本地纠正，`needs_review` 保持空值，不恢复历史缓存。
+- Compatibility: legacy 缺少任务类型或周转元数据时只兼容字段适用性，不引入任何历史密码权威来源；真实 API 刷新后明确空值会覆盖旧缓存。
+
+### Files / Areas
+
+- `src/lib/turnoverDisplay.ts`, `src/lib/api.ts` — modified: 权威空值与来源字段类型/读取 helper。
+- `src/screens/tasks/TaskDetailScreen.tsx`, `src/screens/tabs/TasksScreen.tsx`, `src/components/WorkRecordReadOnlyInfo.tsx`, `src/screens/tasks/InspectionCompleteScreen.tsx`, `src/screens/tasks/ManagerDailyTaskScreen.tsx`, `src/screens/tabs/NoticesScreen.tsx` — modified: 全入口统一权威密码显示，禁止局部历史 fallback。
+- `src/lib/turnoverDisplay.test.ts`, `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — modified: 明确空值压制陈旧顶层值、入住/退房字段对称门禁、角色分拆来源选择及 legacy 无类型投影兼容。
+- `docs/feature-regression-registry.md`, `docs/change-release-ledger.md` — modified: 当前不变量和发布边界。
+
+### Impact / Boundaries
+
+- Roles/navigation/task workflow/media/upload/cache invalidation/native dependencies/runtime/channel: unchanged.
+- Database/migration/backfill/production data: none. Mobile 不推导或修复密码，只显示 Root 权威结果。
+- Dependency: paired `root/CRL-20261102-001` must deploy first or together; no OTA/build/release is authorized.
+- Prior record: earlier `mobile/CRL-20261101-004` authority-label/save behavior remains, but its paired Root cross-order source assumptions are superseded.
+
+### Validation
+
+- `npm run typecheck` — PASS.
+- `npx jest src/lib/turnoverDisplay.test.ts src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx --runInBand` — PASS, 2 suites / 31 tests. Including `TaskDetailScreen.test.tsx` and `TasksScreen.test.tsx`, the affected set passes 4 suites / 158 tests.
+- `CI=true npm run check:ci` — PASS: ledger, typecheck, lint (0 errors / baseline warnings), button audit, 8 suites / 138 fast tests and 82 suites / 757 complete tests.
+- Paired Root `CI=true npm run check:full` — PASS: backend suite, Web 56 files / 300 tests and this Mobile 82 suites / 757 tests. Independent review drove correction of the Mobile applicability P3；Root 随后按用户原规则确认已填 `new_code` 不受 legacy authority 标签阻断，并以真实 PostgreSQL HTTP→SQL 回归验证。最终独立复审 GO，P0/P1/P2/P3 = 0。
+- Real iOS/Android, protected account, weak network, OTA and production verification — NOT RUN.
+
+### Release Boundary
+
+- Branch: `codex/mz091-password-chain-v2`, base `Dev@dee4b6746ca51150df4dde22ed6ba8e3fdaaf03a`.
+- No commit, staging, push, PR, merge, EAS build, OTA, native release, production API write or database operation occurred.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared exact MZ-091 Mobile projection candidate
+- **Untracked review:** PASS; no untracked path is present and ignored dependencies/build artifacts are excluded
+- Candidate patch SHA-256: `00140938489002d603978aad7f6aadc9fae725e0449cce982d8cfe20b677b1c7`; all non-ledger staged hunks against `Dev@dee4b6746ca51150df4dde22ed6ba8e3fdaaf03a`
+- `docs/feature-regression-registry.md` — SHA-256: `66ee5a5e3482ef02d34d659a89f8e7a20c618e271c20fdbd170b76a09a87acb6`
+- `docs/feature-regression-registry.md` — SHA-256: `6ec7152cd3f4d1d7fc5b690dcaed9f4542c2da5078e2a25bd8cf748d74c86691`
+- `docs/feature-regression-registry.md` — SHA-256: `aad190f2db790adf26d298f97ef0fdc9354f0e5eec9aa249014d8a5e7a0c1537`
+- `src/components/WorkRecordReadOnlyInfo.tsx` — SHA-256: `ad56c5769cafec672d34c27830ce0764776fda15f2ff301d1133603ba38709da`
+- `src/components/WorkRecordReadOnlyInfo.tsx` — SHA-256: `f9b2ba21c408467c8718ee888e4505bd1cf4c2937354c8f0c2d0155b4432ffe7`
+- `src/lib/api.ts` — SHA-256: `81fb3431f3070fa7e279305867df8df1f8a7031f2f07feb87e17252a32814da1`
+- `src/lib/api.ts` — SHA-256: `865ccc28325d708502cfc6cc516e744e41f2291b4d186c423a1b434770b68583`
+- `src/lib/api.ts` — SHA-256: `fbc655bc35ef200f1bd847ac128c4e2135ef7bd58a6f2f269bbe2a37020d9a5a`
+- `src/lib/turnoverDisplay.test.ts` — SHA-256: `23f1d0f01db841a1773b58ad3ab1fd140de23c9ae5930b5f7b282d4b4e8de1bf`
+- `src/lib/turnoverDisplay.test.ts` — SHA-256: `382ef9c147d496c0bc136e9782bc79dc63e8bc2fab46e81a0f5b6fc35026be49`
+- `src/lib/turnoverDisplay.ts` — SHA-256: `1de8a5fee4676e0e6cfe98c37f57c1f7eb26409e0531bf00c9fae77b0cf7494e`
+- `src/lib/turnoverDisplay.ts` — SHA-256: `3d31a18f8cf0ac919d5a243d694f99684a555f13016c3e8af495b344fcb96526`
+- `src/lib/turnoverDisplay.ts` — SHA-256: `960b53dde55cd3ea63e022e2fed36664d681dfbac08a5ea6c028522713c33a67`
+- `src/lib/turnoverDisplay.ts` — SHA-256: `a666fb489fdee1286bd100ebe421396100d51c676f50a2e6e65abebf01da2a26`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `00018037df8affd06f86c0f935d24b5f9711d3ae2c82f00496560693be2542df`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `56bc53303f005788b87b3e8a1ac0d5b929d24e42107fe996069617b09d67aa11`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `7a2cb99afc125c7f91f0c0d6062eda67d755a5d9d3dd2fc5dddb49d10a3c4e84`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `c19c265fc7484244edcdf17a0106ad8936f8b69baf7b26f07eb9672a5c978080`
+- `src/screens/tabs/NoticesScreen.tsx` — SHA-256: `f7ceb947c909da7ecfc228e5e6d1e5db38c42bf698f25f132680cac1d0696000`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `0e48991dcd1b2a96b5495a46790565072950336031e42ab1ae9b2c4e64a26229`
+- `src/screens/tabs/TasksScreen.tsx` — SHA-256: `203e11591463485bd7b6c1368b90930cb51ee6db559bcd98256a355bb6f1680b`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `0f0b9dd688699f1df59f7ed88cde4f75916f9e2762584f18aade55c833cfa3b3`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `2bbac30aea8dbb007bee25379ac3882adad4f20578aab90ba89c6db3c3f24676`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `329e08d811552e76d35c471ce5de9af58a1600641aecf388509bd80c3d8aa7ef`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `76f7b00abb0abefd0f2b5fe6b55c51a42c35e009b3f5add0f322e4181537efe5`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `0a8a76b09374b1b0efe74241f2032325e6069ddd4ca5692dc4255246a2480664`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `1608094bb898f3d2b64e146bfe8aacac21d6f0874f4dca080d067f5c0d32b01a`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `17aa31645f07dc2440ae365ce02cf1e0c2e0f7a81a00eba73a80c440a1cbf10a`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `1b6870380a7d20d4f1910f27b48397e5f4901dfa6169157767ea4693d638a891`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `49344e23867db8fb3e60c50cfbfdecf84a3b03c84d3c87a2b16b1db1c4d7bf5c`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `56b16533900abaf7f844058f8ce77e865d1c2efff63b1b5241e10f2ec7b78944`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `58c1457e5e4c879256d83859e6178c86d74559623c98d87b7898adbcb769a5c9`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `77d0e0e8b50e30b8d5835dde933ba5610aec0666bb99091f24af57a7d506c66b`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `7c69ac89006db238a6aec02b192f9e3ffc7026be33ce1c5c4f013b1c6ae6f00b`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `88738e34c5220fb08ba5d3ab945a109fdb20325916a8f34099b7ad5c79ade741`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `88d4a20fce9f5a8a601938a8b3949f070d2e92a93178cfdde6785f8a5dd12f24`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `926644cfbb3c6fb746441de1af7d76c6999fa92af57a385a76cd5f0fb976ec4a`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `bee35f5df6eb47e547cdf375942af15ef93b5ec488093e66b6616cd897fa835b`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `ed141e5836e425d7cf41a9737e23d2837c1f825d782aedcea690562ce7808ff5`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `5e8ffdfd5de18d74515b221d2642a0ccb3abb6a264da5072cda00d5e79a9183b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `965d928bbf75dc4b5dd69e94e5cd47d23fc5603bd52644eab751b622e6d71aa8`
+
+### Release Attempts
+
+#### RA-20261102-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261102-001`
+- Selected CRL identities: `mobile/CRL-20261102-001`
+- Intended action: `push`
+- Branch: `codex/mz091-password-chain-v2`
+- Base: `origin/Dev@dee4b6746ca51150df4dde22ed6ba8e3fdaaf03a`; fetched at `2026-11-02T06:36:24Z` and verified unchanged before staging
+- Candidate patch SHA-256: `00140938489002d603978aad7f6aadc9fae725e0449cce982d8cfe20b677b1c7`
+- Commit SHA: `20ce99f6ed217ce2b17f25b612f725709b6516b9`; exact reviewed local content commit
+- Dependencies: none
+- Required validation: PASS; focused projection/manager regression, affected task screens, TypeScript, lint with zero errors, ledger checks, fast regression and full Mobile 82-suite / 757-test gate
+- Shared-hunk review: PASS; all staged non-ledger hunks belong only to this selected MZ-091 Mobile projection correction
+- Generated-file review: PASS; no native build output, environment file, dependency directory, cache, media, credential or production payload is selected
+- Technical state: committed locally
+- User authorization: approved-for-push; evidence: on 2026-11-02 the user instructed “先提交创建修补PR吧 先补齐091”, authorizing commit, new feature-branch push and Draft PR to Dev; merge, main, deployment and OTA remain excluded
+- Independent review: GO on the final local candidate; P0=0 / P1=0 / P2=0 / P3=0, including explicit-null no-fallback compatibility review
+- Action conclusion: local content commit completed after exact staged audit and independent review; ordinary feature-branch push and Draft PR remain pending the repository-required exact SHA authorization, and no merge or release is authorized
+
 ## CRL-20261028-005 — 人员结算补发回归去除重复整屏渲染
 
 - **Repository:** `mobile`

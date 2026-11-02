@@ -56,6 +56,8 @@ import {
   isEarlyCheckinDisplay,
   isLateCheckinDisplay,
   isLateCheckoutDisplay,
+  newCodeForDisplay,
+  oldCodeForDisplay,
   turnoverDisplayOf,
 } from '../../lib/turnoverDisplay'
 import { getInspectionModeTone, getInspectionScopeTone, getKeyHandoverPendingNotice, getTaskKindTone, getTaskStatusMeta, TASK_TONE_COLORS, type TaskTone } from '../../lib/taskVisualTheme'
@@ -3332,8 +3334,8 @@ function showBanner(title: string, message: string) {
               const hasWifiInfo = !!(wifiSsid || wifiPassword)
               const turnoverDisplay = turnoverDisplayOf(task)
               const canViewLockCodes = canViewReadOnlyWorkRecordLockCodes(task)
-              const oldCode = canViewLockCodes ? String(turnoverDisplay?.old_code || (task as any).old_code || '').trim() : ''
-              const newCode = canViewLockCodes ? String(turnoverDisplay?.new_code || (task as any).new_code || '').trim() : ''
+              const oldCode = canViewLockCodes ? oldCodeForDisplay(task) : ''
+              const newCode = canViewLockCodes ? newCodeForDisplay(task) : ''
               const guestSpecialRequest = guestRequestForDisplay(task)
               const guestLuggage = (task as any).guest_luggage || null
               const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'

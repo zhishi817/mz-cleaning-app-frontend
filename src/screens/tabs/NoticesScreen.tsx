@@ -37,6 +37,7 @@ import {
   type WorkTask,
 } from '../../lib/api'
 import type { NoticesStackParamList } from '../../navigation/RootNavigator'
+import { newCodeForDisplay, oldCodeForDisplay } from '../../lib/turnoverDisplay'
 
 type Props = NativeStackScreenProps<NoticesStackParamList, 'NoticesList'>
 
@@ -122,8 +123,8 @@ function taskHistoryBody(task: WorkTask) {
   const date = String(task.scheduled_date || (task as any).date || '').trim()
   const start = String((task as any).start_time || '').trim()
   const end = String((task as any).end_time || '').trim()
-  const oldCode = String((task as any).old_code || '').trim()
-  const newCode = String((task as any).new_code || '').trim()
+  const oldCode = oldCodeForDisplay(task)
+  const newCode = newCodeForDisplay(task)
   const guest = String((task as any).guest_special_request || '').trim()
   const summary = String(task.summary || '').trim()
   if (code) lines.push(`房源：${code}`)
@@ -144,8 +145,8 @@ function propertySearchBody(task: WorkTask) {
   const wifiSsid = String((task.property as any)?.wifi_ssid || '').trim()
   const wifiPassword = String((task.property as any)?.wifi_password || '').trim()
   const guide = normalizeHttpUrl((task.property as any)?.access_guide_link)
-  const oldCode = String((task as any).old_code || '').trim()
-  const newCode = String((task as any).new_code || '').trim()
+  const oldCode = oldCodeForDisplay(task)
+  const newCode = newCodeForDisplay(task)
   const guest = String((task as any).guest_special_request || '').trim()
   if (code) lines.push(`房号：${code}`)
   if (addr) lines.push(`地址：${addr}`)
@@ -546,8 +547,8 @@ export default function NoticesScreen(props: Props) {
       const wifiSsid = String((it.property as any)?.wifi_ssid || '').trim()
       const wifiPassword = String((it.property as any)?.wifi_password || '').trim()
       const guide = normalizeHttpUrl((it.property as any)?.access_guide_link)
-      const oldCode = String((it as any).old_code || '').trim()
-      const newCode = String((it as any).new_code || '').trim()
+      const oldCode = oldCodeForDisplay(it)
+      const newCode = newCodeForDisplay(it)
       const guest = String((it as any).guest_special_request || '').trim()
       const hay = `${code} ${addr} ${wifiSsid} ${wifiPassword} ${guide || ''} ${oldCode} ${newCode} ${guest}`.toLowerCase()
       if (!hay.includes(q)) continue
@@ -600,8 +601,8 @@ export default function NoticesScreen(props: Props) {
       const addr = String(it.property?.address || '').trim()
       const summary = String(it.summary || '').trim()
       const taskType = String((it as any).task_type || it.task_kind || '').trim()
-      const oldCode = String((it as any).old_code || '').trim()
-      const newCode = String((it as any).new_code || '').trim()
+      const oldCode = oldCodeForDisplay(it)
+      const newCode = newCodeForDisplay(it)
       const guest = String((it as any).guest_special_request || '').trim()
       const date = String(it.scheduled_date || (it as any).date || '').trim()
       const wifiSsid = String((it.property as any)?.wifi_ssid || '').trim()

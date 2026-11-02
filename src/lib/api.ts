@@ -864,7 +864,14 @@ export type WorkTask = {
     guest_request_checkin?: string | null
     guest_request_summary?: string | null
     old_code?: string | null
+    old_code_task_id?: string | null
+    old_code_authority_status?: string | null
+    old_code_source_task_id?: string | null
+    old_code_source_order_id?: string | null
+    old_code_source_field?: string | null
     new_code?: string | null
+    new_code_task_id?: string | null
+    new_code_authority_status?: string | null
     keys_required_checkout?: number | null
     keys_required_checkin?: number | null
     stayed_nights?: number | null
@@ -892,6 +899,7 @@ export async function updateCleaningTaskManagerFields(
   token: string,
   params: {
     task_ids: string[]
+    password_task_ids?: string[]
     checkout_time?: string | null
     checkin_time?: string | null
     old_code?: string | null

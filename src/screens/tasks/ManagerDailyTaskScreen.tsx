@@ -46,7 +46,7 @@ import {
   type ManagerDailyTaskPhotoLoadIssue,
   type ManagerDailyTaskPhotoSource,
 } from '../../lib/managerDailyTaskPhotos'
-import { executionTaskIdsForRole } from '../../lib/turnoverDisplay'
+import { executionTaskIdsForRole, hasCheckoutPasswordField, newCodeForDisplay, oldCodeForDisplay, passwordTaskIdsForFields } from '../../lib/turnoverDisplay'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import CleaningMediaImage from '../../components/CleaningMediaImage'
@@ -294,6 +294,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
 
   const task = useMemo(() => findWorkTaskItemByAnyId(props.route.params.taskId), [props.route.params.taskId, storeVersion])
   const actualCheckinTask = useMemo(() => hasActualCheckinTask(task), [task])
+  const actualCheckoutTask = useMemo(() => hasCheckoutPasswordField(task), [task])
   const roleNames = useMemo(() => roleNamesOf(user), [user])
   const activeRole = String((user as any)?.role || '').trim().toLowerCase()
   const canEditManagerFields = hasAnyRole(user, ['customer_service', 'admin', 'offline_manager'])
@@ -339,8 +340,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
     syncedTaskIdRef.current = currentTaskId
     setCheckoutTime(String((task as any)?.start_time || (task as any)?.checkout_time || '').trim())
     setCheckinTime(String((task as any)?.end_time || (task as any)?.checkin_time_note || (task as any)?.checkin_time || '').trim())
-    setOldCode(String((task as any)?.old_code || '').trim())
-    setNewCode(String((task as any)?.new_code || '').trim())
+    setOldCode(oldCodeForDisplay(task))
+    setNewCode(newCodeForDisplay(task))
     setGuestNote(String((task as any)?.guest_special_request || '').trim())
     const k = Number((task as any)?.keys_required_checkin ?? (task as any)?.keys_required ?? 1)
     setKeysRequired(Number.isFinite(k) && k >= 2 ? 2 : 1)
@@ -587,8 +588,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
       }
       const prevCheckout = toNull((task as any)?.start_time || (task as any)?.checkout_time)
       const prevCheckin = toNull((task as any)?.end_time || (task as any)?.checkin_time_note || (task as any)?.checkin_time)
-      const prevOldCode = toNull((task as any)?.old_code)
-      const prevNewCode = toNull((task as any)?.new_code)
+      const prevOldCode = toNull(oldCodeForDisplay(task))
+      const prevNewCode = toNull(newCodeForDisplay(task))
       const prevGuest = toNull((task as any)?.guest_special_request)
       const prevKeys0 = Number((task as any)?.keys_required_checkin ?? (task as any)?.keys_required ?? 1)
       const prevKeys = Number.isFinite(prevKeys0) && prevKeys0 >= 2 ? 2 : 1
@@ -604,8 +605,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
       if (!isHistoricalTask) {
         if (norm(nextCheckout) !== norm(prevCheckout)) payload.checkout_time = nextCheckout
         if (norm(nextCheckin) !== norm(prevCheckin)) payload.checkin_time = nextCheckin
-        if (norm(nextOldCode) !== norm(prevOldCode)) payload.old_code = nextOldCode
-        if (norm(nextNewCode) !== norm(prevNewCode)) payload.new_code = nextNewCode
+        if (actualCheckoutTask && norm(nextOldCode) !== norm(prevOldCode)) payload.old_code = nextOldCode
+        if (actualCheckinTask && norm(nextNewCode) !== norm(prevNewCode)) payload.new_code = nextNewCode
         if (norm(nextGuest) !== norm(prevGuest)) payload.guest_special_request = nextGuest
       }
       const needKeysUpdate = Number.isFinite(nextKeys) && (keysDirty || nextKeys !== prevKeys)
@@ -617,7 +618,9 @@ export default function ManagerDailyTaskScreen(props: Props) {
         ...(payload.new_code !== undefined ? ['new_code' as const] : []),
       ]
       const verificationFields = Array.from(new Set([...(options?.verifyFields || []), ...changedPasswordFields]))
+        .filter((field) => (field === 'old_code' ? actualCheckoutTask : actualCheckinTask))
       if (verificationFields.length) {
+        payload.password_task_ids = passwordTaskIdsForFields(task, verificationFields)
         payload.password_verification = {
           fields: verificationFields,
           request_id: passwordAuthorityRequestId(),
@@ -718,8 +721,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
           if (refreshResult === false) throw new Error('authoritative_refresh_rejected')
           const refreshed = findWorkTaskItemByAnyId(String(task.id || ''))
           if (!refreshed) throw new Error('authoritative_task_missing')
-          setOldCode(String((refreshed as any).old_code || '').trim())
-          setNewCode(String((refreshed as any).new_code || '').trim())
+          setOldCode(oldCodeForDisplay(refreshed))
+          setNewCode(newCodeForDisplay(refreshed))
         } catch {
           refreshFailed = true
           setOldCode(String(prevOldCode || '').trim())
@@ -739,8 +742,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
   function changedPasswordFieldsForSave(): Array<'old_code' | 'new_code'> {
     const norm = (value: any) => String(value ?? '').replace(/\s+/g, ' ').trim()
     return [
-      ...(norm(oldCode) !== norm((task as any)?.old_code) ? ['old_code' as const] : []),
-      ...(norm(newCode) !== norm((task as any)?.new_code) ? ['new_code' as const] : []),
+      ...(actualCheckoutTask && norm(oldCode) !== norm(oldCodeForDisplay(task)) ? ['old_code' as const] : []),
+      ...(actualCheckinTask && norm(newCode) !== norm(newCodeForDisplay(task)) ? ['new_code' as const] : []),
     ]
   }
 
@@ -751,7 +754,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     onConfirm: () => void
   }) {
     if (!token || !task || saving || workRecordReadOnly) return
-    const taskIds = executionTaskIdsForRole(task, task.task_kind)
+    const taskIds = passwordTaskIdsForFields(task, params.fields)
     if (!taskIds.length) return Alert.alert('无法核对', '缺少任务 ID')
     try {
       setSaving(true)
@@ -790,11 +793,16 @@ export default function ManagerDailyTaskScreen(props: Props) {
   }
 
   async function onVerifyPasswordAuthority() {
+    const fields: Array<'old_code' | 'new_code'> = [
+      ...(actualCheckoutTask ? ['old_code' as const] : []),
+      ...(actualCheckinTask ? ['new_code' as const] : []),
+    ]
+    if (!fields.length) return
     await previewPasswordAuthorityAndConfirm({
-      fields: ['old_code', 'new_code'],
+      fields,
       title: '确认核对密码来源？',
       confirmLabel: '确认核对',
-      onConfirm: () => void onSave({ verifyFields: ['old_code', 'new_code'] }),
+      onConfirm: () => void onSave({ verifyFields: fields }),
     })
   }
 
@@ -1155,16 +1163,20 @@ export default function ManagerDailyTaskScreen(props: Props) {
             </View>
           </View>
           <View style={styles.row2Compact}>
-            <View style={styles.formHalf}>
-              <Text style={styles.label}>旧密码</Text>
-              <TextInput value={oldCode} onChangeText={setOldCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="旧密码" placeholderTextColor="#9CA3AF" />
-              <Text testID="manager-old-code-authority" style={styles.fieldHint}>{oldCodeAuthorityLabel}</Text>
-            </View>
-            <View style={styles.formHalf}>
-              <Text style={styles.label}>新密码</Text>
-              <TextInput value={newCode} onChangeText={setNewCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="新密码" placeholderTextColor="#9CA3AF" />
-              <Text testID="manager-new-code-authority" style={styles.fieldHint}>{newCodeAuthorityLabel}</Text>
-            </View>
+            {actualCheckoutTask ? (
+              <View style={styles.formHalf}>
+                <Text style={styles.label}>旧密码</Text>
+                <TextInput value={oldCode} onChangeText={setOldCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="旧密码" placeholderTextColor="#9CA3AF" />
+                <Text testID="manager-old-code-authority" style={styles.fieldHint}>{oldCodeAuthorityLabel}</Text>
+              </View>
+            ) : null}
+            {actualCheckinTask ? (
+              <View style={styles.formHalf}>
+                <Text style={styles.label}>新密码</Text>
+                <TextInput value={newCode} onChangeText={setNewCode} editable={canEditGeneralInfo} style={[styles.input, !canEditGeneralInfo ? styles.inputDisabled : null]} placeholder="新密码" placeholderTextColor="#9CA3AF" />
+                <Text testID="manager-new-code-authority" style={styles.fieldHint}>{newCodeAuthorityLabel}</Text>
+              </View>
+            ) : null}
           </View>
           <View style={styles.fieldCompact}>
             <Text style={styles.label}>客人特殊需求</Text>

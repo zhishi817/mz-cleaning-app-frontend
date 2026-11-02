@@ -222,6 +222,78 @@ test('manager check-in card keeps its work status after the guest later checks o
   }
 })
 
+test('pure check-in manager card hides old password and verifies only new password', async () => {
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const before = {
+    task_type: mockTask.task_type,
+    has_checkin_task: mockTask.has_checkin_task,
+    turnover_display: mockTask.turnover_display,
+  }
+  try {
+    mockTask.task_type = 'checkin_clean'
+    mockTask.has_checkin_task = true
+    mockTask.turnover_display = {
+      checkin_order_id: 'checkin-order-1',
+      old_code: 'legacy-checkin-old',
+      new_code: 'new-code',
+    }
+    const ui = render(
+      <I18nProvider>
+        <ManagerDailyTaskScreen
+          navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+          route={{ key: 'manager-pure-checkin-password', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+        />
+      </I18nProvider>,
+    )
+    expect(ui.queryByPlaceholderText('旧密码')).toBeNull()
+    expect(ui.getByPlaceholderText('新密码')).toBeTruthy()
+    fireEvent.press(ui.getByTestId('manager-password-authority-verify'))
+    await waitFor(() => expect(api.previewCleaningTaskPasswordAuthority).toHaveBeenCalledWith(
+      mockAuthState.token,
+      { task_ids: ['cleaning-1'], fields: ['new_code'] },
+    ))
+    ui.unmount()
+  } finally {
+    Object.assign(mockTask, before)
+  }
+})
+
+test('checkout-only manager card hides new password and verifies only old password', async () => {
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const before = {
+    task_type: mockTask.task_type,
+    has_checkin_task: mockTask.has_checkin_task,
+    turnover_display: mockTask.turnover_display,
+  }
+  try {
+    mockTask.task_type = 'checkout_clean'
+    mockTask.has_checkin_task = false
+    mockTask.turnover_display = {
+      checkout_order_id: 'checkout-order-1',
+      old_code: 'old-code',
+      new_code: 'stale-checkout-new',
+    }
+    const ui = render(
+      <I18nProvider>
+        <ManagerDailyTaskScreen
+          navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+          route={{ key: 'manager-checkout-only-password', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+        />
+      </I18nProvider>,
+    )
+    expect(ui.getByPlaceholderText('旧密码')).toBeTruthy()
+    expect(ui.queryByPlaceholderText('新密码')).toBeNull()
+    fireEvent.press(ui.getByTestId('manager-password-authority-verify'))
+    await waitFor(() => expect(api.previewCleaningTaskPasswordAuthority).toHaveBeenCalledWith(
+      mockAuthState.token,
+      { task_ids: ['cleaning-1'], fields: ['old_code'] },
+    ))
+    ui.unmount()
+  } finally {
+    Object.assign(mockTask, before)
+  }
+})
+
 test('customer-service guest-ready actions coexist with the original editor and media order', async () => {
   const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
   const ui = render(
@@ -660,6 +732,62 @@ test('changed password previews the affected chain and requires explicit confirm
   const submitted = (api.updateCleaningTaskManagerFields as jest.Mock).mock.calls.at(-1)?.[1]
   expect(submitted).not.toHaveProperty('new_code')
   ui.unmount()
+})
+
+test('role-split turnover previews and saves passwords against both exact source tasks', async () => {
+  const alertSpy = jest.spyOn(Alert, 'alert')
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const before = {
+    task_kind: mockTask.task_kind,
+    active_source_ids: mockTask.active_source_ids,
+    cleaning_task_ids: mockTask.cleaning_task_ids,
+    inspection_task_ids: mockTask.inspection_task_ids,
+    turnover_display: mockTask.turnover_display,
+  }
+  try {
+    mockTask.task_kind = 'inspection'
+    mockTask.active_source_ids = ['checkout-source-1', 'checkin-source-1']
+    mockTask.cleaning_task_ids = ['checkout-source-1']
+    mockTask.inspection_task_ids = ['checkin-source-1']
+    mockTask.turnover_display = {
+      checkout_order_id: 'checkout-order-1',
+      checkin_order_id: 'checkin-order-1',
+      old_code: 'old-code',
+      old_code_task_id: 'checkout-source-1',
+      new_code: 'new-code',
+      new_code_task_id: 'checkin-source-1',
+    }
+    const ui = render(
+      <I18nProvider>
+        <ManagerDailyTaskScreen
+          navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+          route={{ key: 'manager-role-split-passwords', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+        />
+      </I18nProvider>,
+    )
+
+    fireEvent.press(ui.getByTestId('manager-password-authority-verify'))
+    await waitFor(() => expect(api.previewCleaningTaskPasswordAuthority).toHaveBeenCalledWith(
+      mockAuthState.token,
+      { task_ids: ['checkout-source-1', 'checkin-source-1'], fields: ['old_code', 'new_code'] },
+    ))
+    const confirmation = alertSpy.mock.calls.find((call) => call[0] === '确认核对密码来源？')
+    const confirmButton = (confirmation?.[2] as any[])?.find((button) => button.text === '确认核对')
+    await act(async () => {
+      confirmButton.onPress()
+    })
+    await waitFor(() => expect(api.updateCleaningTaskManagerFields).toHaveBeenCalledWith(
+      mockAuthState.token,
+      expect.objectContaining({
+        task_ids: ['checkout-source-1', 'checkin-source-1'],
+        password_task_ids: ['checkout-source-1', 'checkin-source-1'],
+        password_verification: expect.objectContaining({ fields: ['old_code', 'new_code'] }),
+      }),
+    ))
+    ui.unmount()
+  } finally {
+    Object.assign(mockTask, before)
+  }
 })
 
 test.each([

@@ -1,6 +1,8 @@
 import { isEarlyCheckinTime, isLateCheckinTime, isLateCheckoutTime } from './taskTime'
 
 export type TurnoverDisplay = {
+  checkout_order_id?: string | null
+  checkin_order_id?: string | null
   checkout_time?: string | null
   checkin_time?: string | null
   is_late_checkout?: boolean
@@ -10,7 +12,14 @@ export type TurnoverDisplay = {
   guest_request_checkin?: string | null
   guest_request_summary?: string | null
   old_code?: string | null
+  old_code_task_id?: string | null
+  old_code_authority_status?: string | null
+  old_code_source_task_id?: string | null
+  old_code_source_order_id?: string | null
+  old_code_source_field?: string | null
   new_code?: string | null
+  new_code_task_id?: string | null
+  new_code_authority_status?: string | null
   active_source_ids?: string[]
   superseded_source_ids?: string[]
   all_related_source_ids?: string[]
@@ -36,6 +45,50 @@ export function uniqueTextList(values: any[]) {
 export function turnoverDisplayOf(task: any): TurnoverDisplay | null {
   const value = task?.turnover_display
   return value && typeof value === 'object' ? value as TurnoverDisplay : null
+}
+
+export function oldCodeForDisplay(task: any) {
+  if (!hasCheckoutPasswordField(task)) return ''
+  const display = turnoverDisplayOf(task)
+  return display ? cleanText(display.old_code) : cleanText(task?.old_code)
+}
+
+export function hasCheckoutPasswordField(task: any) {
+  const display = turnoverDisplayOf(task)
+  const taskType = cleanText(task?.task_type).toLowerCase()
+  const hasCheckoutSide = taskType === 'checkout_clean'
+    || taskType === 'checkout'
+    || taskType === 'turnover'
+    || !!cleanText(display?.checkout_order_id)
+    || !!cleanText(display?.old_code_task_id)
+  if (hasCheckoutSide) return true
+  return !display && !taskType
+}
+
+export function newCodeForDisplay(task: any) {
+  if (!hasCheckinPasswordField(task)) return ''
+  const display = turnoverDisplayOf(task)
+  return display ? cleanText(display.new_code) : cleanText(task?.new_code)
+}
+
+export function hasCheckinPasswordField(task: any) {
+  const display = turnoverDisplayOf(task)
+  const taskType = cleanText(task?.task_type).toLowerCase()
+  if (taskType === 'checkin_clean' || taskType === 'checkin' || taskType === 'turnover') return true
+  if (cleanText(display?.checkin_order_id) || cleanText(display?.new_code_task_id)) return true
+  // Legacy payloads without a task type predate explicit side metadata. Keep
+  // their established fallback, while known non-check-in tasks stay gated.
+  return !display && !taskType
+}
+
+export function passwordTaskIdsForFields(task: any, fields: Array<'old_code' | 'new_code'>) {
+  const display = turnoverDisplayOf(task)
+  const exact = uniqueTextList([
+    ...(fields.includes('old_code') ? [display?.old_code_task_id] : []),
+    ...(fields.includes('new_code') ? [display?.new_code_task_id] : []),
+  ])
+  if (exact.length === fields.length) return exact
+  return uniqueTextList([...exact, ...activeSourceIdsFromTask(task)])
 }
 
 export function activeSourceIdsFromTask(task: any) {

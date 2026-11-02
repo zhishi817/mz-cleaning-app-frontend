@@ -2,21 +2,22 @@
 
 ## FR-P1-TSK-09 — 客服密码来源状态与权威刷新
 
-- **Status:** active; MZ-091 is committed and pushed on the coordinated feature branch with Draft PR #71 open against `Dev`; not merged or released.
-- **Maintenance scope:** Mobile `ManagerDailyTaskScreen`, MZ App password preview/save contract, and work-task cache reconciliation; paired Root authority is `root/CRL-20261101-004`.
-- **Last reviewed:** 2026-11-01 UTC
-- **Business outcome:** 客服、admin 和线下经理在每日任务详情必须看到旧/新密码的“待核对、系统生成、已关联来源、已人工核对”状态。修改密码或显式同值核对前，客户端发送唯一 request ID；“核对密码来源”必须先读取不含密码值的影响预览并明确确认，手工任务提示只确认人工来源而不猜订单。保存后必须强制读取 Root 权威状态，不能把本地输入或不完整实时事件直接写成已核对；保存/传播失败必须显示错误，刷新明确返回 `false` 或未返回目标任务时也按失败处理并恢复保存前权威显示。未核对只限制“密码已核对”的声明，不阻断其他客服字段或整项任务。
-- **Related CRLs:** `root/CRL-20261101-004` / `mobile/CRL-20261101-004`.
+- **Status:** active; MZ-091 same-order source correction is an isolated local candidate, not committed, pushed, merged or released.
+- **Maintenance scope:** Mobile task-list/detail password projection, `ManagerDailyTaskScreen`, MZ App password preview/save contract, and work-task cache reconciliation; paired Root authority is `root/CRL-20261102-001`.
+- **Last reviewed:** 2026-11-02 UTC
+- **Business outcome:** 客服、admin 和线下经理在每日任务详情必须看到适用密码字段的“待核对、系统生成、已关联来源、已人工核对”状态。同订单入住 `new_code` 是对应退房 `old_code` 的唯一自动来源；Root 明确返回 `turnover_display.old_code/new_code=null` 时，列表、详情、历史卡和管理编辑初值都必须保持空，绝不能回退顶层缓存、另一 source 或历史任务密码。纯入住不显示/编辑旧密码，纯退房不显示/编辑新密码；角色分拆合卡的预览/保存必须命中 checkout/checkin 精确来源任务。当前退房任务明确人工旧密码仍可显示，但只属于该任务。修改密码或显式同值核对前，客户端发送唯一 request ID 并读取不含密码值的影响预览；保存后强制读取 Root 权威状态，保存/传播/刷新失败恢复保存前显示。未核对只限制“密码已核对”的声明，不阻断其他客服字段或整项任务。
+- **Related CRLs:** `root/CRL-20261102-001` / `mobile/CRL-20261102-001`; supersedes the cross-order display assumptions in the earlier `CRL-20261101-004` pair.
 
 ### Test-to-invariant mapping
 
 - `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — 显示待核对/已关联来源，先预览关联影响，再以同值 `password_verification` 保存；payload 不伪造密码变更，保存后强制刷新且不把密码局部补入缓存；刷新返回 `false` 或缺少目标任务不能提示成功，并恢复保存前权威显示。
 - `src/lib/workTasksStore.test.ts` — 带 `password_authority` 的脱敏事件不是安全局部补丁，必须触发权威刷新。
 - `src/lib/api.ts` — preview 和 save 类型只发送 task IDs、字段、request ID 与客户端，不在预览响应中接收密码值。
+- `src/lib/turnoverDisplay.test.ts`、`src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — Root 周转投影明确为空时，禁止从顶层旧缓存恢复旧/新密码；明确 pure-checkin/pure-checkout 时隐藏并拒绝操作不适用字段，角色分拆卡对旧/新密码使用精确 source task 并集，只有完全缺少任务类型与 `turnover_display` 的 legacy payload 才使用顶层值。
 
 ### Delivery boundary
 
-- Root migration和后端必须先完成并部署，之后才可发布 Mobile OTA。单独 OTA 不会修复来源选择、事务或历史数据。
+- Root 后端必须先完成并部署，之后才可发布 Mobile OTA。单独 OTA 不会修复来源选择、事务或历史数据；本纠正不新增数据库迁移。
 - 不扩大角色权限、不读取或记录密码明文到审计、不自动修历史密码、不清缓存/草稿/上传队列，不改原生依赖或 runtime。真实账号、iOS/Android、弱网、数据库迁移和发布均未验收。
 
 ## FR-P1-UPD-01 — OTA 已下载与实际生效提示
