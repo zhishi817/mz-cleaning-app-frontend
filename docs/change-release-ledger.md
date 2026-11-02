@@ -100,15 +100,15 @@
 - Branch: `codex/mz091-password-chain-v2`
 - Base: `origin/Dev@dee4b6746ca51150df4dde22ed6ba8e3fdaaf03a`; fetched at `2026-11-02T06:36:24Z` and verified unchanged before staging
 - Candidate patch SHA-256: `00140938489002d603978aad7f6aadc9fae725e0449cce982d8cfe20b677b1c7`
-- Commit SHA: pending local content commit; this Release Attempt will be updated by a ledger-only receipt before push
-- Dependencies: paired `root/CRL-20261102-001`; coordinated review required, while Mobile introduces no database or permission behavior
+- Commit SHA: `20ce99f6ed217ce2b17f25b612f725709b6516b9`; exact reviewed local content commit
+- Dependencies: none
 - Required validation: PASS; focused projection/manager regression, affected task screens, TypeScript, lint with zero errors, ledger checks, fast regression and full Mobile 82-suite / 757-test gate
 - Shared-hunk review: PASS; all staged non-ledger hunks belong only to this selected MZ-091 Mobile projection correction
 - Generated-file review: PASS; no native build output, environment file, dependency directory, cache, media, credential or production payload is selected
-- Technical state: candidate
+- Technical state: committed locally
 - User authorization: approved-for-push; evidence: on 2026-11-02 the user instructed “先提交创建修补PR吧 先补齐091”, authorizing commit, new feature-branch push and Draft PR to Dev; merge, main, deployment and OTA remain excluded
 - Independent review: GO on the final local candidate; P0=0 / P1=0 / P2=0 / P3=0, including explicit-null no-fallback compatibility review
-- Action conclusion: pending exact staged audit, local commit receipt, ordinary feature-branch push and Draft PR creation; no merge or release is authorized
+- Action conclusion: local content commit completed after exact staged audit and independent review; ordinary feature-branch push and Draft PR remain pending the repository-required exact SHA authorization, and no merge or release is authorized
 
 ## CRL-20261028-005 — 人员结算补发回归去除重复整屏渲染
 
