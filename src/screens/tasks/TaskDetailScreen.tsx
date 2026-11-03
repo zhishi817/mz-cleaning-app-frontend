@@ -8,6 +8,7 @@ import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { API_BASE_URL } from '../../config/env'
 import { useAuth } from '../../lib/auth'
+import { useAppRestartBlocker } from '../../lib/appRestartSafety'
 import { cleaningTaskTitleSuffix, effectiveInspectionMode, inspectionModeLabel, inspectionScopeLabel, isCheckinSiteExecutionTask, isKeyHandoverExecutionTask, isPasswordOnlyInspectionTask, isSelfCompleteMode, isStayoverTaskType, taskPersonnelPresentation } from '../../lib/cleaningInspection'
 import { useI18n } from '../../lib/i18n'
 import {
@@ -295,6 +296,20 @@ export default function TaskDetailScreen(props: Props) {
   const [readOnlyTaskPhotos, setReadOnlyTaskPhotos] = useState<TaskFormPhoto[]>([])
   const [readOnlyTaskPhotosLoading, setReadOnlyTaskPhotosLoading] = useState(false)
   const [readOnlyTaskPhotosError, setReadOnlyTaskPhotosError] = useState<string | null>(null)
+  const taskDetailBusy = marking || taskPhotoSaving || keyUploading || keyDeleting || offlineEditBusy
+  const taskDetailDraftActive = offlineEditOpen
+    || !!markNote.trim()
+    || !!deferReason.trim()
+    || maintenanceCompletionPhotoDrafts.length > 0
+    || pendingCompletionPhotoReferences.length > 0
+  useAppRestartBlocker('screen:task-detail', taskDetailDraftActive || taskDetailBusy, {
+    kind: keyUploading || taskPhotoSaving ? 'uploading' : taskDetailBusy ? 'submitting' : 'unsaved',
+    message: keyUploading || taskPhotoSaving
+      ? '任务照片正在上传保存'
+      : taskDetailBusy
+        ? '任务变更正在提交'
+        : '任务页面有尚未保存的输入或照片',
+  })
 
   useEffect(() => {
     setHasInit(true)

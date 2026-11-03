@@ -6,6 +6,7 @@ import { useFocusEffect } from '@react-navigation/native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { API_BASE_URL } from '../../config/env'
 import { useAuth } from '../../lib/auth'
+import { useAppRestartBlocker } from '../../lib/appRestartSafety'
 import { buildMzappExpenseReceiptImageSource, type MzappExpenseReceiptImageSource } from '../../lib/expenseReceiptMedia'
 import {
   createMzappExpenseReceipt,
@@ -93,6 +94,14 @@ function buildEmptyForm(scope: MzappExpenseScope): ReceiptFormState {
     receipt_urls: [],
     items: [buildEmptyItem(scope)],
   }
+}
+
+function receiptFormHasInput(form: ReceiptFormState) {
+  if (form.receipt_date !== todayYmd()) return true
+  if (String(form.receipt_total_amount || '').trim() || String(form.note || '').trim() || form.receipt_urls.length) return true
+  if (form.items.length !== 1) return true
+  return form.items.some((item) => [item.property_id, item.expense_name, item.amount, item.category, item.category_detail, item.note]
+    .some((value) => String(value || '').trim()))
 }
 
 function normalizeAmountInput(raw: string) {
@@ -319,6 +328,11 @@ export default function ExpenseCenterScreen() {
   const lineTotalCents = useMemo(() => form.items.reduce((sum, item) => sum + moneyToCents(item.amount), 0), [form.items])
   const receiptTotalCents = useMemo(() => moneyToCents(form.receipt_total_amount), [form.receipt_total_amount])
   const diffCents = receiptTotalCents - lineTotalCents
+  const expenseBusy = saving || uploading
+  useAppRestartBlocker('screen:expense-center', !!editingId || receiptFormHasInput(form) || expenseBusy, {
+    kind: uploading ? 'uploading' : saving ? 'submitting' : 'unsaved',
+    message: uploading ? '报销凭证正在上传' : saving ? '报销记录正在提交' : '报销表单有尚未保存的输入',
+  })
 
   const canEditCurrentDetail = useMemo(() => {
     if (!detail) return false

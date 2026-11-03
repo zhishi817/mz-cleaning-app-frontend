@@ -5,6 +5,7 @@ import { useAuth } from '../../lib/auth'
 import { changeMyPassword } from '../../lib/api'
 import { hairline, moderateScale } from '../../lib/scale'
 import { useI18n } from '../../lib/i18n'
+import { useAppRestartBlocker } from '../../lib/appRestartSafety'
 
 export default function ChangePasswordScreen() {
   const { t } = useI18n()
@@ -16,6 +17,11 @@ export default function ChangePasswordScreen() {
   const [showOld, setShowOld] = useState(false)
   const [showNew, setShowNew] = useState(false)
   const [showNew2, setShowNew2] = useState(false)
+
+  useAppRestartBlocker('screen:change-password', !!oldPwd || !!newPwd || !!newPwd2 || saving, {
+    kind: saving ? 'submitting' : 'unsaved',
+    message: saving ? '密码修改正在提交' : '密码页面有尚未保存的输入',
+  })
 
   async function onSubmit() {
     if (!token) {

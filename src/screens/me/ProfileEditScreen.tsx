@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n'
+import { useAppRestartBlocker } from '../../lib/appRestartSafety'
 import { defaultProfileFromUser, getProfile, PROFILE_DOCUMENT_PRESENT, profileDocumentPresence, setProfile, type Profile } from '../../lib/profileStore'
 import { getMyPersonnelSettlementProfile, getMyProfile, profileDocumentImageSource, type ProfileDocumentType, updateMyPersonnelSettlementProfile, updateMyProfile, uploadMzappMedia } from '../../lib/api'
 import { isValidAustralianAbn, isValidDateOnly, melbourneDateToday, type PersonnelGstStatus } from '../../lib/personnelSettlementProfile'
@@ -138,6 +139,7 @@ export default function ProfileEditScreen() {
   const [uploadingPhotoId, setUploadingPhotoId] = useState(false)
   const [uploadingVisaDocument, setUploadingVisaDocument] = useState(false)
   const [settlementProfileAvailable, setSettlementProfileAvailable] = useState(false)
+  const [profileDirty, setProfileDirty] = useState(false)
   const [form, setForm] = useState<Profile>(() => defaultProfileFromUser(user))
   const [localAvatarUri, setLocalAvatarUri] = useState<string | null>(null)
   const [localPhotoIdUri, setLocalPhotoIdUri] = useState<string | null>(null)
@@ -147,6 +149,13 @@ export default function ProfileEditScreen() {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions()
   const photoIdSource = profileDocumentSource(token, 'photo_id', localPhotoIdUri, form.photo_id_url)
   const visaDocumentSource = profileDocumentSource(token, 'visa_document', localVisaDocumentUri, form.visa_document_url)
+
+  const profileBusy = saving || uploadingAvatar || uploadingPhotoId || uploadingVisaDocument
+  const profileLocalDraft = !!localAvatarUri || !!localPhotoIdUri || !!localVisaDocumentUri
+  useAppRestartBlocker('screen:profile-edit', profileDirty || profileLocalDraft || profileBusy, {
+    kind: profileBusy ? 'uploading' : 'unsaved',
+    message: profileBusy ? '个人资料或证件正在上传保存' : '个人资料有尚未保存的输入',
+  })
 
   const initials = useMemo(() => {
     const parts = form.display_name.trim().split(/\s+/g).filter(Boolean)
@@ -189,6 +198,7 @@ export default function ProfileEditScreen() {
       const next = profileFromRemote(updated, { ...form, avatar_url: up.url })
       setForm(next)
       await setProfile(user, next)
+      setLocalAvatarUri(null)
     } catch (error: any) {
       Alert.alert(t('common_error'), String(error?.message || t('profile_pick_failed')))
     } finally {
@@ -314,6 +324,7 @@ export default function ProfileEditScreen() {
       }
       await setProfile(user, cleaned)
       setForm(cleaned)
+      setProfileDirty(false)
       Alert.alert(t('common_ok'), t('common_saved'))
     } catch (error: any) {
       Alert.alert(t('common_error'), String(error?.message || t('profile_save_failed')))
@@ -323,6 +334,7 @@ export default function ProfileEditScreen() {
   }
 
   function setField<K extends keyof Profile>(key: K, value: Profile[K]) {
+    setProfileDirty(true)
     setForm(prev => ({ ...prev, [key]: value }))
   }
 

@@ -22,22 +22,23 @@
 
 ## FR-P1-UPD-01 — OTA 已下载与实际生效提示
 
-- **Status:** active; MZ-083 Scheme A selected local commit candidate, not released.
-- **Maintenance scope:** Mobile root update observer, versioned notice persistence, “我的” update entry and compiled release notes.
-- **Last reviewed:** 2026-10-26 UTC
-- **Business outcome:** 只有 Expo Updates 明确提供已下载目标时显示“更新已下载”；只有实际运行 `updateId` 与目标一致或相对已知运行版本真实变化后，才显示一次“更新完成”。首次安装、回退、应急启动、缓存缺失/替代和未知元数据不得伪报成功。选择“稍后”只表示当前会话不由本功能主动重启，用户可从“我的”再次查看。
-- **Related CRLs:** `mobile/CRL-20261025-001`.
+- **Status:** active; MZ-083 controlled-restart follow-up is a local candidate, not committed, pushed or released.
+- **Maintenance scope:** Mobile root update observer, versioned notice persistence, global restart-safety registry, persisted draft/upload queues, “我的” update entry and compiled release notes.
+- **Last reviewed:** 2026-11-03 UTC
+- **Business outcome:** 只有 Expo Updates 明确提供已下载目标时显示“更新已下载”；只有实际运行 `updateId` 与目标一致或相对已知运行版本真实变化后，才显示一次“更新完成”。已下载目标提供“现在重启并更新”和“稍后”；主动重启前必须同时确认 App 在前台、下载目标仍相同、没有未保存输入、照片草稿、上传或提交，并在调用 native reload 前再次做无异步间隙的状态预约。首次安装、回退、应急启动、缓存缺失/替代和未知元数据不得伪报成功，也不得调用 reload。
+- **Related CRLs:** `mobile/CRL-20261025-001`; `mobile/CRL-20261103-005`.
 
 ### Test-to-invariant mapping
 
 - `src/lib/appUpdateNoticeState.test.ts` — 首装不误报、pending/ack 去重、running updateId 生效、漏观察 pending、startup 未稳定、rollback/emergency/cache missing/replacement、损坏存储与缺失发布说明。
-- `src/components/AppUpdateNoticeProvider.test.tsx` — SDK downloaded 提示、无主动重启按钮、稍后与手动入口、实际生效说明、rollback 不误报。
+- `src/lib/appRestartSafety.test.ts` — 运行时编辑、持久草稿、上传/提交队列、损坏存储 fail-closed、最终检查后的竞态与单次预约。
+- `src/components/AppUpdateNoticeProvider.test.tsx` — SDK downloaded 提示、现在重启/稍后双入口、全局阻断解除、目标元数据缺失、重复点击、native reload 失败及检查/下载状态。
 - `src/screens/tabs/MeScreen.test.tsx` — “我的”入口可见并打开提示。
 
 ### Delivery boundary
 
-- 不主动调用 OTA check/fetch/reload；不修改原生 `ON_LOAD`、runtime、channel、依赖、上传队列、草稿或媒体。
-- 方案 A 只提供准确提示，不是“可控重启/完整资料恢复”方案。冷启动仍可能应用已缓存更新；iOS/Android 真机、真实 rollback、离线与受保护生产资料仍需发布前后单独验收。
+- 不主动调用 OTA check/fetch；只对 SDK 已确认 pending 且目标 ID 未变化的已下载更新调用 reload。不修改原生 `ON_LOAD`、runtime、channel、依赖、上传队列、草稿或媒体内容。
+- 本地阻断只保护已登记的编辑面、持久草稿和队列；iOS/Android 真机、真实 reload、后台切换、系统强杀、真实 rollback、离线与受保护生产资料仍需发布前后单独验收。
 
 ## FR-P2-NOT-01 — 管理详情临时通知单一入口
 

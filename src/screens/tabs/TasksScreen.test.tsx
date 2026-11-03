@@ -68,6 +68,7 @@ jest.mock('expo-clipboard', () => ({
 jest.mock('../../lib/api', () => ({
   createCleaningOfflineTask: jest.fn(async () => ({})),
   createManualCleaningTask: jest.fn(async () => ({})),
+  listManualCheckinLinkCandidates: jest.fn(async () => []),
   listCleaningAppPropertyCodes: jest.fn(async () => []),
   listUsers: jest.fn(async () => []),
   listCleaningAppTasks: jest.fn(async () => []),
@@ -132,13 +133,13 @@ jest.mock('../../lib/workTasksStore', () => {
         guest_special_request: '请多放两条浴巾',
         property: {
           id: 'p1',
-          code: 'Aura2707',
+          code: 'FIXTURE-PROP-001',
           region: 'CBD',
-          address: '123 Collins St',
+          address: '1 Example Avenue, Testville',
           unit_type: '2b2b',
           access_guide_link: '',
-          wifi_ssid: 'AuraWiFi',
-          wifi_password: 'pw-1234',
+          wifi_ssid: 'FIXTURE_WIFI_NAME',
+          wifi_password: 'NOT_A_REAL_PASSWORD',
         },
         date: mockTodayKey,
       },
@@ -359,21 +360,21 @@ test('tasks screen defaults tasks collapsed, shows guest request, and expands de
 
   await waitFor(() => expect(ui.getByLabelText('task-collapse-w1')).toBeTruthy())
   expect(ui.getAllByText('请多放两条浴巾').length).toBeGreaterThan(0)
-  expect(ui.queryByText('AuraWiFi')).toBeNull()
-  expect(ui.queryByText('pw-1234')).toBeNull()
+  expect(ui.queryByText('FIXTURE_WIFI_NAME')).toBeNull()
+  expect(ui.queryByText('NOT_A_REAL_PASSWORD')).toBeNull()
 
   expandTask(ui, 'w1')
 
   await waitFor(() => {
-    expect(ui.getByText('AuraWiFi')).toBeTruthy()
-    expect(ui.getByText('pw-1234')).toBeTruthy()
+    expect(ui.getByText('FIXTURE_WIFI_NAME')).toBeTruthy()
+    expect(ui.getByText('NOT_A_REAL_PASSWORD')).toBeTruthy()
   })
 
   expandTask(ui, 'w1')
 
   await waitFor(() => {
-    expect(ui.queryByText('AuraWiFi')).toBeNull()
-    expect(ui.queryByText('pw-1234')).toBeNull()
+    expect(ui.queryByText('FIXTURE_WIFI_NAME')).toBeNull()
+    expect(ui.queryByText('NOT_A_REAL_PASSWORD')).toBeNull()
   })
 
   expandTask(ui, 'w1')
@@ -381,7 +382,7 @@ test('tasks screen defaults tasks collapsed, shows guest request, and expands de
   fireEvent.press(ui.getByLabelText('wifi-copy-w1'))
 
   await waitFor(() => {
-    expect(Clipboard.setStringAsync).toHaveBeenCalledWith('pw-1234')
+    expect(Clipboard.setStringAsync).toHaveBeenCalledWith('NOT_A_REAL_PASSWORD')
     expect(ui.getByLabelText('wifi-copied-w1')).toBeTruthy()
     expect(ui.getAllByText('已复制').length).toBeGreaterThan(0)
   })
@@ -409,8 +410,8 @@ test('long Wi-Fi name wraps fully on a narrow screen with large text and passwor
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
   const previousProperty = snapshot.items[0].property
-  const longWifiName = 'MZStay_Guest_WiFi_Level_27_North_Wing'
-  const testPassword = 'test-password-9876'
+  const longWifiName = 'FIXTURE_WIFI_LONG_NAME_FOR_LAYOUT_ONLY'
+  const testPassword = 'NOT_A_REAL_PASSWORD'
   snapshot.items[0].property = {
     ...previousProperty,
     wifi_ssid: longWifiName,
@@ -943,7 +944,7 @@ test('offline task creation can select and submit an executor', async () => {
   mockRoleState.canSwitchTaskMode = false
   mockRoleState.isTaskManagerUser = true
   ;(api.listUsers as jest.Mock).mockResolvedValue([
-    { id: 'cleaner-2', username: 'alice', role: 'cleaner', display_name: 'Alice' },
+    { id: 'cleaner-2', username: 'alice', role: 'cleaner', display_name: 'Fixture User A' },
   ])
   const createOfflineMock = api.createCleaningOfflineTask as jest.Mock
   createOfflineMock.mockClear()
@@ -972,7 +973,7 @@ test('offline task creation can select and submit an executor', async () => {
   fireEvent.changeText(ui.getByPlaceholderText('例如 临时送物 / 联系客人'), '临时送物')
   fireEvent.press(ui.getByLabelText('quick-create-assignee'))
   await waitFor(() => {
-    expect(ui.getByText('Alice')).toBeTruthy()
+    expect(ui.getByText('Fixture User A')).toBeTruthy()
     expect(ui.getByTestId('quick-create-assignee-options')).toBeTruthy()
     expect(ui.queryByText('清洁人员')).toBeNull()
   })
@@ -1311,7 +1312,7 @@ test('manual quick create sends only the password field applicable to the select
   mockRoleState.isTaskManagerUser = true
   const listPropertiesMock = api.listCleaningAppPropertyCodes as jest.Mock
   const createManualMock = api.createManualCleaningTask as jest.Mock
-  listPropertiesMock.mockResolvedValue([{ id: 'property-cwg05', code: 'CWG05' }])
+  listPropertiesMock.mockResolvedValue([{ id: 'FIXTURE-PROPERTY-LINK-001', code: 'FIXTURE-PROP-CODE-LINK-001' }])
   createManualMock.mockClear()
   createManualMock.mockResolvedValue({})
 
@@ -1329,23 +1330,26 @@ test('manual quick create sends only the password field applicable to the select
     await waitFor(() => expect(ui.getByTestId('quick-create-open')).toBeTruthy())
     fireEvent.press(ui.getByTestId('quick-create-open'))
     await waitFor(() => expect(listPropertiesMock).toHaveBeenCalled())
-    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'CWG05')
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-CODE-LINK-001')
     fireEvent.changeText(ui.getByLabelText('quick-create-lock-code'), 'synthetic-checkin-code')
+    await waitFor(() => expect(ui.getByTestId('quick-create-link-empty')).toBeTruthy())
     fireEvent.press(ui.getByTestId('quick-create-submit'))
 
     await waitFor(() => expect(createManualMock).toHaveBeenCalledTimes(1))
     const checkinPayload = createManualMock.mock.calls[0][1]
     expect(checkinPayload).toEqual(expect.objectContaining({
       create_mode: 'checkin',
-      property_id: 'property-cwg05',
+      property_id: 'FIXTURE-PROPERTY-LINK-001',
       new_code: 'synthetic-checkin-code',
+      linked_checkout_task_id: null,
+      checkin_link_decision: 'independent',
     }))
     expect(Object.prototype.hasOwnProperty.call(checkinPayload, 'old_code')).toBe(false)
     await waitFor(() => expect(ui.queryByTestId('quick-create-keyboard-avoider')).toBeNull())
 
     fireEvent.press(ui.getByTestId('quick-create-open'))
     fireEvent.press(ui.getByText('待同步退房'))
-    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'CWG05')
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-CODE-LINK-001')
     fireEvent.changeText(ui.getByLabelText('quick-create-lock-code'), 'synthetic-checkout-code')
     fireEvent.press(ui.getByTestId('quick-create-submit'))
 
@@ -1353,14 +1357,17 @@ test('manual quick create sends only the password field applicable to the select
     const checkoutPayload = createManualMock.mock.calls[1][1]
     expect(checkoutPayload).toEqual(expect.objectContaining({
       create_mode: 'checkout',
-      property_id: 'property-cwg05',
+      property_id: 'FIXTURE-PROPERTY-LINK-001',
       old_code: 'synthetic-checkout-code',
     }))
     expect(Object.prototype.hasOwnProperty.call(checkoutPayload, 'new_code')).toBe(false)
+    expect(Object.prototype.hasOwnProperty.call(checkoutPayload, 'linked_checkout_task_id')).toBe(false)
+    expect(Object.prototype.hasOwnProperty.call(checkoutPayload, 'checkin_link_decision')).toBe(false)
 
     await waitFor(() => expect(ui.queryByTestId('quick-create-keyboard-avoider')).toBeNull())
     fireEvent.press(ui.getByTestId('quick-create-open'))
-    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'CWG05')
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-CODE-LINK-001')
+    await waitFor(() => expect(ui.getByTestId('quick-create-link-empty')).toBeTruthy())
     fireEvent.press(ui.getByTestId('quick-create-submit'))
     await waitFor(() => expect(createManualMock).toHaveBeenCalledTimes(3))
     const blankCheckinPayload = createManualMock.mock.calls[2][1]
@@ -1370,7 +1377,7 @@ test('manual quick create sends only the password field applicable to the select
     await waitFor(() => expect(ui.queryByTestId('quick-create-keyboard-avoider')).toBeNull())
     fireEvent.press(ui.getByTestId('quick-create-open'))
     fireEvent.press(ui.getByText('待同步退房'))
-    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'CWG05')
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-CODE-LINK-001')
     fireEvent.press(ui.getByTestId('quick-create-submit'))
     await waitFor(() => expect(createManualMock).toHaveBeenCalledTimes(4))
     const blankCheckoutPayload = createManualMock.mock.calls[3][1]
@@ -1378,6 +1385,316 @@ test('manual quick create sends only the password field applicable to the select
     expect(Object.prototype.hasOwnProperty.call(blankCheckoutPayload, 'new_code')).toBe(false)
   } finally {
     ui.unmount()
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test.each(['keys_hung', 'completed'])('checkin quick create auto-links the sole %s checkout candidate without inheriting its password', async (status) => {
+  const api = require('../../lib/api')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const listPropertiesMock = api.listCleaningAppPropertyCodes as jest.Mock
+  const listCandidatesMock = api.listManualCheckinLinkCandidates as jest.Mock
+  const createManualMock = api.createManualCleaningTask as jest.Mock
+  listPropertiesMock.mockResolvedValue([{ id: 'FIXTURE-PROPERTY-LINK-001', code: 'FIXTURE-PROP-CODE-LINK-001' }])
+  listCandidatesMock.mockReset()
+  listCandidatesMock.mockResolvedValue([{
+    id: `checkout-${status}`,
+    property_id: 'FIXTURE-PROPERTY-LINK-001',
+    property_code: 'FIXTURE-PROP-CODE-LINK-001',
+    task_date: mockTodayKey,
+    checkout_time: '10am',
+    status,
+  }])
+  createManualMock.mockReset()
+  createManualMock.mockResolvedValue({})
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: `tasks-create-link-${status}`, name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    fireEvent.press(await ui.findByTestId('quick-create-open'))
+    await waitFor(() => expect(listPropertiesMock).toHaveBeenCalled())
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-CODE-LINK-001')
+    await waitFor(() => expect(ui.getByLabelText(`关联退房任务-checkout-${status}`)).toBeTruthy())
+    fireEvent.press(ui.getByTestId('quick-create-submit'))
+    await waitFor(() => expect(createManualMock).toHaveBeenCalledTimes(1))
+    const payload = createManualMock.mock.calls[0][1]
+    expect(payload).toEqual(expect.objectContaining({
+      create_mode: 'checkin',
+      linked_checkout_task_id: `checkout-${status}`,
+      checkin_link_decision: 'link',
+    }))
+    expect(Object.prototype.hasOwnProperty.call(payload, 'old_code')).toBe(false)
+  } finally {
+    ui.unmount()
+    listCandidatesMock.mockReset()
+    listCandidatesMock.mockResolvedValue([])
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('multiple checkout candidates require an explicit link or independent decision', async () => {
+  const api = require('../../lib/api')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const listPropertiesMock = api.listCleaningAppPropertyCodes as jest.Mock
+  const listCandidatesMock = api.listManualCheckinLinkCandidates as jest.Mock
+  const createManualMock = api.createManualCleaningTask as jest.Mock
+  listPropertiesMock.mockResolvedValue([{ id: 'FIXTURE-PROPERTY-LINK-001', code: 'FIXTURE-PROP-CODE-LINK-001' }])
+  listCandidatesMock.mockReset()
+  listCandidatesMock.mockResolvedValue(['a', 'b'].map((id, index) => ({
+    id: `checkout-${id}`,
+    property_id: 'FIXTURE-PROPERTY-LINK-001',
+    property_code: 'FIXTURE-PROP-CODE-LINK-001',
+    task_date: mockTodayKey,
+    checkout_time: index ? '11am' : '10am',
+    status: index ? 'completed' : 'keys_hung',
+  })))
+  createManualMock.mockReset()
+  createManualMock.mockResolvedValue({})
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-link-multiple', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    fireEvent.press(await ui.findByTestId('quick-create-open'))
+    await waitFor(() => expect(listPropertiesMock).toHaveBeenCalled())
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-CODE-LINK-001')
+    await waitFor(() => expect(ui.getByTestId('quick-create-link-decision-required')).toBeTruthy())
+    expect(ui.getByTestId('quick-create-submit').props.accessibilityState?.disabled).toBe(true)
+    fireEvent.press(ui.getByLabelText('关联退房任务-checkout-b'))
+    expect(ui.getByTestId('quick-create-submit').props.accessibilityState?.disabled).not.toBe(true)
+    fireEvent.press(ui.getByLabelText('创建独立入住任务'))
+    fireEvent.press(ui.getByTestId('quick-create-submit'))
+    await waitFor(() => expect(createManualMock).toHaveBeenCalledTimes(1))
+    expect(createManualMock.mock.calls[0][1]).toEqual(expect.objectContaining({
+      linked_checkout_task_id: null,
+      checkin_link_decision: 'independent',
+    }))
+  } finally {
+    ui.unmount()
+    listCandidatesMock.mockReset()
+    listCandidatesMock.mockResolvedValue([])
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('candidate loading fails closed and retry keeps the current quick-create input', async () => {
+  const api = require('../../lib/api')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const listPropertiesMock = api.listCleaningAppPropertyCodes as jest.Mock
+  const listCandidatesMock = api.listManualCheckinLinkCandidates as jest.Mock
+  const createManualMock = api.createManualCleaningTask as jest.Mock
+  listPropertiesMock.mockResolvedValue([{ id: 'FIXTURE-PROPERTY-LINK-001', code: 'FIXTURE-PROP-CODE-LINK-001' }])
+  listCandidatesMock.mockReset()
+  listCandidatesMock.mockRejectedValueOnce(new Error('候选服务暂不可用')).mockResolvedValueOnce([])
+  createManualMock.mockReset()
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-link-retry', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    fireEvent.press(await ui.findByTestId('quick-create-open'))
+    await waitFor(() => expect(listPropertiesMock).toHaveBeenCalled())
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-CODE-LINK-001')
+    fireEvent.changeText(ui.getByLabelText('quick-create-guest-note'), '临时入住备注不能丢')
+    await waitFor(() => expect(ui.getByTestId('quick-create-link-error')).toBeTruthy())
+    expect(ui.getByTestId('quick-create-submit').props.accessibilityState?.disabled).toBe(true)
+    expect(createManualMock).not.toHaveBeenCalled()
+    fireEvent.press(ui.getByLabelText('重试加载退房关联候选'))
+    await waitFor(() => expect(ui.getByTestId('quick-create-link-empty')).toBeTruthy())
+    expect(ui.getByDisplayValue('临时入住备注不能丢')).toBeTruthy()
+  } finally {
+    ui.unmount()
+    listCandidatesMock.mockReset()
+    listCandidatesMock.mockResolvedValue([])
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('late candidate responses cannot overwrite a newer property scope', async () => {
+  const api = require('../../lib/api')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const listPropertiesMock = api.listCleaningAppPropertyCodes as jest.Mock
+  const listCandidatesMock = api.listManualCheckinLinkCandidates as jest.Mock
+  listPropertiesMock.mockResolvedValue([
+    { id: 'FIXTURE-PROPERTY-LINK-001', code: 'FIXTURE-PROP-CODE-LINK-001' },
+    { id: 'property-other', code: 'OTHER' },
+  ])
+  let resolveCwg!: (items: any[]) => void
+  let resolveOther!: (items: any[]) => void
+  listCandidatesMock.mockReset()
+  listCandidatesMock.mockImplementation((_token: string, params: { property_id: string }) => new Promise<any[]>((resolve) => {
+    if (params.property_id === 'FIXTURE-PROPERTY-LINK-001') resolveCwg = resolve
+    else resolveOther = resolve
+  }))
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-link-stale', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    fireEvent.press(await ui.findByTestId('quick-create-open'))
+    await waitFor(() => expect(listPropertiesMock).toHaveBeenCalled())
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-CODE-LINK-001')
+    await waitFor(() => expect(listCandidatesMock).toHaveBeenCalledWith('local:test', expect.objectContaining({ property_id: 'FIXTURE-PROPERTY-LINK-001' })))
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'OTHER')
+    await waitFor(() => expect(listCandidatesMock).toHaveBeenCalledWith('local:test', expect.objectContaining({ property_id: 'property-other' })))
+    await act(async () => {
+      resolveOther([{
+        id: 'checkout-other',
+        property_id: 'property-other',
+        property_code: 'OTHER',
+        task_date: mockTodayKey,
+        checkout_time: '10am',
+        status: 'completed',
+      }])
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(ui.getByLabelText('关联退房任务-checkout-other')).toBeTruthy())
+    await act(async () => {
+      resolveCwg([{
+        id: 'FIXTURE-CHECKOUT-STALE-001',
+        property_id: 'FIXTURE-PROPERTY-LINK-001',
+        property_code: 'FIXTURE-PROP-CODE-LINK-001',
+        task_date: mockTodayKey,
+        checkout_time: '10am',
+        status: 'completed',
+      }])
+      await Promise.resolve()
+    })
+    expect(ui.queryByLabelText('关联退房任务-FIXTURE-CHECKOUT-STALE-001')).toBeNull()
+    expect(ui.getByLabelText('关联退房任务-checkout-other')).toBeTruthy()
+  } finally {
+    ui.unmount()
+    listCandidatesMock.mockReset()
+    listCandidatesMock.mockResolvedValue([])
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('a link conflict refreshes candidates and retains input for a safe retry', async () => {
+  const api = require('../../lib/api')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const listPropertiesMock = api.listCleaningAppPropertyCodes as jest.Mock
+  const listCandidatesMock = api.listManualCheckinLinkCandidates as jest.Mock
+  const createManualMock = api.createManualCleaningTask as jest.Mock
+  const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+  listPropertiesMock.mockResolvedValue([{ id: 'FIXTURE-PROPERTY-LINK-001', code: 'FIXTURE-PROP-CODE-LINK-001' }])
+  const candidate = (id: string) => [{
+    id,
+    property_id: 'FIXTURE-PROPERTY-LINK-001',
+    property_code: 'FIXTURE-PROP-CODE-LINK-001',
+    task_date: mockTodayKey,
+    checkout_time: '10am',
+    status: 'completed',
+  }]
+  listCandidatesMock.mockReset()
+  let resolveReplacement!: (items: ReturnType<typeof candidate>) => void
+  listCandidatesMock.mockResolvedValueOnce(candidate('checkout-first')).mockImplementationOnce(() => new Promise((resolve) => {
+    resolveReplacement = resolve
+  }))
+  createManualMock.mockReset()
+  createManualMock.mockRejectedValueOnce(Object.assign(new Error('该退房任务已被关联'), {
+    code: 'manual_checkin_checkout_link_conflict',
+    status: 409,
+  })).mockResolvedValueOnce({})
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-link-conflict', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    fireEvent.press(await ui.findByTestId('quick-create-open'))
+    await waitFor(() => expect(listPropertiesMock).toHaveBeenCalled())
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-CODE-LINK-001')
+    fireEvent.changeText(ui.getByLabelText('quick-create-guest-note'), '冲突后保留输入')
+    await waitFor(() => expect(ui.getByLabelText('关联退房任务-checkout-first')).toBeTruthy())
+    fireEvent.press(ui.getByTestId('quick-create-submit'))
+    await waitFor(() => expect(listCandidatesMock).toHaveBeenCalledTimes(2))
+    expect(ui.getByTestId('quick-create-link-loading')).toBeTruthy()
+    expect(ui.getByTestId('quick-create-submit').props.accessibilityState?.disabled).toBe(true)
+    expect(ui.getByDisplayValue('冲突后保留输入')).toBeTruthy()
+    await act(async () => {
+      resolveReplacement(candidate('checkout-replacement'))
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(ui.getByLabelText('关联退房任务-checkout-replacement')).toBeTruthy())
+    expect(ui.getByDisplayValue('冲突后保留输入')).toBeTruthy()
+    fireEvent.press(ui.getByTestId('quick-create-submit'))
+    await waitFor(() => expect(createManualMock).toHaveBeenCalledTimes(2))
+    expect(createManualMock.mock.calls[1][1]).toEqual(expect.objectContaining({
+      linked_checkout_task_id: 'checkout-replacement',
+      checkin_link_decision: 'link',
+      guest_special_request: '冲突后保留输入',
+    }))
+  } finally {
+    ui.unmount()
+    alertSpy.mockRestore()
+    listCandidatesMock.mockReset()
+    listCandidatesMock.mockResolvedValue([])
     mockAuthState.user = previousUser
     mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
     mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
@@ -1394,7 +1711,7 @@ test('failed checkin quick create keeps its applicable input and remains single-
   const listPropertiesMock = api.listCleaningAppPropertyCodes as jest.Mock
   const createManualMock = api.createManualCleaningTask as jest.Mock
   const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {})
-  listPropertiesMock.mockResolvedValue([{ id: 'property-cwg05', code: 'CWG05' }])
+  listPropertiesMock.mockResolvedValue([{ id: 'FIXTURE-PROPERTY-LINK-001', code: 'FIXTURE-PROP-CODE-LINK-001' }])
   createManualMock.mockClear()
   let rejectCreate!: (reason: Error) => void
   createManualMock.mockImplementationOnce(() => new Promise((_resolve, reject) => {
@@ -1415,10 +1732,11 @@ test('failed checkin quick create keeps its applicable input and remains single-
     await waitFor(() => expect(ui.getByTestId('quick-create-open')).toBeTruthy())
     fireEvent.press(ui.getByTestId('quick-create-open'))
     await waitFor(() => expect(listPropertiesMock).toHaveBeenCalled())
-    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'CWG05')
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-CODE-LINK-001')
     fireEvent.changeText(ui.getByLabelText('quick-create-time'), '4pm')
     fireEvent.changeText(ui.getByLabelText('quick-create-lock-code'), 'synthetic-checkin-code')
     fireEvent.changeText(ui.getByLabelText('quick-create-guest-note'), '保留这条入住备注')
+    await waitFor(() => expect(ui.getByTestId('quick-create-link-empty')).toBeTruthy())
 
     const submit = ui.getByTestId('quick-create-submit')
     fireEvent.press(submit)
@@ -1430,7 +1748,7 @@ test('failed checkin quick create keeps its applicable input and remains single-
       await Promise.resolve()
     })
     await waitFor(() => expect(ui.getByTestId('quick-create-submit').props.accessibilityState?.disabled).not.toBe(true))
-    expect(ui.getByDisplayValue('CWG05')).toBeTruthy()
+    expect(ui.getByDisplayValue('FIXTURE-PROP-CODE-LINK-001')).toBeTruthy()
     expect(ui.getByDisplayValue('4pm')).toBeTruthy()
     expect(ui.getByDisplayValue('synthetic-checkin-code')).toBeTruthy()
     expect(ui.getByDisplayValue('保留这条入住备注')).toBeTruthy()
@@ -1441,7 +1759,7 @@ test('failed checkin quick create keeps its applicable input and remains single-
     const retryPayload = createManualMock.mock.calls[1][1]
     expect(retryPayload).toEqual(expect.objectContaining({
       create_mode: 'checkin',
-      property_id: 'property-cwg05',
+      property_id: 'FIXTURE-PROPERTY-LINK-001',
       checkin_time: '4pm',
       new_code: 'synthetic-checkin-code',
       guest_special_request: '保留这条入住备注',
@@ -2091,8 +2409,8 @@ test('a day containing only read-only work records does not offer task reorderin
     work_record_date: mockTodayKey,
     work_record_read_only: true,
     source_type: 'cleaning_tasks',
-    old_code: '1357',
-    new_code: '2468',
+    old_code: 'NOT_A_REAL_OLD_CODE',
+    new_code: 'NOT_A_REAL_NEW_CODE',
     read_only_views: {
       property_access: true,
       lock_codes: true,
@@ -2118,8 +2436,8 @@ test('a day containing only read-only work records does not offer task reorderin
   try {
     await waitFor(() => expect(ui.getByLabelText('task-card-completed-record')).toBeTruthy())
     expandTask(ui, 'completed-record')
-    expect(ui.getByText('1357')).toBeTruthy()
-    expect(ui.getByText('2468')).toBeTruthy()
+    expect(ui.getByText('NOT_A_REAL_OLD_CODE')).toBeTruthy()
+    expect(ui.getByText('NOT_A_REAL_NEW_CODE')).toBeTruthy()
     expect(ui.queryByText('排序')).toBeNull()
   } finally {
     snapshot.items = previousItems
@@ -2322,8 +2640,8 @@ test('key handover execution task shows password-only tag and executor role in l
       source_type: 'cleaning_tasks',
       source_id: 'ct-exec-1',
       assignee_id: 'angela-id',
-      assignee_name: 'Angela',
-      executor_name: 'Angela',
+      assignee_name: 'Fixture User D',
+      executor_name: 'Fixture User D',
       cleaner_id: null,
       cleaner_name: null,
       inspector_id: null,
@@ -2354,14 +2672,14 @@ test('key handover execution task shows password-only tag and executor role in l
   await waitFor(() => {
     expect(ui.getAllByText('执行').length).toBeGreaterThan(0)
     expect(ui.getByText('仅改密码')).toBeTruthy()
-    expect(ui.getByText('Angela')).toBeTruthy()
+    expect(ui.getByText('Fixture User D')).toBeTruthy()
     expect(ui.queryByText('execution')).toBeNull()
   })
 
   const rendered = flattenRenderedText(ui.toJSON()).join('\n')
   expect(rendered).toContain('检查/挂钥匙')
-  expect(rendered).toContain('执行\nAngela')
-  expect(rendered).not.toContain('清洁\nAngela')
+  expect(rendered).toContain('执行\nFixture User D')
+  expect(rendered).not.toContain('清洁\nFixture User D')
 
   snapshot.items = previousItems
 })
@@ -2383,10 +2701,10 @@ test('legacy password-only check-in card shows generic executor instead of clean
       source_type: 'cleaning_tasks',
       source_id: 'ct-eq3401',
       assignee_id: 'u1',
-      assignee_name: 'Oscar',
+      assignee_name: 'Fixture User E',
       executor_name: null,
       cleaner_id: null,
-      cleaner_name: 'Oscar',
+      cleaner_name: 'Fixture User E',
       inspector_id: null,
       inspector_name: null,
       status: 'pending',
@@ -2418,12 +2736,12 @@ test('legacy password-only check-in card shows generic executor instead of clean
       expect(ui.getByText('检查/挂钥匙')).toBeTruthy()
       expect(ui.getByText('仅改密码')).toBeTruthy()
       expect(ui.getByText('已分配')).toBeTruthy()
-      expect(ui.getByText('Oscar')).toBeTruthy()
+      expect(ui.getByText('Fixture User E')).toBeTruthy()
     })
 
     const rendered = flattenRenderedText(ui.toJSON()).join('\n')
-    expect(rendered).toContain('执行\nOscar')
-    expect(rendered).not.toContain('清洁\nOscar')
+    expect(rendered).toContain('执行\nFixture User E')
+    expect(rendered).not.toContain('清洁\nFixture User E')
     expect(rendered).not.toContain('未分配')
   } finally {
     snapshot.items = previousItems
@@ -2447,11 +2765,11 @@ test('inspect-and-hang semantics never show a generic assignee as cleaning staff
       source_type: 'cleaning_tasks',
       source_id: 'ct-inspect-and-hang',
       assignee_id: 'oscar-id',
-      assignee_name: 'Oscar',
+      assignee_name: 'Fixture User E',
       executor_id: 'oscar-id',
-      executor_name: 'Oscar',
+      executor_name: 'Fixture User E',
       cleaner_id: null,
-      cleaner_name: 'Oscar',
+      cleaner_name: 'Fixture User E',
       inspector_id: null,
       inspector_name: null,
       status: 'pending',
@@ -2482,12 +2800,12 @@ test('inspect-and-hang semantics never show a generic assignee as cleaning staff
     await waitFor(() => {
       expect(ui.getByText('检查/挂钥匙')).toBeTruthy()
       expect(ui.getByText('检查后挂钥匙')).toBeTruthy()
-      expect(ui.getByText('Oscar')).toBeTruthy()
+      expect(ui.getByText('Fixture User E')).toBeTruthy()
     })
 
     const rendered = flattenRenderedText(ui.toJSON()).join('\n')
-    expect(rendered).toContain('执行\nOscar')
-    expect(rendered).not.toContain('清洁\nOscar')
+    expect(rendered).toContain('执行\nFixture User E')
+    expect(rendered).not.toContain('清洁\nFixture User E')
   } finally {
     snapshot.items = previousItems
   }
@@ -2510,7 +2828,7 @@ test('check-in site execution task shows inspection scope and assignee in list',
       source_type: 'cleaning_tasks',
       source_id: 'ct-exec-inspect-1',
       assignee_id: 'carrie-id',
-      assignee_name: 'Carrie',
+      assignee_name: 'Fixture User F',
       executor_name: null,
       cleaner_id: null,
       cleaner_name: null,
@@ -2542,12 +2860,12 @@ test('check-in site execution task shows inspection scope and assignee in list',
   await waitFor(() => {
     expect(ui.getAllByText('执行').length).toBeGreaterThan(0)
     expect(ui.getByText('检查后挂钥匙')).toBeTruthy()
-    expect(ui.getByText('Carrie')).toBeTruthy()
+    expect(ui.getByText('Fixture User F')).toBeTruthy()
     expect(ui.queryByText('execution')).toBeNull()
   })
 
   const rendered = flattenRenderedText(ui.toJSON()).join('\n')
-  expect(rendered).toContain('执行\nCarrie')
+  expect(rendered).toContain('执行\nFixture User F')
   expect(rendered).not.toContain('清洁\n-')
   expect(rendered).not.toContain('检查\n-')
 
@@ -2629,11 +2947,11 @@ test('tasks screen shows original checkout and blocks silent inspection reassign
     inspection_assignment_conflict: {
       reasons: ['checkin_inspector_mismatch', 'checkin_participant_mismatch'],
       planned_inspector_id: 'oscar',
-      planned_inspector_name: 'Oscar',
+      planned_inspector_name: 'Fixture User E',
       checkin_inspector_id: 'barbara',
-      checkin_inspector_name: 'Barbara',
+      checkin_inspector_name: 'Fixture User I',
       checkin_assignee_id: 'oscar',
-      checkin_assignee_name: 'Oscar',
+      checkin_assignee_name: 'Fixture User E',
       deferred_task_id: 'checkout-8508',
       checkin_task_id: 'checkin-8508',
     },
@@ -2652,7 +2970,7 @@ test('tasks screen shows original checkout and blocks silent inspection reassign
   await waitFor(() => {
     expect(ui.getByText('原退房 2026-10-16')).toBeTruthy()
     expect(ui.getByText('检查安排冲突')).toBeTruthy()
-    expect(ui.getByText('计划检查：Oscar；入住检查：Barbara；入住执行：Oscar。不会自动改派或转移检查费。')).toBeTruthy()
+    expect(ui.getByText('计划检查：Fixture User E；入住检查：Fixture User I；入住执行：Fixture User E。不会自动改派或转移检查费。')).toBeTruthy()
   })
 
   snapshot.items[0] = previousTask
@@ -2677,12 +2995,12 @@ test.each([
     source_ids: ['checkout-406', 'checkin-406'],
     task_kind: 'inspection',
     task_type: 'checkin_clean',
-    title: '883406',
+    title: 'FIXTURE-VISIBILITY-001',
     scheduled_date: mockTodayKey,
     status: 'assigned',
     assignee_id: 'mia-id',
     inspector_id: null,
-    assignee_name: 'Mia',
+    assignee_name: 'Fixture User J',
     inspection_mode: 'deferred',
     inspection_scope: 'inspect_and_hang',
     inspection_original_checkout_date: '2026-10-23',
@@ -2692,7 +3010,7 @@ test.each([
     start_time: '10am',
     end_time: '3pm',
     inspection_assignment_conflict: null,
-    property: { ...base.property, code: '883406' },
+    property: { ...base.property, code: 'FIXTURE-VISIBILITY-001' },
   }]
   mockAuthState.user = { id: `${roles[0]}-075`, username: `${roles[0]}-075`, role: roles[0], roles }
   mockRoleState.canSwitchTaskMode = false
@@ -2711,13 +3029,13 @@ test.each([
   try {
     await waitFor(() => {
       expect(ui.getByText('是延期检查')).toBeTruthy()
-      expect(ui.getByText('883406 入住')).toBeTruthy()
-      expect(ui.queryByText('883406 退房 入住')).toBeNull()
+      expect(ui.getByText('FIXTURE-VISIBILITY-001 入住')).toBeTruthy()
+      expect(ui.queryByText('FIXTURE-VISIBILITY-001 退房 入住')).toBeNull()
       expect(ui.getByText(`原退房 2026-10-23 → 本次检查 ${mockTodayKey}`)).toBeTruthy()
       expect(ui.queryByText('检查安排冲突')).toBeNull()
     })
     expandTask(ui, `deferred-checkin-${roles[0]}`)
-    await waitFor(() => expect(ui.getByText('Mia')).toBeTruthy())
+    await waitFor(() => expect(ui.getByText('Fixture User J')).toBeTruthy())
   } finally {
     ui.unmount()
     snapshot.items = previousItems
@@ -2771,7 +3089,7 @@ test('a genuinely unassigned merged card stays unassigned and an ordinary check-
       scheduled_date: mockTodayKey,
       status: 'assigned',
       assignee_id: 'mia-id',
-      assignee_name: 'Mia',
+      assignee_name: 'Fixture User J',
       inspection_mode: 'same_day',
       inspection_scope: 'inspect_and_hang',
       inspection_original_checkout_date: null,
@@ -2810,7 +3128,7 @@ test('a genuinely unassigned merged card stays unassigned and an ordinary check-
   }
 })
 
-test('manager keeps MSQ1905E reopened overdue inspection separate from the current turnover', async () => {
+test('manager keeps FIXTURE-DEFERRED-001 reopened overdue inspection separate from the current turnover', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
   const previousItems = snapshot.items.slice()
@@ -2822,9 +3140,9 @@ test('manager keeps MSQ1905E reopened overdue inspection separate from the curre
   snapshot.items = [
     {
       ...previousItems[0],
-      id: 'msq1905e-current',
-      source_id: 'msq1905e-current-checkout',
-      source_ids: ['msq1905e-current-checkout'],
+      id: 'fixture-deferred-001-current',
+      source_id: 'fixture-deferred-001-current-checkout',
+      source_ids: ['fixture-deferred-001-current-checkout'],
       task_kind: 'inspection',
       task_type: 'checkout_clean',
       inspection_mode: 'same_day',
@@ -2836,18 +3154,18 @@ test('manager keeps MSQ1905E reopened overdue inspection separate from the curre
       status: 'assigned',
       assignee_id: 'oscar-id',
       inspector_id: 'oscar-id',
-      inspector_name: 'Oscar',
-      cleaner_name: 'Barbara',
+      inspector_name: 'Fixture User E',
+      cleaner_name: 'Fixture User I',
       lockbox_video_url: null,
-      property_id: 'msq1905e-property',
-      property: { ...previousItems[0].property, id: 'msq1905e-property', code: 'MSQ1905E', region: 'Southbank' },
+      property_id: 'fixture-deferred-001-property',
+      property: { ...previousItems[0].property, id: 'fixture-deferred-001-property', code: 'FIXTURE-DEFERRED-001', region: 'Southbank' },
       date: mockTodayKey,
     },
     {
       ...previousItems[0],
-      id: 'msq1905e-overdue',
-      source_id: 'msq1905e-deferred-2026-10-11',
-      source_ids: ['msq1905e-deferred-2026-10-11'],
+      id: 'fixture-deferred-001-overdue',
+      source_id: 'fixture-deferred-001-deferred-2026-10-11',
+      source_ids: ['fixture-deferred-001-deferred-2026-10-11'],
       task_kind: 'inspection',
       task_type: 'checkout_clean',
       inspection_mode: 'deferred',
@@ -2859,12 +3177,12 @@ test('manager keeps MSQ1905E reopened overdue inspection separate from the curre
       status: 'assigned',
       assignee_id: 'angela-id',
       inspector_id: 'angela-id',
-      inspector_name: 'Angela',
-      cleaner_name: 'Barbara',
+      inspector_name: 'Fixture User D',
+      cleaner_name: 'Fixture User I',
       key_photo_url: 'https://example.invalid/historical-key.jpg',
       lockbox_video_url: 'https://example.invalid/historical-lockbox.mp4',
-      property_id: 'msq1905e-property',
-      property: { ...previousItems[0].property, id: 'msq1905e-property', code: 'MSQ1905E', region: 'Southbank' },
+      property_id: 'fixture-deferred-001-property',
+      property: { ...previousItems[0].property, id: 'fixture-deferred-001-property', code: 'FIXTURE-DEFERRED-001', region: 'Southbank' },
       date: mockTodayKey,
     },
   ]
@@ -2874,23 +3192,23 @@ test('manager keeps MSQ1905E reopened overdue inspection separate from the curre
     <I18nProvider>
       <TasksScreen
         navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
-        route={{ key: 'tasks-msq1905e-source-isolation', name: 'TasksList' } as any}
+        route={{ key: 'tasks-fixture-deferred-001-source-isolation', name: 'TasksList' } as any}
       />
     </I18nProvider>,
   )
 
   await waitFor(() => {
-    expect(ui.getByText('MSQ1905E 退房')).toBeTruthy()
-    expect(ui.getByText('MSQ1905E 延期检查')).toBeTruthy()
+    expect(ui.getByText('FIXTURE-DEFERRED-001 退房')).toBeTruthy()
+    expect(ui.getByText('FIXTURE-DEFERRED-001 延期检查')).toBeTruthy()
     expect(ui.getAllByText('已分配')).toHaveLength(2)
     expect(ui.queryByText('已挂钥匙')).toBeNull()
   })
 
-  expandTask(ui, 'msq1905e-current')
-  expandTask(ui, 'msq1905e-overdue')
+  expandTask(ui, 'fixture-deferred-001-current')
+  expandTask(ui, 'fixture-deferred-001-overdue')
   await waitFor(() => {
-    expect(ui.getByText('Oscar')).toBeTruthy()
-    expect(ui.getByText('Angela')).toBeTruthy()
+    expect(ui.getByText('Fixture User E')).toBeTruthy()
+    expect(ui.getByText('Fixture User D')).toBeTruthy()
   })
 
   ui.unmount()
@@ -2900,7 +3218,7 @@ test('manager keeps MSQ1905E reopened overdue inspection separate from the curre
   mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
 })
 
-test('MQ2212-style pending finalization shows key handover fact and separate missing-material notice', async () => {
+test('FIXTURE-KEY-001-style pending finalization shows key handover fact and separate missing-material notice', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
   const previousItems = snapshot.items.slice()
@@ -2911,25 +3229,25 @@ test('MQ2212-style pending finalization shows key handover fact and separate mis
   mockRoleState.isTaskManagerUser = true
   snapshot.items = [{
     ...previousItems[0],
-    id: 'mq2212-current',
-    source_id: 'mq2212-checkout',
-    source_ids: ['mq2212-checkout'],
+    id: 'fixture-key-001-current',
+    source_id: 'fixture-key-001-checkout',
+    source_ids: ['fixture-key-001-checkout'],
     task_kind: 'inspection',
     task_type: 'checkout_clean',
     status: 'in_progress',
     cleaning_status: 'in_progress',
     inspection_status: 'in_progress',
     cleaning_submission_ready: false,
-    lockbox_video_url: 'https://example.invalid/mq2212-lockbox.mp4',
+    lockbox_video_url: 'https://example.invalid/fixture-key-001-lockbox.mp4',
     key_handover: {
       state: 'completed',
-      source_task_id: 'mq2212-checkout',
+      source_task_id: 'fixture-key-001-checkout',
       completed_at: '2026-10-20T02:32:15.623Z',
       workflow_finalization_pending: true,
       missing_requirements: ['cleaning_consumables', 'cleaning_property_photo'],
     },
-    property_id: 'mq2212-property',
-    property: { ...previousItems[0].property, id: 'mq2212-property', code: 'MQ2212', region: 'Southbank' },
+    property_id: 'fixture-key-001-property',
+    property: { ...previousItems[0].property, id: 'fixture-key-001-property', code: 'FIXTURE-KEY-001', region: 'Southbank' },
     scheduled_date: mockTodayKey,
     date: mockTodayKey,
   }]
@@ -2939,7 +3257,7 @@ test('MQ2212-style pending finalization shows key handover fact and separate mis
     <I18nProvider>
       <TasksScreen
         navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
-        route={{ key: 'tasks-mq2212-key-fact', name: 'TasksList' } as any}
+        route={{ key: 'tasks-fixture-key-001-key-fact', name: 'TasksList' } as any}
       />
     </I18nProvider>,
   )
@@ -3192,43 +3510,43 @@ test('task list preserves a prior-day current projection while bucketing a genui
   }
 })
 
-test('manager keeps two 831606 tasks that share a property and order but have different sources', async () => {
+test('manager keeps two FIXTURE-SOURCES-001 tasks that share a property and order but have different sources', async () => {
   const store = jest.requireMock('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()
   const previousItems = snapshot.items.slice()
   const previousUser = mockAuthState.user
   const previousRoleState = { ...mockRoleState }
   const base = previousItems[0]
-  mockAuthState.user = { id: 'admin-831606', username: 'admin-831606', role: 'admin', roles: ['admin', 'cleaner'] }
+  mockAuthState.user = { id: 'admin-FIXTURE-SOURCES-001', username: 'admin-FIXTURE-SOURCES-001', role: 'admin', roles: ['admin', 'cleaner'] }
   mockRoleState.canSwitchTaskMode = false
   mockRoleState.isTaskManagerUser = true
   snapshot.items = [
     {
       ...base,
-      id: '831606-cleaning-a',
-      source_id: '831606-source-a',
-      source_ids: ['831606-source-a'],
-      order_id_checkout: '831606-shared-order',
-      property_id: 'property-831606',
-      property: { ...base.property, id: 'property-831606', code: '831606' },
+      id: 'FIXTURE-SOURCES-001-cleaning-a',
+      source_id: 'FIXTURE-SOURCES-001-source-a',
+      source_ids: ['FIXTURE-SOURCES-001-source-a'],
+      order_id_checkout: 'FIXTURE-SOURCES-001-shared-order',
+      property_id: 'property-FIXTURE-SOURCES-001',
+      property: { ...base.property, id: 'property-FIXTURE-SOURCES-001', code: 'FIXTURE-SOURCES-001' },
       execution_list_visible: true,
       daily_stats_group: 'turnover',
-      daily_stats_key: `turnover:${mockTodayKey}:property-831606`,
+      daily_stats_key: `turnover:${mockTodayKey}:property-FIXTURE-SOURCES-001`,
       scheduled_date: mockTodayKey,
       status: 'assigned',
       date: mockTodayKey,
     },
     {
       ...base,
-      id: '831606-cleaning-b',
-      source_id: '831606-source-b',
-      source_ids: ['831606-source-b'],
-      order_id_checkout: '831606-shared-order',
-      property_id: 'property-831606',
-      property: { ...base.property, id: 'property-831606', code: '831606' },
+      id: 'FIXTURE-SOURCES-001-cleaning-b',
+      source_id: 'FIXTURE-SOURCES-001-source-b',
+      source_ids: ['FIXTURE-SOURCES-001-source-b'],
+      order_id_checkout: 'FIXTURE-SOURCES-001-shared-order',
+      property_id: 'property-FIXTURE-SOURCES-001',
+      property: { ...base.property, id: 'property-FIXTURE-SOURCES-001', code: 'FIXTURE-SOURCES-001' },
       execution_list_visible: true,
       daily_stats_group: 'turnover',
-      daily_stats_key: `turnover:${mockTodayKey}:property-831606`,
+      daily_stats_key: `turnover:${mockTodayKey}:property-FIXTURE-SOURCES-001`,
       scheduled_date: mockTodayKey,
       status: 'assigned',
       date: mockTodayKey,
@@ -3240,15 +3558,15 @@ test('manager keeps two 831606 tasks that share a property and order but have di
     <I18nProvider>
       <TasksScreen
         navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
-        route={{ key: 'tasks-831606-distinct-sources', name: 'TasksList' } as any}
+        route={{ key: 'tasks-FIXTURE-SOURCES-001-distinct-sources', name: 'TasksList' } as any}
       />
     </I18nProvider>,
   )
 
   try {
     await waitFor(() => {
-      expect(ui.getByLabelText('task-card-831606-cleaning-a')).toBeTruthy()
-      expect(ui.getByLabelText('task-card-831606-cleaning-b')).toBeTruthy()
+      expect(ui.getByLabelText('task-card-FIXTURE-SOURCES-001-cleaning-a')).toBeTruthy()
+      expect(ui.getByLabelText('task-card-FIXTURE-SOURCES-001-cleaning-b')).toBeTruthy()
       expect(ui.getByText('入住＋退房 2 · 线下 0')).toBeTruthy()
       expect(ui.getByText('在办 2 · 完成 0')).toBeTruthy()
     })
@@ -3429,15 +3747,15 @@ test('customer service cleaning task is collapsed by default and opens the origi
   await waitFor(() => {
     expect(ui.getByLabelText('task-card-w1')).toBeTruthy()
     expect(ui.getByLabelText('task-collapse-w1')).toBeTruthy()
-    expect(ui.queryByText('AuraWiFi')).toBeNull()
-    expect(ui.queryByText('pw-1234')).toBeNull()
+    expect(ui.queryByText('FIXTURE_WIFI_NAME')).toBeNull()
+    expect(ui.queryByText('NOT_A_REAL_PASSWORD')).toBeNull()
     expect(ui.getByText('展开')).toBeTruthy()
   })
   fireEvent.press(ui.getByLabelText('task-collapse-w1'))
 
   await waitFor(() => {
-    expect(ui.getByText('AuraWiFi')).toBeTruthy()
-    expect(ui.getByText('pw-1234')).toBeTruthy()
+    expect(ui.getByText('FIXTURE_WIFI_NAME')).toBeTruthy()
+    expect(ui.getByText('NOT_A_REAL_PASSWORD')).toBeTruthy()
     expect(ui.getByText('标记已退房')).toBeTruthy()
     expect(ui.getByText('问题反馈')).toBeTruthy()
     expect(ui.queryByText('检查与补充')).toBeNull()
@@ -3704,8 +4022,8 @@ test.each([
   await waitFor(() => {
     expect(ui.getByLabelText('task-card-w1')).toBeTruthy()
     expect(ui.getByLabelText('task-collapse-w1')).toBeTruthy()
-    expect(ui.queryByText('AuraWiFi')).toBeNull()
-    expect(ui.queryByText('pw-1234')).toBeNull()
+    expect(ui.queryByText('FIXTURE_WIFI_NAME')).toBeNull()
+    expect(ui.queryByText('NOT_A_REAL_PASSWORD')).toBeNull()
   })
 
   snapshotRestoreForRoleTest()
@@ -4001,20 +4319,20 @@ test('property follow-up task prioritizes content before assignee and address', 
       task_kind: 'maintenance',
       source_type: 'property_maintenance',
       source_id: 'pm-1',
-      title: '888312',
+      title: 'FIXTURE-MAINT-001',
       summary: '洗碗机排水不正常',
       scheduled_date: mockTodayKey,
       start_time: '',
       end_time: '',
       assignee_id: 'u1',
-      assignee_name: 'Miranda',
+      assignee_name: 'Fixture User G',
       status: 'assigned',
       urgency: 'medium',
       property: {
         id: 'p-maintenance',
-        code: '888312',
+        code: 'FIXTURE-MAINT-001',
         region: 'Melbourne',
-        address: '888 Collins Street, Melbourne',
+        address: '1 Example Maintenance Road, Testville',
         unit_type: '',
         access_guide_link: '',
       },
@@ -4039,13 +4357,13 @@ test('property follow-up task prioritizes content before assignee and address', 
     expect(ui.getByText('任务内容')).toBeTruthy()
     expect(ui.getByText('洗碗机排水不正常')).toBeTruthy()
     expect(ui.getByText('执行人员')).toBeTruthy()
-    expect(ui.getByText('Miranda')).toBeTruthy()
+    expect(ui.getByText('Fixture User G')).toBeTruthy()
     expect(ui.getByText('房源地址')).toBeTruthy()
   })
 
   const rendered = flattenRenderedText(ui.toJSON()).join('\n')
   expect(rendered.indexOf('洗碗机排水不正常')).toBeLessThan(rendered.indexOf('执行人员'))
-  expect(rendered.indexOf('执行人员')).toBeLessThan(rendered.indexOf('888 Collins Street, Melbourne'))
+  expect(rendered.indexOf('执行人员')).toBeLessThan(rendered.indexOf('1 Example Maintenance Road, Testville'))
 
   snapshot.items = previousItems
 })
@@ -4144,7 +4462,7 @@ test('customer service hides day-end overview while admin lazily opens dated sta
       cleaner_id: null,
       cleaner_name: null,
       inspector_id: 'inspector-2',
-      inspector_name: 'zhi-f',
+      inspector_name: 'Fixture Inspector F',
       status: 'to_hang_keys',
       cleaning_status: 'assigned',
       inspection_status: 'to_hang_keys',
@@ -4167,7 +4485,7 @@ test('customer service hides day-end overview while admin lazily opens dated sta
       end_time: '3pm',
       assignee_id: 'cleaner-3',
       cleaner_id: 'cleaner-3',
-      cleaner_name: 'Simon',
+      cleaner_name: 'Fixture User H',
       inspector_id: null,
       inspector_name: null,
       status: 'assigned',
@@ -4194,7 +4512,7 @@ test('customer service hides day-end overview while admin lazily opens dated sta
       cleaner_id: null,
       cleaner_name: null,
       inspector_id: 'inspector-4',
-      inspector_name: 'AaronInspector',
+      inspector_name: 'Fixture Inspector H',
       status: 'assigned',
       cleaning_status: null,
       inspection_status: 'assigned',
@@ -4248,24 +4566,24 @@ test('customer service hides day-end overview while admin lazily opens dated sta
   await waitFor(() => {
     expect(adminUi.getByText('清洁A')).toBeTruthy()
     expect(adminUi.getByText('检查B')).toBeTruthy()
-    expect(adminUi.getByText('Simon')).toBeTruthy()
-    expect(adminUi.getByText('AaronInspector')).toBeTruthy()
+    expect(adminUi.getByText('Fixture User H')).toBeTruthy()
+    expect(adminUi.getByText('Fixture Inspector H')).toBeTruthy()
     expect(adminUi.getByText('清洁 0/1 · 进行中 MQ101')).toBeTruthy()
     expect(adminUi.getByText('检查 1/1 · 已完成 MQ101')).toBeTruthy()
-    expect(adminUi.getByText('zhi-f')).toBeTruthy()
+    expect(adminUi.getByText('Fixture Inspector F')).toBeTruthy()
     expect(adminUi.getAllByText('检查 0/1 · 待处理 1').length).toBeGreaterThan(0)
     expect(adminUi.queryByText('检查 1/1 · 进行中 MQ101')).toBeNull()
     expect(adminUi.queryByText('清洁 + 检查')).toBeNull()
     const rendered = flattenRenderedText(adminUi.toJSON()).join('\n')
     expect(rendered.indexOf('清洁A')).toBeGreaterThanOrEqual(0)
     expect(rendered.indexOf('检查B')).toBeGreaterThanOrEqual(0)
-    expect(rendered.indexOf('zhi-f')).toBeGreaterThanOrEqual(0)
-    expect(rendered.indexOf('Simon')).toBeGreaterThanOrEqual(0)
-    expect(rendered.indexOf('AaronInspector')).toBeGreaterThanOrEqual(0)
-    expect(rendered.indexOf('清洁A')).toBeLessThan(rendered.indexOf('zhi-f'))
+    expect(rendered.indexOf('Fixture Inspector F')).toBeGreaterThanOrEqual(0)
+    expect(rendered.indexOf('Fixture User H')).toBeGreaterThanOrEqual(0)
+    expect(rendered.indexOf('Fixture Inspector H')).toBeGreaterThanOrEqual(0)
+    expect(rendered.indexOf('清洁A')).toBeLessThan(rendered.indexOf('Fixture Inspector F'))
     expect(rendered.indexOf('清洁A')).toBeLessThan(rendered.indexOf('检查B'))
-    expect(rendered.indexOf('Simon')).toBeLessThan(rendered.indexOf('AaronInspector'))
-    expect(rendered.indexOf('Simon')).toBeLessThan(rendered.indexOf('检查B'))
+    expect(rendered.indexOf('Fixture User H')).toBeLessThan(rendered.indexOf('Fixture Inspector H'))
+    expect(rendered.indexOf('Fixture User H')).toBeLessThan(rendered.indexOf('检查B'))
   })
 
   expect(listWorkTasksMock).toHaveBeenCalledWith('local:test', {
@@ -4314,19 +4632,19 @@ test('warehouse key latest event uses today, yesterday, then explicit date label
 
   expect(formatWarehouseKeyLatestEvent({
     action: 'borrow',
-    actor_name: 'Alice',
+    actor_name: 'Fixture User A',
     created_at: new Date(2026, 6, 28, 9, 5).toISOString(),
-  }, referenceDate)).toBe('Alice借出 09:05')
+  }, referenceDate)).toBe('Fixture User A借出 09:05')
   expect(formatWarehouseKeyLatestEvent({
     action: 'borrow',
-    actor_name: 'Bob',
+    actor_name: 'Fixture User B',
     created_at: new Date(2026, 6, 27, 19, 45).toISOString(),
-  }, referenceDate)).toBe('昨天 Bob借出 19:45')
+  }, referenceDate)).toBe('昨天 Fixture User B借出 19:45')
   expect(formatWarehouseKeyLatestEvent({
     action: 'return',
-    actor_name: 'Cara',
+    actor_name: 'Fixture User C',
     created_at: new Date(2026, 6, 26, 8, 6).toISOString(),
-  }, referenceDate)).toBe('2026-07-26 Cara归还 08:06')
+  }, referenceDate)).toBe('2026-07-26 Fixture User C归还 08:06')
 })
 
 test('today week strip follows the selected Melbourne business date across a Monday boundary', () => {
@@ -4362,9 +4680,9 @@ test('admin manager view shows MSQ warehouse key card for Southbank work even wh
       property: {
         ...previousItems[0].property,
         id: 'p-southbank',
-        code: 'MSQ4504E',
+        code: 'FIXTURE-WAREHOUSE-001',
         region: 'Southbank',
-        address: '18 Hoff Boulevard, Southbank',
+        address: '2 Example Warehouse Road, Testville',
       },
     },
   ]

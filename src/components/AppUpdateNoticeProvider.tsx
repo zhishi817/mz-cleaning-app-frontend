@@ -2,8 +2,15 @@ import Constants from 'expo-constants'
 import * as Updates from 'expo-updates'
 import { useUpdates } from 'expo-updates'
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { Modal, Platform, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { AppState, Modal, Platform, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { CURRENT_APP_RELEASE_NOTES, type AppReleaseNotes } from '../lib/appReleaseNotes'
+import {
+  checkAppRestartSafety,
+  releaseAppRestartReservation,
+  reserveAppRestart,
+  subscribeAppRestartSafety,
+  type AppRestartSafetyResult,
+} from '../lib/appRestartSafety'
 import {
   acknowledgeAppliedAppUpdate,
   appUpdatePendingTarget,
@@ -60,7 +67,7 @@ function shortId(value: unknown) {
 function copyFor(view: AppUpdateNoticeView) {
   if (view.kind === 'pending') return {
     label: '更新已下载',
-    detail: '本次会话不会主动重启。选择“稍后”后，可从“我的 → 应用更新”再次查看；完全关闭并重新打开 App 时，缓存更新可能自动生效。',
+    detail: '可以现在安全重启并应用更新，也可以选择“稍后”，保存或取消当前工作后再从“我的 → 应用更新”打开。',
   }
   if (view.kind === 'applied') return {
     label: '更新完成',
@@ -107,7 +114,13 @@ export function AppUpdateNoticeProvider({ children }: { children: React.ReactNod
   })
   const [view, setView] = useState<AppUpdateNoticeView>({ kind: 'current' })
   const [visible, setVisible] = useState(false)
+  const [appState, setAppState] = useState(AppState.currentState)
+  const [restartSafety, setRestartSafety] = useState<{ status: 'idle' | 'checking' | 'ready'; result: AppRestartSafetyResult | null }>({ status: 'idle', result: null })
+  const [restartError, setRestartError] = useState<string | null>(null)
+  const [restartRequested, setRestartRequested] = useState(false)
   const generationRef = useRef(0)
+  const safetyCheckRef = useRef(0)
+  const restartInFlightRef = useRef(false)
   const runningUpdateId = cleanText(Updates.updateId)
   const downloaded = updateState.downloadedUpdate
   const downloadedId = downloadedUpdateId(downloaded)
@@ -115,6 +128,40 @@ export function AppUpdateNoticeProvider({ children }: { children: React.ReactNod
   const pendingCreatedAt = downloadedCreatedAt(downloaded)
   const rollbackPending = updateState.isUpdatePending && String((downloaded as any)?.type || '').toLowerCase() === 'rollback'
   const settled = !updateState.isStartupProcedureRunning && !updateState.isChecking && !updateState.isDownloading
+  const pendingTargetId = view.kind === 'pending' ? view.target.update_id : ''
+  const pendingDownloadReady = view.kind === 'pending'
+    && updateState.isUpdatePending
+    && !!downloadedId
+    && downloadedId === pendingTargetId
+    && !updateState.isChecking
+    && !updateState.isDownloading
+    && !updateState.isRestarting
+
+  const latestRestartStateRef = useRef({
+    appState,
+    downloadedId,
+    isChecking: !!updateState.isChecking,
+    isDownloading: !!updateState.isDownloading,
+    isRestarting: !!updateState.isRestarting,
+    isUpdatePending: !!updateState.isUpdatePending,
+    pendingTargetId,
+    visible,
+  })
+  latestRestartStateRef.current = {
+    appState,
+    downloadedId,
+    isChecking: !!updateState.isChecking,
+    isDownloading: !!updateState.isDownloading,
+    isRestarting: !!updateState.isRestarting,
+    isUpdatePending: !!updateState.isUpdatePending,
+    pendingTargetId,
+    visible,
+  }
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', setAppState)
+    return () => subscription.remove()
+  }, [])
 
   useEffect(() => {
     const generation = ++generationRef.current
@@ -158,7 +205,39 @@ export function AppUpdateNoticeProvider({ children }: { children: React.ReactNod
     return () => { alive = false }
   }, [downloadedId, pendingCreatedAt, pendingRuntimeVersion, rollbackPending, runningUpdateId, settled, updateState.isUpdatePending])
 
+  const refreshRestartSafety = useCallback(() => {
+    if (!visible || view.kind !== 'pending') return
+    const checkId = ++safetyCheckRef.current
+    setRestartSafety((current) => ({ status: 'checking', result: current.result }))
+    void checkAppRestartSafety().then((result) => {
+      if (safetyCheckRef.current !== checkId) return
+      setRestartSafety({ status: 'ready', result })
+    }).catch(() => {
+      if (safetyCheckRef.current !== checkId) return
+      setRestartSafety({
+        status: 'ready',
+        result: {
+          safe: false,
+          generation: -1,
+          blockers: [{ kind: 'storage_error', message: '无法核对本地草稿和上传队列，请稍后重试' }],
+        },
+      })
+    })
+  }, [view.kind, visible])
+
+  useEffect(() => {
+    if (!visible || view.kind !== 'pending') {
+      safetyCheckRef.current += 1
+      setRestartSafety({ status: 'idle', result: null })
+      setRestartError(null)
+      return
+    }
+    refreshRestartSafety()
+    return subscribeAppRestartSafety(refreshRestartSafety)
+  }, [refreshRestartSafety, view.kind, visible])
+
   const close = useCallback(() => {
+    if (restartInFlightRef.current) return
     setVisible(false)
     const next = view.kind === 'pending'
       ? dismissPendingAppUpdate(stored, view.target.update_id)
@@ -168,6 +247,67 @@ export function AppUpdateNoticeProvider({ children }: { children: React.ReactNod
     setStored(next)
     void saveAppUpdateNoticeState(next)
   }, [stored, view])
+
+  const restartNow = useCallback(async () => {
+    if (restartInFlightRef.current) return
+    const initial = latestRestartStateRef.current
+    if (
+      initial.appState !== 'active'
+      || !initial.visible
+      || !initial.isUpdatePending
+      || !initial.downloadedId
+      || initial.downloadedId !== initial.pendingTargetId
+      || initial.isChecking
+      || initial.isDownloading
+      || initial.isRestarting
+    ) {
+      setRestartError('更新文件尚未准备好，请保持 App 在前台并稍后重试。')
+      return
+    }
+    restartInFlightRef.current = true
+    setRestartRequested(true)
+    setRestartError(null)
+    const targetId = initial.pendingTargetId
+    let reservation: symbol | null = null
+    let reloadScheduled = false
+    try {
+      const result = await checkAppRestartSafety()
+      const latest = latestRestartStateRef.current
+      const targetStillReady = latest.appState === 'active'
+        && latest.visible
+        && latest.isUpdatePending
+        && latest.downloadedId === targetId
+        && latest.pendingTargetId === targetId
+        && !latest.isChecking
+        && !latest.isDownloading
+        && !latest.isRestarting
+      if (!targetStillReady) {
+        setRestartError('更新状态已经变化，请重新打开更新提示后再试。')
+        return
+      }
+      setRestartSafety({ status: 'ready', result })
+      if (!result.safe) return
+      reservation = reserveAppRestart(result.generation)
+      if (!reservation) {
+        setRestartError('表单或上传状态刚刚发生变化，已阻止重启，请确认后重试。')
+        refreshRestartSafety()
+        return
+      }
+      await Updates.reloadAsync()
+      reloadScheduled = true
+      // A successful call schedules native reload immediately. Keep the guard active;
+      // running more application logic here could race the reload.
+      return
+    } catch {
+      releaseAppRestartReservation(reservation)
+      setRestartError('重启更新失败，当前内容仍保留。请稍后重试或选择“稍后”。')
+    } finally {
+      if (!reloadScheduled) {
+        restartInFlightRef.current = false
+        setRestartRequested(false)
+      }
+    }
+  }, [refreshRestartSafety])
 
   const copy = copyFor(view)
   const release = releaseForView(view, stored, runningUpdateId)
@@ -184,6 +324,40 @@ export function AppUpdateNoticeProvider({ children }: { children: React.ReactNod
     status: view.kind,
     open: () => setVisible(true),
   }), [view.kind])
+
+  const restartBlockers = restartSafety.result?.blockers || []
+  const restartSafe = pendingDownloadReady
+    && appState === 'active'
+    && restartSafety.status === 'ready'
+    && restartSafety.result?.safe === true
+  const pendingStatusText = updateState.isRestarting || restartRequested
+    ? '正在重启并应用更新…'
+    : updateState.isDownloading
+      ? `正在下载更新${Number.isFinite(Number(updateState.downloadProgress)) ? ` · ${Math.round(Number(updateState.downloadProgress) * 100)}%` : ''}`
+      : updateState.downloadError
+        ? '更新下载失败，请保持当前 App，稍后重试。'
+        : updateState.isChecking
+          ? '正在检查更新文件…'
+          : updateState.checkError
+            ? '检查更新失败，当前版本可继续使用。'
+            : !pendingDownloadReady
+              ? '正在确认已下载更新，暂时不能重启。'
+              : restartSafety.status === 'checking'
+                ? '正在核对未保存内容和上传队列…'
+                : restartSafety.result?.safe
+                  ? '更新已准备好，且未发现未保存内容或进行中的上传。'
+                  : '为避免丢失内容，当前已阻止重启。'
+  const transientUpdateStatus = updateState.isRestarting
+    ? '正在切换到已下载更新…'
+    : updateState.isDownloading
+      ? `正在下载更新${Number.isFinite(Number(updateState.downloadProgress)) ? ` · ${Math.round(Number(updateState.downloadProgress) * 100)}%` : ''}`
+      : updateState.downloadError
+        ? '更新下载失败，当前版本可继续使用。'
+        : updateState.isChecking
+          ? '正在检查是否有可用更新…'
+          : updateState.checkError
+            ? '检查更新失败，当前版本可继续使用。'
+            : null
 
   return (
     <AppUpdateNoticeContext.Provider value={contextValue}>
@@ -209,13 +383,39 @@ export function AppUpdateNoticeProvider({ children }: { children: React.ReactNod
                   )) : <Text style={styles.noteEmpty}>此版本没有提供修复清单。</Text>}
                 </View>
               ) : null}
+              {view.kind !== 'pending' && transientUpdateStatus ? (
+                <View style={styles.restartStatus} testID="app-update-transient-status">
+                  <Text style={styles.restartStatusTitle}>{transientUpdateStatus}</Text>
+                </View>
+              ) : null}
               {view.kind === 'pending' ? (
-                <Text style={styles.footnote}>“稍后”只表示本次不主动重启；当前安装包仍使用 ON_LOAD，缓存更新可能在下次冷启动自动生效。</Text>
+                <View style={styles.restartStatus} testID="app-update-restart-status">
+                  <Text style={styles.restartStatusTitle}>{pendingStatusText}</Text>
+                  {restartBlockers.map((blocker, index) => (
+                    <Text key={`${blocker.kind}-${index}`} style={styles.restartBlocker}>• {blocker.message}</Text>
+                  ))}
+                  {!restartSafe && restartSafety.status === 'ready' && restartBlockers.length ? (
+                    <Text style={styles.restartHelp}>请先选择“稍后”，回到相关页面完成保存、等待上传结束，或取消草稿，再重新打开“我的 → 应用更新”。</Text>
+                  ) : null}
+                  {restartError ? <Text style={styles.restartError}>{restartError}</Text> : null}
+                </View>
+              ) : null}
+              {view.kind === 'pending' ? (
+                <AppButton
+                  testID="app-update-restart-now"
+                  label="现在重启并更新"
+                  onPress={restartNow}
+                  disabled={!restartSafe}
+                  loading={restartRequested}
+                  fullWidth
+                />
               ) : null}
               <AppButton
                 testID="app-update-notice-close"
                 label={view.kind === 'pending' ? '稍后' : view.kind === 'applied' ? '完成' : '关闭'}
                 onPress={close}
+                disabled={restartRequested}
+                tone={view.kind === 'pending' ? 'secondary' : 'primary'}
                 fullWidth
               />
             </ScrollView>
@@ -242,5 +442,9 @@ const styles = StyleSheet.create({
   notesTitle: { fontSize: 14, lineHeight: 20, fontWeight: '900', color: '#111827' },
   noteItem: { fontSize: 13, lineHeight: 19, color: '#374151' },
   noteEmpty: { fontSize: 13, lineHeight: 19, color: '#6B7280' },
-  footnote: { fontSize: 12, lineHeight: 18, color: '#6B7280' },
+  restartStatus: { padding: 12, gap: 6, borderRadius: 12, backgroundColor: '#F9FAFB', borderWidth: hairline(), borderColor: '#E5E7EB' },
+  restartStatusTitle: { fontSize: 13, lineHeight: 19, fontWeight: '800', color: '#374151' },
+  restartBlocker: { fontSize: 12, lineHeight: 18, color: '#92400E' },
+  restartHelp: { fontSize: 12, lineHeight: 18, color: '#6B7280' },
+  restartError: { fontSize: 12, lineHeight: 18, fontWeight: '700', color: '#B91C1C' },
 })

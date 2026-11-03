@@ -4,6 +4,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import type { AuthStackParamList } from '../navigation/RootNavigator'
 import { useAuth } from '../lib/auth'
 import { validateEmail } from '../lib/validators'
+import { useAppRestartBlocker } from '../lib/appRestartSafety'
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'ForgotPassword'>
 
@@ -14,6 +15,11 @@ export default function ForgotPasswordScreen(props: Props) {
   const [loading, setLoading] = useState(false)
 
   const canSubmit = useMemo(() => !!email.trim() && !loading, [email, loading])
+
+  useAppRestartBlocker('screen:forgot-password', !!email.trim() || loading, {
+    kind: loading ? 'submitting' : 'unsaved',
+    message: loading ? '找回密码请求正在提交' : '找回密码页面有尚未完成的输入',
+  })
 
   async function onSubmit() {
     const { email: e, errors } = validateEmail({ email })

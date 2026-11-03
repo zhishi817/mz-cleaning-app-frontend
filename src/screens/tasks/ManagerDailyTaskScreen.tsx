@@ -25,6 +25,7 @@ import {
   type WorkTaskAvailableAction,
 } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
+import { useAppRestartBlocker } from '../../lib/appRestartSafety'
 import { useI18n } from '../../lib/i18n'
 import { canLoadLiveSourceMediaForDailyTask } from '../../lib/dailyTaskExecutionVisibility'
 import { prependNotice } from '../../lib/noticesStore'
@@ -325,6 +326,22 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const [historicalLockboxVideo, setHistoricalLockboxVideo] = useState<{ url: string; taskId: string } | null>(null)
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
+  const managerFieldsDirty = !!task && (
+    checkoutTime.trim() !== String((task as any)?.start_time || (task as any)?.checkout_time || '').trim()
+    || checkinTime.trim() !== String((task as any)?.checkin_time || '').trim()
+    || oldCode.trim() !== oldCodeForDisplay(task)
+    || newCode.trim() !== newCodeForDisplay(task)
+    || guestNote.trim() !== String((task as any)?.guest_special_request || '').trim()
+  )
+  const managerBusy = saving || marking || resolvingRemote || luggageSaving || luggageUploading
+  useAppRestartBlocker(
+    'screen:manager-daily-task',
+    managerFieldsDirty || keysDirty || keysEditorOpen || managerBusy,
+    {
+      kind: luggageUploading ? 'uploading' : managerBusy ? 'submitting' : 'unsaved',
+      message: luggageUploading ? '客人行李照片正在上传' : managerBusy ? '任务资料正在保存' : '任务资料有尚未保存的修改',
+    },
+  )
   const syncedTaskIdRef = useRef<string>('')
   const syncedLuggageVersionRef = useRef<string>('')
   const photoLoadInFlightKeyRef = useRef<string>('')

@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
+import { useAppRestartBlocker, useAppRestartScreenFocus } from '../../lib/appRestartSafety'
 import {
   deleteCleaningConsumablesPhoto,
   enqueueCleaningConsumablesMediaCleanup,
@@ -180,6 +181,11 @@ function scenePhotoUrlsFrom(rawExtraPhotoUrls: any, sourceItems: any[]) {
 }
 
 export default function SuppliesFormScreen(props: Props) {
+  const isFocused = useAppRestartScreenFocus(props.navigation)
+  useAppRestartBlocker('screen:supplies-form', isFocused, {
+    kind: 'unsaved',
+    message: '补品表单或照片草稿尚未完成',
+  })
   const { t } = useI18n()
   const { token, user } = useAuth()
   const insets = useSafeAreaInsets()

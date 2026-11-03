@@ -31,6 +31,92 @@ afterEach(() => {
   jest.useRealTimers()
 })
 
+test('manual checkin link candidates use the canonical read-only query and preserve the minimal DTO', async () => {
+  const fetchMock = jest.fn(async () => response(200, {
+    items: [{
+      id: 'FIXTURE-CHECKOUT-TASK-001',
+      property_id: 'FIXTURE-PROPERTY-001',
+      property_code: 'FIXTURE-PROP-CODE-001',
+      task_date: '2026-11-03',
+      checkout_time: '10am',
+      status: 'completed',
+    }],
+  }))
+  globalThis.fetch = fetchMock as any
+  const api = require('./api') as typeof import('./api')
+
+  await expect(api.listManualCheckinLinkCandidates('token', {
+    property_id: 'FIXTURE-PROPERTY-001',
+    task_date: '2026-11-03',
+  })).resolves.toEqual([{
+    id: 'FIXTURE-CHECKOUT-TASK-001',
+    property_id: 'FIXTURE-PROPERTY-001',
+    property_code: 'FIXTURE-PROP-CODE-001',
+    task_date: '2026-11-03',
+    checkout_time: '10am',
+    status: 'completed',
+  }])
+
+  const [url, init] = (fetchMock as jest.Mock).mock.calls[0]
+  expect(url).toContain('/cleaning/tasks/checkin-link-candidates?')
+  expect(url).toContain('property_id=FIXTURE-PROPERTY-001')
+  expect(url).toContain('task_date=2026-11-03')
+  expect(init).toEqual(expect.objectContaining({ method: 'GET', cache: 'no-store' }))
+  expect((init.headers as Headers).get('Authorization')).toBe('Bearer token')
+})
+
+test('manual checkin link candidates fail closed for service errors and out-of-scope data', async () => {
+  const api = require('./api') as typeof import('./api')
+  globalThis.fetch = jest.fn(async () => response(503, {
+    code: 'checkin_link_candidates_unavailable',
+    message: 'candidate query unavailable',
+  })) as any
+  await expect(api.listManualCheckinLinkCandidates('token', {
+    property_id: 'FIXTURE-PROPERTY-001',
+    task_date: '2026-11-03',
+  })).rejects.toMatchObject({ status: 503, code: 'SERVER_ERROR', retryable: true })
+
+  globalThis.fetch = jest.fn(async () => response(200, {
+    items: [{
+      id: 'FIXTURE-CHECKOUT-TASK-OTHER',
+      property_id: 'FIXTURE-PROPERTY-OTHER',
+      property_code: 'FIXTURE-PROP-CODE-OTHER',
+      task_date: '2026-11-03',
+      checkout_time: '10am',
+      status: 'completed',
+    }],
+  })) as any
+  await expect(api.listManualCheckinLinkCandidates('token', {
+    property_id: 'FIXTURE-PROPERTY-001',
+    task_date: '2026-11-03',
+  })).rejects.toMatchObject({ code: 'INVALID_RESPONSE', retryable: true })
+})
+
+test('manual cleaning create sends an explicit link decision and preserves structured conflicts', async () => {
+  const api = require('./api') as typeof import('./api')
+  const fetchMock = jest.fn(async () => response(409, {
+    code: 'manual_checkin_checkout_link_conflict',
+    message: 'candidate already linked',
+  }))
+  globalThis.fetch = fetchMock as any
+
+  await expect(api.createManualCleaningTask('token', {
+    create_mode: 'checkin',
+    task_date: '2026-11-03',
+    property_id: 'FIXTURE-PROPERTY-001',
+    new_code: null,
+    linked_checkout_task_id: 'FIXTURE-CHECKOUT-TASK-001',
+    checkin_link_decision: 'link',
+  })).rejects.toMatchObject({ status: 409, code: 'manual_checkin_checkout_link_conflict' })
+
+  const body = JSON.parse(String((fetchMock as jest.Mock).mock.calls[0][1]?.body || '{}'))
+  expect(body).toEqual(expect.objectContaining({
+    linked_checkout_task_id: 'FIXTURE-CHECKOUT-TASK-001',
+    checkin_link_decision: 'link',
+  }))
+  expect(Object.prototype.hasOwnProperty.call(body, 'old_code')).toBe(false)
+})
+
 test('queue request can handle 401 without invalidating the global session', async () => {
   const fetchMock = jest.fn(async () => response(401, { message: 'token expired' }))
   globalThis.fetch = fetchMock as any
@@ -38,8 +124,8 @@ test('queue request can handle 401 without invalidating the global session', asy
   const api = require('./api') as typeof import('./api')
 
   await expect(api.saveInspectionPhotos(
-    'expired-token',
-    'cleaning-task-1',
+    'NOT_A_REAL_EXPIRED_TOKEN',
+    'FIXTURE-CLEANING-TASK-001',
     { items: [] },
     { skipAuthInvalidation: true },
   )).rejects.toMatchObject({ status: 401, code: 'UNAUTHORIZED' })
@@ -52,7 +138,7 @@ test('queue request can handle 401 without invalidating the global session', asy
     }),
   )
   const sentHeaders = (fetchMock as jest.Mock).mock.calls[0]?.[1]?.headers as Headers
-  expect(sentHeaders.get('Authorization')).toBe('Bearer expired-token')
+  expect(sentHeaders.get('Authorization')).toBe('Bearer NOT_A_REAL_EXPIRED_TOKEN')
   expect(sentHeaders.get('X-Skip-Auth-Invalidation')).toBe('1')
   expect(sentHeaders.get('Cache-Control')).toBe('no-cache')
   expect(sentHeaders.get('Pragma')).toBe('no-cache')
@@ -60,9 +146,9 @@ test('queue request can handle 401 without invalidating the global session', asy
 
 test('mzapp upload exposes the server-owned task-photo reference without replacing the legacy url field', async () => {
   const fetchMock = jest.fn(async () => response(201, {
-    url: 'https://current-media.r2.dev/mzapp/task-photo.jpg',
+    url: 'https://example.invalid/mzapp/task-photo.jpg',
     key: 'mzapp/task-photo.jpg',
-    remote_reference: 'r2://bucket-current/mzapp/task-photo.jpg',
+    remote_reference: 'fixture://not-a-real-remote-reference/mzapp/task-photo.jpg',
   }))
   globalThis.fetch = fetchMock as any
   const api = require('./api') as typeof import('./api')
@@ -73,9 +159,9 @@ test('mzapp upload exposes the server-owned task-photo reference without replaci
     undefined,
     { skipImageCompression: true },
   )).resolves.toEqual({
-    url: 'https://current-media.r2.dev/mzapp/task-photo.jpg',
+    url: 'https://example.invalid/mzapp/task-photo.jpg',
     key: 'mzapp/task-photo.jpg',
-    remoteReference: 'r2://bucket-current/mzapp/task-photo.jpg',
+    remoteReference: 'fixture://not-a-real-remote-reference/mzapp/task-photo.jpg',
   })
 })
 
@@ -136,8 +222,8 @@ test.each([
 
   await expect(api.createPropertyFeedback('token', {
     kind: 'deep_cleaning',
-    property_id: 'property-1',
-    source_task_id: 'cleaning-task-1',
+    property_id: 'FIXTURE-PROPERTY-FEEDBACK-001',
+    source_task_id: 'FIXTURE-CLEANING-TASK-001',
     areas: ['浴室'],
     detail: '深清记录',
     media_urls: ['cleaning/before.jpg'],
@@ -151,9 +237,38 @@ test('property feedback project create preserves a structured 403 error', async 
   await expect(api.createPropertyFeedbackProject(
     'token',
     'deep_cleaning',
-    'feedback-1',
+    'FIXTURE-FEEDBACK-001',
     { name: '浴室深清', area: '浴室' },
   )).rejects.toMatchObject({ status: 403, code: 'FORBIDDEN' })
+})
+
+test('property feedback project update remains a global restart blocker after its screen unmounts', async () => {
+  const safety = require('./appRestartSafety') as typeof import('./appRestartSafety')
+  safety.__resetAppRestartSafetyForTests()
+  let finishRequest!: (value: any) => void
+  globalThis.fetch = jest.fn(() => new Promise((resolve) => {
+    finishRequest = resolve
+  })) as any
+  const api = require('./api') as typeof import('./api')
+
+  safety.setAppRestartBlocker('screen:feedback-form', { kind: 'unsaved', message: '反馈表单尚未完成' })
+  const request = api.updatePropertyFeedbackProject(
+    'token', 'deep_cleaning', 'FIXTURE-FEEDBACK-001', 'FIXTURE-PROJECT-001', { note: '已更新' },
+  )
+  await Promise.resolve()
+  safety.setAppRestartBlocker('screen:feedback-form', null)
+
+  const duringRequest = await safety.checkAppRestartSafety()
+  expect(duringRequest.safe).toBe(false)
+  expect(duringRequest.blockers).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: 'submitting', message: '数据正在提交，请等待完成' }),
+  ]))
+
+  finishRequest(response(200, { ok: true, item: {}, row: {} }))
+  await expect(request).resolves.toMatchObject({ ok: true })
+  expect((await safety.checkAppRestartSafety()).blockers).not.toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: 'submitting', message: '数据正在提交，请等待完成' }),
+  ]))
 })
 
 test('property feedback project completion preserves a structured 401 error', async () => {
@@ -163,12 +278,70 @@ test('property feedback project completion preserves a structured 401 error', as
   await expect(api.completePropertyFeedbackProject(
     'token',
     'deep_cleaning',
-    'feedback-1',
-    'project-1',
+    'FIXTURE-FEEDBACK-001',
+    'FIXTURE-PROJECT-001',
     {
-      source_task_id: 'cleaning-task-1',
+      source_task_id: 'FIXTURE-CLEANING-TASK-001',
       before_photos: ['cleaning/before.jpg'],
       after_photos: ['cleaning/after.jpg'],
     },
   )).rejects.toMatchObject({ status: 401, code: 'UNAUTHORIZED' })
+})
+
+test.each([
+  ['feedback create', (api: typeof import('./api')) => api.createPropertyFeedback('token', {
+    kind: 'deep_cleaning',
+    property_id: 'FIXTURE-PROPERTY-FEEDBACK-001',
+    source_task_id: 'FIXTURE-CLEANING-TASK-001',
+    areas: ['浴室'],
+    detail: '深清记录',
+    media_urls: ['cleaning/before.jpg'],
+  })],
+  ['project create', (api: typeof import('./api')) => api.createPropertyFeedbackProject(
+    'token', 'deep_cleaning', 'FIXTURE-FEEDBACK-001', { name: '浴室深清', area: '浴室' },
+  )],
+  ['project complete', (api: typeof import('./api')) => api.completePropertyFeedbackProject(
+    'token', 'deep_cleaning', 'FIXTURE-FEEDBACK-001', 'FIXTURE-PROJECT-001', {
+      source_task_id: 'FIXTURE-CLEANING-TASK-001',
+      before_photos: ['cleaning/before.jpg'],
+      after_photos: ['cleaning/after.jpg'],
+    },
+  )],
+] as const)('%s aborts a request that never returns headers', async (_label, invoke) => {
+  jest.useFakeTimers()
+  globalThis.fetch = jest.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+    init.signal?.addEventListener('abort', () => {
+      const error = new Error('aborted')
+      error.name = 'AbortError'
+      reject(error)
+    })
+  })) as any
+  const api = require('./api') as typeof import('./api')
+
+  const request = invoke(api)
+  const rejected = expect(request).rejects.toMatchObject({ status: 0, code: 'TIMEOUT', retryable: true })
+  await jest.advanceTimersByTimeAsync(30_000)
+  await rejected
+})
+
+test.each([200, 500])('feedback create bounds a %s response body that never finishes', async (status) => {
+  jest.useFakeTimers()
+  globalThis.fetch = jest.fn(async () => ({
+    ok: status >= 200 && status < 300,
+    status,
+    text: jest.fn(() => new Promise<string>(() => {})),
+  })) as any
+  const api = require('./api') as typeof import('./api')
+
+  const request = api.createPropertyFeedback('token', {
+    kind: 'deep_cleaning',
+    property_id: 'FIXTURE-PROPERTY-FEEDBACK-001',
+    source_task_id: 'FIXTURE-CLEANING-TASK-001',
+    areas: ['浴室'],
+    detail: '深清记录',
+    media_urls: ['cleaning/before.jpg'],
+  })
+  const rejected = expect(request).rejects.toMatchObject({ status: 0, code: 'TIMEOUT', retryable: true })
+  await jest.advanceTimersByTimeAsync(30_000)
+  await rejected
 })

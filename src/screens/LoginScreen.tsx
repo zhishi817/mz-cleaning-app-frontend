@@ -13,6 +13,7 @@ import * as SecureStore from 'expo-secure-store'
 import { validateLoginForm } from '../lib/validators'
 import type { AuthStackParamList } from '../navigation/RootNavigator'
 import AppButton from '../components/ui/AppButton'
+import { useAppRestartBlocker } from '../lib/appRestartSafety'
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'Login'>
 
@@ -27,6 +28,11 @@ export default function LoginScreen(props: Props) {
   const canSubmit = useMemo(() => !!username.trim() && !!password.trim() && !isSigningIn, [isSigningIn, password, username])
   const biometricLabel = Platform.OS === 'ios' ? '面容识别' : '生物识别'
   const canUseBiometricLogin = !!rememberedHint?.biometric_enabled && biometricReady && !isSigningIn
+
+  useAppRestartBlocker('screen:login', !!username.trim() || !!password || isSigningIn, {
+    kind: isSigningIn ? 'submitting' : 'unsaved',
+    message: isSigningIn ? '登录正在提交' : '登录页面有尚未完成的输入',
+  })
 
   useEffect(() => {
     if (!authIssue) return

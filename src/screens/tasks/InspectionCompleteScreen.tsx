@@ -8,6 +8,7 @@ import CleaningMediaVideo from '../../components/CleaningMediaVideo'
 import { buildCleaningMediaVideoSource } from '../../lib/cleaningMedia'
 import { deleteLockboxVideo, getInspectionPhotos } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
+import { useAppRestartBlocker, useAppRestartScreenFocus } from '../../lib/appRestartSafety'
 import {
   bindInspectionPanelCleaningTaskId,
   getInspectionPanelVideoReadiness,
@@ -73,6 +74,11 @@ function staleQueueUpload(item: InspectionMediaQueueItem | null, now = Date.now(
 }
 
 export default function InspectionCompleteScreen(props: Props) {
+  const isFocused = useAppRestartScreenFocus(props.navigation)
+  useAppRestartBlocker('screen:inspection-complete', isFocused, {
+    kind: 'unsaved',
+    message: '检查完成资料或钥匙视频尚未提交',
+  })
   const { t } = useI18n()
   const { token } = useAuth()
   const insets = useSafeAreaInsets()
