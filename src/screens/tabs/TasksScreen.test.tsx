@@ -1,5 +1,5 @@
 import React from 'react'
-import { Alert, AppState, Keyboard, Modal, Platform, RefreshControl } from 'react-native'
+import { Alert, AppState, Keyboard, Modal, Platform, RefreshControl, ScrollView } from 'react-native'
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native'
 import * as Clipboard from 'expo-clipboard'
 import { I18nProvider } from '../../lib/i18n'
@@ -1067,6 +1067,393 @@ test('quick create uses a keyboard-safe shared shell and preserves drafts while 
   mockAuthState.user = previousUser
   mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
   mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+})
+
+test('quick-create focus geometry keeps the measured field above the keyboard-adjusted viewport footer', () => {
+  const { quickCreateFocusedFieldScrollTarget } = require('./TasksScreen') as typeof import('./TasksScreen')
+  const fieldTop = 520
+  const fieldHeight = 108
+  const viewportHeight = 320
+  const bottomGap = 16
+  const target = quickCreateFocusedFieldScrollTarget({
+    fieldTop,
+    fieldHeight,
+    viewportHeight,
+    currentOffset: 0,
+    bottomGap,
+  })
+
+  expect(target).toBe(324)
+  expect(fieldTop + fieldHeight).toBeLessThanOrEqual((target || 0) + viewportHeight - bottomGap)
+  expect(quickCreateFocusedFieldScrollTarget({
+    fieldTop,
+    fieldHeight,
+    viewportHeight,
+    currentOffset: target || 0,
+    bottomGap,
+  })).toBeNull()
+  expect(quickCreateFocusedFieldScrollTarget({
+    fieldTop: 12,
+    fieldHeight: 60,
+    viewportHeight,
+    currentOffset: 220,
+  })).toBe(0)
+})
+
+test('quick create consumes an iOS keyboard frame-only resize without waiting for another viewport layout', async () => {
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  const previousPlatform = Platform.OS
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' })
+  const keyboardListeners = new Map<string, (event: any) => void>()
+  const addKeyboardListener = jest.spyOn(Keyboard, 'addListener').mockImplementation((event, listener) => {
+    keyboardListeners.set(String(event), listener as (keyboardEvent: any) => void)
+    return { remove: jest.fn() } as any
+  })
+  const getNativeScrollRef = jest.spyOn(ScrollView.prototype, 'getNativeScrollRef').mockReturnValue({
+    measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 100, 340, 320),
+  } as any)
+  const scrollTo = jest.spyOn(ScrollView.prototype, 'scrollTo').mockImplementation(() => {})
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-frame-only-resize', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByText('新增')).toBeTruthy())
+    fireEvent.press(ui.getByText('新增'))
+    fireEvent.press(ui.getByText('线下任务'))
+    const scroll = ui.getByTestId('quick-create-scroll')
+    fireEvent(scroll, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 340, height: 320 } } })
+    fireEvent(ui.getByTestId('quick-create-field-offline-content'), 'layout', {
+      nativeEvent: { layout: { x: 0, y: 220, width: 340, height: 60 } },
+    })
+    fireEvent(ui.getByLabelText('quick-create-offline-content'), 'focus')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+    expect(scrollTo).not.toHaveBeenCalledWith({ y: 46, animated: true })
+
+    const frameListener = keyboardListeners.get('keyboardWillChangeFrame')
+    expect(frameListener).toBeTruthy()
+    act(() => {
+      frameListener?.({ endCoordinates: { screenY: 350, height: 494, width: 390, screenX: 0 } })
+    })
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ y: 46, animated: true }))
+
+    fireEvent.press(ui.getByLabelText('关闭新增任务'))
+    await waitFor(() => expect(ui.queryByTestId('quick-create-scroll')).toBeNull())
+    scrollTo.mockClear()
+    fireEvent.press(ui.getByText('新增'))
+    fireEvent.press(ui.getByText('线下任务'))
+    const reopenedScroll = ui.getByTestId('quick-create-scroll')
+    fireEvent(reopenedScroll, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 340, height: 320 } } })
+    fireEvent(ui.getByTestId('quick-create-field-offline-content'), 'layout', {
+      nativeEvent: { layout: { x: 0, y: 220, width: 340, height: 60 } },
+    })
+    fireEvent(ui.getByLabelText('quick-create-offline-content'), 'focus')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+    expect(scrollTo).not.toHaveBeenCalledWith({ y: 46, animated: true })
+  } finally {
+    ui.unmount()
+    scrollTo.mockRestore()
+    getNativeScrollRef.mockRestore()
+    addKeyboardListener.mockRestore()
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: previousPlatform })
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('quick create scrolls measured low fields above the fixed footer in all modes and follows multiline growth', async () => {
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const scrollTo = jest.spyOn(ScrollView.prototype, 'scrollTo').mockImplementation(() => {})
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-focus-visible', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByText('新增')).toBeTruthy())
+  fireEvent.press(ui.getByText('新增'))
+  fireEvent.press(ui.getByText('线下任务'))
+  const scroll = ui.getByTestId('quick-create-scroll')
+  expect(flattenTestStyle(scroll.props.contentContainerStyle).paddingBottom).toBeGreaterThanOrEqual(80)
+  fireEvent(scroll, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 340, height: 320 } } })
+  fireEvent(ui.getByTestId('quick-create-field-offline-content'), 'layout', {
+    nativeEvent: { layout: { x: 0, y: 520, width: 340, height: 108 } },
+  })
+  fireEvent(ui.getByLabelText('quick-create-offline-content'), 'focus')
+  await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ y: 324, animated: true }))
+
+  fireEvent(ui.getByTestId('quick-create-field-offline-content'), 'layout', {
+    nativeEvent: { layout: { x: 0, y: 520, width: 340, height: 160 } },
+  })
+  fireEvent(ui.getByLabelText('quick-create-offline-content'), 'contentSizeChange', {
+    nativeEvent: { contentSize: { width: 320, height: 132 } },
+  })
+  await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ y: 376, animated: true }))
+
+  fireEvent.press(ui.getByText('待同步入住'))
+  expect(scrollTo).toHaveBeenCalledWith({ y: 0, animated: false })
+  const checkinScroll = ui.getByTestId('quick-create-scroll')
+  fireEvent(checkinScroll, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 340, height: 300 } } })
+  fireEvent(ui.getByTestId('quick-create-field-guest-note'), 'layout', {
+    nativeEvent: { layout: { x: 0, y: 640, width: 340, height: 110 } },
+  })
+  fireEvent(ui.getByLabelText('quick-create-guest-note'), 'focus')
+  await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ y: 466, animated: true }))
+
+  fireEvent.press(ui.getByText('待同步退房'))
+  const checkoutScroll = ui.getByTestId('quick-create-scroll')
+  fireEvent(checkoutScroll, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 340, height: 300 } } })
+  fireEvent(ui.getByTestId('quick-create-field-lock-code'), 'layout', {
+    nativeEvent: { layout: { x: 0, y: 390, width: 340, height: 70 } },
+  })
+  fireEvent(ui.getByLabelText('quick-create-lock-code'), 'focus')
+  await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ y: 176, animated: true }))
+
+  const callCount = scrollTo.mock.calls.length
+  fireEvent(ui.getByLabelText('quick-create-lock-code'), 'focus')
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+  expect(scrollTo).toHaveBeenCalledTimes(callCount)
+
+  fireEvent.press(ui.getByLabelText('关闭新增任务'))
+  expect(scrollTo).toHaveBeenLastCalledWith({ y: 0, animated: false })
+  await waitFor(() => expect(ui.queryByTestId('quick-create-scroll')).toBeNull())
+  fireEvent.press(ui.getByText('新增'))
+  expect(ui.getByTestId('quick-create-scroll')).toBeTruthy()
+  fireEvent.press(ui.getByLabelText('关闭新增任务'))
+  await waitFor(() => expect(ui.queryByTestId('quick-create-scroll')).toBeNull())
+
+  scrollTo.mockRestore()
+  mockAuthState.user = previousUser
+  mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+  mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+})
+
+test('quick create ignores a queued focus scroll after mode change or cancel', async () => {
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const callbacks: FrameRequestCallback[] = []
+  const requestFrame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback: FrameRequestCallback) => {
+    callbacks.push(callback)
+    return callbacks.length
+  })
+  const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {})
+  const scrollTo = jest.spyOn(ScrollView.prototype, 'scrollTo').mockImplementation(() => {})
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-focus-session', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByText('新增')).toBeTruthy())
+  fireEvent.press(ui.getByText('新增'))
+  fireEvent.press(ui.getByText('线下任务'))
+  fireEvent(ui.getByTestId('quick-create-scroll'), 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 340, height: 300 } } })
+  fireEvent(ui.getByTestId('quick-create-field-offline-content'), 'layout', {
+    nativeEvent: { layout: { x: 0, y: 520, width: 340, height: 108 } },
+  })
+  fireEvent(ui.getByLabelText('quick-create-offline-content'), 'focus')
+  const staleModeCallback = callbacks[callbacks.length - 1]
+  fireEvent.press(ui.getByText('待同步入住'))
+  staleModeCallback(0)
+  expect(scrollTo).not.toHaveBeenCalledWith({ y: 344, animated: true })
+  expect(cancelFrame).toHaveBeenCalled()
+
+  fireEvent(ui.getByTestId('quick-create-scroll'), 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 340, height: 300 } } })
+  fireEvent(ui.getByTestId('quick-create-field-guest-note'), 'layout', {
+    nativeEvent: { layout: { x: 0, y: 640, width: 340, height: 110 } },
+  })
+  fireEvent(ui.getByLabelText('quick-create-guest-note'), 'focus')
+  const staleCloseCallback = callbacks[callbacks.length - 1]
+  fireEvent.press(ui.getByLabelText('关闭新增任务'))
+  staleCloseCallback(0)
+  expect(scrollTo).not.toHaveBeenCalledWith({ y: 466, animated: true })
+
+  scrollTo.mockRestore()
+  requestFrame.mockRestore()
+  cancelFrame.mockRestore()
+  mockAuthState.user = previousUser
+  mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+  mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+})
+
+test('manual quick create sends only the password field applicable to the selected task type', async () => {
+  const api = require('../../lib/api')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const listPropertiesMock = api.listCleaningAppPropertyCodes as jest.Mock
+  const createManualMock = api.createManualCleaningTask as jest.Mock
+  listPropertiesMock.mockResolvedValue([{ id: 'property-cwg05', code: 'CWG05' }])
+  createManualMock.mockClear()
+  createManualMock.mockResolvedValue({})
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-password-applicability', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByTestId('quick-create-open')).toBeTruthy())
+    fireEvent.press(ui.getByTestId('quick-create-open'))
+    await waitFor(() => expect(listPropertiesMock).toHaveBeenCalled())
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'CWG05')
+    fireEvent.changeText(ui.getByLabelText('quick-create-lock-code'), 'synthetic-checkin-code')
+    fireEvent.press(ui.getByTestId('quick-create-submit'))
+
+    await waitFor(() => expect(createManualMock).toHaveBeenCalledTimes(1))
+    const checkinPayload = createManualMock.mock.calls[0][1]
+    expect(checkinPayload).toEqual(expect.objectContaining({
+      create_mode: 'checkin',
+      property_id: 'property-cwg05',
+      new_code: 'synthetic-checkin-code',
+    }))
+    expect(Object.prototype.hasOwnProperty.call(checkinPayload, 'old_code')).toBe(false)
+    await waitFor(() => expect(ui.queryByTestId('quick-create-keyboard-avoider')).toBeNull())
+
+    fireEvent.press(ui.getByTestId('quick-create-open'))
+    fireEvent.press(ui.getByText('待同步退房'))
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'CWG05')
+    fireEvent.changeText(ui.getByLabelText('quick-create-lock-code'), 'synthetic-checkout-code')
+    fireEvent.press(ui.getByTestId('quick-create-submit'))
+
+    await waitFor(() => expect(createManualMock).toHaveBeenCalledTimes(2))
+    const checkoutPayload = createManualMock.mock.calls[1][1]
+    expect(checkoutPayload).toEqual(expect.objectContaining({
+      create_mode: 'checkout',
+      property_id: 'property-cwg05',
+      old_code: 'synthetic-checkout-code',
+    }))
+    expect(Object.prototype.hasOwnProperty.call(checkoutPayload, 'new_code')).toBe(false)
+
+    await waitFor(() => expect(ui.queryByTestId('quick-create-keyboard-avoider')).toBeNull())
+    fireEvent.press(ui.getByTestId('quick-create-open'))
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'CWG05')
+    fireEvent.press(ui.getByTestId('quick-create-submit'))
+    await waitFor(() => expect(createManualMock).toHaveBeenCalledTimes(3))
+    const blankCheckinPayload = createManualMock.mock.calls[2][1]
+    expect(blankCheckinPayload.new_code).toBeNull()
+    expect(Object.prototype.hasOwnProperty.call(blankCheckinPayload, 'old_code')).toBe(false)
+
+    await waitFor(() => expect(ui.queryByTestId('quick-create-keyboard-avoider')).toBeNull())
+    fireEvent.press(ui.getByTestId('quick-create-open'))
+    fireEvent.press(ui.getByText('待同步退房'))
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'CWG05')
+    fireEvent.press(ui.getByTestId('quick-create-submit'))
+    await waitFor(() => expect(createManualMock).toHaveBeenCalledTimes(4))
+    const blankCheckoutPayload = createManualMock.mock.calls[3][1]
+    expect(blankCheckoutPayload.old_code).toBeNull()
+    expect(Object.prototype.hasOwnProperty.call(blankCheckoutPayload, 'new_code')).toBe(false)
+  } finally {
+    ui.unmount()
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('failed checkin quick create keeps its applicable input and remains single-flight for retry', async () => {
+  const api = require('../../lib/api')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const listPropertiesMock = api.listCleaningAppPropertyCodes as jest.Mock
+  const createManualMock = api.createManualCleaningTask as jest.Mock
+  const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+  listPropertiesMock.mockResolvedValue([{ id: 'property-cwg05', code: 'CWG05' }])
+  createManualMock.mockClear()
+  let rejectCreate!: (reason: Error) => void
+  createManualMock.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+    rejectCreate = reject
+  }))
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-checkin-retry', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByTestId('quick-create-open')).toBeTruthy())
+    fireEvent.press(ui.getByTestId('quick-create-open'))
+    await waitFor(() => expect(listPropertiesMock).toHaveBeenCalled())
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'CWG05')
+    fireEvent.changeText(ui.getByLabelText('quick-create-time'), '4pm')
+    fireEvent.changeText(ui.getByLabelText('quick-create-lock-code'), 'synthetic-checkin-code')
+    fireEvent.changeText(ui.getByLabelText('quick-create-guest-note'), '保留这条入住备注')
+
+    const submit = ui.getByTestId('quick-create-submit')
+    fireEvent.press(submit)
+    fireEvent.press(submit)
+    expect(createManualMock).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      rejectCreate(new Error('password_field_not_applicable'))
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(ui.getByTestId('quick-create-submit').props.accessibilityState?.disabled).not.toBe(true))
+    expect(ui.getByDisplayValue('CWG05')).toBeTruthy()
+    expect(ui.getByDisplayValue('4pm')).toBeTruthy()
+    expect(ui.getByDisplayValue('synthetic-checkin-code')).toBeTruthy()
+    expect(ui.getByDisplayValue('保留这条入住备注')).toBeTruthy()
+
+    createManualMock.mockResolvedValueOnce({})
+    fireEvent.press(ui.getByTestId('quick-create-submit'))
+    await waitFor(() => expect(createManualMock).toHaveBeenCalledTimes(2))
+    const retryPayload = createManualMock.mock.calls[1][1]
+    expect(retryPayload).toEqual(expect.objectContaining({
+      create_mode: 'checkin',
+      property_id: 'property-cwg05',
+      checkin_time: '4pm',
+      new_code: 'synthetic-checkin-code',
+      guest_special_request: '保留这条入住备注',
+    }))
+    expect(Object.prototype.hasOwnProperty.call(retryPayload, 'old_code')).toBe(false)
+  } finally {
+    ui.unmount()
+    alertSpy.mockRestore()
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
 })
 
 test('quick create ignores repeated saves and keeps input after an async failure', async () => {
