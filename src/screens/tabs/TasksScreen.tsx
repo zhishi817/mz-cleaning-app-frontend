@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, AppState, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
+import type { KeyboardEvent, LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
@@ -88,6 +89,8 @@ type QuickCreateMode = 'checkout' | 'checkin' | 'offline'
 type QuickCreateOfflineTaskType = 'property' | 'company' | 'other'
 type QuickCreatePropertyOption = { id: string; code: string; region?: string | null }
 type QuickCreateUserOption = { id: string; username?: string | null; display_name?: string | null }
+type QuickCreateFocusField = 'date' | 'property' | 'offline-title' | 'offline-content' | 'time' | 'lock-code' | 'nights' | 'guest-note'
+type QuickCreateFieldLayout = { y: number; height: number }
 type DayEndOverviewDisplayUser = DayEndOverviewUser & { displayRole: DayEndTargetRole }
 type Props = NativeStackScreenProps<TasksStackParamList, 'TasksList'>
 type TaskCacheHint = { message: string; lastSyncedAt: string | null } | null
@@ -104,6 +107,38 @@ function quickCreateUserName(user: QuickCreateUserOption) {
 
 export function quickCreateKeyboardBehavior(os: string = Platform.OS): 'padding' | 'height' {
   return os === 'ios' ? 'padding' : 'height'
+}
+
+const QUICK_CREATE_FOCUS_TOP_GAP = 12
+const QUICK_CREATE_FOCUS_BOTTOM_GAP = 16
+const QUICK_CREATE_SCROLL_BOTTOM_SPACE = 84
+
+export function quickCreateFocusedFieldScrollTarget(input: {
+  fieldTop: number
+  fieldHeight: number
+  viewportHeight: number
+  currentOffset: number
+  topGap?: number
+  bottomGap?: number
+}): number | null {
+  const fieldTop = Number(input.fieldTop)
+  const fieldHeight = Number(input.fieldHeight)
+  const viewportHeight = Number(input.viewportHeight)
+  const currentOffset = Math.max(0, Number(input.currentOffset) || 0)
+  const topGap = Math.max(0, Number(input.topGap ?? QUICK_CREATE_FOCUS_TOP_GAP) || 0)
+  const bottomGap = Math.max(0, Number(input.bottomGap ?? QUICK_CREATE_FOCUS_BOTTOM_GAP) || 0)
+  if (!Number.isFinite(fieldTop) || !Number.isFinite(fieldHeight) || !Number.isFinite(viewportHeight) || fieldHeight <= 0 || viewportHeight <= topGap + bottomGap) return null
+
+  const visibleTop = currentOffset + topGap
+  const visibleBottom = currentOffset + viewportHeight - bottomGap
+  const fieldBottom = fieldTop + fieldHeight
+  if (fieldHeight > viewportHeight - topGap - bottomGap || fieldTop < visibleTop) {
+    return Math.max(0, fieldTop - topGap)
+  }
+  if (fieldBottom > visibleBottom) {
+    return Math.max(0, fieldBottom - viewportHeight + bottomGap)
+  }
+  return null
 }
 
 function pad2(n: number) {
@@ -694,6 +729,16 @@ export default function TasksScreen(props: Props) {
   const [quickCreateAssigneeId, setQuickCreateAssigneeId] = useState<string | null>(null)
   const [quickCreateAssigneeOpen, setQuickCreateAssigneeOpen] = useState(false)
   const quickCreateSubmitInFlightRef = useRef(false)
+  const quickCreateScrollRef = useRef<ScrollView>(null)
+  const quickCreateFieldLayoutsRef = useRef<Partial<Record<QuickCreateFocusField, QuickCreateFieldLayout>>>({})
+  const quickCreateViewportLayoutHeightRef = useRef(0)
+  const quickCreateViewportWindowYRef = useRef<number | null>(null)
+  const quickCreateKeyboardTopRef = useRef<number | null>(null)
+  const quickCreateViewportHeightRef = useRef(0)
+  const quickCreateScrollOffsetRef = useRef(0)
+  const quickCreateFocusedFieldRef = useRef<QuickCreateFocusField | null>(null)
+  const quickCreateFocusSessionRef = useRef(0)
+  const quickCreateRevealFrameRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null)
   const bannerTimerRef = useRef<any>(null)
   const [search, setSearch] = useState('')
   const weekRowRef = useRef<ScrollView>(null)
@@ -2129,6 +2174,146 @@ function showBanner(title: string, message: string) {
     if (route) props.navigation.navigate(route.screen as any, route.params as any)
   }
 
+  const resetQuickCreateFocusSession = useCallback((options?: { clearLayouts?: boolean; resetScroll?: boolean }) => {
+    quickCreateFocusSessionRef.current += 1
+    quickCreateFocusedFieldRef.current = null
+    quickCreateKeyboardTopRef.current = null
+    quickCreateViewportWindowYRef.current = null
+    quickCreateViewportHeightRef.current = quickCreateViewportLayoutHeightRef.current
+    if (quickCreateRevealFrameRef.current !== null) {
+      cancelAnimationFrame(quickCreateRevealFrameRef.current)
+      quickCreateRevealFrameRef.current = null
+    }
+    if (options?.clearLayouts) quickCreateFieldLayoutsRef.current = {}
+    if (options?.resetScroll) {
+      quickCreateScrollOffsetRef.current = 0
+      quickCreateScrollRef.current?.scrollTo({ y: 0, animated: false })
+    }
+  }, [])
+
+  const revealQuickCreateFocusedField = useCallback((field: QuickCreateFocusField, session: number) => {
+    if (!quickCreateOpen || quickCreateFocusSessionRef.current !== session || quickCreateFocusedFieldRef.current !== field) return
+    const layout = quickCreateFieldLayoutsRef.current[field]
+    if (!layout) return
+    const target = quickCreateFocusedFieldScrollTarget({
+      fieldTop: layout.y,
+      fieldHeight: layout.height,
+      viewportHeight: quickCreateViewportHeightRef.current,
+      currentOffset: quickCreateScrollOffsetRef.current,
+    })
+    if (target === null) return
+    quickCreateScrollOffsetRef.current = target
+    quickCreateScrollRef.current?.scrollTo({ y: target, animated: true })
+  }, [quickCreateOpen])
+
+  const updateQuickCreateEffectiveViewportHeight = useCallback(() => {
+    const layoutHeight = quickCreateViewportLayoutHeightRef.current
+    if (!Number.isFinite(layoutHeight) || layoutHeight <= 0) {
+      quickCreateViewportHeightRef.current = 0
+      return
+    }
+    const viewportWindowY = quickCreateViewportWindowYRef.current
+    const keyboardTop = quickCreateKeyboardTopRef.current
+    const keyboardLimitedHeight = viewportWindowY !== null && keyboardTop !== null
+      ? Math.max(0, keyboardTop - viewportWindowY)
+      : layoutHeight
+    quickCreateViewportHeightRef.current = Math.min(layoutHeight, keyboardLimitedHeight)
+  }, [])
+
+  const queueQuickCreateFocusedFieldReveal = useCallback((field: QuickCreateFocusField) => {
+    quickCreateFocusedFieldRef.current = field
+    const session = quickCreateFocusSessionRef.current
+    if (quickCreateRevealFrameRef.current !== null) cancelAnimationFrame(quickCreateRevealFrameRef.current)
+    quickCreateRevealFrameRef.current = requestAnimationFrame(() => {
+      quickCreateRevealFrameRef.current = null
+      revealQuickCreateFocusedField(field, session)
+    })
+  }, [revealQuickCreateFocusedField])
+
+  const measureQuickCreateViewport = useCallback(() => {
+    const session = quickCreateFocusSessionRef.current
+    const scroll = quickCreateScrollRef.current
+    const nativeScroll = scroll?.getNativeScrollRef()
+    const finish = () => {
+      if (!quickCreateOpen || quickCreateFocusSessionRef.current !== session) return
+      updateQuickCreateEffectiveViewportHeight()
+      const focused = quickCreateFocusedFieldRef.current
+      if (focused) queueQuickCreateFocusedFieldReveal(focused)
+    }
+    if (!nativeScroll || typeof nativeScroll.measureInWindow !== 'function') {
+      finish()
+      return
+    }
+    nativeScroll.measureInWindow((_x, y, _width, height) => {
+      if (!quickCreateOpen || quickCreateFocusSessionRef.current !== session) return
+      if (Number.isFinite(y)) quickCreateViewportWindowYRef.current = y
+      if ((!Number.isFinite(quickCreateViewportLayoutHeightRef.current) || quickCreateViewportLayoutHeightRef.current <= 0)
+        && Number.isFinite(height) && height > 0) {
+        quickCreateViewportLayoutHeightRef.current = height
+      }
+      finish()
+    })
+  }, [quickCreateOpen, queueQuickCreateFocusedFieldReveal, updateQuickCreateEffectiveViewportHeight])
+
+  const handleQuickCreateFieldLayout = useCallback((field: QuickCreateFocusField, event: LayoutChangeEvent) => {
+    const y = Number(event.nativeEvent.layout.y)
+    const height = Number(event.nativeEvent.layout.height)
+    if (!Number.isFinite(y) || !Number.isFinite(height) || height <= 0) return
+    quickCreateFieldLayoutsRef.current[field] = { y, height }
+    if (quickCreateFocusedFieldRef.current === field) queueQuickCreateFocusedFieldReveal(field)
+  }, [queueQuickCreateFocusedFieldReveal])
+
+  const handleQuickCreateViewportLayout = useCallback((event: LayoutChangeEvent) => {
+    const height = Number(event.nativeEvent.layout.height)
+    if (!Number.isFinite(height) || height <= 0) return
+    quickCreateViewportLayoutHeightRef.current = height
+    measureQuickCreateViewport()
+  }, [measureQuickCreateViewport])
+
+  const handleQuickCreateScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    quickCreateScrollOffsetRef.current = Math.max(0, Number(event.nativeEvent.contentOffset.y) || 0)
+  }, [])
+
+  function quickCreateFocusHandlers(field: QuickCreateFocusField) {
+    return {
+      onFocus: () => queueQuickCreateFocusedFieldReveal(field),
+      onBlur: () => {
+        if (quickCreateFocusedFieldRef.current === field) quickCreateFocusedFieldRef.current = null
+      },
+    }
+  }
+
+  function handleQuickCreateMultilineSizeChange(field: QuickCreateFocusField) {
+    if (quickCreateFocusedFieldRef.current === field) queueQuickCreateFocusedFieldReveal(field)
+  }
+
+  useEffect(() => {
+    if (!quickCreateOpen) return undefined
+    const updateKeyboardFrame = (event: KeyboardEvent) => {
+      const screenY = Number(event.endCoordinates?.screenY)
+      quickCreateKeyboardTopRef.current = Number.isFinite(screenY) ? screenY : null
+      measureQuickCreateViewport()
+    }
+    const clearKeyboardFrame = () => {
+      quickCreateKeyboardTopRef.current = null
+      measureQuickCreateViewport()
+    }
+    const didShow = Keyboard.addListener('keyboardDidShow', updateKeyboardFrame)
+    const didHide = Keyboard.addListener('keyboardDidHide', clearKeyboardFrame)
+    const willChangeFrame = Platform.OS === 'ios' ? Keyboard.addListener('keyboardWillChangeFrame', updateKeyboardFrame) : null
+    const didChangeFrame = Platform.OS === 'ios' ? Keyboard.addListener('keyboardDidChangeFrame', updateKeyboardFrame) : null
+    return () => {
+      didShow.remove()
+      didHide.remove()
+      willChangeFrame?.remove()
+      didChangeFrame?.remove()
+    }
+  }, [measureQuickCreateViewport, quickCreateOpen])
+
+  useEffect(() => () => {
+    if (quickCreateRevealFrameRef.current !== null) cancelAnimationFrame(quickCreateRevealFrameRef.current)
+  }, [])
+
   function openDayEndScreen(params?: { userId?: string; userName?: string; taskRoomCodes?: string[]; targetRoles?: DayEndTargetRole[]; focus?: 'key' | 'dirty' | 'consumable' | 'reject'; overviewMode?: boolean; overviewUsers?: DayEndOverviewUser[] }) {
     props.navigation.navigate('DayEndBackupKeys', {
       date: dayEndDate,
@@ -2144,6 +2329,7 @@ function showBanner(title: string, message: string) {
 
   function openQuickCreate(mode0: QuickCreateMode = 'checkin') {
     if (quickCreateBusy || quickCreateSubmitInFlightRef.current) return
+    resetQuickCreateFocusSession({ clearLayouts: true, resetScroll: true })
     setQuickCreateMode(mode0)
     setQuickCreateDate(selectedDate)
     setQuickCreateTime(mode0 === 'checkout' ? '10am' : '3pm')
@@ -2162,6 +2348,7 @@ function showBanner(title: string, message: string) {
   }
 
   function closeQuickCreate() {
+    resetQuickCreateFocusSession({ clearLayouts: true, resetScroll: true })
     Keyboard.dismiss()
     setQuickCreateAssigneeOpen(false)
     setQuickCreateOpen(false)
@@ -2230,8 +2417,9 @@ function showBanner(title: string, message: string) {
           property_id: propertyOption.id,
           status: 'pending',
           keys_required: 1,
-          old_code: quickCreateMode === 'checkout' ? (String(quickCreateOldCode || '').trim() || null) : null,
-          new_code: quickCreateMode === 'checkin' ? (String(quickCreateNewCode || '').trim() || null) : null,
+          ...(quickCreateMode === 'checkout'
+            ? { old_code: String(quickCreateOldCode || '').trim() || null }
+            : { new_code: String(quickCreateNewCode || '').trim() || null }),
           checkout_time: quickCreateMode === 'checkout' ? time : null,
           checkin_time: quickCreateMode === 'checkin' ? time : null,
           nights_override: quickCreateMode === 'checkin' ? nights : null,
@@ -2239,6 +2427,7 @@ function showBanner(title: string, message: string) {
           linked_checkout_task_id: quickCreateMode === 'checkin' ? quickCreateLinkedCheckoutTaskId : null,
         })
       }
+      resetQuickCreateFocusSession({ clearLayouts: true, resetScroll: true })
       setQuickCreateOpen(false)
       showBanner('已新增', quickCreateMode === 'offline' ? '线下任务已新增。' : '清洁任务已新增，订单同步后会自动关联。')
       try {
@@ -3045,6 +3234,7 @@ function showBanner(title: string, message: string) {
                     key={item.key}
                     disabled={quickCreateBusy}
                     onPress={() => {
+                      resetQuickCreateFocusSession({ clearLayouts: true, resetScroll: true })
                       Keyboard.dismiss()
                       const mode0 = item.key as QuickCreateMode
                       setQuickCreateMode(mode0)
@@ -3058,16 +3248,20 @@ function showBanner(title: string, message: string) {
                 ))}
               </View>
               <ScrollView
+                ref={quickCreateScrollRef}
                 testID="quick-create-scroll"
                 style={styles.createTaskBody}
                 contentContainerStyle={styles.createTaskBodyContent}
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
                 onScrollBeginDrag={Keyboard.dismiss}
+                onLayout={handleQuickCreateViewportLayout}
+                onScroll={handleQuickCreateScroll}
+                scrollEventThrottle={16}
               >
-                <View style={styles.createField}>
+                <View testID="quick-create-field-date" style={styles.createField} onLayout={(event) => handleQuickCreateFieldLayout('date', event)}>
                   <Text style={styles.createLabel}>日期</Text>
-                  <TextInput accessibilityLabel="quick-create-date" value={quickCreateDate} onChangeText={setQuickCreateDate} editable={!quickCreateBusy} style={styles.createInput} placeholder="YYYY-MM-DD" placeholderTextColor="#9CA3AF" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
+                  <TextInput {...quickCreateFocusHandlers('date')} accessibilityLabel="quick-create-date" value={quickCreateDate} onChangeText={setQuickCreateDate} editable={!quickCreateBusy} style={styles.createInput} placeholder="YYYY-MM-DD" placeholderTextColor="#9CA3AF" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
                 </View>
                 {quickCreateMode === 'offline' ? (
                   <View style={styles.createField}>
@@ -3086,13 +3280,13 @@ function showBanner(title: string, message: string) {
                     </View>
                   </View>
                 ) : null}
-                <View style={styles.createField}>
+                <View testID="quick-create-field-property" style={styles.createField} onLayout={(event) => handleQuickCreateFieldLayout('property', event)}>
                   <Text style={styles.createLabel}>
                     {quickCreateMode === 'offline'
                       ? (quickCreateOfflineTaskType === 'property' ? '房号' : '房号（可选）')
                       : '房号'}
                   </Text>
-                  <TextInput accessibilityLabel="quick-create-property" value={quickCreateProperty} onChangeText={setQuickCreateProperty} editable={!quickCreateBusy} style={styles.createInput} placeholder="例如 2607" placeholderTextColor="#9CA3AF" autoCapitalize="characters" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
+                  <TextInput {...quickCreateFocusHandlers('property')} accessibilityLabel="quick-create-property" value={quickCreateProperty} onChangeText={setQuickCreateProperty} editable={!quickCreateBusy} style={styles.createInput} placeholder="例如 2607" placeholderTextColor="#9CA3AF" autoCapitalize="characters" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
                   {quickCreatePropertyMatches.length ? (
                     <View style={styles.propertySuggestList}>
                       {quickCreatePropertyMatches.map((item) => (
@@ -3111,13 +3305,13 @@ function showBanner(title: string, message: string) {
 
                 {quickCreateMode === 'offline' ? (
                   <>
-                    <View style={styles.createField}>
+                    <View testID="quick-create-field-offline-title" style={styles.createField} onLayout={(event) => handleQuickCreateFieldLayout('offline-title', event)}>
                       <Text style={styles.createLabel}>标题</Text>
-                      <TextInput accessibilityLabel="quick-create-offline-title" value={quickCreateOfflineTitle} onChangeText={setQuickCreateOfflineTitle} editable={!quickCreateBusy} style={styles.createInput} placeholder="例如 临时送物 / 联系客人" placeholderTextColor="#9CA3AF" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
+                      <TextInput {...quickCreateFocusHandlers('offline-title')} accessibilityLabel="quick-create-offline-title" value={quickCreateOfflineTitle} onChangeText={setQuickCreateOfflineTitle} editable={!quickCreateBusy} style={styles.createInput} placeholder="例如 临时送物 / 联系客人" placeholderTextColor="#9CA3AF" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
                     </View>
-                    <View style={styles.createField}>
+                    <View testID="quick-create-field-offline-content" style={styles.createField} onLayout={(event) => handleQuickCreateFieldLayout('offline-content', event)}>
                       <Text style={styles.createLabel}>内容</Text>
-                      <TextInput accessibilityLabel="quick-create-offline-content" value={quickCreateOfflineContent} onChangeText={setQuickCreateOfflineContent} editable={!quickCreateBusy} style={[styles.createInput, styles.createTextArea]} placeholder="补充说明" placeholderTextColor="#9CA3AF" multiline returnKeyType="default" submitBehavior="newline" />
+                      <TextInput {...quickCreateFocusHandlers('offline-content')} accessibilityLabel="quick-create-offline-content" value={quickCreateOfflineContent} onChangeText={setQuickCreateOfflineContent} editable={!quickCreateBusy} style={[styles.createInput, styles.createTextArea]} placeholder="补充说明" placeholderTextColor="#9CA3AF" multiline returnKeyType="default" submitBehavior="newline" onContentSizeChange={() => handleQuickCreateMultilineSizeChange('offline-content')} />
                     </View>
                     <View style={styles.createField}>
                       <Text style={styles.createLabel}>执行人</Text>
@@ -3182,13 +3376,13 @@ function showBanner(title: string, message: string) {
                   </>
                 ) : (
                   <>
-                    <View style={styles.createField}>
+                    <View testID="quick-create-field-time" style={styles.createField} onLayout={(event) => handleQuickCreateFieldLayout('time', event)}>
                       <Text style={styles.createLabel}>{quickCreateMode === 'checkout' ? '退房时间' : '入住时间'}</Text>
-                      <TextInput accessibilityLabel="quick-create-time" value={quickCreateTime} onChangeText={setQuickCreateTime} editable={!quickCreateBusy} style={styles.createInput} placeholder={quickCreateMode === 'checkout' ? '10am' : '3pm'} placeholderTextColor="#9CA3AF" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
+                      <TextInput {...quickCreateFocusHandlers('time')} accessibilityLabel="quick-create-time" value={quickCreateTime} onChangeText={setQuickCreateTime} editable={!quickCreateBusy} style={styles.createInput} placeholder={quickCreateMode === 'checkout' ? '10am' : '3pm'} placeholderTextColor="#9CA3AF" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
                     </View>
-                    <View style={styles.createField}>
+                    <View testID="quick-create-field-lock-code" style={styles.createField} onLayout={(event) => handleQuickCreateFieldLayout('lock-code', event)}>
                       <Text style={styles.createLabel}>{quickCreateMode === 'checkout' ? '旧密码' : '新密码'}</Text>
-                      <TextInput accessibilityLabel="quick-create-lock-code" value={quickCreateMode === 'checkout' ? quickCreateOldCode : quickCreateNewCode} onChangeText={quickCreateMode === 'checkout' ? setQuickCreateOldCode : setQuickCreateNewCode} editable={!quickCreateBusy} style={styles.createInput} placeholder={quickCreateMode === 'checkout' ? '旧密码' : '新密码'} placeholderTextColor="#9CA3AF" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
+                      <TextInput {...quickCreateFocusHandlers('lock-code')} accessibilityLabel="quick-create-lock-code" value={quickCreateMode === 'checkout' ? quickCreateOldCode : quickCreateNewCode} onChangeText={quickCreateMode === 'checkout' ? setQuickCreateOldCode : setQuickCreateNewCode} editable={!quickCreateBusy} style={styles.createInput} placeholder={quickCreateMode === 'checkout' ? '旧密码' : '新密码'} placeholderTextColor="#9CA3AF" returnKeyType="done" submitBehavior="blurAndSubmit" onSubmitEditing={Keyboard.dismiss} />
                     </View>
                     {quickCreateMode === 'checkin' ? (
                       <>
@@ -3217,15 +3411,15 @@ function showBanner(title: string, message: string) {
                           </View>
                           <Text style={styles.createHint}>只有明确选择的退房任务才会合并显示；不会按房号和日期自动关联。</Text>
                         </View>
-                        <View style={styles.createField}>
+                        <View testID="quick-create-field-nights" style={styles.createField} onLayout={(event) => handleQuickCreateFieldLayout('nights', event)}>
                           <Text style={styles.createLabel}>入住天数（可选）</Text>
-                          <TextInput value={quickCreateNights} onChangeText={setQuickCreateNights} editable={!quickCreateBusy} style={styles.createInput} keyboardType="number-pad" placeholder="例如 3" placeholderTextColor="#9CA3AF" />
+                          <TextInput {...quickCreateFocusHandlers('nights')} accessibilityLabel="quick-create-nights" value={quickCreateNights} onChangeText={setQuickCreateNights} editable={!quickCreateBusy} style={styles.createInput} keyboardType="number-pad" placeholder="例如 3" placeholderTextColor="#9CA3AF" />
                         </View>
                       </>
                     ) : null}
-                    <View style={styles.createField}>
+                    <View testID="quick-create-field-guest-note" style={styles.createField} onLayout={(event) => handleQuickCreateFieldLayout('guest-note', event)}>
                       <Text style={styles.createLabel}>客人需求</Text>
-                      <TextInput accessibilityLabel="quick-create-guest-note" value={quickCreateGuestNote} onChangeText={setQuickCreateGuestNote} editable={!quickCreateBusy} style={[styles.createInput, styles.createTextArea]} placeholder="需要同步给现场的信息" placeholderTextColor="#9CA3AF" multiline returnKeyType="default" submitBehavior="newline" />
+                      <TextInput {...quickCreateFocusHandlers('guest-note')} accessibilityLabel="quick-create-guest-note" value={quickCreateGuestNote} onChangeText={setQuickCreateGuestNote} editable={!quickCreateBusy} style={[styles.createInput, styles.createTextArea]} placeholder="需要同步给现场的信息" placeholderTextColor="#9CA3AF" multiline returnKeyType="default" submitBehavior="newline" onContentSizeChange={() => handleQuickCreateMultilineSizeChange('guest-note')} />
                     </View>
                     <Text style={styles.createHint}>手动新增的入住/退房任务会保持待同步；订单同步后自动关联。</Text>
                   </>
@@ -4405,8 +4599,8 @@ const styles = StyleSheet.create({
   transferOptionName: { color: '#111827', fontWeight: '900', fontSize: moderateScale(14), lineHeight: moderateScale(18) },
   transferOptionRole: { marginTop: 2, color: '#6B7280', fontWeight: '700', fontSize: moderateScale(12), lineHeight: moderateScale(16) },
   createTaskModal: { width: '100%', maxHeight: '86%', flexShrink: 1, backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14 },
-  createTaskBody: { marginTop: 12, flexGrow: 0, flexShrink: 1 },
-  createTaskBodyContent: { gap: 12, paddingBottom: 2 },
+  createTaskBody: { marginTop: 12, minHeight: 0, flexGrow: 0, flexShrink: 1 },
+  createTaskBodyContent: { gap: 12, paddingBottom: QUICK_CREATE_SCROLL_BOTTOM_SPACE },
   createHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   createKeyboardDismiss: { minHeight: 44, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' },
   createKeyboardDismissText: { color: '#1D4ED8', fontSize: moderateScale(11), fontWeight: '900' },

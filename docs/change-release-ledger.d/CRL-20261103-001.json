@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "crl": "CRL-20261103-001",
+  "repository": "mobile",
+  "title": "MZ-091 and MZ-096 quick-create reliability",
+  "request": "Send only the password field applicable to a manual task type and keep every low-position quick-create input visible while the software keyboard changes size.",
+  "outcome": "Check-in and checkout create payloads omit the inapplicable password field, while measured focus scrolling keeps inputs above the effective keyboard-adjusted footer and discards stale focus work.",
+  "implementation": [
+    "Build the manual check-in or checkout payload with only its applicable password field, preserving an explicit null for a blank applicable value.",
+    "Calculate a bounded scroll target from measured field geometry, the scroll viewport window position, and the keyboard frame screen position.",
+    "Re-evaluate focused-field visibility after frame-only keyboard changes and multiline content growth, even when the ScrollView does not emit another layout event.",
+    "Clear keyboard and window geometry on every form-session reset so a closed form cannot influence a reopened form.",
+    "Add bottom scroll space for the fixed action footer while preserving existing permissions, draft retention, and single-flight save behavior."
+  ],
+  "impact_dependencies": [
+    "No backend, database, migration, native dependency, package manifest, lockfile, environment, permission, or production-data change.",
+    "The local integration base includes the separately reviewed MZ-097 draft-recovery change, while this registration binds only the MZ-091 and MZ-096 hunks.",
+    "Physical-device Chinese input, candidate-bar resizing, and real iOS and Android keyboard behavior remain outside local mock validation."
+  ],
+  "validation": [
+    "Focused integration coverage passes check-in and checkout field applicability, blank applicable values, retry retention, measured geometry, all create modes, frame-only keyboard resizing, close-and-reopen geometry reset, multiline growth, and stale callbacks.",
+    "The exact combined Mobile gate passed 83 suites and 796 tests, plus 57 incremental-ledger tests, type checking, lint with zero errors, and button-contract audit.",
+    "Independent final review found no P0, P1, or P2 findings on the exact staged candidate."
+  ],
+  "risks": [
+    "A physical platform keyboard can report a frame sequence not represented by the local React Native event mocks.",
+    "A missing or stale generation check could scroll a newly opened form using geometry from an older form session.",
+    "An inapplicable field must remain absent rather than being serialized as null, while a blank applicable field must remain explicit null.",
+    "The historical ledger remains byte-for-byte unchanged and is not included in this candidate."
+  ],
+  "files": [
+    "docs/change-release-ledger.d/CRL-20261103-001.json",
+    "src/screens/tabs/TasksScreen.test.tsx",
+    "src/screens/tabs/TasksScreen.tsx"
+  ],
+  "staged_hunks": [
+    {
+      "path": "src/screens/tabs/TasksScreen.test.tsx",
+      "sha256": "38dc6e1f8151e132f45eccb662fddda6042f86d9f38e1f8e07fe178f34a1d746"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.test.tsx",
+      "sha256": "711c65673ba06c10045899446ddb099428076267c078ec385ba17f031f279e4a"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "041defe1385e43f0f26604bf8ac8efdb7a5e17a5db9d6582480fa6a671cc8200"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "05877d9409979b6e3873502c34ecf3db999b03ccb168f6925a319a516607ec90"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "07949a157c8fb1252da81577cce5ce11d47a79832ae553023de8395a4d30fcd4"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "1febf4a92cd6c565a22466fcd3abec2881cb4f55f1909d6d51c7f8b734609f39"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "202156702dd12fcb03b89839635121708896e78c44d770754d9993756151ad4d"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "2f39940824ccb983ad0e390e2881be477cf8194fc5d223fdd9cd9a61b6a9d82a"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "3b13c0126791b985b2cffa640aebb649dc462fcabfcb0413e753b77e2a5478e4"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "3b1bb39396d88c016d704bc73628469854e64fda1a0ded827458362f9c2fc9cd"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "448c29e410188792b40f1b04c9b4db3d3d129eba243e1c604a2d2827e2a891cb"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "462f1cc3787a10bbf9572d44bcb80f28a641150ea2d7041a4ac09d55dae1ff1d"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "47b4f81b01d711042adedc108be66d47db1f3865dba4331767629486f64e109a"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "56cdc18171159672e4804eed1c6634c2e8c1f89a2bcbc3f66d15fcad46911a4b"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "580d281edca96b4b0b78719c22e9f3910873036a62e7444a5a8900fc7c2a34a9"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "582e95675951e5d320359296aa012642414b1c6da18ea51643c140be2ec2dc6d"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "6258f24d240cee6e48bd821d7bcdd5e8675debff9825895ac6e9f24ad092ce4c"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "6b97e642fd12d7f91e8756229381f104387744ea69359247b7b4bb29e0ce34c5"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "703d818cb5a9ae3e88c560dadc3223dd6d13ff443aa7db9abc6aa4b1916f9f65"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "720484d8025991442480193b039e64e1a89b558992bc2ae077305e57bcc37708"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "77b3f9cfc3771676626bf8ee74d52d252f1157ffb5c4be1cccfaa4dad43f32ed"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "a581bd3d0bd30ac42cb2b9558e22c9c255d1eaa0cbe639dddc9efa4bbad44b27"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "ad0ccb2290b720da5cbfeeb37e595e181da773c943a48c135b67e961b2dbed82"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "b9b89e3426297e14d3b48ef6ff187dff9901542e8a2c0a1b9503176bc20e2cc5"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "bf9e2f2b660bdacba6aac9c123de91b20c4cdb4a574c040207e38d44d4ed3577"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "c9de6d39946c6b4ea1dcc96938d8458b0bf574ca8ecedbb0402c3066228a4eae"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "d0e6087e0da976171f374fdbcd28a3d8ac986267f6baa463070b7923066aa8da"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "db376a0d9def921691e8618b91ecc5ebd7f6c5fcb2ca5eafc2d895aada3ad197"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "dfb28c0db4896d65b938eadaa51b21c220ad69e02ab6be20bbddb2cbb53a2ae5"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "fc65f1dd211e90478282777fd47b727a943d40de36578685c658bd19fbb427e3"
+    },
+    {
+      "path": "src/screens/tabs/TasksScreen.tsx",
+      "sha256": "ffaa7d818a17ace8eb52bce34db2c27e7a2d97b6fa21d48fe681bfed03ad960c"
+    }
+  ],
+  "release_attempt": {
+    "id": "RA-20261103-001",
+    "intended_action": "commit",
+    "branch": "codex/mz091-mz096-mobile-followup",
+    "base_sha": "143e0c352b6773583a9050d7273609d48932393e",
+    "fetched_at": "2026-11-03T00:50:32Z",
+    "candidate_patch_sha256": "85261ca848bc1e003f05548ba3aab9df04c829f8d5e2c7ea5708815ce2d26476",
+    "commit_sha": "not committed",
+    "dependencies": "none",
+    "required_validation": "PASS; evidence: 83 suites and 796 tests, 57 ledger tests, typecheck, lint with zero errors, and button audit",
+    "shared_hunk_review": "PASS; evidence: independent review verified 31 exact non-ledger hunks and no unrelated paths",
+    "generated_file_review": "PASS; no generated paths selected",
+    "technical_state": "verified",
+    "user_authorization": "approved-for-push",
+    "independent_review": "GO; evidence: final exact-candidate review found no P0, P1, or P2 findings",
+    "action_conclusion": "GO",
+    "blockers": "none"
+  }
+}
