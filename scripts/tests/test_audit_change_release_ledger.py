@@ -16,9 +16,7 @@ from pathlib import Path
 
 
 AUDITOR_PATH = Path(__file__).resolve().parents[1] / "audit_change_release_ledger.py"
-EXPECTED_REPOSITORY = (
-    "mobile" if "mz-cleaning-app-frontend" in str(AUDITOR_PATH) else "root"
-)
+EXPECTED_REPOSITORY = "mobile"
 
 
 def load_auditor():
@@ -49,6 +47,68 @@ def selected_files_without_ledger(env_file: bool, generated: bool) -> list[str]:
     return paths
 
 
+def incremental_record(
+    *,
+    identifier: str,
+    files: list[str],
+    repository: str = EXPECTED_REPOSITORY,
+    staged_hunks: list[tuple[str, str]] | None = None,
+    base_sha: str = "2" * 40,
+    commit_sha: str = "4" * 40,
+    candidate_patch_sha256: str = "3" * 64,
+    intended_action: str = "push",
+    technical_state: str = "committed",
+) -> str:
+    registration_path = f"docs/change-release-ledger.d/{identifier}.json"
+    return json.dumps(
+        {
+            "schema_version": 1,
+            "crl": identifier,
+            "repository": repository,
+            "title": "Exact incremental fixture registration",
+            "request": "Register only the reviewed fixture change without rewriting history.",
+            "outcome": "The exact fixture range is attributable and fails closed on drift.",
+            "implementation": ["Validate one append-only registration for this exact range."],
+            "impact_dependencies": ["No runtime, database, configuration, or dependency impact."],
+            "validation": ["Isolated Git range audit exercises the registration contract."],
+            "risks": ["A missing, malformed, stale, or over-broad registration blocks coverage."],
+            "files": sorted(files),
+            "staged_hunks": [
+                {"path": path, "sha256": fingerprint}
+                for path, fingerprint in sorted(
+                    staged_hunks
+                    if staged_hunks is not None
+                    else [
+                        (path, "1" * 64)
+                        for path in sorted(files)
+                        if path != registration_path
+                    ]
+                )
+            ],
+            "release_attempt": {
+                "id": "RA-20260909-001",
+                "intended_action": intended_action,
+                "branch": "codex/incremental-fixture",
+                "base_sha": base_sha,
+                "fetched_at": "2026-09-09T00:00:00Z",
+                "candidate_patch_sha256": candidate_patch_sha256,
+                "commit_sha": commit_sha,
+                "dependencies": "none",
+                "required_validation": "PASS; evidence: isolated fixture",
+                "shared_hunk_review": "not applicable; evidence: exact fixture scope",
+                "generated_file_review": "not applicable; evidence: no generated files",
+                "technical_state": technical_state,
+                "user_authorization": "approved-for-push",
+                "independent_review": "GO; evidence: isolated fixture review",
+                "action_conclusion": "GO",
+                "blockers": "none"
+            },
+        },
+        ensure_ascii=False,
+        indent=2,
+    ) + "\n"
+
+
 class ReleaseReportFixture:
     def __init__(
         self,
@@ -71,7 +131,13 @@ class ReleaseReportFixture:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
 
-    def _ledger(self, *, candidate_hash: str, commit_sha: str, scope_hunks: list[tuple[str, str]]) -> str:
+    def _ledger(
+        self,
+        *,
+        candidate_hash: str,
+        commit_sha: str,
+        scope_hunks: list[tuple[str, str]],
+    ) -> str:
         other_crl = ""
         if self.shared:
             other_crl = """
@@ -87,7 +153,9 @@ class ReleaseReportFixture:
         if self.generated:
             selected_files.append("dist/generated.js")
         files = "\n".join(f"- `{path}` — fixture release path." for path in selected_files)
-        hunk_lines = "\n".join(f"- `{path}` — SHA-256: `{fingerprint}`" for path, fingerprint in scope_hunks)
+        hunk_lines = "\n".join(
+            f"- `{path}` — SHA-256: `{fingerprint}`" for path, fingerprint in scope_hunks
+        )
         return f"""# Change Release Ledger
 {other_crl}
 ## CRL-20260803-777 — Fixture release attempt
@@ -174,11 +242,22 @@ class ReleaseReportFixture:
         if self.generated:
             self._write("dist/generated.js", "generated fixture\n")
         git(self.root, "add", *selected_files_without_ledger(self.env_file, self.generated))
-        scope_hunks = sorted(set().union(*(AUDITOR.diff_hunk_fingerprints(self.root, path, "--cached") for path in selected_files_without_ledger(self.env_file, self.generated))))
+        scope_hunks = sorted(
+            set().union(
+                *(
+                    AUDITOR.diff_hunk_fingerprints(self.root, path, "--cached")
+                    for path in selected_files_without_ledger(self.env_file, self.generated)
+                )
+            )
+        )
         self.scope_hunks = scope_hunks
         self._write(
             "docs/change-release-ledger.md",
-            self._ledger(candidate_hash="0" * 64, commit_sha="not committed", scope_hunks=scope_hunks),
+            self._ledger(
+                candidate_hash="0" * 64,
+                commit_sha="not committed",
+                scope_hunks=scope_hunks,
+            ),
         )
         git(self.root, "add", ".")
         git(self.root, "commit", "-qm", "candidate content")
@@ -188,7 +267,11 @@ class ReleaseReportFixture:
         )
         self._write(
             "docs/change-release-ledger.md",
-            self._ledger(candidate_hash=candidate_hash, commit_sha=self.candidate_commit, scope_hunks=scope_hunks),
+            self._ledger(
+                candidate_hash=candidate_hash,
+                commit_sha=self.candidate_commit,
+                scope_hunks=scope_hunks,
+            ),
         )
         git(self.root, "add", "docs/change-release-ledger.md")
         git(self.root, "commit", "-qm", "record release evidence")
@@ -204,6 +287,39 @@ class ReleaseReportFixture:
             crl_ids=["CRL-20260803-777"],
         )
 
+    def stage_bound_incremental_registration(
+        self, identifier: str
+    ) -> tuple[str, str, str]:
+        base = self.head
+        git(self.root, "update-ref", "refs/remotes/origin/Dev", base)
+        content_path = "src/incremental.txt"
+        registration_path = f"docs/change-release-ledger.d/{identifier}.json"
+        self._write(content_path, "reviewed bound incremental change\n")
+        git(self.root, "add", content_path)
+        git(self.root, "commit", "-qm", "bound incremental content")
+        content_commit = git(self.root, "rev-parse", "HEAD")
+        staged_hunks = sorted(
+            AUDITOR.diff_hunk_fingerprints(
+                self.root, content_path, f"{base}...{content_commit}"
+            )
+        )
+        candidate_hash = AUDITOR.content_patch_sha256(
+            self.root, base, content_commit
+        )
+        self._write(
+            registration_path,
+            incremental_record(
+                identifier=identifier,
+                files=[registration_path, content_path],
+                staged_hunks=staged_hunks,
+                base_sha=base,
+                commit_sha=content_commit,
+                candidate_patch_sha256=candidate_hash,
+            ),
+        )
+        git(self.root, "add", registration_path)
+        return base, content_commit, registration_path
+
     def update_attempt_field(self, name: str, value: str) -> None:
         ledger = self.root / "docs/change-release-ledger.md"
         new_line = f"- {name}: {value}"
@@ -217,18 +333,27 @@ class ReleaseReportFixture:
                 index for index, line in enumerate(lines) if line.startswith("- Dependencies:")
             )
             lines.insert(dependency_index + 1, new_line)
-        self._write("docs/change-release-ledger.md", "\n".join(lines) + "\n")
+        content = "\n".join(lines) + "\n"
+        self._write(
+            "docs/change-release-ledger.md",
+            content,
+        )
         git(self.root, "add", "docs/change-release-ledger.md")
         git(self.root, "commit", "-qm", f"record {name.lower()} evidence")
         self.head = git(self.root, "rev-parse", "HEAD")
 
     def stage_pre_commit_candidate(self, content: str = "pre-commit candidate\n") -> None:
         self._write("src/feature.txt", content)
-        scope_hunks = sorted(AUDITOR.diff_hunk_fingerprints(self.root, "src/feature.txt", "HEAD"))
+        scope_hunks = sorted(
+            AUDITOR.diff_hunk_fingerprints(self.root, "src/feature.txt", "HEAD")
+        )
         ledger = self.root / "docs/change-release-ledger.md"
         old_line = f"- `src/feature.txt` — SHA-256: `{self.scope_hunks[0][1]}`"
         new_line = f"- `src/feature.txt` — SHA-256: `{scope_hunks[0][1]}`"
-        ledger.write_text(ledger.read_text(encoding="utf-8").replace(old_line, new_line), encoding="utf-8")
+        ledger.write_text(
+            ledger.read_text(encoding="utf-8").replace(old_line, new_line),
+            encoding="utf-8",
+        )
         git(self.root, "add", "src/feature.txt", "docs/change-release-ledger.md")
 
     def stage_historical_receipt_candidate(self, source_attempt: str = "RA-20260803-777") -> None:
@@ -258,7 +383,10 @@ class ReleaseReportFixture:
 
 """
         ledger = self.root / "docs/change-release-ledger.md"
-        ledger.write_text(ledger.read_text(encoding="utf-8").replace("\n## CRL-20260803-778", f"\n{attempt}## CRL-20260803-778"), encoding="utf-8")
+        ledger.write_text(
+            ledger.read_text(encoding="utf-8").replace("\n## CRL-20260803-778", f"\n{attempt}## CRL-20260803-778"),
+            encoding="utf-8",
+        )
         git(self.root, "add", "docs/change-release-ledger.md")
 
     def forge_current_historical_source_attempt(self) -> None:
@@ -266,15 +394,26 @@ class ReleaseReportFixture:
         text = ledger.read_text(encoding="utf-8")
         source_start = text.index("#### RA-20260803-777")
         source_end = text.index("\n#### RA-20260803-779", source_start)
-        source_block = text[source_start:source_end].replace("#### RA-20260803-777", "#### RA-20260803-781", 1)
+        source_block = text[source_start:source_end].replace(
+            "#### RA-20260803-777", "#### RA-20260803-781", 1
+        )
         text = text[:source_end] + "\n" + source_block + text[source_end:]
-        text = text.replace("Historical source attempt: `RA-20260803-777`", "Historical source attempt: `RA-20260803-781`", 1)
+        text = text.replace(
+            "Historical source attempt: `RA-20260803-777`",
+            "Historical source attempt: `RA-20260803-781`",
+            1,
+        )
         ledger.write_text(text, encoding="utf-8")
         git(self.root, "add", "docs/change-release-ledger.md")
 
     def rewrite_historical_source_attempt(self) -> None:
         ledger = self.root / "docs/change-release-ledger.md"
-        ledger.write_text(ledger.read_text(encoding="utf-8").replace("fixture approval", "forged fixture approval", 1), encoding="utf-8")
+        ledger.write_text(
+            ledger.read_text(encoding="utf-8").replace(
+                "fixture approval", "forged fixture approval", 1
+            ),
+            encoding="utf-8",
+        )
         git(self.root, "add", "docs/change-release-ledger.md")
         git(self.root, "commit", "-qm", "rewrite historical source attempt")
         self.head = git(self.root, "rev-parse", "HEAD")
@@ -282,7 +421,9 @@ class ReleaseReportFixture:
     def finish_historical_receipt(self, *, include_nonledger_path: bool = False) -> None:
         git(self.root, "commit", "-qm", "historical receipt candidate")
         self.historical_candidate = git(self.root, "rev-parse", "HEAD")
-        empty_patch = AUDITOR.content_patch_sha256(self.root, self.historical_base, self.historical_candidate)
+        empty_patch = AUDITOR.content_patch_sha256(
+            self.root, self.historical_base, self.historical_candidate
+        )
         push_attempt = f"""#### RA-20260803-780
 
 - Repository: `{EXPECTED_REPOSITORY}`
@@ -306,7 +447,10 @@ class ReleaseReportFixture:
 
 """
         ledger = self.root / "docs/change-release-ledger.md"
-        ledger.write_text(ledger.read_text(encoding="utf-8").replace("\n## CRL-20260803-778", f"\n{push_attempt}## CRL-20260803-778"), encoding="utf-8")
+        ledger.write_text(
+            ledger.read_text(encoding="utf-8").replace("\n## CRL-20260803-778", f"\n{push_attempt}## CRL-20260803-778"),
+            encoding="utf-8",
+        )
         if include_nonledger_path:
             self._write("src/feature.txt", "historical receipt must remain ledger-only\n")
             git(self.root, "add", "src/feature.txt")
@@ -327,7 +471,7 @@ class ReleaseReportTests(unittest.TestCase):
                 "### Release Attempts",
                 "#### RA-20261002-999",
                 "- Selected CRLs: `CRL-20261002-999`",
-                "- Selected CRL identities: `mobile/CRL-20261002-999`",
+                "- Selected CRL identities: `root/CRL-20261002-999`",
                 "- Base: `origin/Dev@1111111111111111111111111111111111111111`; fetched at `fixture-time`",
                 "- Commit SHA: `2222222222222222222222222222222222222222`",
                 "### Git / Delivery State",
@@ -353,7 +497,11 @@ class ReleaseReportTests(unittest.TestCase):
     def test_pre_commit_gate_accepts_initial_historical_receipt_candidate(self) -> None:
         fixture = ReleaseReportFixture(self)
         fixture.stage_historical_receipt_candidate()
-        report = AUDITOR.build_pre_commit_report(fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"])
+
+        report = AUDITOR.build_pre_commit_report(
+            fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"]
+        )
+
         self.assertEqual("GO", report["conclusion"])
         self.assertTrue(any(item["gate"] == "ledger-only receipt" and item["result"] == "PASS" for item in report["checks"]))
 
@@ -361,7 +509,9 @@ class ReleaseReportTests(unittest.TestCase):
         fixture = ReleaseReportFixture(self)
         fixture.stage_historical_receipt_candidate()
         fixture.finish_historical_receipt()
+
         report = fixture.historical_receipt_report()
+
         self.assertEqual("GO", report["conclusion"])
         self.assertTrue(report["historical_receipt"])
         self.assertTrue(any(item["gate"] == "historical source proof" and item["result"] == "PASS" for item in report["checks"]))
@@ -370,14 +520,20 @@ class ReleaseReportTests(unittest.TestCase):
         fixture = ReleaseReportFixture(self)
         fixture.stage_historical_receipt_candidate()
         fixture.finish_historical_receipt(include_nonledger_path=True)
+
         report = fixture.historical_receipt_report()
+
         self.assertEqual("BLOCKED", report["conclusion"])
         self.assertTrue(any("must change only docs/change-release-ledger.md" in blocker for blocker in report["blockers"]))
 
     def test_historical_receipt_blocks_unknown_source_attempt(self) -> None:
         fixture = ReleaseReportFixture(self)
         fixture.stage_historical_receipt_candidate("RA-20260803-999")
-        report = AUDITOR.build_pre_commit_report(fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"])
+
+        report = AUDITOR.build_pre_commit_report(
+            fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"]
+        )
+
         self.assertEqual("BLOCKED", report["conclusion"])
         self.assertTrue(any("Historical source attempt is missing" in blocker for blocker in report["blockers"]))
 
@@ -385,7 +541,11 @@ class ReleaseReportTests(unittest.TestCase):
         fixture = ReleaseReportFixture(self)
         fixture.stage_historical_receipt_candidate()
         fixture.forge_current_historical_source_attempt()
-        report = AUDITOR.build_pre_commit_report(fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"])
+
+        report = AUDITOR.build_pre_commit_report(
+            fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"]
+        )
+
         self.assertEqual("BLOCKED", report["conclusion"])
         self.assertTrue(any("must already exist" in blocker for blocker in report["blockers"]))
 
@@ -394,14 +554,23 @@ class ReleaseReportTests(unittest.TestCase):
         fixture.stage_historical_receipt_candidate()
         fixture.finish_historical_receipt()
         fixture.rewrite_historical_source_attempt()
+
         report = fixture.historical_receipt_report()
+
         self.assertEqual("BLOCKED", report["conclusion"])
         self.assertTrue(any("byte-for-byte unchanged" in blocker for blocker in report["blockers"]))
 
     def test_pre_commit_gate_accepts_exact_staged_hunk_scope(self) -> None:
         fixture = ReleaseReportFixture(self)
         fixture.stage_pre_commit_candidate()
-        report = AUDITOR.build_pre_commit_report(fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"])
+
+        report = AUDITOR.build_pre_commit_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            ["CRL-20260803-777"],
+        )
+
         self.assertEqual("GO", report["conclusion"])
         self.assertEqual([], report["untracked_files"])
         self.assertEqual([], report["unexpected_hunks"])
@@ -410,7 +579,14 @@ class ReleaseReportTests(unittest.TestCase):
         fixture = ReleaseReportFixture(self)
         fixture.stage_pre_commit_candidate()
         fixture._write("scratch.txt", "do not disclose this content\n")
-        report = AUDITOR.build_pre_commit_report(fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"])
+
+        report = AUDITOR.build_pre_commit_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            ["CRL-20260803-777"],
+        )
+
         self.assertEqual("BLOCKED", report["conclusion"])
         self.assertIn("scratch.txt", report["untracked_files"])
         self.assertNotIn("do not disclose", AUDITOR.markdown_pre_commit_report(report))
@@ -419,25 +595,56 @@ class ReleaseReportTests(unittest.TestCase):
         fixture = ReleaseReportFixture(self)
         fixture._write("src/feature.txt", "undeclared candidate\n")
         git(fixture.root, "add", "src/feature.txt")
-        report = AUDITOR.build_pre_commit_report(fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"])
+
+        report = AUDITOR.build_pre_commit_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            ["CRL-20260803-777"],
+        )
+
         self.assertEqual("BLOCKED", report["conclusion"])
         self.assertTrue(report["unexpected_hunks"])
 
     def test_pre_commit_gate_accepts_verified_ledger_only_receipt(self) -> None:
         fixture = ReleaseReportFixture(self)
         ledger = fixture.root / "docs/change-release-ledger.md"
-        ledger.write_text(ledger.read_text(encoding="utf-8").replace("fixture approval", "fixture receipt renewal"), encoding="utf-8")
+        ledger.write_text(
+            ledger.read_text(encoding="utf-8").replace(
+                "fixture approval", "fixture receipt renewal"
+            ),
+            encoding="utf-8",
+        )
         git(fixture.root, "add", "docs/change-release-ledger.md")
-        report = AUDITOR.build_pre_commit_report(fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"])
+
+        report = AUDITOR.build_pre_commit_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            ["CRL-20260803-777"],
+        )
+
         self.assertEqual("GO", report["conclusion"])
         self.assertTrue(any(item["gate"] == "ledger-only receipt" and item["result"] == "PASS" for item in report["checks"]))
 
     def test_pre_commit_gate_blocks_ledger_only_change_outside_receipt(self) -> None:
         fixture = ReleaseReportFixture(self)
         ledger = fixture.root / "docs/change-release-ledger.md"
-        ledger.write_text(ledger.read_text(encoding="utf-8").replace("Fixture release attempt", "Mutated fixture business identity"), encoding="utf-8")
+        ledger.write_text(
+            ledger.read_text(encoding="utf-8").replace(
+                "Fixture release attempt", "Mutated fixture business identity"
+            ),
+            encoding="utf-8",
+        )
         git(fixture.root, "add", "docs/change-release-ledger.md")
-        report = AUDITOR.build_pre_commit_report(fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"])
+
+        report = AUDITOR.build_pre_commit_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            ["CRL-20260803-777"],
+        )
+
         self.assertEqual("BLOCKED", report["conclusion"])
         self.assertTrue(any("outside selected CRL Release Attempts" in blocker for blocker in report["blockers"]))
 
@@ -445,9 +652,21 @@ class ReleaseReportTests(unittest.TestCase):
         fixture = ReleaseReportFixture(self, shared=True)
         fixture.stage_pre_commit_candidate()
         ledger = fixture.root / "docs/change-release-ledger.md"
-        ledger.write_text(ledger.read_text(encoding="utf-8").replace("Concurrent fixture", "Mutated unselected fixture"), encoding="utf-8")
+        ledger.write_text(
+            ledger.read_text(encoding="utf-8").replace(
+                "Concurrent fixture", "Mutated unselected fixture"
+            ),
+            encoding="utf-8",
+        )
         git(fixture.root, "add", "docs/change-release-ledger.md")
-        report = AUDITOR.build_pre_commit_report(fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"])
+
+        report = AUDITOR.build_pre_commit_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            ["CRL-20260803-777"],
+        )
+
         self.assertEqual("BLOCKED", report["conclusion"])
         self.assertTrue(any("outside selected CRL sections" in blocker for blocker in report["blockers"]))
 
@@ -455,126 +674,21 @@ class ReleaseReportTests(unittest.TestCase):
         fixture = ReleaseReportFixture(self)
         original = fixture.report()["candidate_patch_sha256"]["recorded"]
         ledger = fixture.root / "docs/change-release-ledger.md"
-        ledger.write_text(ledger.read_text(encoding="utf-8").replace(original, "0" * 64), encoding="utf-8")
-        git(fixture.root, "add", "docs/change-release-ledger.md")
-        report = AUDITOR.build_pre_commit_report(fixture.root, EXPECTED_REPOSITORY, EXPECTED_REPOSITORY, ["CRL-20260803-777"])
-        self.assertEqual("BLOCKED", report["conclusion"])
-        self.assertTrue(any("candidate patch fingerprint" in blocker for blocker in report["blockers"]))
-
-    def test_hunk_reconciliation_allows_only_the_shifted_scope_and_exact_range(self) -> None:
-        fixture = ReleaseReportFixture(self)
-        original_hunk = fixture.scope_hunks[0]
-        ledger = fixture.root / "docs/change-release-ledger.md"
-
-        fixture._write("src/feature.txt", "inserted\nheader\nstable\nafter\n")
-        git(fixture.root, "add", "src/feature.txt")
-        insertion_hunks = AUDITOR.diff_hunk_fingerprints(
-            fixture.root, "src/feature.txt", "--cached"
+        ledger.write_text(
+            ledger.read_text(encoding="utf-8").replace(original, "0" * 64),
+            encoding="utf-8",
         )
-        self.assertEqual(1, len(insertion_hunks))
-        insertion_path, insertion_hunk = next(iter(insertion_hunks))
-
-        current = ledger.read_text(encoding="utf-8")
-        dependency_start = current.index("## CRL-20260803-778 — Fixture dependency")
-        insertion_scope = f"- `{insertion_path}` — SHA-256: `{insertion_hunk}`"
-        companion_crl = f"""## CRL-20260803-778 — Fixture insertion unit
-
-- **Repository:** `{EXPECTED_REPOSITORY}`
-- **Request:** Insert an unrelated line before the original fixture hunk.
-- **Outcome:** The original source hunk body remains unchanged but its zero-context header shifts.
-
-### Files / Areas
-
-- `src/feature.txt` — fixture insertion path.
-- `docs/change-release-ledger.md` — fixture release evidence.
-
-### Staged Commit Scope
-
-- **Repository:** `{EXPECTED_REPOSITORY}`
-- **Status:** `prepared`
-- **Untracked review:** `none`
-{insertion_scope}
-
-### Release Attempts
-
-- None yet.
-"""
-        fixture._write("docs/change-release-ledger.md", current[:dependency_start] + companion_crl)
-        git(fixture.root, "add", "docs/change-release-ledger.md")
-        git(fixture.root, "commit", "-qm", "fixture insertion content")
-        late_content = git(fixture.root, "rev-parse", "HEAD")
-
-        actual_hunks = AUDITOR.diff_hunk_fingerprints(
-            fixture.root, "src/feature.txt", f"{fixture.base}...{late_content}"
-        )
-        shifted_hunks = actual_hunks - insertion_hunks
-        self.assertEqual(1, len(shifted_hunks))
-        shifted_path, shifted_hunk = next(iter(shifted_hunks))
-        self.assertEqual(original_hunk[0], shifted_path)
-        self.assertNotEqual(original_hunk[1], shifted_hunk)
-
-        reconciled_hash = AUDITOR.content_patch_sha256(
-            fixture.root, fixture.base, late_content
-        )
-        updated = ledger.read_text(encoding="utf-8")
-        updated = updated.replace(
-            f"- `src/feature.txt` — SHA-256: `{original_hunk[1]}`",
-            f"- `src/feature.txt` — SHA-256: `{shifted_hunk}`",
-            1,
-        )
-        updated = updated.replace(
-            "- Selected CRLs: `CRL-20260803-777`",
-            "- Selected CRLs: `CRL-20260803-777`, `CRL-20260803-778`",
-            1,
-        )
-        updated = updated.replace(
-            f"- Selected CRL identities: `{EXPECTED_REPOSITORY}/CRL-20260803-777`",
-            f"- Selected CRL identities: `{EXPECTED_REPOSITORY}/CRL-20260803-777`, `{EXPECTED_REPOSITORY}/CRL-20260803-778`",
-            1,
-        )
-        initial_hash = AUDITOR.content_patch_sha256(
-            fixture.root, fixture.base, fixture.candidate_commit
-        )
-        updated = updated.replace(initial_hash, reconciled_hash, 1)
-        updated = updated.replace(fixture.candidate_commit, late_content, 1)
-        updated = updated.replace(
-            f"- Commit SHA: `{late_content}`",
-            f"- Commit SHA: `{late_content}`\n- Hunk reconciliation: `src/feature.txt#{original_hunk[1]} -> {shifted_hunk}`; evidence: an independent insertion hunk shifts only the zero-context header.",
-            1,
-        )
-        fixture._write("docs/change-release-ledger.md", updated)
         git(fixture.root, "add", "docs/change-release-ledger.md")
 
-        pre_commit = AUDITOR.build_pre_commit_report(
+        report = AUDITOR.build_pre_commit_report(
             fixture.root,
             EXPECTED_REPOSITORY,
             EXPECTED_REPOSITORY,
-            ["CRL-20260803-777", "CRL-20260803-778"],
+            ["CRL-20260803-777"],
         )
-        self.assertEqual("GO", pre_commit["conclusion"])
-        self.assertTrue(
-            any(
-                item["gate"] == "ledger-only receipt" and item["result"] == "PASS"
-                for item in pre_commit["checks"]
-            )
-        )
-        git(fixture.root, "commit", "-qm", "fixture hunk reconciliation receipt")
 
-        report = AUDITOR.build_release_report(
-            root=fixture.root,
-            expected_repository=EXPECTED_REPOSITORY,
-            repository=EXPECTED_REPOSITORY,
-            base_reference=fixture.base,
-            head_reference="HEAD",
-            crl_ids=["CRL-20260803-777", "CRL-20260803-778"],
-        )
-        self.assertEqual("GO", report["conclusion"])
-        self.assertTrue(
-            any(
-                item["gate"] == "hunk reconciliation" and item["result"] == "PASS"
-                for item in report["checks"]
-            )
-        )
+        self.assertEqual("BLOCKED", report["conclusion"])
+        self.assertTrue(any("candidate patch fingerprint" in blocker for blocker in report["blockers"]))
 
     def test_cli_range_coverage_accepts_base_and_head_without_release_report(self) -> None:
         fixture = ReleaseReportFixture(self)
@@ -599,6 +713,370 @@ class ReleaseReportTests(unittest.TestCase):
 
         self.assertEqual(1, code)
         self.assertIn("src/unrecorded.txt", stream.getvalue())
+
+    def test_incremental_registration_covers_only_the_exact_range(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        git(fixture.root, "update-ref", "refs/remotes/origin/Dev", fixture.head)
+        identifier = "CRL-20260909-002"
+        registration_path = f"docs/change-release-ledger.d/{identifier}.json"
+        fixture._write("src/incremental.txt", "reviewed incremental change\n")
+        fixture._write(
+            registration_path,
+            incremental_record(
+                identifier=identifier,
+                files=[registration_path, "src/incremental.txt"],
+            ),
+        )
+        git(fixture.root, "add", registration_path, "src/incremental.txt")
+        git(fixture.root, "commit", "-qm", "incremental registration fixture")
+        stream = io.StringIO()
+
+        with redirect_stdout(stream):
+            code = AUDITOR.main(
+                ["--base", fixture.head, "--head", "HEAD"],
+                root=fixture.root,
+                expected_repository=EXPECTED_REPOSITORY,
+            )
+
+        self.assertEqual(0, code)
+        self.assertIn("Changed files: 2", stream.getvalue())
+        self.assertIn("Recorded changed files: 2", stream.getvalue())
+        self.assertIn("Coverage: PASS", stream.getvalue())
+
+    def test_incremental_registration_covers_committed_candidate_and_dirty_record(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        git(fixture.root, "update-ref", "refs/remotes/origin/Dev", fixture.head)
+        identifier = "CRL-20260909-007"
+        registration_path = f"docs/change-release-ledger.d/{identifier}.json"
+        fixture._write("src/incremental.txt", "reviewed committed change\n")
+        git(fixture.root, "add", "src/incremental.txt")
+        git(fixture.root, "commit", "-qm", "committed content before registration")
+        fixture._write(
+            registration_path,
+            incremental_record(
+                identifier=identifier,
+                files=[registration_path, "src/incremental.txt"],
+            ),
+        )
+        stream = io.StringIO()
+
+        with redirect_stdout(stream):
+            code = AUDITOR.main(
+                [], root=fixture.root, expected_repository=EXPECTED_REPOSITORY
+            )
+
+        self.assertEqual(0, code)
+        self.assertIn("Coverage: PASS", stream.getvalue())
+
+    def test_incremental_registration_passes_precommit_and_release_report(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        identifier = "CRL-20260909-008"
+        base, _, _ = fixture.stage_bound_incremental_registration(identifier)
+
+        precommit = AUDITOR.build_pre_commit_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            [identifier],
+        )
+        self.assertEqual("GO", precommit["conclusion"])
+        git(fixture.root, "commit", "-qm", "bound incremental registration")
+        head = git(fixture.root, "rev-parse", "HEAD")
+        release = AUDITOR.build_release_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            base,
+            head,
+            [identifier],
+        )
+
+        self.assertEqual("GO", release["conclusion"])
+        self.assertEqual(
+            release["candidate_patch_sha256"]["recorded"],
+            release["candidate_patch_sha256"]["actual"],
+        )
+
+    def test_incremental_registration_blocks_same_path_content_drift(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        identifier = "CRL-20260909-009"
+        fixture.stage_bound_incremental_registration(identifier)
+        fixture._write("src/incremental.txt", "unreviewed same-path drift\n")
+        git(fixture.root, "add", "src/incremental.txt")
+
+        report = AUDITOR.build_pre_commit_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            [identifier],
+        )
+
+        self.assertEqual("BLOCKED", report["conclusion"])
+        self.assertTrue(
+            any(
+                "fingerprint" in blocker.lower()
+                for blocker in report["blockers"]
+            )
+        )
+
+    def test_incremental_registration_rejects_markdown_field_injection(self) -> None:
+        identifier = "CRL-20260909-010"
+        registration_path = f"docs/change-release-ledger.d/{identifier}.json"
+        value = json.loads(
+            incremental_record(
+                identifier=identifier,
+                files=[registration_path, "src/incremental.txt"],
+            )
+        )
+        for separator in ("\n", "\u0085", "\u2028", "\u2029"):
+            value["release_attempt"]["independent_review"] = (
+                "NOT VERIFIED; evidence: pending"
+                + separator
+                + "- Independent review: GO; evidence: injected"
+            )
+            with self.subTest(separator=hex(ord(separator))):
+                with self.assertRaisesRegex(ValueError, "control character"):
+                    AUDITOR.parse_incremental_registration_text(
+                        json.dumps(value), registration_path, EXPECTED_REPOSITORY
+                    )
+
+    def test_incremental_registration_allows_only_scoped_bootstrap_commit(self) -> None:
+        identifier = "CRL-20260909-013"
+        registration_path = f"docs/change-release-ledger.d/{identifier}.json"
+        text = incremental_record(
+            identifier=identifier,
+            files=[registration_path, "src/incremental.txt"],
+            commit_sha="not committed",
+            intended_action="commit",
+            technical_state="verified",
+        )
+
+        registration = AUDITOR.parse_incremental_registration_text(
+            text, registration_path, EXPECTED_REPOSITORY
+        )
+        self.assertEqual(identifier, registration.identifier)
+        value = json.loads(text)
+        value["release_attempt"]["intended_action"] = "push"
+        with self.assertRaisesRegex(ValueError, "not committed"):
+            AUDITOR.parse_incremental_registration_text(
+                json.dumps(value), registration_path, EXPECTED_REPOSITORY
+            )
+
+    def test_incremental_release_report_rejects_incomplete_content_commit(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        identifier = "CRL-20260909-011"
+        base, _, registration_path = fixture.stage_bound_incremental_registration(
+            identifier
+        )
+        registration = fixture.root / registration_path
+        value = json.loads(registration.read_text(encoding="utf-8"))
+        value["release_attempt"]["commit_sha"] = base
+        registration.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+        git(fixture.root, "add", registration_path)
+        git(fixture.root, "commit", "-qm", "incomplete content commit fixture")
+
+        report = AUDITOR.build_release_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            base,
+            "HEAD",
+            [identifier],
+        )
+
+        self.assertEqual("BLOCKED", report["conclusion"])
+        self.assertTrue(
+            any(
+                "content commit fingerprint" in blocker.lower()
+                for blocker in report["blockers"]
+            )
+        )
+
+    def test_incremental_release_report_requires_final_action_conclusion(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        identifier = "CRL-20260909-012"
+        base, _, registration_path = fixture.stage_bound_incremental_registration(
+            identifier
+        )
+        registration = fixture.root / registration_path
+        value = json.loads(registration.read_text(encoding="utf-8"))
+        value["release_attempt"]["action_conclusion"] = "NOT VERIFIED"
+        value["release_attempt"]["blockers"] = "independent review pending"
+        registration.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+        git(fixture.root, "add", registration_path)
+        git(fixture.root, "commit", "-qm", "pending action conclusion fixture")
+
+        report = AUDITOR.build_release_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            base,
+            "HEAD",
+            [identifier],
+        )
+
+        self.assertEqual("NOT VERIFIED", report["conclusion"])
+        self.assertIn(
+            "Release Attempt does not record GO with blockers: none.",
+            report["missing_evidence"],
+        )
+
+    def test_incremental_registration_rejects_a_wrong_unchanged_path(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        git(fixture.root, "update-ref", "refs/remotes/origin/Dev", fixture.head)
+        identifier = "CRL-20260909-003"
+        registration_path = f"docs/change-release-ledger.d/{identifier}.json"
+        fixture._write("src/incremental.txt", "reviewed incremental change\n")
+        fixture._write(
+            registration_path,
+            incremental_record(
+                identifier=identifier,
+                files=[registration_path, "src/incremental.txt", "src/wrong.txt"],
+            ),
+        )
+        git(fixture.root, "add", registration_path, "src/incremental.txt")
+        git(fixture.root, "commit", "-qm", "wrong incremental path fixture")
+        stream = io.StringIO()
+
+        with redirect_stdout(stream):
+            code = AUDITOR.main(
+                ["--base", fixture.head, "--head", "HEAD"],
+                root=fixture.root,
+                expected_repository=EXPECTED_REPOSITORY,
+            )
+
+        self.assertEqual(1, code)
+        self.assertIn("claim paths outside this exact change range", stream.getvalue())
+        self.assertIn("src/wrong.txt", stream.getvalue())
+
+    def test_incremental_registration_rejects_missing_range_path(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        git(fixture.root, "update-ref", "refs/remotes/origin/Dev", fixture.head)
+        identifier = "CRL-20260909-004"
+        registration_path = f"docs/change-release-ledger.d/{identifier}.json"
+        fixture._write("src/first-incremental.txt", "first reviewed change\n")
+        fixture._write("src/second-incremental.txt", "second reviewed change\n")
+        fixture._write(
+            registration_path,
+            incremental_record(
+                identifier=identifier,
+                files=[registration_path, "src/first-incremental.txt"],
+            ),
+        )
+        git(
+            fixture.root,
+            "add",
+            registration_path,
+            "src/first-incremental.txt",
+            "src/second-incremental.txt",
+        )
+        git(fixture.root, "commit", "-qm", "missing incremental path fixture")
+        stream = io.StringIO()
+
+        with redirect_stdout(stream):
+            code = AUDITOR.main(
+                ["--base", fixture.head, "--head", "HEAD"],
+                root=fixture.root,
+                expected_repository=EXPECTED_REPOSITORY,
+            )
+
+        self.assertEqual(1, code)
+        self.assertIn("do not cover every path", stream.getvalue())
+        self.assertIn("src/second-incremental.txt", stream.getvalue())
+
+    def test_incremental_registration_rejects_invalid_schema(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        git(fixture.root, "update-ref", "refs/remotes/origin/Dev", fixture.head)
+        identifier = "CRL-20260909-005"
+        registration_path = f"docs/change-release-ledger.d/{identifier}.json"
+        fixture._write("src/incremental.txt", "reviewed incremental change\n")
+        value = json.loads(
+            incremental_record(
+                identifier=identifier,
+                files=[registration_path, "src/incremental.txt"],
+            )
+        )
+        value["unexpected"] = "must fail closed"
+        fixture._write(registration_path, json.dumps(value, indent=2) + "\n")
+        git(fixture.root, "add", registration_path, "src/incremental.txt")
+        git(fixture.root, "commit", "-qm", "invalid incremental schema fixture")
+        stream = io.StringIO()
+
+        with redirect_stdout(stream):
+            code = AUDITOR.main(
+                ["--base", fixture.head, "--head", "HEAD"],
+                root=fixture.root,
+                expected_repository=EXPECTED_REPOSITORY,
+            )
+
+        self.assertEqual(1, code)
+        self.assertIn("invalid schema", stream.getvalue())
+        self.assertIn("unknown unexpected", stream.getvalue())
+
+    def test_origin_incremental_registration_is_append_only(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        identifier = "CRL-20260909-006"
+        registration_path = f"docs/change-release-ledger.d/{identifier}.json"
+        fixture._write("src/incremental.txt", "reviewed incremental change\n")
+        fixture._write(
+            registration_path,
+            incremental_record(
+                identifier=identifier,
+                files=[registration_path, "src/incremental.txt"],
+            ),
+        )
+        git(fixture.root, "add", registration_path, "src/incremental.txt")
+        git(fixture.root, "commit", "-qm", "published incremental registration fixture")
+        published = git(fixture.root, "rev-parse", "HEAD")
+        git(fixture.root, "update-ref", "refs/remotes/origin/Dev", published)
+        registration = fixture.root / registration_path
+        registration.write_text(
+            registration.read_text(encoding="utf-8").replace(
+                "Exact incremental fixture registration",
+                "Rewritten fixture identity",
+            ),
+            encoding="utf-8",
+        )
+        stream = io.StringIO()
+
+        with redirect_stdout(stream):
+            code = AUDITOR.main(
+                [], root=fixture.root, expected_repository=EXPECTED_REPOSITORY
+            )
+
+        self.assertEqual(1, code)
+        self.assertIn("append-only", stream.getvalue())
+
+    def test_recorded_paths_accepts_comma_grouped_file_bullets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            ledger = Path(temporary) / "change-release-ledger.md"
+            ledger.write_text(
+                """# Change Release Ledger
+
+## CRL-20260909-001 — Fixture
+
+### Files / Areas
+
+- `src/first.ts`, `src/second.ts`, `package.json` — grouped fixture paths.
+- `docs/change-release-ledger.md` — standalone fixture path; explanation code `src/not-a-path.ts` is ignored.
+This prose mentions `src/unrecorded.ts` — it is not a file-list bullet.
+
+### Validation
+
+- `fixture-check` — not run.
+""",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                {
+                    "src/first.ts",
+                    "src/second.ts",
+                    "package.json",
+                    "docs/change-release-ledger.md",
+                },
+                AUDITOR.recorded_paths(ledger),
+            )
 
     def test_cli_range_coverage_requires_complete_range(self) -> None:
         fixture = ReleaseReportFixture(self)
@@ -852,7 +1330,7 @@ class ReleaseReportTests(unittest.TestCase):
         self.assertEqual("BLOCKED", invalid["conclusion"])
         self.assertEqual(0, AUDITOR.main([], root=fixture.root, expected_repository=EXPECTED_REPOSITORY))
 
-    def test_duplicate_crl_id_blocks_coverage_audit(self) -> None:
+    def test_duplicate_crl_id_blocks_report(self) -> None:
         fixture = ReleaseReportFixture(self)
         ledger = fixture.root / "docs/change-release-ledger.md"
         ledger.write_text(
@@ -861,10 +1339,34 @@ class ReleaseReportTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+        report = fixture.report()
+
+        self.assertEqual("BLOCKED", report["conclusion"])
+        self.assertIn(
+            "Duplicate CRL ID in this repository ledger: CRL-20260803-777",
+            report["blockers"],
+        )
+        with redirect_stdout(io.StringIO()):
+            code = AUDITOR.main(
+                [
+                    "--release-report",
+                    "--repo",
+                    EXPECTED_REPOSITORY,
+                    "--base",
+                    fixture.base,
+                    "--head",
+                    fixture.head,
+                    "--crl",
+                    "CRL-20260803-777",
+                ],
+                root=fixture.root,
+                expected_repository=EXPECTED_REPOSITORY,
+        )
+        self.assertEqual(1, code)
+
         coverage_output = io.StringIO()
         with redirect_stdout(coverage_output):
             coverage_code = AUDITOR.main([], root=fixture.root, expected_repository=EXPECTED_REPOSITORY)
-
         self.assertEqual(1, coverage_code)
         self.assertIn("Duplicate CRL ID", coverage_output.getvalue())
 
@@ -949,6 +1451,122 @@ class ReleaseReportTests(unittest.TestCase):
 
         self.assertEqual(2, coverage_code)
         self.assertIn("NOT VERIFIED", coverage_output.getvalue())
+
+
+    def test_hunk_reconciliation_allows_only_the_shifted_scope_and_exact_range(self) -> None:
+        fixture = ReleaseReportFixture(self)
+        original_hunk = fixture.scope_hunks[0]
+        ledger = fixture.root / "docs/change-release-ledger.md"
+
+        fixture._write("src/feature.txt", "inserted\nheader\nstable\nafter\n")
+        git(fixture.root, "add", "src/feature.txt")
+        insertion_hunks = AUDITOR.diff_hunk_fingerprints(
+            fixture.root, "src/feature.txt", "--cached"
+        )
+        self.assertEqual(1, len(insertion_hunks))
+        insertion_path, insertion_hunk = next(iter(insertion_hunks))
+
+        current = ledger.read_text(encoding="utf-8")
+        dependency_start = current.index("## CRL-20260803-778 — Fixture dependency")
+        insertion_scope = f"- `{insertion_path}` — SHA-256: `{insertion_hunk}`"
+        companion_crl = f"""## CRL-20260803-778 — Fixture insertion unit
+
+- **Repository:** `{EXPECTED_REPOSITORY}`
+- **Request:** Insert an unrelated line before the original fixture hunk.
+- **Outcome:** The original source hunk body remains unchanged but its zero-context header shifts.
+
+### Files / Areas
+
+- `src/feature.txt` — fixture insertion path.
+- `docs/change-release-ledger.md` — fixture release evidence.
+
+### Staged Commit Scope
+
+- **Repository:** `{EXPECTED_REPOSITORY}`
+- **Status:** `prepared`
+- **Untracked review:** `none`
+{insertion_scope}
+
+### Release Attempts
+
+- None yet.
+"""
+        fixture._write("docs/change-release-ledger.md", current[:dependency_start] + companion_crl)
+        git(fixture.root, "add", "docs/change-release-ledger.md")
+        git(fixture.root, "commit", "-qm", "fixture insertion content")
+        late_content = git(fixture.root, "rev-parse", "HEAD")
+
+        actual_hunks = AUDITOR.diff_hunk_fingerprints(
+            fixture.root, "src/feature.txt", f"{fixture.base}...{late_content}"
+        )
+        shifted_hunks = actual_hunks - insertion_hunks
+        self.assertEqual(1, len(shifted_hunks))
+        shifted_path, shifted_hunk = next(iter(shifted_hunks))
+        self.assertEqual(original_hunk[0], shifted_path)
+        self.assertNotEqual(original_hunk[1], shifted_hunk)
+
+        reconciled_hash = AUDITOR.content_patch_sha256(
+            fixture.root, fixture.base, late_content
+        )
+        updated = ledger.read_text(encoding="utf-8")
+        updated = updated.replace(
+            f"- `src/feature.txt` — SHA-256: `{original_hunk[1]}`",
+            f"- `src/feature.txt` — SHA-256: `{shifted_hunk}`",
+            1,
+        )
+        updated = updated.replace(
+            "- Selected CRLs: `CRL-20260803-777`",
+            "- Selected CRLs: `CRL-20260803-777`, `CRL-20260803-778`",
+            1,
+        )
+        updated = updated.replace(
+            f"- Selected CRL identities: `{EXPECTED_REPOSITORY}/CRL-20260803-777`",
+            f"- Selected CRL identities: `{EXPECTED_REPOSITORY}/CRL-20260803-777`, `{EXPECTED_REPOSITORY}/CRL-20260803-778`",
+            1,
+        )
+        initial_hash = AUDITOR.content_patch_sha256(
+            fixture.root, fixture.base, fixture.candidate_commit
+        )
+        updated = updated.replace(initial_hash, reconciled_hash, 1)
+        updated = updated.replace(fixture.candidate_commit, late_content, 1)
+        updated = updated.replace(
+            f"- Commit SHA: `{late_content}`",
+            f"- Commit SHA: `{late_content}`\n- Hunk reconciliation: `src/feature.txt#{original_hunk[1]} -> {shifted_hunk}`; evidence: an independent insertion hunk shifts only the zero-context header.",
+            1,
+        )
+        fixture._write("docs/change-release-ledger.md", updated)
+        git(fixture.root, "add", "docs/change-release-ledger.md")
+
+        pre_commit = AUDITOR.build_pre_commit_report(
+            fixture.root,
+            EXPECTED_REPOSITORY,
+            EXPECTED_REPOSITORY,
+            ["CRL-20260803-777", "CRL-20260803-778"],
+        )
+        self.assertEqual("GO", pre_commit["conclusion"])
+        self.assertTrue(
+            any(
+                item["gate"] == "ledger-only receipt" and item["result"] == "PASS"
+                for item in pre_commit["checks"]
+            )
+        )
+        git(fixture.root, "commit", "-qm", "fixture hunk reconciliation receipt")
+
+        report = AUDITOR.build_release_report(
+            root=fixture.root,
+            expected_repository=EXPECTED_REPOSITORY,
+            repository=EXPECTED_REPOSITORY,
+            base_reference=fixture.base,
+            head_reference="HEAD",
+            crl_ids=["CRL-20260803-777", "CRL-20260803-778"],
+        )
+        self.assertEqual("GO", report["conclusion"])
+        self.assertTrue(
+            any(
+                item["gate"] == "hunk reconciliation" and item["result"] == "PASS"
+                for item in report["checks"]
+            )
+        )
 
 
 class MergeParentPreCommitTests(unittest.TestCase):
