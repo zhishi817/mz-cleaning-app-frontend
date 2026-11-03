@@ -6,6 +6,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
+import { useAppRestartBlocker, useAppRestartScreenFocus } from '../../lib/appRestartSafety'
 import {
   deleteCleaningConsumablesPhoto,
   enqueueCleaningConsumablesMediaCleanup,
@@ -217,6 +218,11 @@ function emptyCompletionPhotos(): Record<PhotoArea, string[]> {
 }
 
 export default function CleaningSelfCompleteScreen(props: Props) {
+  const isFocused = useAppRestartScreenFocus(props.navigation)
+  useAppRestartBlocker('screen:cleaning-self-complete', isFocused, {
+    kind: 'unsaved',
+    message: '自助完成表单或照片草稿尚未完成',
+  })
   const { t } = useI18n()
   const { token, user } = useAuth()
   const insets = useSafeAreaInsets()

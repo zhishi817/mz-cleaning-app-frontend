@@ -5,6 +5,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { Ionicons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
+import { useAppRestartBlocker, useAppRestartScreenFocus } from '../../lib/appRestartSafety'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { isRetryableApiError, listCleaningAppLinenTypes, listCleaningAppPropertyCodes, listCleaningAppTasks, listDayEndBackupKeys, listDayEndHandover, listWorkTasks, uploadCleaningMedia, uploadDayEndHandover } from '../../lib/api'
@@ -210,6 +211,11 @@ function buildResolvedDayEndMeta(tasks: Array<any>, userId0: string) {
 }
 
 export default function DayEndBackupKeysScreen(props: Props) {
+  const isFocused = useAppRestartScreenFocus(props.navigation)
+  useAppRestartBlocker('screen:day-end-handover', isFocused, {
+    kind: 'unsaved',
+    message: '日结表单或照片草稿尚未完成',
+  })
   const { t } = useI18n()
   const { token, user } = useAuth()
   const insets = useSafeAreaInsets()

@@ -3,6 +3,7 @@ import {
   isDownloadableTaskCacheKey,
   pruneDownloadableTaskCaches,
 } from './downloadableCacheMaintenance'
+import { notifyAppRestartSafetyStateChanged } from './appRestartSafety'
 
 export function isStorageFullError(error: unknown) {
   const value = [
@@ -35,6 +36,7 @@ export async function setJson<T>(key: string, value: T) {
       // The cache write already succeeded. Maintenance is best-effort and must not make callers retry it.
     }
   }
+  notifyAppRestartSafetyStateChanged()
 }
 
 export async function getJson<T>(key: string): Promise<T | null> {
@@ -64,5 +66,6 @@ export async function readJsonState<T>(key: string): Promise<JsonStorageRead<T>>
 
 export async function remove(key: string) {
   await AsyncStorage.removeItem(key)
+  notifyAppRestartSafetyStateChanged()
 }
 

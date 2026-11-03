@@ -2,6 +2,7 @@ import { API_BASE_URL } from '../config/env'
 import { notifyAuthInvalidated } from './authEvents'
 import { Directory, File, Paths } from 'expo-file-system'
 import { recordTaskLoadStage } from './taskLoadDiagnostics'
+import { beginAppRestartUnsafeOperation } from './appRestartSafety'
 
 type Json = any
 type AuthenticatedRequestOptions = {
@@ -78,6 +79,23 @@ function buildAuthUrlCandidates(endpoint: 'login' | 'me' | 'forgot') {
   return uniq(candidates)
 }
 
+async function trackedFetch(input: string, init: RequestInit = {}) {
+  const method = String(init.method || 'GET').trim().toUpperCase()
+  const mutation = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS'
+  const uploading = mutation && typeof FormData !== 'undefined' && init.body instanceof FormData
+  const finish = mutation
+    ? beginAppRestartUnsafeOperation(`api:${method}`, {
+        kind: uploading ? 'uploading' : 'submitting',
+        message: uploading ? '照片或文件正在上传' : '数据正在提交，请等待完成',
+      })
+    : null
+  try {
+    return await fetch(input, init)
+  } finally {
+    finish?.()
+  }
+}
+
 async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: number) {
   const controller = new AbortController()
   const timer = setTimeout(() => {
@@ -89,7 +107,7 @@ async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: num
   if (!headers.has('Cache-Control')) headers.set('Cache-Control', 'no-cache')
   if (!headers.has('Pragma')) headers.set('Pragma', 'no-cache')
   try {
-    const res = await fetch(input, { ...init, headers, cache: 'no-store', signal: controller.signal })
+    const res = await trackedFetch(input, { ...init, headers, cache: 'no-store', signal: controller.signal })
     const authHeader = headers.get('Authorization')
     const skipAuthInvalidation = String(headers.get('X-Skip-Auth-Invalidation') || '').trim() === '1'
     if (res.status === 401 && authHeader && !skipAuthInvalidation) notifyAuthInvalidated('session_expired')
@@ -104,6 +122,53 @@ async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: num
       clearTimeout(timer)
     } catch {}
   }
+}
+
+async function fetchTextWithTimeout(input: string, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController()
+  const headers = new Headers(init?.headers || {})
+  if (!headers.has('Cache-Control')) headers.set('Cache-Control', 'no-cache')
+  if (!headers.has('Pragma')) headers.set('Pragma', 'no-cache')
+  let timer: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await trackedFetch(input, { ...init, headers, cache: 'no-store', signal: controller.signal })
+        const authHeader = headers.get('Authorization')
+        const skipAuthInvalidation = String(headers.get('X-Skip-Auth-Invalidation') || '').trim() === '1'
+        if (response.status === 401 && authHeader && !skipAuthInvalidation) notifyAuthInvalidated('session_expired')
+        return { response, text: await response.text() }
+      })(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          try {
+            controller.abort()
+          } catch {}
+          reject(new ApiError('网络超时，请检查网络后重试', 0, 'TIMEOUT', true))
+        }, timeoutMs)
+      }),
+    ])
+  } catch (e: any) {
+    if (e?.name === 'AbortError') throw new ApiError('网络超时，请检查网络后重试', 0, 'TIMEOUT', true)
+    if (e instanceof ApiError) throw e
+    const msg = String(e?.message || '网络异常，请稍后重试')
+    throw new ApiError(msg, 0, 'NETWORK_ERROR', true)
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+function responseWithCapturedText(response: Response, text: string): Response {
+  const captured: any = {
+    ok: response.ok,
+    status: response.status,
+    headers: response.headers,
+    url: response.url,
+    text: async () => text,
+    json: async () => JSON.parse(text),
+  }
+  captured.clone = () => responseWithCapturedText(response, text)
+  return captured as Response
 }
 
 function toApiError(res: Response, message: string, errorCode?: string) {
@@ -986,6 +1051,7 @@ export async function createManualCleaningTask(
     nights_override?: number | null
     guest_special_request?: string | null
     linked_checkout_task_id?: string | null
+    checkin_link_decision?: 'link' | 'independent' | null
   },
 ) {
   const urls = buildUrlCandidates('cleaning/tasks')
@@ -1000,8 +1066,61 @@ export async function createManualCleaningTask(
     if (lastRes.status !== 404) break
   }
   const res = lastRes as Response
-  if (!res.ok) throw new Error(await parseErrorMessage(res))
+  if (!res.ok) throw await toApiErrorFromResponse(res)
   return (await parseJsonOrThrow(res)) as any
+}
+
+export type ManualCheckinLinkCandidate = {
+  id: string
+  property_id: string
+  property_code: string | null
+  task_date: string
+  checkout_time: string | null
+  status: string | null
+}
+
+export async function listManualCheckinLinkCandidates(
+  token: string,
+  params: { property_id: string; task_date: string },
+): Promise<ManualCheckinLinkCandidate[]> {
+  const sp = new URLSearchParams()
+  sp.set('property_id', String(params.property_id || '').trim())
+  sp.set('task_date', String(params.task_date || '').trim())
+  const urls = buildUrlCandidates(`cleaning/tasks/checkin-link-candidates?${sp.toString()}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw await toApiErrorFromResponse(res)
+  const body = (await parseJsonOrThrow(res)) as { items?: unknown }
+  if (!Array.isArray(body?.items)) {
+    throw new ApiError('入住关联候选返回格式异常，请稍后重试', 0, 'INVALID_RESPONSE', true)
+  }
+  const items = body.items.map((item: any) => ({
+    id: String(item?.id || '').trim(),
+    property_id: String(item?.property_id || '').trim(),
+    property_code: String(item?.property_code || '').trim() || null,
+    task_date: String(item?.task_date || '').slice(0, 10),
+    checkout_time: String(item?.checkout_time || '').trim() || null,
+    status: String(item?.status || '').trim() || null,
+  }))
+  const expectedPropertyId = String(params.property_id || '').trim()
+  const expectedTaskDate = String(params.task_date || '').trim()
+  if (items.some((item) => !item.id
+    || !item.property_id
+    || !/^\d{4}-\d{2}-\d{2}$/.test(item.task_date)
+    || item.property_id !== expectedPropertyId
+    || item.task_date !== expectedTaskDate)) {
+    throw new ApiError('入住关联候选与当前房源或日期不一致，请刷新后重试', 0, 'INVALID_RESPONSE', true)
+  }
+  return items
 }
 
 export async function createCleaningOfflineTask(
@@ -1435,7 +1554,7 @@ export async function listPropertyFeedbacks(
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
   for (const url of urls) {
-    const res = await fetch(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } })
+    const res = await trackedFetch(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } })
     lastRes = res
     if (res.ok) return (await res.json()) as PropertyFeedback[]
   }
@@ -1488,13 +1607,14 @@ export async function createPropertyFeedback(
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
   for (const url of urls) {
-    const res = await fetch(url, {
+    const result = await fetchTextWithTimeout(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
-    })
+    }, 30000)
+    const res = responseWithCapturedText(result.response, result.text)
     lastRes = res
-    if (res.ok) return (await res.json()) as any
+    if (res.ok) return parseJsonTextOrThrow(res.status, result.text) as any
   }
   if (lastRes) throw await toApiErrorFromResponse(lastRes)
   throw new Error('提交失败')
@@ -1640,7 +1760,7 @@ export async function updatePropertyFeedback(
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
   for (const url of urls) {
-    const res = await fetch(url, {
+    const res = await trackedFetch(url, {
       method: 'PATCH',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
@@ -1687,7 +1807,7 @@ export async function deletePropertyFeedback(
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
   for (const url of urls) {
-    const res = await fetch(url, {
+    const res = await trackedFetch(url, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -1708,7 +1828,7 @@ export async function movePropertyFeedback(
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
   for (const url of urls) {
-    const res = await fetch(url, {
+    const res = await trackedFetch(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ target_kind: targetKind }),
@@ -1724,19 +1844,29 @@ export async function createPropertyFeedbackProject(
   token: string,
   kind: 'maintenance' | 'deep_cleaning',
   feedbackId: string,
-  params: { name: string; area?: string; category?: string; detail?: string; note?: string },
+  params: {
+    name: string
+    area?: string
+    category?: string
+    detail?: string
+    note?: string
+    submit_id?: string
+    step_key?: string
+    client_item_id?: string
+  },
 ) {
   const urls = buildUrlCandidates(`mzapp/property-feedbacks/${encodeURIComponent(kind)}/${encodeURIComponent(feedbackId)}/projects`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
   for (const url of urls) {
-    const res = await fetch(url, {
+    const result = await fetchTextWithTimeout(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
-    })
+    }, 30000)
+    const res = responseWithCapturedText(result.response, result.text)
     lastRes = res
-    if (res.ok) return (await res.json()) as { ok: boolean; item: PropertyFeedbackProject; row: PropertyFeedback }
+    if (res.ok) return parseJsonTextOrThrow(res.status, result.text) as { ok: boolean; item: PropertyFeedbackProject; row: PropertyFeedback }
   }
   if (lastRes) throw await toApiErrorFromResponse(lastRes)
   throw new Error('新增项目失败')
@@ -1753,7 +1883,7 @@ export async function updatePropertyFeedbackProject(
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
   for (const url of urls) {
-    const res = await fetch(url, {
+    const res = await trackedFetch(url, {
       method: 'PATCH',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
@@ -1778,19 +1908,23 @@ export async function completePropertyFeedbackProject(
     ended_at?: string
     before_photos?: string[]
     after_photos: string[]
+    submit_id?: string
+    step_key?: string
+    client_item_id?: string
   },
 ) {
   const urls = buildUrlCandidates(`mzapp/property-feedbacks/${encodeURIComponent(kind)}/${encodeURIComponent(feedbackId)}/projects/${encodeURIComponent(projectId)}/complete`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
   for (const url of urls) {
-    const res = await fetch(url, {
+    const result = await fetchTextWithTimeout(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
-    })
+    }, 30000)
+    const res = responseWithCapturedText(result.response, result.text)
     lastRes = res
-    if (res.ok) return (await res.json()) as { ok: boolean; item: PropertyFeedbackProject; row: PropertyFeedback }
+    if (res.ok) return parseJsonTextOrThrow(res.status, result.text) as { ok: boolean; item: PropertyFeedbackProject; row: PropertyFeedback }
   }
   if (lastRes) throw await toApiErrorFromResponse(lastRes)
   throw new Error('提交完成失败')

@@ -28,6 +28,7 @@ import AppButton from '../../components/ui/AppButton'
 import AppIconButton from '../../components/ui/AppIconButton'
 import { API_BASE_URL } from '../../config/env'
 import { useAuth } from '../../lib/auth'
+import { useAppRestartBlocker } from '../../lib/appRestartSafety'
 import {
   confirmMyPersonnelSettlement,
   createMyPersonnelClaim,
@@ -1537,6 +1538,15 @@ export default function PersonnelSettlementScreen({ navigation }: PersonnelSettl
   const [supplementPicking, setSupplementPicking] = useState(false)
   const [datePickerTarget, setDatePickerTarget] = useState<DatePickerTarget | null>(null)
   const [claimTimePickerTarget, setClaimTimePickerTarget] = useState<ClaimTimePickerTarget | null>(null)
+  const personnelFormBusy = saving || picking || supplementSaving || supplementPicking
+  useAppRestartBlocker(
+    'screen:personnel-settlement',
+    claimFormOpen || !!supplementDraft || claimSubmissionReviewOpen || submissionReviewOpen || personnelFormBusy,
+    {
+      kind: personnelFormBusy ? (picking || supplementPicking ? 'uploading' : 'submitting') : 'unsaved',
+      message: personnelFormBusy ? '申报照片或资料正在处理' : '人员申报或结算确认尚未完成',
+    },
+  )
   const settlementDetailRequestRef = useRef(0)
   const claimOptionsRequestRef = useRef(0)
   const claimEstimateRequestRef = useRef(0)

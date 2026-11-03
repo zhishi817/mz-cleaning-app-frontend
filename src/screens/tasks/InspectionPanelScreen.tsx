@@ -6,6 +6,7 @@ import { useNetInfo } from '@react-native-community/netinfo'
 import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
+import { useAppRestartBlocker, useAppRestartScreenFocus } from '../../lib/appRestartSafety'
 import {
   getInspectionPanelFeedbackDraft,
   type InspectionPanelFeedbackDraftState,
@@ -383,6 +384,11 @@ async function ensureLibraryPerm() {
 }
 
 export default function InspectionPanelScreen(props: Props) {
+  const isFocused = useAppRestartScreenFocus(props.navigation)
+  useAppRestartBlocker('screen:inspection-panel', isFocused, {
+    kind: 'unsaved',
+    message: '检查表单或照片草稿尚未完成',
+  })
   const { t } = useI18n()
   const { token } = useAuth()
   const netInfo = useNetInfo()

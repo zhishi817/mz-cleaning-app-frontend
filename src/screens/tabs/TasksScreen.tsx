@@ -7,10 +7,11 @@ import * as Clipboard from 'expo-clipboard'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
+import { useAppRestartBlocker } from '../../lib/appRestartSafety'
 import { useI18n } from '../../lib/i18n'
 import { hairline, moderateScale } from '../../lib/scale'
 import { layoutTokens } from '../../lib/theme'
-import { changeGuestReadyNotification, createCleaningOfflineTask, createManualCleaningTask, listCleaningAppPropertyCodes, listUsers, reorderMixedWorkTasks } from '../../lib/api'
+import { changeGuestReadyNotification, createCleaningOfflineTask, createManualCleaningTask, listCleaningAppPropertyCodes, listManualCheckinLinkCandidates, listUsers, reorderMixedWorkTasks, type ManualCheckinLinkCandidate } from '../../lib/api'
 import { markGuestCheckedOutByOrder, markGuestCheckedOutByTasks } from '../../lib/api'
 import { listMzappAlerts, markMzappAlertRead } from '../../lib/api'
 import { getMyProfile } from '../../lib/api'
@@ -86,6 +87,8 @@ import type { DayEndOverviewUser, DayEndRoleStats, DayEndTargetRole, TasksStackP
 
 type Period = 'today' | 'week' | 'month'
 type QuickCreateMode = 'checkout' | 'checkin' | 'offline'
+type QuickCreateCheckinLinkDecision = 'link' | 'independent' | null
+type QuickCreateCandidateLoadState = 'idle' | 'loading' | 'ready' | 'error'
 type QuickCreateOfflineTaskType = 'property' | 'company' | 'other'
 type QuickCreatePropertyOption = { id: string; code: string; region?: string | null }
 type QuickCreateUserOption = { id: string; username?: string | null; display_name?: string | null }
@@ -103,6 +106,12 @@ const QUICK_CREATE_OFFLINE_TASK_TYPES: { key: QuickCreateOfflineTaskType; label:
 
 function quickCreateUserName(user: QuickCreateUserOption) {
   return String(user.display_name || user.username || user.id || '').trim() || user.id
+}
+
+function quickCreateCheckoutCandidateLabel(candidate: ManualCheckinLinkCandidate) {
+  const room = candidate.property_code || candidate.property_id
+  const checkoutTime = candidate.checkout_time || '退房时间未填写'
+  return `${room} · ${checkoutTime}退房`
 }
 
 export function quickCreateKeyboardBehavior(os: string = Platform.OS): 'padding' | 'height' {
@@ -721,6 +730,12 @@ export default function TasksScreen(props: Props) {
   const [quickCreateNights, setQuickCreateNights] = useState('')
   const [quickCreateGuestNote, setQuickCreateGuestNote] = useState('')
   const [quickCreateLinkedCheckoutTaskId, setQuickCreateLinkedCheckoutTaskId] = useState<string | null>(null)
+  const [quickCreateCheckinLinkDecision, setQuickCreateCheckinLinkDecision] = useState<QuickCreateCheckinLinkDecision>(null)
+  const [quickCreateCheckoutCandidates, setQuickCreateCheckoutCandidates] = useState<ManualCheckinLinkCandidate[]>([])
+  const [quickCreateCandidateLoadState, setQuickCreateCandidateLoadState] = useState<QuickCreateCandidateLoadState>('idle')
+  const [quickCreateCandidateError, setQuickCreateCandidateError] = useState<string | null>(null)
+  const [quickCreateCandidateLoadedScope, setQuickCreateCandidateLoadedScope] = useState<string | null>(null)
+  const [quickCreateCandidateRefreshNonce, setQuickCreateCandidateRefreshNonce] = useState(0)
   const [quickCreateOfflineTitle, setQuickCreateOfflineTitle] = useState('')
   const [quickCreateOfflineContent, setQuickCreateOfflineContent] = useState('')
   const [quickCreateOfflineTaskType, setQuickCreateOfflineTaskType] = useState<QuickCreateOfflineTaskType>('other')
@@ -728,7 +743,20 @@ export default function TasksScreen(props: Props) {
   const [quickCreateUsers, setQuickCreateUsers] = useState<QuickCreateUserOption[]>([])
   const [quickCreateAssigneeId, setQuickCreateAssigneeId] = useState<string | null>(null)
   const [quickCreateAssigneeOpen, setQuickCreateAssigneeOpen] = useState(false)
+  useAppRestartBlocker('screen:tasks-quick-create', quickCreateOpen || quickCreateBusy, {
+    kind: quickCreateBusy ? 'submitting' : 'unsaved',
+    message: quickCreateBusy ? '新任务正在提交' : '新建任务表单有尚未保存的输入',
+  })
+  useAppRestartBlocker('screen:tasks-warehouse-transfer', warehouseTransferOpen || warehouseKeyBusy, {
+    kind: warehouseKeyBusy ? 'submitting' : 'unsaved',
+    message: warehouseKeyBusy ? '仓库钥匙交接正在提交' : '仓库钥匙交接表单尚未完成',
+  })
+  useAppRestartBlocker('screen:tasks-reorder', reorderMode || savingOrder, {
+    kind: savingOrder ? 'submitting' : 'unsaved',
+    message: savingOrder ? '任务排序正在保存' : '任务排序尚未保存或取消',
+  })
   const quickCreateSubmitInFlightRef = useRef(false)
+  const quickCreateCandidateRequestRef = useRef(0)
   const quickCreateScrollRef = useRef<ScrollView>(null)
   const quickCreateFieldLayoutsRef = useRef<Partial<Record<QuickCreateFocusField, QuickCreateFieldLayout>>>({})
   const quickCreateViewportLayoutHeightRef = useRef(0)
@@ -1337,33 +1365,58 @@ export default function TasksScreen(props: Props) {
   // immutable completion record belongs to the actual work-record date, so a
   // per-day reconciliation cannot see both sides of a cross-day completion.
   const reconciledItems = useMemo(() => reconcileDailyTaskDisplay(items), [items])
-  const quickCreateCheckoutCandidates = useMemo(() => {
-    const propertyKey = String(quickCreateProperty || '').trim().toUpperCase()
-    const bySourceId = new Map<string, { id: string; label: string }>()
-    if (!propertyKey || quickCreateMode !== 'checkin') return []
-    for (const task of reconciledItems) {
-      if (task.source_type !== 'cleaning_tasks' || task.work_record_read_only === true) continue
-      if (String(task.task_type || '').trim().toLowerCase() !== 'checkout_clean') continue
-      if (task.has_checkin_task === true) continue
-      if (String(task.scheduled_date || task.date || '').slice(0, 10) !== quickCreateDate) continue
-      const taskPropertyId = String(task.property_id || task.property?.id || '').trim()
-      const taskPropertyCode = String(task.property?.code || '').trim()
-      if (![taskPropertyId, taskPropertyCode].some((value) => value.toUpperCase() === propertyKey)) continue
-      const sourceIds = Array.from(new Set((task.source_ids?.length ? task.source_ids : [task.source_id]).map((value) => String(value || '').trim()).filter(Boolean)))
-      if (sourceIds.length !== 1) continue
-      const sourceId = sourceIds[0]
-      bySourceId.set(sourceId, {
-        id: sourceId,
-        label: `${taskPropertyCode || taskPropertyId} · ${String(task.start_time || '10am')}退房`,
-      })
-    }
-    return Array.from(bySourceId.values())
-  }, [quickCreateDate, quickCreateMode, quickCreateProperty, reconciledItems])
+  const quickCreateResolvedProperty = useMemo(() => {
+    const raw = String(quickCreateProperty || '').trim().toUpperCase()
+    if (!raw) return null
+    return quickCreatePropertyOptions.find((item) => [item.id, item.code].some((value) => String(value || '').trim().toUpperCase() === raw)) || null
+  }, [quickCreateProperty, quickCreatePropertyOptions])
+  const quickCreateCandidateScope = useMemo(() => {
+    if (!quickCreateOpen || quickCreateMode !== 'checkin' || !quickCreateResolvedProperty?.id || !/^\d{4}-\d{2}-\d{2}$/.test(quickCreateDate)) return null
+    return `${quickCreateResolvedProperty.id}|${quickCreateDate}`
+  }, [quickCreateDate, quickCreateMode, quickCreateOpen, quickCreateResolvedProperty?.id])
+  const quickCreateCandidateScopeReady = !!quickCreateCandidateScope
+    && quickCreateCandidateLoadedScope === quickCreateCandidateScope
+    && quickCreateCandidateLoadState === 'ready'
+  const quickCreateVisibleCheckoutCandidates = quickCreateCandidateScopeReady ? quickCreateCheckoutCandidates : []
   useEffect(() => {
-    if (!quickCreateLinkedCheckoutTaskId) return
-    if (quickCreateCheckoutCandidates.some((candidate) => candidate.id === quickCreateLinkedCheckoutTaskId)) return
+    const requestId = ++quickCreateCandidateRequestRef.current
+    setQuickCreateCheckoutCandidates([])
     setQuickCreateLinkedCheckoutTaskId(null)
-  }, [quickCreateCheckoutCandidates, quickCreateLinkedCheckoutTaskId])
+    setQuickCreateCheckinLinkDecision(null)
+    setQuickCreateCandidateError(null)
+    setQuickCreateCandidateLoadedScope(null)
+    if (!token || !quickCreateCandidateScope || !quickCreateResolvedProperty?.id) {
+      setQuickCreateCandidateLoadState('idle')
+      return () => {
+        if (quickCreateCandidateRequestRef.current === requestId) quickCreateCandidateRequestRef.current += 1
+      }
+    }
+    setQuickCreateCandidateLoadState('loading')
+    void listManualCheckinLinkCandidates(token, {
+      property_id: quickCreateResolvedProperty.id,
+      task_date: quickCreateDate,
+    }).then((items) => {
+      if (quickCreateCandidateRequestRef.current !== requestId) return
+      const deduped = Array.from(new Map(items.map((item) => [item.id, item])).values())
+      setQuickCreateCheckoutCandidates(deduped)
+      setQuickCreateCandidateLoadedScope(quickCreateCandidateScope)
+      setQuickCreateCandidateLoadState('ready')
+      if (deduped.length === 0) {
+        setQuickCreateCheckinLinkDecision('independent')
+        setQuickCreateLinkedCheckoutTaskId(null)
+      } else if (deduped.length === 1) {
+        setQuickCreateCheckinLinkDecision('link')
+        setQuickCreateLinkedCheckoutTaskId(deduped[0].id)
+      }
+    }).catch((error: any) => {
+      if (quickCreateCandidateRequestRef.current !== requestId) return
+      setQuickCreateCandidateLoadState('error')
+      setQuickCreateCandidateError(String(error?.message || '退房关联候选加载失败，请重试'))
+    })
+    return () => {
+      if (quickCreateCandidateRequestRef.current === requestId) quickCreateCandidateRequestRef.current += 1
+    }
+  }, [quickCreateCandidateRefreshNonce, quickCreateCandidateScope, quickCreateDate, quickCreateResolvedProperty?.id, token])
   const tasksByDate = useMemo(() => {
     const map = new Map<string, WorkTaskItem[]>()
     for (const task of reconciledItems) {
@@ -2339,6 +2392,11 @@ function showBanner(title: string, message: string) {
     setQuickCreateNights('')
     setQuickCreateGuestNote('')
     setQuickCreateLinkedCheckoutTaskId(null)
+    setQuickCreateCheckinLinkDecision(null)
+    setQuickCreateCheckoutCandidates([])
+    setQuickCreateCandidateLoadState('idle')
+    setQuickCreateCandidateError(null)
+    setQuickCreateCandidateLoadedScope(null)
     setQuickCreateOfflineTitle('')
     setQuickCreateOfflineContent('')
     setQuickCreateOfflineTaskType('other')
@@ -2408,6 +2466,24 @@ function showBanner(title: string, message: string) {
           Alert.alert(t('common_error'), '请从房号提示中选择房号')
           return
         }
+        if (quickCreateMode === 'checkin') {
+          if (!quickCreateCandidateScopeReady) {
+            Alert.alert(t('common_error'), quickCreateCandidateLoadState === 'error'
+              ? '退房关联候选加载失败，请先重试'
+              : '正在核对可关联的退房任务，请稍候')
+            return
+          }
+          if (!quickCreateCheckinLinkDecision) {
+            Alert.alert(t('common_error'), '请选择关联的退房任务，或明确选择独立入住')
+            return
+          }
+          if (quickCreateCheckinLinkDecision === 'link'
+            && (!quickCreateLinkedCheckoutTaskId
+              || !quickCreateVisibleCheckoutCandidates.some((candidate) => candidate.id === quickCreateLinkedCheckoutTaskId))) {
+            Alert.alert(t('common_error'), '已选退房任务已失效，请刷新候选后重试')
+            return
+          }
+        }
         const time = String(quickCreateTime || '').trim() || (quickCreateMode === 'checkout' ? '10am' : '3pm')
         const nightsRaw = Number(String(quickCreateNights || '').trim())
         const nights = Number.isFinite(nightsRaw) && nightsRaw >= 0 ? Math.trunc(nightsRaw) : null
@@ -2424,7 +2500,12 @@ function showBanner(title: string, message: string) {
           checkin_time: quickCreateMode === 'checkin' ? time : null,
           nights_override: quickCreateMode === 'checkin' ? nights : null,
           guest_special_request: String(quickCreateGuestNote || '').trim() || null,
-          linked_checkout_task_id: quickCreateMode === 'checkin' ? quickCreateLinkedCheckoutTaskId : null,
+          ...(quickCreateMode === 'checkin'
+            ? {
+              linked_checkout_task_id: quickCreateCheckinLinkDecision === 'link' ? quickCreateLinkedCheckoutTaskId : null,
+              checkin_link_decision: quickCreateCheckinLinkDecision,
+            }
+            : {}),
         })
       }
       resetQuickCreateFocusSession({ clearLayouts: true, resetScroll: true })
@@ -2437,6 +2518,15 @@ function showBanner(title: string, message: string) {
         // state and must not turn a successful create into “新增失败”.
       }
     } catch (e: any) {
+      if (quickCreateMode === 'checkin'
+        && ['manual_checkin_checkout_link_conflict', 'manual_checkin_checkout_link_decision_required'].includes(String(e?.code || ''))) {
+        setQuickCreateCandidateLoadState('loading')
+        setQuickCreateCandidateLoadedScope(null)
+        setQuickCreateCheckinLinkDecision(null)
+        setQuickCreateLinkedCheckoutTaskId(null)
+        setQuickCreateCheckoutCandidates([])
+        setQuickCreateCandidateRefreshNonce((value) => value + 1)
+      }
       Alert.alert(t('common_error'), String(e?.message || '新增失败'))
     } finally {
       quickCreateSubmitInFlightRef.current = false
@@ -3240,6 +3330,7 @@ function showBanner(title: string, message: string) {
                       setQuickCreateMode(mode0)
                       setQuickCreateTime(mode0 === 'checkout' ? '10am' : '3pm')
                       setQuickCreateLinkedCheckoutTaskId(null)
+                      setQuickCreateCheckinLinkDecision(null)
                     }}
                     style={({ pressed }) => [styles.createModeBtn, quickCreateMode === item.key ? styles.createModeBtnOn : null, pressed ? styles.segmentPressed : null]}
                   >
@@ -3387,29 +3478,68 @@ function showBanner(title: string, message: string) {
                     {quickCreateMode === 'checkin' ? (
                       <>
                         <View style={styles.createField}>
-                          <Text style={styles.createLabel}>关联退房任务（可选）</Text>
-                          <View style={styles.createAssigneeList}>
+                          <Text style={styles.createLabel}>关联退房任务</Text>
+                          {!quickCreateCandidateScope ? (
+                            <Text testID="quick-create-link-idle" style={styles.createHint}>选择有效房号和日期后，系统会核对可关联的退房任务。</Text>
+                          ) : null}
+                          {quickCreateCandidateLoadState === 'loading' ? (
+                            <Text testID="quick-create-link-loading" style={styles.createHint}>正在核对可关联的退房任务…</Text>
+                          ) : null}
+                          {quickCreateCandidateLoadState === 'error' ? (
+                            <View testID="quick-create-link-error" style={styles.createAssigneeList}>
+                              <Text style={styles.createHint}>{quickCreateCandidateError || '退房关联候选加载失败，请重试。'}</Text>
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel="重试加载退房关联候选"
+                                disabled={quickCreateBusy}
+                                onPress={() => setQuickCreateCandidateRefreshNonce((value) => value + 1)}
+                                style={({ pressed }) => [styles.createAssigneeItem, pressed ? styles.segmentPressed : null]}
+                              >
+                                <Text style={styles.createAssigneeName}>重新加载</Text>
+                              </Pressable>
+                            </View>
+                          ) : null}
+                          {quickCreateCandidateScopeReady ? <View style={styles.createAssigneeList}>
                             <Pressable
                               disabled={quickCreateBusy}
-                              onPress={() => setQuickCreateLinkedCheckoutTaskId(null)}
-                              style={({ pressed }) => [styles.createAssigneeItem, !quickCreateLinkedCheckoutTaskId ? styles.createAssigneeItemOn : null, pressed ? styles.segmentPressed : null]}
+                              accessibilityRole="button"
+                              accessibilityLabel="创建独立入住任务"
+                              onPress={() => {
+                                setQuickCreateCheckinLinkDecision('independent')
+                                setQuickCreateLinkedCheckoutTaskId(null)
+                              }}
+                              style={({ pressed }) => [styles.createAssigneeItem, quickCreateCheckinLinkDecision === 'independent' ? styles.createAssigneeItemOn : null, pressed ? styles.segmentPressed : null]}
                             >
                               <Text style={styles.createAssigneeName}>独立入住任务</Text>
-                              {!quickCreateLinkedCheckoutTaskId ? <Ionicons name="checkmark" size={moderateScale(16)} color="#2563EB" /> : null}
+                              {quickCreateCheckinLinkDecision === 'independent' ? <Ionicons name="checkmark" size={moderateScale(16)} color="#2563EB" /> : null}
                             </Pressable>
-                            {quickCreateCheckoutCandidates.map((candidate) => (
+                            {quickCreateVisibleCheckoutCandidates.map((candidate) => (
                               <Pressable
                                 key={candidate.id}
                                 disabled={quickCreateBusy}
-                                onPress={() => setQuickCreateLinkedCheckoutTaskId(candidate.id)}
-                                style={({ pressed }) => [styles.createAssigneeItem, quickCreateLinkedCheckoutTaskId === candidate.id ? styles.createAssigneeItemOn : null, pressed ? styles.segmentPressed : null]}
+                                accessibilityRole="button"
+                                accessibilityLabel={`关联退房任务-${candidate.id}`}
+                                onPress={() => {
+                                  setQuickCreateCheckinLinkDecision('link')
+                                  setQuickCreateLinkedCheckoutTaskId(candidate.id)
+                                }}
+                                style={({ pressed }) => [styles.createAssigneeItem, quickCreateCheckinLinkDecision === 'link' && quickCreateLinkedCheckoutTaskId === candidate.id ? styles.createAssigneeItemOn : null, pressed ? styles.segmentPressed : null]}
                               >
-                                <Text style={styles.createAssigneeName}>{candidate.label}</Text>
-                                {quickCreateLinkedCheckoutTaskId === candidate.id ? <Ionicons name="checkmark" size={moderateScale(16)} color="#2563EB" /> : null}
+                                <Text style={styles.createAssigneeName}>{quickCreateCheckoutCandidateLabel(candidate)}</Text>
+                                {quickCreateCheckinLinkDecision === 'link' && quickCreateLinkedCheckoutTaskId === candidate.id ? <Ionicons name="checkmark" size={moderateScale(16)} color="#2563EB" /> : null}
                               </Pressable>
                             ))}
-                          </View>
-                          <Text style={styles.createHint}>只有明确选择的退房任务才会合并显示；不会按房号和日期自动关联。</Text>
+                          </View> : null}
+                          {quickCreateCandidateScopeReady && quickCreateVisibleCheckoutCandidates.length > 1 && !quickCreateCheckinLinkDecision ? (
+                            <Text testID="quick-create-link-decision-required" style={styles.createHint}>找到多个退房任务，请选择一个关联，或明确选择独立入住。</Text>
+                          ) : null}
+                          {quickCreateCandidateScopeReady && quickCreateVisibleCheckoutCandidates.length === 1 ? (
+                            <Text style={styles.createHint}>已自动选择唯一可关联的退房任务；也可以改为独立入住。</Text>
+                          ) : null}
+                          {quickCreateCandidateScopeReady && quickCreateVisibleCheckoutCandidates.length === 0 ? (
+                            <Text testID="quick-create-link-empty" style={styles.createHint}>没有可关联的退房任务，已明确创建独立入住。</Text>
+                          ) : null}
+                          <Text style={styles.createHint}>关联只影响任务对应关系，不会读取或继承退房密码。</Text>
                         </View>
                         <View testID="quick-create-field-nights" style={styles.createField} onLayout={(event) => handleQuickCreateFieldLayout('nights', event)}>
                           <Text style={styles.createLabel}>入住天数（可选）</Text>
@@ -3427,11 +3557,11 @@ function showBanner(title: string, message: string) {
               </ScrollView>
               <Pressable
                 testID="quick-create-submit"
-                disabled={quickCreateBusy}
+                disabled={quickCreateBusy || (quickCreateMode === 'checkin' && (!quickCreateCandidateScopeReady || !quickCreateCheckinLinkDecision))}
                 onPress={() => { void submitQuickCreate() }}
-                style={({ pressed }) => [styles.createSubmitBtn, pressed ? styles.segmentPressed : null, quickCreateBusy ? styles.actionBtnDisabled : null]}
+                style={({ pressed }) => [styles.createSubmitBtn, pressed ? styles.segmentPressed : null, quickCreateBusy || (quickCreateMode === 'checkin' && (!quickCreateCandidateScopeReady || !quickCreateCheckinLinkDecision)) ? styles.actionBtnDisabled : null]}
               >
-                <Text style={[styles.actionText, quickCreateBusy ? { color: '#6B7280' } : null]}>{quickCreateBusy ? '新增中' : '确认新增'}</Text>
+                <Text style={[styles.actionText, quickCreateBusy || (quickCreateMode === 'checkin' && (!quickCreateCandidateScopeReady || !quickCreateCheckinLinkDecision)) ? { color: '#6B7280' } : null]}>{quickCreateBusy ? '新增中' : '确认新增'}</Text>
               </Pressable>
             </View>
           </KeyboardAvoidingView>
