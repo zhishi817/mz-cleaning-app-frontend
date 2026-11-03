@@ -9,13 +9,65 @@ import json
 import re
 import subprocess
 import sys
+import unicodedata
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
 LEDGER_RELATIVE_PATH = Path("docs/change-release-ledger.md")
+INCREMENTAL_LEDGER_RELATIVE_DIR = Path("docs/change-release-ledger.d")
+INCREMENTAL_LEDGER_FILENAME = re.compile(r"^(CRL-\d{8}-\d{3})\.json$")
+INCREMENTAL_LEDGER_MAX_BYTES = 64 * 1024
+INCREMENTAL_LEDGER_KEYS = frozenset(
+    {
+        "schema_version",
+        "crl",
+        "repository",
+        "title",
+        "request",
+        "outcome",
+        "implementation",
+        "impact_dependencies",
+        "validation",
+        "risks",
+        "files",
+        "staged_hunks",
+        "release_attempt",
+    }
+)
+INCREMENTAL_LEDGER_LIST_KEYS = (
+    "implementation",
+    "impact_dependencies",
+    "validation",
+    "risks",
+)
+INCREMENTAL_RELEASE_ATTEMPT_KEYS = frozenset(
+    {
+        "id",
+        "intended_action",
+        "branch",
+        "base_sha",
+        "fetched_at",
+        "candidate_patch_sha256",
+        "commit_sha",
+        "dependencies",
+        "required_validation",
+        "shared_hunk_review",
+        "generated_file_review",
+        "technical_state",
+        "user_authorization",
+        "independent_review",
+        "action_conclusion",
+        "blockers",
+    }
+)
+SENSITIVE_REGISTRATION_TEXT = re.compile(
+    r"(?i)(?:postgres(?:ql)?://|authorization\s*:\s*bearer|"
+    r"(?:api[_-]?key|token|password|secret)\s*[:=]|"
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----)"
+)
 FILES_HEADING = "### Files / Areas"
 CRL_HEADING = re.compile(r"^## (CRL-\d{8}-\d{3})\b")
 ATTEMPT_HEADING = re.compile(r"^#### (RA-[^\s]+)\b")
@@ -79,6 +131,16 @@ class DependencyReference:
     sha: str
 
 
+@dataclass(frozen=True)
+class IncrementalRegistration:
+    identifier: str
+    repository: str
+    source_path: str
+    files: frozenset[str]
+    section: CrlSection
+    canonical_json: str
+
+
 class GitError(RuntimeError):
     """A Git operation needed for a report could not be completed."""
 
@@ -123,15 +185,23 @@ def recorded_paths(ledger: Path) -> set[str]:
         if in_files and line.startswith("### "):
             in_files = False
         if in_files:
-            match = re.match(r"^- `([^`]+)`(?:\s|$)", line)
-            if match:
-                paths.add(match.group(1))
+            if not line.startswith("- "):
+                continue
+            listed_paths, _, _ = line[2:].partition(" — ")
+            paths.update(re.findall(r"`([^`]+)`", listed_paths))
     return paths
 
 
-def ledger_preflight(root: Path) -> int | None:
+def ledger_preflight(root: Path, expected_repository: str = "mobile") -> int | None:
     try:
         sections = parse_crl_sections(root / LEDGER_RELATIVE_PATH)
+        registrations = incremental_registrations(root, expected_repository)
+        duplicate_ids = sorted(sections.keys() & registrations.keys())
+        if duplicate_ids:
+            raise ValueError(
+                "Incremental registrations duplicate CRLs in the historical ledger: "
+                + ", ".join(duplicate_ids)
+            )
     except ValueError as error:
         print("Ledger structure errors:")
         print(f"- {error}")
@@ -144,6 +214,9 @@ def ledger_preflight(root: Path) -> int | None:
         return 1
     try:
         lineage_errors = remote_lineage_errors(root, sections)
+        lineage_errors.extend(
+            incremental_remote_lineage_errors(root, registrations, expected_repository)
+        )
     except GitError:
         print("Ledger lineage: NOT VERIFIED (locally fetched origin/Dev ledger is unavailable).")
         return 2
@@ -159,8 +232,8 @@ def ledger_preflight(root: Path) -> int | None:
     return None
 
 
-def coverage_audit(root: Path) -> int:
-    preflight = ledger_preflight(root)
+def coverage_audit(root: Path, expected_repository: str = "mobile") -> int:
+    preflight = ledger_preflight(root, expected_repository)
     if preflight is not None:
         return preflight
     try:
@@ -168,10 +241,38 @@ def coverage_audit(root: Path) -> int:
     except GitError as error:
         print(str(error) or "Unable to inspect Git changes.", file=sys.stderr)
         return 2
-    recorded = recorded_paths(root / LEDGER_RELATIVE_PATH)
-    uncovered = sorted(changed - recorded)
-    print(f"Changed files: {len(changed)}")
-    print(f"Recorded changed files: {len(changed & recorded)}")
+    registration_scope = set(changed)
+    try:
+        registrations = incremental_registrations(root, expected_repository)
+        if any(
+            path.startswith(INCREMENTAL_LEDGER_RELATIVE_DIR.as_posix() + "/")
+            for path in changed
+        ):
+            base = resolve_ref(root, "origin/Dev")
+            head = resolve_ref(root, "HEAD")
+            registration_scope |= git_paths(
+                root, "diff", "--name-only", f"{base}...{head}"
+            )
+            registration_scope |= git_paths(
+                root, "diff", "--name-only", "--no-renames", f"{base}...{head}"
+            )
+        incremental_paths, registration_errors = incremental_range_claims(
+            registrations, registration_scope
+        )
+    except ValueError as error:
+        print("Ledger structure errors:")
+        print(f"- {error}")
+        return 1
+    if registration_errors:
+        print("Incremental registration errors:")
+        for error in registration_errors:
+            print(f"- {error}")
+        return 1
+    recorded = recorded_paths(root / LEDGER_RELATIVE_PATH) | incremental_paths
+    audited_changed = registration_scope if incremental_paths else changed
+    uncovered = sorted(audited_changed - recorded)
+    print(f"Changed files: {len(audited_changed)}")
+    print(f"Recorded changed files: {len(audited_changed & recorded)}")
     if uncovered:
         print("Uncovered files:")
         for path in uncovered:
@@ -181,8 +282,13 @@ def coverage_audit(root: Path) -> int:
     return 0
 
 
-def range_coverage_audit(root: Path, base_reference: str, head_reference: str) -> int:
-    preflight = ledger_preflight(root)
+def range_coverage_audit(
+    root: Path,
+    base_reference: str,
+    head_reference: str,
+    expected_repository: str = "mobile",
+) -> int:
+    preflight = ledger_preflight(root, expected_repository)
     if preflight is not None:
         return preflight
     try:
@@ -195,7 +301,21 @@ def range_coverage_audit(root: Path, base_reference: str, head_reference: str) -
     except GitError as error:
         print(str(error) or "Unable to inspect the pull-request range.", file=sys.stderr)
         return 2
-    recorded = recorded_paths(root / LEDGER_RELATIVE_PATH)
+    try:
+        registrations = incremental_registrations(root, expected_repository)
+        incremental_paths, registration_errors = incremental_range_claims(
+            registrations, changed
+        )
+    except ValueError as error:
+        print("Ledger structure errors:")
+        print(f"- {error}")
+        return 1
+    if registration_errors:
+        print("Incremental registration errors:")
+        for error in registration_errors:
+            print(f"- {error}")
+        return 1
+    recorded = recorded_paths(root / LEDGER_RELATIVE_PATH) | incremental_paths
     uncovered = sorted(changed - recorded)
     print(f"Audit scope: {base}...{head}")
     print(f"Changed files: {len(changed)}")
@@ -207,6 +327,460 @@ def range_coverage_audit(root: Path, base_reference: str, head_reference: str) -
         return 1
     print("Coverage: PASS")
     return 0
+
+
+def safe_registration_text(value: Any, field: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"Incremental registration field `{field}` must be a string.")
+    if value != value.strip() or not value or len(value) > 1000:
+        raise ValueError(
+            f"Incremental registration field `{field}` must be non-empty, trimmed, and at most 1000 characters."
+        )
+    if len(value.splitlines()) != 1 or any(
+        unicodedata.category(character).startswith("C") for character in value
+    ):
+        raise ValueError(
+            f"Incremental registration field `{field}` contains a control character."
+        )
+    if SENSITIVE_REGISTRATION_TEXT.search(value):
+        raise ValueError(
+            f"Incremental registration field `{field}` contains potentially sensitive material."
+        )
+    return value
+
+
+def normalized_registration_path(value: Any) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError("Incremental registration file paths must be non-empty strings without surrounding whitespace.")
+    if "\\" in value or "\x00" in value:
+        raise ValueError(f"Incremental registration contains an invalid file path: {value!r}.")
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or value != path.as_posix()
+        or any(part in ("", ".", "..") for part in path.parts)
+    ):
+        raise ValueError(f"Incremental registration contains a non-normalized file path: {value!r}.")
+    return value
+
+
+def incremental_registration_section(
+    value: dict[str, Any], source_path: str
+) -> CrlSection:
+    attempt = value["release_attempt"]
+    lines = [
+        f"## {value['crl']} — {value['title']}",
+        "",
+        f"- **Repository:** `{value['repository']}`",
+        f"- **Request:** {value['request']}",
+        f"- **Outcome:** {value['outcome']}",
+        "",
+        "### Implementation",
+        "",
+        *(f"- {item}" for item in value["implementation"]),
+        "",
+        "### Files / Areas",
+        "",
+        *(f"- `{path}` — exact incremental scope." for path in value["files"]),
+        "",
+        "### Impact / Dependencies",
+        "",
+        *(f"- {item}" for item in value["impact_dependencies"]),
+        "",
+        "### Validation",
+        "",
+        *(f"- {item}" for item in value["validation"]),
+        "",
+        "### Staged Commit Scope",
+        "",
+        f"- **Repository:** `{value['repository']}`",
+        "- **Status:** `prepared`",
+        "- **Untracked review:** `none`",
+        *(
+            f"- `{item['path']}` — SHA-256: `{item['sha256']}`"
+            for item in value["staged_hunks"]
+        ),
+        "",
+        "### Release Attempts",
+        "",
+        f"#### {attempt['id']}",
+        "",
+        f"- Repository: `{value['repository']}`",
+        f"- Selected CRLs: `{value['crl']}`",
+        f"- Selected CRL identities: `{value['repository']}/{value['crl']}`",
+        f"- Intended action: `{attempt['intended_action']}`",
+        f"- Branch: `{attempt['branch']}`",
+        f"- Base: `origin/Dev@{attempt['base_sha']}`; fetched at `{attempt['fetched_at']}`",
+        f"- Candidate patch SHA-256: `{attempt['candidate_patch_sha256']}`",
+        f"- Commit SHA: `{attempt['commit_sha']}`",
+        f"- Dependencies: {attempt['dependencies']}",
+        f"- Required validation: {attempt['required_validation']}",
+        f"- Shared-hunk review: {attempt['shared_hunk_review']}",
+        f"- Generated-file review: {attempt['generated_file_review']}",
+        f"- Technical state: `{attempt['technical_state']}`",
+        f"- User authorization: `{attempt['user_authorization']}`",
+        f"- Independent review: {attempt['independent_review']}",
+        f"- Action conclusion: `{attempt['action_conclusion']}`; blockers: {attempt['blockers']}",
+        "",
+        "### Risks / Release Notes",
+        "",
+        *(f"- {item}" for item in value["risks"]),
+    ]
+    parsed = parse_crl_sections_text("\n".join(lines) + "\n")
+    section = parsed.get(value["crl"])
+    if section is None:
+        raise ValueError(
+            f"Incremental registration `{source_path}` could not be materialized as a CRL."
+        )
+    return section
+
+
+def parse_incremental_registration_text(
+    text: str,
+    source_path: str,
+    expected_repository: str,
+) -> IncrementalRegistration:
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"Incremental registration `{source_path}` is not valid JSON: {error.msg}."
+        ) from error
+    if not isinstance(value, dict):
+        raise ValueError(f"Incremental registration `{source_path}` must contain one JSON object.")
+    keys = frozenset(value)
+    if keys != INCREMENTAL_LEDGER_KEYS:
+        missing = sorted(INCREMENTAL_LEDGER_KEYS - keys)
+        unknown = sorted(keys - INCREMENTAL_LEDGER_KEYS)
+        detail = []
+        if missing:
+            detail.append("missing " + ", ".join(missing))
+        if unknown:
+            detail.append("unknown " + ", ".join(unknown))
+        raise ValueError(
+            f"Incremental registration `{source_path}` has an invalid schema ({'; '.join(detail)})."
+        )
+    if value["schema_version"] != 1 or isinstance(value["schema_version"], bool):
+        raise ValueError(
+            f"Incremental registration `{source_path}` must use schema_version 1."
+        )
+    source_name = PurePosixPath(source_path).name
+    filename_match = INCREMENTAL_LEDGER_FILENAME.fullmatch(source_name)
+    if not filename_match:
+        raise ValueError(
+            f"Incremental registration filename must be CRL-YYYYMMDD-NNN.json: `{source_path}`."
+        )
+    identifier = safe_registration_text(value["crl"], "crl")
+    if identifier != filename_match.group(1):
+        raise ValueError(
+            f"Incremental registration `{source_path}` CRL must match its filename."
+        )
+    repository = safe_registration_text(value["repository"], "repository")
+    if repository != expected_repository:
+        raise ValueError(
+            f"Incremental registration `{source_path}` repository must be `{expected_repository}`."
+        )
+    for field in ("title", "request", "outcome"):
+        safe_registration_text(value[field], field)
+    for field in INCREMENTAL_LEDGER_LIST_KEYS:
+        items = value[field]
+        if not isinstance(items, list) or not items:
+            raise ValueError(
+                f"Incremental registration field `{field}` must be a non-empty list."
+            )
+        for index, item in enumerate(items):
+            safe_registration_text(item, f"{field}[{index}]")
+    raw_files = value["files"]
+    if not isinstance(raw_files, list) or not raw_files:
+        raise ValueError("Incremental registration field `files` must be a non-empty list.")
+    files = [normalized_registration_path(path) for path in raw_files]
+    if files != sorted(files):
+        raise ValueError(
+            f"Incremental registration `{source_path}` file paths must be sorted."
+        )
+    if len(files) != len(set(files)):
+        raise ValueError(
+            f"Incremental registration `{source_path}` contains duplicate file paths."
+        )
+    if source_path not in files:
+        raise ValueError(
+            f"Incremental registration `{source_path}` must list itself in `files`."
+        )
+    other_registration_paths = sorted(
+        path
+        for path in files
+        if path.startswith(INCREMENTAL_LEDGER_RELATIVE_DIR.as_posix() + "/")
+        and path != source_path
+    )
+    if other_registration_paths:
+        raise ValueError(
+            f"Incremental registration `{source_path}` cannot claim another registration: "
+            + ", ".join(other_registration_paths)
+            + "."
+        )
+    raw_hunks = value["staged_hunks"]
+    if not isinstance(raw_hunks, list) or not raw_hunks:
+        raise ValueError(
+            "Incremental registration field `staged_hunks` must be a non-empty list."
+        )
+    normalized_hunks: list[tuple[str, str]] = []
+    for index, item in enumerate(raw_hunks):
+        if not isinstance(item, dict) or frozenset(item) != {"path", "sha256"}:
+            raise ValueError(
+                f"Incremental registration staged_hunks[{index}] must contain only path and sha256."
+            )
+        path = normalized_registration_path(item["path"])
+        fingerprint = item["sha256"]
+        if not isinstance(fingerprint, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", fingerprint
+        ):
+            raise ValueError(
+                f"Incremental registration staged_hunks[{index}] has an invalid SHA-256."
+            )
+        if path not in files or path == source_path:
+            raise ValueError(
+                f"Incremental registration staged_hunks[{index}] must bind a listed non-registration path."
+            )
+        normalized_hunks.append((path, fingerprint))
+    if normalized_hunks != sorted(normalized_hunks):
+        raise ValueError(
+            f"Incremental registration `{source_path}` staged_hunks must be sorted."
+        )
+    if len(normalized_hunks) != len(set(normalized_hunks)):
+        raise ValueError(
+            f"Incremental registration `{source_path}` contains duplicate staged hunk fingerprints."
+        )
+    attempt = value["release_attempt"]
+    if not isinstance(attempt, dict) or frozenset(attempt) != INCREMENTAL_RELEASE_ATTEMPT_KEYS:
+        raise ValueError(
+            f"Incremental registration `{source_path}` release_attempt has an invalid schema."
+        )
+    for field, attempt_value in attempt.items():
+        safe_registration_text(attempt_value, f"release_attempt.{field}")
+    if not re.fullmatch(r"RA-\d{8}-\d{3}", attempt["id"]):
+        raise ValueError(
+            f"Incremental registration `{source_path}` release attempt ID is invalid."
+        )
+    if attempt["intended_action"] not in {"commit", "push"}:
+        raise ValueError(
+            f"Incremental registration `{source_path}` intended action is invalid."
+        )
+    for field in ("base_sha",):
+        if not re.fullmatch(r"[0-9a-f]{40}", attempt[field]):
+            raise ValueError(
+                f"Incremental registration `{source_path}` {field} must be a full commit SHA."
+            )
+    commit_sha = attempt["commit_sha"]
+    if commit_sha != "not committed" and not re.fullmatch(
+        r"[0-9a-f]{40}", commit_sha
+    ):
+        raise ValueError(
+            f"Incremental registration `{source_path}` commit_sha must be `not committed` or a full commit SHA."
+        )
+    if commit_sha == "not committed" and (
+        attempt["intended_action"] != "commit"
+        or attempt["technical_state"] not in {"candidate", "verified"}
+    ):
+        raise ValueError(
+            f"Incremental registration `{source_path}` may use `not committed` only for a candidate or verified commit attempt."
+        )
+    if not re.fullmatch(r"[0-9a-f]{64}", attempt["candidate_patch_sha256"]):
+        raise ValueError(
+            f"Incremental registration `{source_path}` candidate patch SHA-256 is invalid."
+        )
+    if attempt["technical_state"] not in {
+        "candidate",
+        "verified",
+        "committed",
+        "pushed",
+        "merged",
+        "deployed",
+    }:
+        raise ValueError(
+            f"Incremental registration `{source_path}` technical state is invalid."
+        )
+    if attempt["user_authorization"] not in {
+        "not-selected",
+        "selected-for-commit",
+        "approved-for-push",
+    }:
+        raise ValueError(
+            f"Incremental registration `{source_path}` user authorization is invalid."
+        )
+    if attempt["action_conclusion"] not in {"GO", "BLOCKED", "NOT VERIFIED"}:
+        raise ValueError(
+            f"Incremental registration `{source_path}` action conclusion is invalid."
+        )
+    section = incremental_registration_section(value, source_path)
+    return IncrementalRegistration(
+        identifier=identifier,
+        repository=repository,
+        source_path=source_path,
+        files=frozenset(files),
+        section=section,
+        canonical_json=json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+    )
+
+
+def incremental_registrations(
+    root: Path, expected_repository: str
+) -> dict[str, IncrementalRegistration]:
+    directory = root / INCREMENTAL_LEDGER_RELATIVE_DIR
+    if not directory.exists():
+        return {}
+    if not directory.is_dir() or directory.is_symlink():
+        raise ValueError("Incremental ledger path must be a real directory, not a symlink.")
+    registrations: dict[str, IncrementalRegistration] = {}
+    for path in sorted(directory.iterdir()):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"Incremental ledger contains a non-regular file: `{relative}`.")
+        if path.stat().st_size > INCREMENTAL_LEDGER_MAX_BYTES:
+            raise ValueError(f"Incremental registration `{relative}` exceeds 64 KiB.")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                f"Incremental registration `{relative}` must be UTF-8 text."
+            ) from error
+        registration = parse_incremental_registration_text(
+            text, relative, expected_repository
+        )
+        if registration.identifier in registrations:
+            raise ValueError(
+                f"Duplicate incremental CRL ID: {registration.identifier}."
+            )
+        registrations[registration.identifier] = registration
+    return registrations
+
+
+def repository_crl_sections(
+    root: Path, expected_repository: str
+) -> tuple[dict[str, CrlSection], dict[str, IncrementalRegistration]]:
+    sections = parse_crl_sections(root / LEDGER_RELATIVE_PATH)
+    registrations = incremental_registrations(root, expected_repository)
+    duplicate_ids = sorted(sections.keys() & registrations.keys())
+    if duplicate_ids:
+        raise ValueError(
+            "Incremental registrations duplicate CRLs in the historical ledger: "
+            + ", ".join(duplicate_ids)
+        )
+    sections.update(
+        {identifier: registration.section for identifier, registration in registrations.items()}
+    )
+    return sections, registrations
+
+
+def is_ledger_metadata_path(path: str) -> bool:
+    return path == LEDGER_RELATIVE_PATH.as_posix() or path.startswith(
+        INCREMENTAL_LEDGER_RELATIVE_DIR.as_posix() + "/"
+    )
+
+
+def incremental_registrations_at_ref(
+    root: Path, reference: str, expected_repository: str
+) -> dict[str, IncrementalRegistration]:
+    output = run_git(
+        root,
+        "ls-tree",
+        "-r",
+        "--name-only",
+        reference,
+        "--",
+        INCREMENTAL_LEDGER_RELATIVE_DIR.as_posix(),
+    )
+    assert isinstance(output, str)
+    registrations: dict[str, IncrementalRegistration] = {}
+    for source_path in sorted(line for line in output.splitlines() if line.strip()):
+        text = run_git(root, "show", f"{reference}:{source_path}")
+        assert isinstance(text, str)
+        registration = parse_incremental_registration_text(
+            text, source_path, expected_repository
+        )
+        if registration.identifier in registrations:
+            raise ValueError(
+                f"Duplicate incremental CRL ID at {reference}: {registration.identifier}."
+            )
+        registrations[registration.identifier] = registration
+    return registrations
+
+
+def incremental_remote_lineage_errors(
+    root: Path,
+    local: dict[str, IncrementalRegistration],
+    expected_repository: str,
+) -> list[str]:
+    remote = incremental_registrations_at_ref(root, "origin/Dev", expected_repository)
+    errors: list[str] = []
+    missing = sorted(remote.keys() - local.keys())
+    if missing:
+        errors.append(
+            "Local incremental ledger omits registrations already present in origin/Dev: "
+            + ", ".join(missing)
+            + "."
+        )
+    for identifier in sorted(remote.keys() & local.keys()):
+        if remote[identifier] != local[identifier]:
+            errors.append(
+                f"Incremental registration {identifier} differs from origin/Dev; registrations are append-only."
+            )
+    return errors
+
+
+def incremental_range_claims(
+    registrations: dict[str, IncrementalRegistration],
+    changed: set[str],
+) -> tuple[set[str], list[str]]:
+    changed_registration_paths = {
+        path
+        for path in changed
+        if path.startswith(INCREMENTAL_LEDGER_RELATIVE_DIR.as_posix() + "/")
+    }
+    if not changed_registration_paths:
+        return set(), []
+    active = [
+        registration
+        for registration in registrations.values()
+        if registration.source_path in changed_registration_paths
+    ]
+    errors: list[str] = []
+    unknown = sorted(
+        changed_registration_paths
+        - {registration.source_path for registration in active}
+    )
+    if unknown:
+        errors.append(
+            "Changed incremental ledger paths are not valid registrations: "
+            + ", ".join(unknown)
+            + "."
+        )
+    claimed_by_path: dict[str, list[str]] = {}
+    for registration in active:
+        for path in registration.files:
+            claimed_by_path.setdefault(path, []).append(registration.identifier)
+    overlapping = sorted(path for path, owners in claimed_by_path.items() if len(owners) > 1)
+    if overlapping:
+        errors.append(
+            "Changed paths are claimed by more than one incremental registration: "
+            + ", ".join(overlapping)
+            + "."
+        )
+    claimed = set(claimed_by_path)
+    wrong = sorted(claimed - changed)
+    missing = sorted(changed - claimed)
+    if wrong:
+        errors.append(
+            "Incremental registrations claim paths outside this exact change range: "
+            + ", ".join(wrong)
+            + "."
+        )
+    if missing:
+        errors.append(
+            "Incremental registrations do not cover every path in this exact change range: "
+            + ", ".join(missing)
+            + "."
+        )
+    return claimed, errors
 
 
 def canonical_field_name(value: str) -> str:
@@ -569,7 +1143,15 @@ def range_paths(root: Path, base: str, head: str) -> list[str]:
 
 def diff_hunk_fingerprints(root: Path, path: str, *range_args: str) -> set[tuple[str, str]]:
     """Return stable hashes for each textual zero-context diff hunk in one path."""
-    output = run_git(root, "diff", "--no-ext-diff", "--unified=0", *range_args, "--", path)
+    output = run_git(
+        root,
+        "diff",
+        "--no-ext-diff",
+        "--unified=0",
+        *range_args,
+        "--",
+        path,
+    )
     assert isinstance(output, str)
     hunks: list[str] = []
     current: list[str] = []
@@ -613,7 +1195,9 @@ def parse_hunk_reconciliation(
     for entry in entries:
         match = HUNK_RECONCILIATION.fullmatch(entry)
         if not match:
-            errors.append("Hunk reconciliation must use `path#<old SHA-256> -> <new SHA-256>`; evidence: <reason>.")
+            errors.append(
+                "Hunk reconciliation must use `path#<old SHA-256> -> <new SHA-256>`; evidence: <reason>."
+            )
             continue
         mappings.append(
             (
@@ -625,7 +1209,9 @@ def parse_hunk_reconciliation(
     if len(set(mappings)) != len(mappings):
         errors.append("Hunk reconciliation contains a duplicate old-to-new mapping.")
     if any(old == new for _, old, new in mappings):
-        errors.append("Hunk reconciliation must replace an old fingerprint with a different new fingerprint.")
+        errors.append(
+            "Hunk reconciliation must replace an old fingerprint with a different new fingerprint."
+        )
     return mappings, errors
 
 
@@ -646,17 +1232,27 @@ def reconciliation_scope_issues(
     expected_removed = {(path, old) for path, old, _ in mappings}
     expected_added = {(path, new) for path, _, new in mappings}
     if removed != expected_removed or added != expected_added:
-        errors.append("Hunk reconciliation must replace exactly the declared old/new Staged Commit Scope fingerprints.")
+        errors.append(
+            "Hunk reconciliation must replace exactly the declared old/new Staged Commit Scope fingerprints."
+        )
     for identifier in selected_ids:
-        before_lines = subsection(before_sections[identifier].lines, STAGED_SCOPE_HEADING)
-        staged_lines = subsection(staged_sections[identifier].lines, STAGED_SCOPE_HEADING)
+        before_lines = subsection(
+            before_sections[identifier].lines, STAGED_SCOPE_HEADING
+        )
+        staged_lines = subsection(
+            staged_sections[identifier].lines, STAGED_SCOPE_HEADING
+        )
         normalized_before = list(before_lines)
         for path, old, new in mappings:
             old_line = f"- `{path}` — SHA-256: `{old}`"
             new_line = f"- `{path}` — SHA-256: `{new}`"
-            normalized_before = [new_line if line == old_line else line for line in normalized_before]
+            normalized_before = [
+                new_line if line == old_line else line for line in normalized_before
+            ]
         if tuple(normalized_before) != staged_lines:
-            errors.append("Hunk reconciliation may change only the declared Staged Commit Scope fingerprint lines.")
+            errors.append(
+                "Hunk reconciliation may change only the declared Staged Commit Scope fingerprint lines."
+            )
             break
     return errors, mappings
 
@@ -670,11 +1266,17 @@ def reconciliation_range_issues(
     mappings, errors = parse_hunk_reconciliation(attempt)
     for path, old, new in mappings:
         if (path, old) in declared_hunks:
-            errors.append("Hunk reconciliation keeps its old fingerprint in the final Staged Commit Scope.")
+            errors.append(
+                "Hunk reconciliation keeps its old fingerprint in the final Staged Commit Scope."
+            )
         if (path, new) not in declared_hunks:
-            errors.append("Hunk reconciliation replacement is absent from the final Staged Commit Scope.")
+            errors.append(
+                "Hunk reconciliation replacement is absent from the final Staged Commit Scope."
+            )
         if (path, new) not in actual_hunks:
-            errors.append("Hunk reconciliation replacement is absent from the exact committed range.")
+            errors.append(
+                "Hunk reconciliation replacement is absent from the exact committed range."
+            )
     return errors, mappings
 
 
@@ -714,7 +1316,9 @@ def selected_scope_issues(
     return errors, missing
 
 
-def subsection_line_ranges(text: str, identifiers: frozenset[str], heading: str) -> list[tuple[int, int]]:
+def subsection_line_ranges(
+    text: str, identifiers: frozenset[str], heading: str
+) -> list[tuple[int, int]]:
     """Return one-based, inclusive line ranges for a named subsection in selected CRLs."""
     lines = text.splitlines()
     ranges: list[tuple[int, int]] = []
@@ -723,10 +1327,19 @@ def subsection_line_ranges(text: str, identifiers: frozenset[str], heading: str)
         if identifier not in identifiers:
             continue
         end = starts[position + 1][0] if position + 1 < len(starts) else len(lines)
-        subsection_start = next((index for index in range(start + 1, end) if lines[index] == heading), None)
+        subsection_start = next(
+            (index for index in range(start + 1, end) if lines[index] == heading), None
+        )
         if subsection_start is None:
             continue
-        subsection_end = next((index for index in range(subsection_start + 1, end) if lines[index].startswith("### ") or lines[index].startswith("## ")), end)
+        subsection_end = next(
+            (
+                index
+                for index in range(subsection_start + 1, end)
+                if lines[index].startswith("### ") or lines[index].startswith("## ")
+            ),
+            end,
+        )
         ranges.append((subsection_start + 2, subsection_end))
     return ranges
 
@@ -735,10 +1348,16 @@ def crl_line_ranges(text: str, identifiers: frozenset[str]) -> list[tuple[int, i
     """Return one-based, inclusive full-section line ranges for selected CRLs."""
     lines = text.splitlines()
     starts = [(index, match.group(1)) for index, line in enumerate(lines) if (match := CRL_HEADING.match(line))]
-    return [(start + 1, starts[position + 1][0] if position + 1 < len(starts) else len(lines)) for position, (start, identifier) in enumerate(starts) if identifier in identifiers]
+    return [
+        (start + 1, starts[position + 1][0] if position + 1 < len(starts) else len(lines))
+        for position, (start, identifier) in enumerate(starts)
+        if identifier in identifiers
+    ]
 
 
-def line_range_is_within(start: int, count: int, allowed_ranges: list[tuple[int, int]]) -> bool:
+def line_range_is_within(
+    start: int, count: int, allowed_ranges: list[tuple[int, int]]
+) -> bool:
     if count == 0:
         return True
     end = start + count - 1
@@ -782,7 +1401,9 @@ def staged_ledger_scope_issues(root: Path, selected_ids: frozenset[str]) -> list
     return errors
 
 
-def receipt_only_issues(root: Path, selected_sections: list[CrlSection], selected_identities: frozenset[str]) -> list[str]:
+def receipt_only_issues(
+    root: Path, selected_sections: list[CrlSection], selected_identities: frozenset[str]
+) -> list[str]:
     """Allow a verified ledger-only receipt and a tightly scoped hunk reconciliation."""
     errors: list[str] = []
     selected_ids = frozenset(section.identifier for section in selected_sections)
@@ -794,15 +1415,32 @@ def receipt_only_issues(root: Path, selected_sections: list[CrlSection], selecte
         staged_sections = parse_crl_sections_text(staged)
         before_ranges = subsection_line_ranges(before, selected_ids, "### Release Attempts")
         staged_ranges = subsection_line_ranges(staged, selected_ids, "### Release Attempts")
-        diff = run_git(root, "diff", "--cached", "--unified=0", "--", LEDGER_RELATIVE_PATH.as_posix())
+        diff = run_git(
+            root,
+            "diff",
+            "--cached",
+            "--unified=0",
+            "--",
+            LEDGER_RELATIVE_PATH.as_posix(),
+        )
         assert isinstance(diff, str)
     except (GitError, ValueError):
         return ["Unable to verify the staged ledger-only Release Attempt receipt."]
     if len(before_ranges) != len(selected_ids) or len(staged_ranges) != len(selected_ids):
         errors.append("Ledger-only receipt requires a Release Attempts subsection in every selected CRL.")
-    staged_selected_sections = [staged_sections[identifier] for identifier in selected_ids]
-    attempts = [attempt for section in staged_selected_sections for attempt in parse_attempts(section)]
-    exact_attempts = [attempt for attempt in attempts if attempt.selected_identities == selected_identities]
+    staged_selected_sections = [
+        staged_sections[identifier] for identifier in selected_ids
+    ]
+    attempts = [
+        attempt
+        for section in staged_selected_sections
+        for attempt in parse_attempts(section)
+    ]
+    exact_attempts = [
+        attempt
+        for attempt in attempts
+        if attempt.selected_identities == selected_identities
+    ]
     attempt = exact_attempts[-1] if exact_attempts else None
     reconciliation_mappings: list[tuple[str, str, str]] = []
     if attempt is not None:
@@ -811,25 +1449,39 @@ def receipt_only_issues(root: Path, selected_sections: list[CrlSection], selecte
         )
         if reconciliation_mappings or reconciliation_errors:
             errors.extend(reconciliation_errors)
-    before_scope_ranges = subsection_line_ranges(before, selected_ids, STAGED_SCOPE_HEADING)
-    staged_scope_ranges = subsection_line_ranges(staged, selected_ids, STAGED_SCOPE_HEADING)
-    allowed_before_ranges = before_ranges + (before_scope_ranges if reconciliation_mappings else [])
-    allowed_staged_ranges = staged_ranges + (staged_scope_ranges if reconciliation_mappings else [])
+    before_scope_ranges = subsection_line_ranges(
+        before, selected_ids, STAGED_SCOPE_HEADING
+    )
+    staged_scope_ranges = subsection_line_ranges(
+        staged, selected_ids, STAGED_SCOPE_HEADING
+    )
+    allowed_before_ranges = before_ranges + (
+        before_scope_ranges if reconciliation_mappings else []
+    )
+    allowed_staged_ranges = staged_ranges + (
+        staged_scope_ranges if reconciliation_mappings else []
+    )
     for line in diff.splitlines():
         match = DIFF_HUNK_HEADER.match(line)
         if not match:
             continue
         old_count = int(match.group("old_count") or "1")
         new_count = int(match.group("new_count") or "1")
-        if not line_range_is_within(int(match.group("old_start")), old_count, allowed_before_ranges):
+        if not line_range_is_within(
+            int(match.group("old_start")), old_count, allowed_before_ranges
+        ):
             errors.append("Ledger-only receipt changes a line outside selected CRL Release Attempts.")
-        if not line_range_is_within(int(match.group("new_start")), new_count, allowed_staged_ranges):
+        if not line_range_is_within(
+            int(match.group("new_start")), new_count, allowed_staged_ranges
+        ):
             errors.append("Ledger-only receipt adds a line outside selected CRL Release Attempts.")
     if not exact_attempts:
         return errors + ["Ledger-only receipt has no Release Attempt bound to exactly the selected canonical CRL identities."]
     assert attempt is not None
     if historical_receipt_enabled(attempt):
-        return errors + historical_receipt_precommit_issues(root, attempt, selected_sections, selected_identities)
+        return errors + historical_receipt_precommit_issues(
+            root, attempt, selected_sections, selected_identities
+        )
     if leading_status(field_value(attempt, "Technical state"), ("committed", "pushed", "merged", "deployed")) is None:
         errors.append("Ledger-only receipt must record a committed-or-later technical state.")
     if leading_status(field_value(attempt, "Independent review"), ("go",)) != "go":
@@ -851,8 +1503,12 @@ def receipt_only_issues(root: Path, selected_sections: list[CrlSection], selecte
     elif content_patch_sha256(root, base, candidate) != patch_match.group(0).lower():
         errors.append("Ledger-only receipt candidate patch fingerprint does not match its recorded content commit.")
     for path, _, new in reconciliation_mappings:
-        if (path, new) not in diff_hunk_fingerprints(root, path, f"{base}...{candidate}"):
-            errors.append("Hunk reconciliation replacement is not present in the recorded candidate content range.")
+        if (path, new) not in diff_hunk_fingerprints(
+            root, path, f"{base}...{candidate}"
+        ):
+            errors.append(
+                "Hunk reconciliation replacement is not present in the recorded candidate content range."
+            )
     if not selected_scope_hunks(selected_sections):
         errors.append("Ledger-only receipt requires an existing selected content-hunk scope.")
     return errors
@@ -867,6 +1523,7 @@ def content_patch_sha256(root: Path, base: str, head: str) -> str:
         "--",
         ".",
         ":(exclude)docs/change-release-ledger.md",
+        ":(exclude)docs/change-release-ledger.d/**",
         text=False,
     )
     assert isinstance(output, bytes)
@@ -874,7 +1531,34 @@ def content_patch_sha256(root: Path, base: str, head: str) -> str:
 
 
 def staged_content_patch_sha256(root: Path) -> str:
-    output = run_git(root, "diff", "--cached", "--binary", "--", ".", ":(exclude)docs/change-release-ledger.md", text=False)
+    output = run_git(
+        root,
+        "diff",
+        "--cached",
+        "--binary",
+        "--",
+        ".",
+        ":(exclude)docs/change-release-ledger.md",
+        ":(exclude)docs/change-release-ledger.d/**",
+        text=False,
+    )
+    assert isinstance(output, bytes)
+    return hashlib.sha256(output).hexdigest()
+
+
+def indexed_content_patch_sha256(root: Path, base: str) -> str:
+    output = run_git(
+        root,
+        "diff",
+        "--cached",
+        "--binary",
+        base,
+        "--",
+        ".",
+        ":(exclude)docs/change-release-ledger.md",
+        ":(exclude)docs/change-release-ledger.d/**",
+        text=False,
+    )
     assert isinstance(output, bytes)
     return hashlib.sha256(output).hexdigest()
 
@@ -883,7 +1567,13 @@ def historical_receipt_enabled(attempt: ReleaseAttempt) -> bool:
     return leading_status(field_value(attempt, "Historical receipt"), ("true", "false")) == "true"
 
 
-def historical_source_issues(root: Path, attempt: ReleaseAttempt, selected_sections: list[CrlSection], selected_identities: frozenset[str], current_boundary: str) -> list[str]:
+def historical_source_issues(
+    root: Path,
+    attempt: ReleaseAttempt,
+    selected_sections: list[CrlSection],
+    selected_identities: frozenset[str],
+    current_boundary: str,
+) -> list[str]:
     """Verify that a ledger-only receipt points to a prior, scoped source Attempt."""
     errors: list[str] = []
     source_identifier = field_value(attempt, "Historical source attempt").strip().strip("`")
@@ -901,19 +1591,28 @@ def historical_source_issues(root: Path, attempt: ReleaseAttempt, selected_secti
         and candidate.selected_identities == selected_identities
     ]
     if not source_candidates:
-        return ["Historical source attempt is missing or does not bind exactly the selected canonical CRL identities."]
+        return [
+            "Historical source attempt is missing or does not bind exactly the selected canonical CRL identities."
+        ]
     if len(source_candidates) != 1:
         return ["Historical source attempt is ambiguous across the selected CRL sections."]
     source_section, source_attempt = source_candidates[0]
     source_repositories = {identity.split("/", 1)[0] for identity in selected_identities}
-    if len(source_repositories) != 1 or leading_status(field_value(source_attempt, "Repository"), ("root", "mobile")) != next(iter(source_repositories)):
+    if len(source_repositories) != 1 or leading_status(
+        field_value(source_attempt, "Repository"), ("root", "mobile")
+    ) != next(iter(source_repositories)):
         errors.append("Historical source attempt Repository does not match its selected canonical CRL identity.")
     try:
         boundary_sections = ledger_sections_at_ref(root, current_boundary)
     except GitError:
         return errors + ["Unable to read the receipt base ledger for historical-source verification."]
     boundary_section = boundary_sections.get(source_section.identifier)
-    boundary_attempts = [] if boundary_section is None else [candidate for candidate in parse_attempts(boundary_section) if candidate.identifier == source_identifier and candidate.selected_identities == selected_identities]
+    boundary_attempts = [] if boundary_section is None else [
+        candidate
+        for candidate in parse_attempts(boundary_section)
+        if candidate.identifier == source_identifier
+        and candidate.selected_identities == selected_identities
+    ]
     if len(boundary_attempts) != 1:
         errors.append("Historical source attempt must already exist exactly once in the receipt base ledger.")
     else:
@@ -947,7 +1646,11 @@ def historical_source_issues(root: Path, attempt: ReleaseAttempt, selected_secti
         errors.append("Historical source content commit is not an ancestor of the current receipt boundary.")
     if content_patch_sha256(root, source_base, source_commit) != source_patch_match.group(0).lower():
         errors.append("Historical source candidate patch fingerprint does not match its recorded source content commit.")
-    if leading_status(field_value(source_attempt, "Technical state"), ("committed", "pushed", "merged", "deployed")) is None:
+    source_technical = leading_status(
+        field_value(source_attempt, "Technical state"),
+        ("committed", "pushed", "merged", "deployed"),
+    )
+    if source_technical is None:
         errors.append("Historical source attempt is not recorded as committed or later.")
     if leading_status(field_value(source_attempt, "Independent review"), ("go",)) != "go":
         errors.append("Historical source attempt has no independent-review GO evidence.")
@@ -964,9 +1667,10 @@ def historical_source_issues(root: Path, attempt: ReleaseAttempt, selected_secti
             source_hunks.update(fingerprints)
     except GitError:
         return errors + ["Unable to inspect the historical source Attempt range."]
+    declared_hunks = selected_scope_hunks(selected_sections)
     if non_text_paths:
         errors.append("Historical source range contains a path without a textual hunk fingerprint.")
-    if source_hunks != selected_scope_hunks(selected_sections):
+    if source_hunks != declared_hunks:
         errors.append("Historical source hunk fingerprints do not exactly match the selected CRL Staged Commit Scope.")
     if generated_paths(source_paths):
         errors.append("Historical source range contains generated files.")
@@ -975,12 +1679,21 @@ def historical_source_issues(root: Path, attempt: ReleaseAttempt, selected_secti
     return errors
 
 
-def historical_receipt_precommit_issues(root: Path, attempt: ReleaseAttempt, selected_sections: list[CrlSection], selected_identities: frozenset[str]) -> list[str]:
+def historical_receipt_precommit_issues(
+    root: Path,
+    attempt: ReleaseAttempt,
+    selected_sections: list[CrlSection],
+    selected_identities: frozenset[str],
+) -> list[str]:
     """Allow the first ledger-only historical receipt commit before its SHA exists."""
     errors: list[str] = []
-    if leading_status(field_value(attempt, "Intended action"), ("commit", "push")) != "commit":
+    action = leading_status(field_value(attempt, "Intended action"), ("commit", "push"))
+    if action != "commit":
         errors.append("Initial historical receipt candidate must declare Intended action: commit.")
-    authorization = leading_status(field_value(attempt, "User authorization"), ("selected-for-commit", "approved-for-push", "not-selected"))
+    authorization = leading_status(
+        field_value(attempt, "User authorization"),
+        ("selected-for-commit", "approved-for-push", "not-selected"),
+    )
     if authorization not in {"selected-for-commit", "approved-for-push"}:
         errors.append("Initial historical receipt candidate has no selected-for-commit authorization.")
     base_field = field_value(attempt, "Base")
@@ -990,12 +1703,15 @@ def historical_receipt_precommit_issues(root: Path, attempt: ReleaseAttempt, sel
         return errors + ["Unable to resolve HEAD for the historical receipt candidate."]
     if current_head not in base_field.lower() or "fetched at" not in base_field.lower():
         errors.append("Historical receipt candidate Base must record the current HEAD SHA and fetch-time evidence.")
-    if SHA.search(field_value(attempt, "Commit SHA")):
+    commit_field = field_value(attempt, "Commit SHA")
+    if SHA.search(commit_field):
         errors.append("Initial historical receipt candidate must record Commit SHA as not committed.")
     recorded_patch = SHA.search(field_value(attempt, "Candidate patch SHA-256"))
     if not recorded_patch or recorded_patch.group(0).lower() != staged_content_patch_sha256(root):
         errors.append("Historical receipt candidate patch fingerprint does not match the staged ledger-only content.")
-    errors.extend(historical_source_issues(root, attempt, selected_sections, selected_identities, current_head))
+    errors.extend(
+        historical_source_issues(root, attempt, selected_sections, selected_identities, current_head)
+    )
     return errors
 
 
@@ -1059,7 +1775,9 @@ def merge_head(root: Path) -> str | None:
 
 
 def pre_commit_comparison_base(
-    root: Path, selected_sections: list[CrlSection], selected_identities: frozenset[str]
+    root: Path,
+    selected_sections: list[CrlSection],
+    selected_identities: frozenset[str],
 ) -> tuple[str, str | None]:
     """Use a merge parent only when the selected attempt records that exact base."""
     parent = merge_head(root)
@@ -1087,7 +1805,9 @@ def pre_commit_comparison_base(
 
 
 def staged_candidate_paths(root: Path, comparison_base: str) -> list[str]:
-    return sorted(git_paths(root, "diff", "--cached", comparison_base, "--name-only"))
+    return sorted(
+        git_paths(root, "diff", "--cached", comparison_base, "--name-only")
+    )
 
 
 def staged_candidate_ledger_scope_issues(
@@ -1095,7 +1815,9 @@ def staged_candidate_ledger_scope_issues(
 ) -> list[str]:
     """Require ledger hunks to stay in selected CRLs relative to the candidate baseline."""
     try:
-        before = run_git(root, "show", f"{comparison_base}:{LEDGER_RELATIVE_PATH.as_posix()}")
+        before = run_git(
+            root, "show", f"{comparison_base}:{LEDGER_RELATIVE_PATH.as_posix()}"
+        )
         staged = run_git(root, "show", f":{LEDGER_RELATIVE_PATH.as_posix()}")
         assert isinstance(before, str) and isinstance(staged, str)
         before_ranges = crl_line_ranges(before, selected_ids)
@@ -1121,9 +1843,13 @@ def staged_candidate_ledger_scope_issues(
             continue
         old_count = int(match.group("old_count") or "1")
         new_count = int(match.group("new_count") or "1")
-        if not line_range_is_within(int(match.group("old_start")), old_count, before_ranges):
+        if not line_range_is_within(
+            int(match.group("old_start")), old_count, before_ranges
+        ):
             errors.append("Staged ledger changes a line outside selected CRL sections.")
-        if not line_range_is_within(int(match.group("new_start")), new_count, staged_ranges):
+        if not line_range_is_within(
+            int(match.group("new_start")), new_count, staged_ranges
+        ):
             errors.append("Staged ledger adds a line outside selected CRL sections.")
     return errors
 
@@ -1143,7 +1869,9 @@ def build_pre_commit_report(
         "repository": repository,
         "expected_repository": expected_repository,
         "crl_ids": sorted(selected_ids),
-        "crl_identities": [canonical_crl_identity(repository, identifier) for identifier in sorted(selected_ids)],
+        "crl_identities": [
+            canonical_crl_identity(repository, identifier) for identifier in sorted(selected_ids)
+        ],
         "staged_files": [],
         "untracked_files": [],
         "unselected_staged_files": [],
@@ -1154,11 +1882,17 @@ def build_pre_commit_report(
     }
     if repository != expected_repository:
         errors.append(f"Repository must be `{expected_repository}`, not `{repository}`.")
-        checks.append(check_item("repository boundary", "FAIL", "Pre-commit repository does not match this audit script."))
+        checks.append(
+            check_item(
+                "repository boundary", "FAIL", "Pre-commit repository does not match this audit script."
+            )
+        )
     else:
         checks.append(check_item("repository boundary", "PASS", "Repository matches this audit script."))
     try:
-        sections = parse_crl_sections(root / LEDGER_RELATIVE_PATH)
+        sections, registrations = repository_crl_sections(
+            root, expected_repository
+        )
     except ValueError as error:
         errors.append(str(error))
         checks.append(check_item("ledger structure", "FAIL", str(error)))
@@ -1169,14 +1903,39 @@ def build_pre_commit_report(
         checks.append(check_item("selected CRLs", "FAIL", "A requested CRL is not in this repository ledger."))
         return finalize_report(report, errors, missing)
     selected_sections = [sections[identifier] for identifier in selected_ids]
+    incremental_selected = sorted(selected_ids & registrations.keys())
+    if incremental_selected and len(selected_ids) != 1:
+        errors.append(
+            "An incremental registration must be audited as one exact CRL, without combining other units."
+        )
+        checks.append(
+            check_item(
+                "incremental registration boundary",
+                "FAIL",
+                "Incremental registration cannot be combined with another selected CRL.",
+            )
+        )
+        return finalize_report(report, errors, missing)
     identity_errors, identity_missing = selected_identity_issues(selected_sections, expected_repository)
     errors.extend(identity_errors)
     missing.extend(identity_missing)
-    checks.append(check_item("canonical CRL identity", "FAIL" if identity_errors else "NOT VERIFIED" if identity_missing else "PASS", "; ".join(identity_errors + identity_missing) or ", ".join(report["crl_identities"])))
+    checks.append(
+        check_item(
+            "canonical CRL identity",
+            "FAIL" if identity_errors else "NOT VERIFIED" if identity_missing else "PASS",
+            "; ".join(identity_errors + identity_missing) or ", ".join(report["crl_identities"]),
+        )
+    )
     scope_errors, scope_missing = selected_scope_issues(selected_sections, expected_repository)
     errors.extend(scope_errors)
     missing.extend(scope_missing)
-    checks.append(check_item("staged commit scope", "FAIL" if scope_errors else "NOT VERIFIED" if scope_missing else "PASS", "; ".join(scope_errors + scope_missing) or "Selected CRL scopes are prepared."))
+    checks.append(
+        check_item(
+            "staged commit scope",
+            "FAIL" if scope_errors else "NOT VERIFIED" if scope_missing else "PASS",
+            "; ".join(scope_errors + scope_missing) or "Selected CRL scopes are prepared.",
+        )
+    )
     try:
         comparison_base, comparison_error = pre_commit_comparison_base(
             root, selected_sections, frozenset(report["crl_identities"])
@@ -1184,9 +1943,13 @@ def build_pre_commit_report(
         report["staged_comparison_base"] = comparison_base
         if comparison_error:
             errors.append(comparison_error)
-            checks.append(check_item("staged comparison base", "FAIL", comparison_error))
+            checks.append(
+                check_item("staged comparison base", "FAIL", comparison_error)
+            )
         else:
-            checks.append(check_item("staged comparison base", "PASS", comparison_base))
+            checks.append(
+                check_item("staged comparison base", "PASS", comparison_base)
+            )
         staged = staged_candidate_paths(root, comparison_base)
         untracked = untracked_paths(root)
         report["staged_files"] = staged
@@ -1197,7 +1960,39 @@ def build_pre_commit_report(
         else:
             checks.append(check_item("staged candidate", "PASS", f"{len(staged)} staged file(s)."))
         selected_files = set().union(*(section.files for section in selected_sections))
-        unselected = sorted(set(staged) - selected_files)
+        candidate_paths = list(staged)
+        incremental_base: str | None = None
+        incremental_attempt: ReleaseAttempt | None = None
+        if incremental_selected:
+            attempts = parse_attempts(selected_sections[0])
+            incremental_attempt = attempts[-1] if attempts else None
+            base_match = (
+                None
+                if incremental_attempt is None
+                else SHA.search(field_value(incremental_attempt, "Base"))
+            )
+            if base_match is None:
+                errors.append("Incremental registration has no parseable Base SHA.")
+            else:
+                incremental_base = resolve_ref(root, base_match.group(0))
+                candidate_paths = sorted(
+                    git_paths(
+                        root,
+                        "diff",
+                        "--cached",
+                        "--name-only",
+                        incremental_base,
+                    )
+                    | git_paths(
+                        root,
+                        "diff",
+                        "--cached",
+                        "--name-only",
+                        "--no-renames",
+                        incremental_base,
+                    )
+                )
+        unselected = sorted(set(candidate_paths) - selected_files)
         report["unselected_staged_files"] = unselected
         if unselected:
             errors.append("Staged candidate contains files outside the selected CRL file lists.")
@@ -1205,7 +2000,9 @@ def build_pre_commit_report(
         else:
             checks.append(check_item("staged path coverage", "PASS", "Every staged path is selected."))
         if untracked:
-            errors.append("Untracked files are present; prepare the candidate in a clean worktree instead of the Legacy frozen workspace.")
+            errors.append(
+                "Untracked files are present; prepare the candidate in a clean worktree instead of the Legacy frozen workspace."
+            )
             checks.append(check_item("untracked files", "FAIL", f"{len(untracked)} untracked file(s)."))
         else:
             checks.append(check_item("untracked files", "PASS", "No untracked files."))
@@ -1221,23 +2018,52 @@ def build_pre_commit_report(
         receipt_only = staged == [LEDGER_RELATIVE_PATH.as_posix()]
         actual_hunks: set[tuple[str, str]] = set()
         non_text_hunk_paths: list[str] = []
-        for path in staged:
-            if path == LEDGER_RELATIVE_PATH.as_posix():
+        for path in candidate_paths:
+            if is_ledger_metadata_path(path):
                 continue
-            fingerprints = diff_hunk_fingerprints(root, path, "--cached", comparison_base)
+            range_args = (
+                ("--cached", incremental_base)
+                if incremental_base is not None
+                else ("--cached", comparison_base)
+            )
+            fingerprints = diff_hunk_fingerprints(root, path, *range_args)
             if not fingerprints:
                 non_text_hunk_paths.append(path)
             actual_hunks.update(fingerprints)
         if receipt_only and comparison_base != "HEAD":
-            errors.append("Ledger-only receipt candidates cannot use a merge-parent comparison base.")
-            checks.append(check_item("ledger-only receipt", "FAIL", "Merge-parent candidates must include a scoped content change."))
+            errors.append(
+                "Ledger-only receipt candidates cannot use a merge-parent comparison base."
+            )
+            checks.append(
+                check_item(
+                    "ledger-only receipt",
+                    "FAIL",
+                    "Merge-parent candidates must include a scoped content change.",
+                )
+            )
         elif receipt_only:
-            receipt_errors = receipt_only_issues(root, selected_sections, frozenset(report["crl_identities"]))
+            receipt_errors = receipt_only_issues(
+                root,
+                selected_sections,
+                frozenset(report["crl_identities"]),
+            )
             if receipt_errors:
                 errors.extend(receipt_errors)
-                checks.append(check_item("ledger-only receipt", "FAIL", "; ".join(receipt_errors)))
+                checks.append(
+                    check_item(
+                        "ledger-only receipt",
+                        "FAIL",
+                        "; ".join(receipt_errors),
+                    )
+                )
             else:
-                checks.append(check_item("ledger-only receipt", "PASS", "Only selected Release Attempt receipt lines changed with verified content-commit evidence."))
+                checks.append(
+                    check_item(
+                        "ledger-only receipt",
+                        "PASS",
+                        "Only selected Release Attempt receipt lines changed with verified content-commit evidence.",
+                    )
+                )
         elif non_text_hunk_paths:
             errors.append("Staged candidate contains a path without a textual hunk fingerprint.")
             checks.append(check_item("staged hunk fingerprints", "FAIL", ", ".join(non_text_hunk_paths)))
@@ -1249,9 +2075,43 @@ def build_pre_commit_report(
             report["missing_hunks"] = [f"{path}#{fingerprint}" for path, fingerprint in missing_hunks]
             if unexpected_hunks or missing_hunks:
                 errors.append("Staged hunk fingerprints do not exactly match the selected CRL Staged Commit Scope.")
-                checks.append(check_item("staged hunk fingerprints", "FAIL", f"unexpected={len(unexpected_hunks)}, missing={len(missing_hunks)}"))
+                checks.append(
+                    check_item(
+                        "staged hunk fingerprints",
+                        "FAIL",
+                        f"unexpected={len(unexpected_hunks)}, missing={len(missing_hunks)}",
+                    )
+                )
             else:
-                checks.append(check_item("staged hunk fingerprints", "PASS", f"{len(actual_hunks)} non-ledger hunk(s) match scope."))
+                checks.append(
+                    check_item(
+                        "staged hunk fingerprints",
+                        "PASS",
+                        f"{len(actual_hunks)} non-ledger hunk(s) match scope.",
+                    )
+                )
+        if incremental_selected and incremental_attempt is not None and incremental_base is not None:
+            actual_patch = indexed_content_patch_sha256(root, incremental_base)
+            recorded_patch = SHA.search(
+                field_value(incremental_attempt, "Candidate patch SHA-256")
+            )
+            if recorded_patch is None or recorded_patch.group(0).lower() != actual_patch:
+                errors.append(
+                    "Incremental registration candidate patch fingerprint does not match the exact indexed candidate."
+                )
+                checks.append(
+                    check_item(
+                        "incremental candidate fingerprint",
+                        "FAIL",
+                        "Recorded and computed hashes differ.",
+                    )
+                )
+            else:
+                checks.append(
+                    check_item(
+                        "incremental candidate fingerprint", "PASS", actual_patch
+                    )
+                )
     except GitError:
         errors.append("Unable to inspect staged or untracked Git state.")
         checks.append(check_item("local Git state", "FAIL", "Git inspection failed."))
@@ -1296,7 +2156,9 @@ def build_release_report(
         "checks": checks,
     }
     selected_ids = frozenset(crl_ids)
-    selected_identities = frozenset(canonical_crl_identity(repository, identifier) for identifier in selected_ids)
+    selected_identities = frozenset(
+        canonical_crl_identity(repository, identifier) for identifier in selected_ids
+    )
     report["crl_identities"] = sorted(selected_identities)
     if repository != expected_repository:
         errors.append(f"Repository must be `{expected_repository}`, not `{repository}`.")
@@ -1323,11 +2185,33 @@ def build_release_report(
         assert isinstance(status_output, str)
         if status_output.strip():
             report["git_worktree_state"] = "dirty"
-            errors.append("PR range audit requires a clean checked-out Git worktree; historical Legacy worktrees are outside this audit.")
-            checks.append(check_item("checked-out Git state", "FAIL", "Working tree has local staged, unstaged, or untracked paths."))
+            errors.append(
+                "PR range audit requires a clean checked-out Git worktree; historical Legacy worktrees are outside this audit."
+            )
+            checks.append(
+                check_item(
+                    "checked-out Git state",
+                    "FAIL",
+                    "Working tree has local staged, unstaged, or untracked paths.",
+                )
+            )
         else:
             report["git_worktree_state"] = "clean"
             checks.append(check_item("checked-out Git state", "PASS", "Working tree is clean."))
+        checkout_head = resolve_ref(root, "HEAD")
+        if checkout_head != head:
+            errors.append("Checked-out HEAD does not match the supplied audit head.")
+            checks.append(
+                check_item(
+                    "checked-out audit head",
+                    "FAIL",
+                    "Release metadata must be loaded from the exact audited head.",
+                )
+            )
+        else:
+            checks.append(
+                check_item("checked-out audit head", "PASS", checkout_head)
+            )
     except GitError:
         errors.append("Unable to inspect the checked-out Git worktree state.")
         checks.append(check_item("checked-out Git state", "FAIL", "Git status inspection failed."))
@@ -1343,7 +2227,9 @@ def build_release_report(
         missing.append("Locally fetched origin/Dev is unavailable, so base freshness is not verified.")
         checks.append(check_item("base freshness", "NOT VERIFIED", "origin/Dev is unavailable locally; report never fetches."))
     try:
-        sections = parse_crl_sections(root / LEDGER_RELATIVE_PATH)
+        sections, registrations = repository_crl_sections(
+            root, expected_repository
+        )
     except ValueError as error:
         errors.append(str(error))
         checks.append(check_item("ledger structure", "FAIL", str(error)))
@@ -1355,6 +2241,11 @@ def build_release_report(
         return finalize_report(report, errors, missing)
     try:
         lineage_errors = remote_lineage_errors(root, sections)
+        lineage_errors.extend(
+            incremental_remote_lineage_errors(
+                root, registrations, expected_repository
+            )
+        )
     except GitError:
         missing.append("Locally fetched origin/Dev ledger is unavailable, so immutable CRL lineage is not verified.")
         checks.append(check_item("remote ledger lineage", "NOT VERIFIED", "origin/Dev ledger is unavailable locally; report never fetches."))
@@ -1374,17 +2265,42 @@ def build_release_report(
         checks.append(check_item("selected CRLs", "FAIL", "A requested CRL is not in this repository ledger."))
         return finalize_report(report, errors, missing)
     selected_sections = [sections[identifier] for identifier in selected_ids]
-    identity_errors, identity_missing = selected_identity_issues(selected_sections, expected_repository)
+    incremental_selected = sorted(selected_ids & registrations.keys())
+    if incremental_selected and len(selected_ids) != 1:
+        errors.append(
+            "An incremental registration must be audited as one exact CRL, without combining other units."
+        )
+        checks.append(
+            check_item(
+                "incremental registration boundary",
+                "FAIL",
+                "Incremental registration cannot be combined with another selected CRL.",
+            )
+        )
+        return finalize_report(report, errors, missing)
+    identity_errors, identity_missing = selected_identity_issues(
+        selected_sections, expected_repository
+    )
     errors.extend(identity_errors)
     missing.extend(identity_missing)
-    checks.append(check_item("canonical CRL identity", "FAIL" if identity_errors else "NOT VERIFIED" if identity_missing else "PASS", "; ".join(identity_errors + identity_missing) or ", ".join(report["crl_identities"])))
+    checks.append(
+        check_item(
+            "canonical CRL identity",
+            "FAIL" if identity_errors else "NOT VERIFIED" if identity_missing else "PASS",
+            "; ".join(identity_errors + identity_missing) or ", ".join(report["crl_identities"]),
+        )
+    )
     selected_files = set().union(*(section.files for section in selected_sections))
     report["selected_files"] = sorted(selected_files)
     attempts = [attempt for section in selected_sections for attempt in parse_attempts(section)]
-    exact_attempts = [attempt for attempt in attempts if attempt.selected_identities == selected_identities]
+    exact_attempts = [
+        attempt for attempt in attempts if attempt.selected_identities == selected_identities
+    ]
     if not exact_attempts:
         missing.append("No Release Attempt binds exactly the selected canonical CRL identities.")
-        checks.append(check_item("release attempt", "NOT VERIFIED", "No exact canonical-identity attempt record exists."))
+        checks.append(
+            check_item("release attempt", "NOT VERIFIED", "No exact canonical-identity attempt record exists.")
+        )
         return finalize_report(report, errors, missing)
     attempt = exact_attempts[-1]
     report["release_attempt"] = attempt.identifier
@@ -1483,6 +2399,37 @@ def build_release_report(
     else:
         missing.append("Release Attempt is not recorded as committed or later.")
         checks.append(check_item("technical state", "NOT VERIFIED", field_value(attempt, "Technical state")))
+    action_conclusion = leading_status(
+        field_value(attempt, "Action conclusion"),
+        ("go", "blocked", "not verified"),
+    )
+    blockers_value = field_value(attempt, "Action conclusion").lower()
+    if action_conclusion == "go" and "blockers: none" in blockers_value:
+        checks.append(
+            check_item(
+                "recorded action conclusion",
+                "PASS",
+                field_value(attempt, "Action conclusion"),
+            )
+        )
+    elif action_conclusion == "blocked":
+        errors.append("Release Attempt records a BLOCKED action conclusion.")
+        checks.append(
+            check_item(
+                "recorded action conclusion",
+                "FAIL",
+                field_value(attempt, "Action conclusion"),
+            )
+        )
+    else:
+        missing.append("Release Attempt does not record GO with blockers: none.")
+        checks.append(
+            check_item(
+                "recorded action conclusion",
+                "NOT VERIFIED",
+                field_value(attempt, "Action conclusion"),
+            )
+        )
     commit_field = field_value(attempt, "Commit SHA")
     commit_match = SHA.search(commit_field)
     if not commit_match:
@@ -1497,12 +2444,60 @@ def build_release_report(
                 checks.append(check_item("candidate content commit", "FAIL", "Recorded commit is outside the report range."))
             else:
                 checks.append(check_item("candidate content commit", "PASS", candidate_commit))
+                recorded_candidate_patch = SHA.search(
+                    field_value(attempt, "Candidate patch SHA-256")
+                )
+                actual_candidate_patch = content_patch_sha256(
+                    root, base, candidate_commit
+                )
+                if (
+                    recorded_candidate_patch is None
+                    or recorded_candidate_patch.group(0).lower()
+                    != actual_candidate_patch
+                ):
+                    errors.append(
+                        "Candidate content commit fingerprint does not match the recorded candidate patch."
+                    )
+                    checks.append(
+                        check_item(
+                            "candidate content commit fingerprint",
+                            "FAIL",
+                            "Recorded and content-commit hashes differ.",
+                        )
+                    )
+                else:
+                    checks.append(
+                        check_item(
+                            "candidate content commit fingerprint",
+                            "PASS",
+                            actual_candidate_patch,
+                        )
+                    )
         except GitError:
             errors.append("Recorded candidate content commit SHA cannot be resolved.")
             checks.append(check_item("candidate content commit", "FAIL", "Recorded commit cannot be resolved."))
     try:
         changed = range_paths(root, base, head)
         report["changed_files"] = changed
+        if incremental_selected:
+            registration_path = registrations[incremental_selected[0]].source_path
+            if registration_path not in changed:
+                errors.append(
+                    "Selected incremental registration is not part of the exact audited range."
+                )
+                checks.append(
+                    check_item(
+                        "incremental registration range",
+                        "FAIL",
+                        registration_path,
+                    )
+                )
+            else:
+                checks.append(
+                    check_item(
+                        "incremental registration range", "PASS", registration_path
+                    )
+                )
         unselected = sorted(set(changed) - selected_files)
         report["unselected_changed_files"] = unselected
         if unselected:
@@ -1516,20 +2511,30 @@ def build_release_report(
                 checks.append(check_item("historical receipt boundary", "FAIL", ", ".join(changed) or "no changed files"))
             else:
                 checks.append(check_item("historical receipt boundary", "PASS", "Exact range is ledger-only."))
-            historical_errors = historical_source_issues(root, attempt, selected_sections, selected_identities, base)
+            historical_errors = historical_source_issues(
+                root, attempt, selected_sections, selected_identities, base
+            )
             if historical_errors:
                 errors.extend(historical_errors)
                 checks.append(check_item("historical source proof", "FAIL", "; ".join(historical_errors)))
             else:
                 checks.append(check_item("historical source proof", "PASS", field_value(attempt, "Historical source attempt")))
-        scope_errors, scope_missing = selected_scope_issues(selected_sections, expected_repository)
+        scope_errors, scope_missing = selected_scope_issues(
+            selected_sections, expected_repository
+        )
         errors.extend(scope_errors)
         missing.extend(scope_missing)
-        checks.append(check_item("committed hunk scope", "FAIL" if scope_errors else "NOT VERIFIED" if scope_missing else "PASS", "; ".join(scope_errors + scope_missing) or "Selected CRL scopes are prepared."))
+        checks.append(
+            check_item(
+                "committed hunk scope",
+                "FAIL" if scope_errors else "NOT VERIFIED" if scope_missing else "PASS",
+                "; ".join(scope_errors + scope_missing) or "Selected CRL scopes are prepared.",
+            )
+        )
         actual_hunks: set[tuple[str, str]] = set()
         non_text_hunk_paths: list[str] = []
         for path in changed:
-            if path == LEDGER_RELATIVE_PATH.as_posix():
+            if is_ledger_metadata_path(path):
                 continue
             fingerprints = diff_hunk_fingerprints(root, path, f"{base}...{head}")
             if not fingerprints:
@@ -1550,9 +2555,21 @@ def build_release_report(
             report["missing_hunks"] = [f"{path}#{fingerprint}" for path, fingerprint in missing_hunks]
             if unexpected_hunks or missing_hunks:
                 errors.append("Committed hunk fingerprints do not exactly match the selected CRL Staged Commit Scope.")
-                checks.append(check_item("committed hunk fingerprints", "FAIL", f"unexpected={len(unexpected_hunks)}, missing={len(missing_hunks)}"))
+                checks.append(
+                    check_item(
+                        "committed hunk fingerprints",
+                        "FAIL",
+                        f"unexpected={len(unexpected_hunks)}, missing={len(missing_hunks)}",
+                    )
+                )
             else:
-                checks.append(check_item("committed hunk fingerprints", "PASS", f"{len(actual_hunks)} non-ledger hunk(s) match scope."))
+                checks.append(
+                    check_item(
+                        "committed hunk fingerprints",
+                        "PASS",
+                        f"{len(actual_hunks)} non-ledger hunk(s) match scope.",
+                    )
+                )
             reconciliation_errors, reconciliations = reconciliation_range_issues(
                 attempt, declared_hunks, actual_hunks
             )
@@ -1600,7 +2617,9 @@ def build_release_report(
         report["candidate_patch_sha256"] = {
             "recorded": recorded_patch.group(0).lower() if recorded_patch else None,
             "actual": actual_patch,
-            "ledger_excluded": str(LEDGER_RELATIVE_PATH),
+            "ledger_excluded": (
+                f"{LEDGER_RELATIVE_PATH}; {INCREMENTAL_LEDGER_RELATIVE_DIR}/**"
+            ),
         }
         if not recorded_patch:
             missing.append("Candidate patch SHA-256 is missing.")
@@ -1674,8 +2693,22 @@ def markdown_pre_commit_report(report: dict[str, Any]) -> str:
     def file_list(paths: list[str]) -> str:
         return ", ".join(f"`{path}`" for path in paths) or "none"
 
-    lines = ["# Pre-commit Ledger Gate", "", f"- Repository: `{report['repository']}`", f"- CRL identities: {', '.join(report['crl_identities']) or 'none'}", f"- Conclusion: **{report['conclusion']}**", "", "## Gate checks", "", "| Gate | Result | Evidence |", "| --- | --- | --- |"]
-    lines.extend(f"| {item['gate']} | {item['result']} | {item['evidence']} |" for item in report["checks"])
+    lines = [
+        "# Pre-commit Ledger Gate",
+        "",
+        f"- Repository: `{report['repository']}`",
+        f"- CRL identities: {', '.join(report['crl_identities']) or 'none'}",
+        f"- Conclusion: **{report['conclusion']}**",
+        "",
+        "## Gate checks",
+        "",
+        "| Gate | Result | Evidence |",
+        "| --- | --- | --- |",
+    ]
+    lines.extend(
+        f"| {item['gate']} | {item['result']} | {item['evidence']} |"
+        for item in report["checks"]
+    )
     lines.extend(["", "## Local candidate", ""])
     lines.append("Staged files: " + file_list(report["staged_files"]))
     lines.append("Untracked files: " + file_list(report["untracked_files"]))
@@ -1692,7 +2725,11 @@ def markdown_pre_commit_report(report: dict[str, Any]) -> str:
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--pre-commit", action="store_true", help="Audit the local staged candidate, untracked paths, CRL identity, and hunk scope without changing Git or the ledger.")
+    parser.add_argument(
+        "--pre-commit",
+        action="store_true",
+        help="Audit the local staged candidate, untracked paths, CRL identity, and hunk scope without changing Git or the ledger.",
+    )
     parser.add_argument("--release-report", action="store_true", help="Audit one exact Release Attempt without changing Git or the ledger.")
     parser.add_argument("--repo", choices=("root", "mobile"), help="Repository boundary for --pre-commit or --release-report.")
     parser.add_argument("--base", help="Exact base commit or ref for --release-report.")
@@ -1722,14 +2759,28 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None, root: Path = ROOT, expected_repository: str = "mobile") -> int:
     args = parse_args(argv)
     if args.pre_commit:
-        report = build_pre_commit_report(root=root, expected_repository=expected_repository, repository=args.repo, crl_ids=args.crl)
+        report = build_pre_commit_report(
+            root=root,
+            expected_repository=expected_repository,
+            repository=args.repo,
+            crl_ids=args.crl,
+        )
         if args.format == "json":
             print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
         else:
             print(markdown_pre_commit_report(report))
         return {"GO": 0, "BLOCKED": 1, "NOT VERIFIED": 2}[report["conclusion"]]
     if not args.release_report:
-        return range_coverage_audit(root, args.base, args.head) if args.base else coverage_audit(root)
+        return (
+            range_coverage_audit(
+                root,
+                args.base,
+                args.head,
+                expected_repository=expected_repository,
+            )
+            if args.base
+            else coverage_audit(root, expected_repository=expected_repository)
+        )
     report = build_release_report(
         root=root,
         expected_repository=expected_repository,

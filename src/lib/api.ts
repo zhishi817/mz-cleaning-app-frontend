@@ -112,7 +112,7 @@ function toApiError(res: Response, message: string, errorCode?: string) {
   if (status === 403) return new ApiError(message || '权限不足', status, 'FORBIDDEN', false)
   if (status === 409) return new ApiError(message || '提交内容已冲突，请重新提交', status, errorCode || 'IDEMPOTENCY_CONFLICT', false)
   if (status >= 500) return new ApiError(message || '服务器错误，请稍后重试', status, 'SERVER_ERROR', true)
-  return new ApiError(message || `请求失败 (${status})`, status, undefined, false)
+  return new ApiError(message || `请求失败 (${status})`, status, errorCode, false)
 }
 
 async function responseErrorCode(res: Response) {
@@ -1496,8 +1496,8 @@ export async function createPropertyFeedback(
     lastRes = res
     if (res.ok) return (await res.json()) as any
   }
-  const msg = lastRes ? await parseErrorMessage(lastRes) : ''
-  throw new Error(msg || '提交失败')
+  if (lastRes) throw await toApiErrorFromResponse(lastRes)
+  throw new Error('提交失败')
 }
 
 export async function createPropertyFeedbackBatch(
@@ -1738,8 +1738,8 @@ export async function createPropertyFeedbackProject(
     lastRes = res
     if (res.ok) return (await res.json()) as { ok: boolean; item: PropertyFeedbackProject; row: PropertyFeedback }
   }
-  const msg = lastRes ? await parseErrorMessage(lastRes) : ''
-  throw new Error(msg || '新增项目失败')
+  if (lastRes) throw await toApiErrorFromResponse(lastRes)
+  throw new Error('新增项目失败')
 }
 
 export async function updatePropertyFeedbackProject(
@@ -1792,8 +1792,8 @@ export async function completePropertyFeedbackProject(
     lastRes = res
     if (res.ok) return (await res.json()) as { ok: boolean; item: PropertyFeedbackProject; row: PropertyFeedback }
   }
-  const msg = lastRes ? await parseErrorMessage(lastRes) : ''
-  throw new Error(msg || '提交完成失败')
+  if (lastRes) throw await toApiErrorFromResponse(lastRes)
+  throw new Error('提交完成失败')
 }
 
 function jpegNameFrom(name: string) {

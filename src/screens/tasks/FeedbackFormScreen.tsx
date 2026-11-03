@@ -16,7 +16,7 @@ import {
 import { deleteDraftMedia, draftFileExists, draftMimeTypeFrom, persistCompressedDraftMedia } from '../../lib/localMediaDrafts'
 import { hairline, moderateScale } from '../../lib/scale'
 import { layoutTokens } from '../../lib/theme'
-import { getJson, remove as removeStorage, setJson } from '../../lib/storage'
+import { getJson, readJsonState, remove as removeStorage, setJson } from '../../lib/storage'
 import { getWorkTasksSnapshot } from '../../lib/workTasksStore'
 import {
   completePropertyFeedbackProject,
@@ -38,6 +38,14 @@ import {
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import { API_BASE_URL } from '../../config/env'
 import { cleaningMediaReference } from '../../lib/cleaningMedia'
+import {
+  feedbackDraftScopeKey,
+  feedbackDraftOwnerMatches,
+  feedbackSourceFailureMessage,
+  resolveFeedbackDraftSourceBinding,
+  resolveFeedbackSourceContext,
+  type FeedbackDraftSourceBinding,
+} from '../../lib/feedbackSourceContext'
 import CleaningMediaImage from '../../components/CleaningMediaImage'
 import CleaningMediaPreview from '../../components/CleaningMediaPreview'
 import AppButton from '../../components/ui/AppButton'
@@ -51,6 +59,7 @@ type DeepCleaningAreaOption = (typeof DEEP_CLEANING_AREA_OPTIONS)[number]
 type DailyStatusOption = (typeof DAILY_STATUS_OPTIONS)[number]['value']
 type PhotoUploadOptions = { continuousCamera?: boolean }
 type FeedbackSubmissionStage = 'create' | 'project' | 'complete'
+type FeedbackDraftStorageLockReason = 'owner_missing' | 'owner_mismatch' | 'invalid' | 'read_failed' | 'write_failed'
 type FeedbackSubmissionState = {
   feedbackId?: string
   projectId?: string
@@ -109,19 +118,12 @@ const DAILY_STATUS_OPTIONS = [
 
 const DAILY_OPTIONS_CACHE_KEY = 'feedback_daily_necessity_options_v1'
 const FEEDBACK_HISTORY_CACHE_TTL_MS = 3 * 60 * 1000
-const FEEDBACK_DRAFT_CACHE_VERSION = 1
+const FEEDBACK_DRAFT_CACHE_VERSION = 2
 const FEEDBACK_HISTORY_LOAD_ERROR = '历史反馈暂时无法加载，请稍后重试。'
 function feedbackHistoryCacheKey(propertyId: string, propertyCode: string, userId: string, sourceTaskId: string) {
   const owner = String(userId || '').trim() || 'anon'
   const source = String(sourceTaskId || '').trim() || 'property'
   return `feedback_history_open_${owner}_${String(propertyId || '').trim()}_${String(propertyCode || '').trim()}_${source}`
-}
-
-function feedbackDraftCacheKey(propertyId: string, propertyCode: string, taskId: string, userId: string) {
-  const owner = String(userId || '').trim() || 'anon'
-  const taskKey = String(taskId || '').trim() || 'no-task'
-  const propertyKey = String(propertyId || propertyCode || '').trim() || 'no-property'
-  return `feedback_form_draft_v${FEEDBACK_DRAFT_CACHE_VERSION}_${owner}_${propertyKey}_${taskKey}`
 }
 
 export function feedbackHistoryItemForMode(item: PropertyFeedback, readOnly: boolean): PropertyFeedback {
@@ -146,6 +148,13 @@ type FeedbackHistoryCache = {
 
 type FeedbackFormDraftCache = {
   version: number
+  owner_user_id?: string | null
+  owner_property_identity?: string | null
+  source_task_id?: string | null
+  source_binding_status?: FeedbackDraftSourceBinding['status']
+  source_binding_reason?: FeedbackDraftSourceBinding['reason']
+  projection_task_id?: string | null
+  business_identity?: string | null
   kind: Kind | null
   maintenanceDrafts?: MaintenanceDraft[]
   deepCleaningDrafts?: DeepCleaningDraft[]
@@ -153,6 +162,20 @@ type FeedbackFormDraftCache = {
   localPreviewByReference?: Record<string, string>
   localPhotoMetaByUri?: Record<string, LocalFeedbackPhotoMeta>
   updated_at: number
+}
+
+function feedbackDraftPersistenceSignature(cache: FeedbackFormDraftCache) {
+  const { updated_at: _updatedAt, ...persisted } = cache
+  return JSON.stringify(persisted)
+}
+
+function feedbackDraftHasRemoteReferences(cache: FeedbackFormDraftCache) {
+  const references = [
+    ...(cache.maintenanceDrafts || []).flatMap((draft) => [...(draft.media || []), ...(draft.completionAfterPhotos || [])]),
+    ...(cache.deepCleaningDrafts || []).flatMap((draft) => [...(draft.media || []), ...(draft.completionAfterPhotos || [])]),
+    ...(cache.dailyDrafts || []).flatMap((draft) => draft.media || []),
+  ]
+  return references.some((reference) => !!String(reference || '').trim() && !isLocalFeedbackDraftReference(reference))
 }
 
 function normalizeBase(base: string) {
@@ -611,20 +634,98 @@ export default function FeedbackFormScreen(props: Props) {
   const propertyId = String(task?.property_id || task?.property?.id || '').trim()
   const propertyCode = String(task?.property?.code || '').trim()
   const taskId = String(task?.id || props.route.params.taskId || '').trim()
-  const feedbackSourceTaskId = String(props.route.params.sourceTaskId || (task as any)?.read_only_views?.feedback_source_id || (task as any)?.source_id || task?.id || '').trim()
+  const businessIdentity = String((task as any)?.business_identity || '').trim()
+  const feedbackSourceContext = useMemo(() => resolveFeedbackSourceContext({
+    routeSourceTaskId: props.route.params.sourceTaskId,
+    feedbackViewSourceTaskId: (task as any)?.read_only_views?.feedback_source_id,
+    taskSourceId: (task as any)?.source_id,
+    taskSourceType: (task as any)?.source_type,
+    projectionTaskId: taskId,
+  }), [props.route.params.sourceTaskId, task, taskId])
+  const feedbackSourceTaskId = feedbackSourceContext.sourceTaskId
   const feedbackReadOnly = props.route.params.readOnly === true
   const isInspectionPanelBatchMode = props.route.params.source === 'inspection_panel_batch'
   const userKey = String((user as any)?.id || (user as any)?.username || (user as any)?.email || '').trim()
-  const draftCacheKey = useMemo(() => feedbackDraftCacheKey(propertyId, propertyCode, taskId, userKey), [propertyId, propertyCode, taskId, userKey])
+  const draftOwnerPropertyIdentity = propertyId || propertyCode
+  const draftCacheKey = useMemo(() => feedbackDraftScopeKey({
+    userId: userKey,
+    propertyId,
+    propertyCode,
+    businessIdentity,
+    projectionTaskId: taskId,
+  }), [businessIdentity, propertyCode, propertyId, taskId, userKey])
+  const draftStorageScopeToken = JSON.stringify([
+    draftCacheKey,
+    userKey,
+    draftOwnerPropertyIdentity,
+    feedbackSourceTaskId,
+    feedbackReadOnly,
+    isInspectionPanelBatchMode,
+  ])
+  const draftOwnerScopeToken = JSON.stringify([
+    draftCacheKey,
+    userKey,
+    draftOwnerPropertyIdentity,
+    feedbackReadOnly,
+    isInspectionPanelBatchMode,
+  ])
   const historyCacheRef = useRef<FeedbackHistoryCache | null>(null)
   const historyRefreshRef = useRef<Promise<void> | null>(null)
   const scrollRef = useRef<ScrollView>(null)
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedDraftRef = useRef('')
+  const submissionInFlightRef = useRef(false)
+  const draftOwnershipBlockedRef = useRef(false)
+  const draftStorageMutationQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const draftStorageMutationGenerationRef = useRef(0)
+  const draftStorageScopeRef = useRef('')
+  const draftHydrationOwnerScopeRef = useRef('')
+  if (draftStorageScopeRef.current !== draftStorageScopeToken) {
+    draftStorageScopeRef.current = draftStorageScopeToken
+    draftStorageMutationGenerationRef.current += 1
+  }
+  const draftSourceBindingRef = useRef<FeedbackDraftSourceBinding>({
+    status: 'confirmed',
+    sourceTaskId: feedbackSourceTaskId,
+    reason: 'exact',
+  })
   const [draftCacheHydrated, setDraftCacheHydrated] = useState(false)
+  const [draftHydratedOwnerScopeToken, setDraftHydratedOwnerScopeToken] = useState('')
+  const [draftStorageLockReason, setDraftStorageLockReason] = useState<FeedbackDraftStorageLockReason | null>(null)
+  const [draftStorageSavedSignature, setDraftStorageSavedSignature] = useState('')
+  const [draftStorageRetryNonce, setDraftStorageRetryNonce] = useState(0)
   const [panelPhotoMeta, setPanelPhotoMeta] = useState<InspectionPanelFeedbackPhotoMetaMap>({})
   const [localPreviewByReference, setLocalPreviewByReference] = useState<Record<string, string>>({})
   const [localPhotoMetaByUri, setLocalPhotoMetaByUri] = useState<Record<string, LocalFeedbackPhotoMeta>>({})
+  const currentDraftHasContent =
+    maintenanceDrafts.some(hasMaintenanceDraftContent) ||
+    deepCleaningDrafts.some(hasDeepCleaningDraftContent) ||
+    dailyDrafts.some(hasDailyDraftContent)
+  const currentDraftStorageCache: FeedbackFormDraftCache = {
+    version: FEEDBACK_DRAFT_CACHE_VERSION,
+    owner_user_id: userKey || null,
+    owner_property_identity: draftOwnerPropertyIdentity || null,
+    source_task_id: draftSourceBindingRef.current.sourceTaskId || null,
+    source_binding_status: draftSourceBindingRef.current.status,
+    source_binding_reason: draftSourceBindingRef.current.reason,
+    projection_task_id: taskId || null,
+    business_identity: businessIdentity || null,
+    kind,
+    maintenanceDrafts,
+    deepCleaningDrafts,
+    dailyDrafts,
+    localPreviewByReference,
+    localPhotoMetaByUri,
+    updated_at: 0,
+  }
+  const currentDraftStorageSignature = feedbackDraftPersistenceSignature(currentDraftStorageCache)
+  const currentDraftHasRemoteReferences = feedbackDraftHasRemoteReferences(currentDraftStorageCache)
+  const currentDraftHasContentRef = useRef(currentDraftHasContent)
+  const currentDraftHasRemoteReferencesRef = useRef(currentDraftHasRemoteReferences)
+  currentDraftHasContentRef.current = currentDraftHasContent
+  currentDraftHasRemoteReferencesRef.current = currentDraftHasRemoteReferences
+  const draftOwnerHydrationReady = feedbackReadOnly
+    || draftHydratedOwnerScopeToken === draftOwnerScopeToken
 
   const persistFeedbackDraftSnapshot = useCallback(async (snapshot?: {
     kind?: Kind | null
@@ -633,7 +734,20 @@ export default function FeedbackFormScreen(props: Props) {
     dailyDrafts?: DailyDraft[]
     localPreviewByReference?: Record<string, string>
     localPhotoMetaByUri?: Record<string, LocalFeedbackPhotoMeta>
+    sourceBinding?: FeedbackDraftSourceBinding
   }) => {
+    if (
+      feedbackReadOnly
+      || draftOwnershipBlockedRef.current
+      || (draftHydratedOwnerScopeToken !== draftOwnerScopeToken)
+      || (!isInspectionPanelBatchMode && (!userKey || !draftOwnerPropertyIdentity))
+    ) {
+      if (!feedbackReadOnly && !isInspectionPanelBatchMode && (!userKey || !draftOwnerPropertyIdentity)) {
+        setDraftStorageLockReason('owner_missing')
+        setDraftStorageSavedSignature('')
+      }
+      return
+    }
     const nextKind = snapshot?.kind || kind
     const nextMaintenance = snapshot?.maintenanceDrafts || maintenanceDrafts
     const nextDeepCleaning = snapshot?.deepCleaningDrafts || deepCleaningDrafts
@@ -650,13 +764,43 @@ export default function FeedbackFormScreen(props: Props) {
       if (isInspectionPanelBatchMode) {
         await clearInspectionPanelFeedbackDraft(taskId).catch(() => null)
       } else {
-        await removeStorage(draftCacheKey).catch(() => null)
+        const mutationGeneration = ++draftStorageMutationGenerationRef.current
+        const mutationScope = draftStorageScopeToken
+        const mutation = draftStorageMutationQueueRef.current.then(async () => {
+          if (
+            draftStorageMutationGenerationRef.current !== mutationGeneration
+            || draftStorageScopeRef.current !== mutationScope
+          ) return false
+          await removeStorage(draftCacheKey)
+          return true
+        })
+        draftStorageMutationQueueRef.current = mutation.then(() => undefined, () => undefined)
+        try {
+          const applied = await mutation
+          if (
+            !applied
+            || draftStorageMutationGenerationRef.current !== mutationGeneration
+            || draftStorageScopeRef.current !== mutationScope
+          ) return
+          draftOwnershipBlockedRef.current = false
+          setDraftStorageSavedSignature('')
+          setDraftStorageLockReason(null)
+        } catch {
+          if (
+            draftStorageMutationGenerationRef.current !== mutationGeneration
+            || draftStorageScopeRef.current !== mutationScope
+          ) return
+          draftOwnershipBlockedRef.current = true
+          setDraftStorageSavedSignature('')
+          setDraftStorageLockReason('write_failed')
+        }
       }
       return
     }
 
     if (!nextKind) return
 
+    const sourceBinding = snapshot?.sourceBinding || draftSourceBindingRef.current
     const payload = isInspectionPanelBatchMode
       ? {
           kind: nextKind,
@@ -667,6 +811,13 @@ export default function FeedbackFormScreen(props: Props) {
         }
       : {
           version: FEEDBACK_DRAFT_CACHE_VERSION,
+          owner_user_id: userKey || null,
+          owner_property_identity: draftOwnerPropertyIdentity || null,
+          source_task_id: sourceBinding.sourceTaskId || null,
+          source_binding_status: sourceBinding.status,
+          source_binding_reason: sourceBinding.reason,
+          projection_task_id: taskId || null,
+          business_identity: businessIdentity || null,
           kind: nextKind,
           maintenanceDrafts: nextMaintenance,
           deepCleaningDrafts: nextDeepCleaning,
@@ -684,18 +835,69 @@ export default function FeedbackFormScreen(props: Props) {
       })
       return
     }
-    await setJson(draftCacheKey, payload).catch(() => {
-      lastSavedDraftRef.current = ''
+    const mutationGeneration = ++draftStorageMutationGenerationRef.current
+    const mutationScope = draftStorageScopeToken
+    const persistedSignature = feedbackDraftPersistenceSignature(payload as FeedbackFormDraftCache)
+    const mutation = draftStorageMutationQueueRef.current.then(async () => {
+      if (
+        draftStorageMutationGenerationRef.current !== mutationGeneration
+        || draftStorageScopeRef.current !== mutationScope
+      ) return false
+      await setJson(draftCacheKey, payload)
+      return true
     })
-  }, [dailyDrafts, deepCleaningDrafts, draftCacheKey, isInspectionPanelBatchMode, kind, localPhotoMetaByUri, localPreviewByReference, maintenanceDrafts, panelPhotoMeta, taskId])
+    draftStorageMutationQueueRef.current = mutation.then(() => undefined, () => undefined)
+    try {
+      const applied = await mutation
+      if (
+        !applied
+        || draftStorageMutationGenerationRef.current !== mutationGeneration
+        || draftStorageScopeRef.current !== mutationScope
+      ) return
+      draftOwnershipBlockedRef.current = false
+      setDraftStorageSavedSignature(persistedSignature)
+      setDraftStorageLockReason(null)
+    } catch {
+      if (
+        draftStorageMutationGenerationRef.current !== mutationGeneration
+        || draftStorageScopeRef.current !== mutationScope
+      ) return
+      lastSavedDraftRef.current = ''
+      draftOwnershipBlockedRef.current = true
+      setDraftStorageSavedSignature('')
+      setDraftStorageLockReason('write_failed')
+    }
+  }, [businessIdentity, dailyDrafts, deepCleaningDrafts, draftCacheKey, draftHydratedOwnerScopeToken, draftOwnerPropertyIdentity, draftOwnerScopeToken, draftStorageScopeToken, feedbackReadOnly, isInspectionPanelBatchMode, kind, localPhotoMetaByUri, localPreviewByReference, maintenanceDrafts, panelPhotoMeta, taskId, userKey])
 
   useEffect(() => {
     let cancelled = false
+    const ownerScopeChanged = !!draftHydrationOwnerScopeRef.current
+      && draftHydrationOwnerScopeRef.current !== draftOwnerScopeToken
+    draftHydrationOwnerScopeRef.current = draftOwnerScopeToken
+    draftStorageMutationGenerationRef.current += 1
+    if (draftSaveTimerRef.current) {
+      clearTimeout(draftSaveTimerRef.current)
+      draftSaveTimerRef.current = null
+    }
     setDraftCacheHydrated(false)
+    setDraftHydratedOwnerScopeToken('')
     lastSavedDraftRef.current = ''
+    draftOwnershipBlockedRef.current = !isInspectionPanelBatchMode
+    if (!isInspectionPanelBatchMode) setDraftStorageSavedSignature('')
+    if (ownerScopeChanged && !feedbackReadOnly) {
+      setKind(null)
+      setMaintenanceDrafts([buildMaintenanceDraft()])
+      setDeepCleaningDrafts([buildDeepCleaningDraft()])
+      setDailyDrafts([buildDailyDraft()])
+      setLocalPreviewByReference({})
+      setLocalPhotoMetaByUri({})
+      setPanelPhotoMeta({})
+    }
     ;(async () => {
       try {
+        if (feedbackReadOnly) return
         if (isInspectionPanelBatchMode) {
+          setDraftStorageLockReason(null)
           const cached = await getInspectionPanelFeedbackDraft(taskId)
           if (cancelled || !cached) return
           if (cached.kind === 'maintenance' || cached.kind === 'deep_cleaning' || cached.kind === 'daily_necessities') {
@@ -720,8 +922,60 @@ export default function FeedbackFormScreen(props: Props) {
           })
           return
         }
-        const cached = await getJson<FeedbackFormDraftCache>(draftCacheKey)
-        if (cancelled || !cached || cached.version !== FEEDBACK_DRAFT_CACHE_VERSION) return
+        if (!userKey || !draftOwnerPropertyIdentity) {
+          setDraftStorageLockReason('owner_missing')
+          return
+        }
+        await draftStorageMutationQueueRef.current
+        if (cancelled) return
+        const draftRead = await readJsonState<FeedbackFormDraftCache>(draftCacheKey)
+        if (cancelled) return
+        if (draftRead.status === 'missing') {
+          draftOwnershipBlockedRef.current = !userKey || !draftOwnerPropertyIdentity
+          setDraftStorageLockReason(draftOwnershipBlockedRef.current ? 'owner_missing' : null)
+          draftSourceBindingRef.current = !ownerScopeChanged && currentDraftHasContentRef.current
+            ? resolveFeedbackDraftSourceBinding({
+                cachedSourceTaskId: draftSourceBindingRef.current.sourceTaskId,
+                currentSourceTaskId: feedbackSourceTaskId,
+                hasRemoteReferences: currentDraftHasRemoteReferencesRef.current,
+              })
+            : {
+                status: 'confirmed',
+                sourceTaskId: feedbackSourceTaskId,
+                reason: 'exact',
+              }
+          return
+        }
+        if (draftRead.status === 'invalid') {
+          setDraftStorageLockReason('invalid')
+          return
+        }
+        const cached = draftRead.value
+        const ownerMatches = feedbackDraftOwnerMatches({
+            cachedUserId: cached.owner_user_id,
+            cachedPropertyIdentity: cached.owner_property_identity,
+            currentUserId: userKey,
+            currentPropertyIdentity: draftOwnerPropertyIdentity,
+          })
+        if (Number(cached.version) !== FEEDBACK_DRAFT_CACHE_VERSION || !ownerMatches) {
+          draftOwnershipBlockedRef.current = true
+          setDraftStorageLockReason('owner_mismatch')
+          draftSourceBindingRef.current = {
+            status: 'confirmed',
+            sourceTaskId: feedbackSourceTaskId,
+            reason: 'exact',
+          }
+          return
+        }
+        draftOwnershipBlockedRef.current = false
+        setDraftStorageLockReason(null)
+        setDraftStorageSavedSignature(feedbackDraftPersistenceSignature(cached))
+        const sourceBinding = resolveFeedbackDraftSourceBinding({
+          cachedSourceTaskId: cached.source_task_id,
+          currentSourceTaskId: feedbackSourceTaskId,
+          hasRemoteReferences: feedbackDraftHasRemoteReferences(cached),
+        })
+        draftSourceBindingRef.current = sourceBinding
         if (cached.kind === 'maintenance' || cached.kind === 'deep_cleaning' || cached.kind === 'daily_necessities') {
           setKind(cached.kind)
         }
@@ -763,14 +1017,22 @@ export default function FeedbackFormScreen(props: Props) {
         setLocalPhotoMetaByUri(savedLocalPhotoMeta)
         lastSavedDraftRef.current = JSON.stringify(cached)
       } catch {
+        if (!cancelled && !feedbackReadOnly && !isInspectionPanelBatchMode) {
+          draftOwnershipBlockedRef.current = true
+          setDraftStorageSavedSignature('')
+          setDraftStorageLockReason('read_failed')
+        }
       } finally {
-        if (!cancelled) setDraftCacheHydrated(true)
+        if (!cancelled) {
+          setDraftHydratedOwnerScopeToken(draftOwnerScopeToken)
+          setDraftCacheHydrated(true)
+        }
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [draftCacheKey, isInspectionPanelBatchMode, taskId])
+  }, [draftCacheKey, draftOwnerPropertyIdentity, draftOwnerScopeToken, draftStorageRetryNonce, feedbackReadOnly, feedbackSourceTaskId, isInspectionPanelBatchMode, taskId, userKey])
 
   useEffect(() => {
     return () => {
@@ -779,13 +1041,14 @@ export default function FeedbackFormScreen(props: Props) {
   }, [])
 
   useEffect(() => {
-    if (!draftCacheHydrated) return
     if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
+    draftSaveTimerRef.current = null
+    if (!draftCacheHydrated || !draftOwnerHydrationReady) return
     draftSaveTimerRef.current = setTimeout(() => {
       draftSaveTimerRef.current = null
       void persistFeedbackDraftSnapshot()
     }, 300)
-  }, [draftCacheHydrated, persistFeedbackDraftSnapshot])
+  }, [draftCacheHydrated, draftOwnerHydrationReady, persistFeedbackDraftSnapshot])
 
   useEffect(() => {
     const title = kind === 'maintenance' ? '房源维修' : kind === 'deep_cleaning' ? '深度清洁' : kind === 'daily_necessities' ? '日用品反馈' : '问题反馈'
@@ -1165,6 +1428,7 @@ export default function FeedbackFormScreen(props: Props) {
 
   async function resolvePendingFeedbackMedia(targetKind: Kind) {
     if (!token) throw new Error('登录已失效，请重新登录后提交')
+    if (!feedbackSourceTaskId) throw new Error('当前页面缺少明确的清洁任务来源，请返回任务列表刷新后重新打开')
     let nextMaintenanceDrafts = maintenanceDrafts
     let nextDeepCleaningDrafts = deepCleaningDrafts
     let nextDailyDrafts = dailyDrafts
@@ -1203,7 +1467,7 @@ export default function FeedbackFormScreen(props: Props) {
             watermark: '1',
             purpose: 'feedback',
             property_code: propertyCode,
-            task_id: feedbackSourceTaskId || taskId,
+            task_id: feedbackSourceTaskId,
             media_id: photoMeta.mediaId,
             captured_at: photoMeta.capturedAt,
             watermark_text: photoMeta.watermarkText,
@@ -1269,6 +1533,7 @@ export default function FeedbackFormScreen(props: Props) {
     onReferenceResolved?: (nextReferences: string[]) => void | Promise<void>,
   ) {
     if (!token) throw new Error('登录已失效，请重新登录后提交')
+    if (!feedbackSourceTaskId) throw new Error('当前页面缺少明确的清洁任务来源，请返回任务列表刷新后重新打开')
     const nextReferences = [...references]
     const nextLocalPreviews = { ...localPreviewByReference }
     const nextLocalPhotoMeta = { ...localPhotoMetaByUri }
@@ -1285,7 +1550,7 @@ export default function FeedbackFormScreen(props: Props) {
           watermark: '1',
           purpose: 'feedback',
           property_code: propertyCode,
-          task_id: feedbackSourceTaskId || taskId,
+          task_id: feedbackSourceTaskId,
           media_id: photoMeta.mediaId,
           captured_at: photoMeta.capturedAt,
           watermark_text: photoMeta.watermarkText,
@@ -1382,8 +1647,10 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   function feedbackSubmissionError(stage: FeedbackSubmissionStage, error: unknown) {
+    const sourceFailure = feedbackSourceFailureMessage(error)
+    if (sourceFailure) return sourceFailure
     const raw = String((error as any)?.message || error || '').toLowerCase()
-    if (raw.includes('source_task')) return '来源任务不匹配，请刷新任务后重试'
+    if (raw.includes('source_task')) return '任务来源不匹配，请返回任务列表刷新后重新打开；本页文字和照片已保留。'
     if (raw.includes('after_photo')) return '请补充处理后照片'
     if (stage === 'create') return '反馈记录保存失败，请重试'
     if (stage === 'project') return '完工项目保存失败，请重试'
@@ -1411,7 +1678,39 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   async function submitFeedback() {
+    if (submissionInFlightRef.current) return
     if (!requireFeedbackKind()) return
+    if (!isInspectionPanelBatchMode && !feedbackSourceTaskId) {
+      Alert.alert(t('common_error'), '当前页面缺少明确的清洁任务来源，已停止上传和提交。本页文字和照片已保留；请返回任务列表刷新后，从当前任务的“问题反馈”入口重新打开。')
+      return
+    }
+    if (!isInspectionPanelBatchMode && (!token || !propertyId)) return
+    if (!isInspectionPanelBatchMode) {
+      const sourceBinding = draftSourceBindingRef.current
+      if (sourceBinding.status !== 'confirmed' || sourceBinding.sourceTaskId !== feedbackSourceTaskId) {
+        Alert.alert(
+          '任务来源已变化',
+          '检测到草稿属于旧任务来源，或旧版本没有保存来源。照片和文字仍在本机。只有确认后才会绑定到当前任务；不会自动选择同房源的其他任务。',
+          [
+            { text: '取消', style: 'cancel' },
+            {
+              text: '绑定当前任务',
+              onPress: () => {
+                const confirmedBinding: FeedbackDraftSourceBinding = {
+                  status: 'confirmed',
+                  sourceTaskId: feedbackSourceTaskId,
+                  reason: 'exact',
+                }
+                draftSourceBindingRef.current = confirmedBinding
+                void persistFeedbackDraftSnapshot({ sourceBinding: confirmedBinding }).then(() => submitFeedback())
+              },
+            },
+          ],
+        )
+        return
+      }
+    }
+    submissionInFlightRef.current = true
     if (isInspectionPanelBatchMode) {
       try {
         setSubmitting(true)
@@ -1462,9 +1761,10 @@ export default function FeedbackFormScreen(props: Props) {
         return
       } finally {
         setSubmitting(false)
+        submissionInFlightRef.current = false
       }
     }
-    if (!token || !propertyId) return
+    const submissionToken = String(token)
     try {
       setSubmitting(true)
       if (kind === 'maintenance') {
@@ -1492,7 +1792,7 @@ export default function FeedbackFormScreen(props: Props) {
           let feedbackId = String(draft.submission?.feedbackId || '').trim()
           if (!feedbackId) {
             try {
-              const response = await createPropertyFeedback(token, {
+              const response = await createPropertyFeedback(submissionToken, {
                 kind: 'maintenance',
                 property_id: propertyId,
                 source_task_id: feedbackSourceTaskId || undefined,
@@ -1520,7 +1820,7 @@ export default function FeedbackFormScreen(props: Props) {
           let projectId = String(draft.submission?.projectId || '').trim()
           if (!projectId) {
             try {
-              const project = await createPropertyFeedbackProject(token, 'maintenance', feedbackId, {
+              const project = await createPropertyFeedbackProject(submissionToken, 'maintenance', feedbackId, {
                 name: draft.detail.trim() || draft.area || '维修项目',
                 area: draft.area || undefined,
                 detail: draft.detail.trim(),
@@ -1536,7 +1836,7 @@ export default function FeedbackFormScreen(props: Props) {
             }
           }
           try {
-            await completePropertyFeedbackProject(token, 'maintenance', feedbackId, projectId, {
+            await completePropertyFeedbackProject(submissionToken, 'maintenance', feedbackId, projectId, {
               note: draft.completionNote.trim() || undefined,
               detail: draft.detail.trim(),
               source_task_id: feedbackSourceTaskId || undefined,
@@ -1593,7 +1893,7 @@ export default function FeedbackFormScreen(props: Props) {
           let feedbackId = String(draft.submission?.feedbackId || '').trim()
           if (!feedbackId) {
             try {
-              const response = await createPropertyFeedback(token, {
+              const response = await createPropertyFeedback(submissionToken, {
                 kind: 'deep_cleaning',
                 property_id: propertyId,
                 source_task_id: feedbackSourceTaskId || undefined,
@@ -1621,7 +1921,7 @@ export default function FeedbackFormScreen(props: Props) {
           let projectId = String(draft.submission?.projectId || '').trim()
           if (!projectId) {
             try {
-              const project = await createPropertyFeedbackProject(token, 'deep_cleaning', feedbackId, {
+              const project = await createPropertyFeedbackProject(submissionToken, 'deep_cleaning', feedbackId, {
                 name: draft.area || '深度清洁',
                 area: draft.area || undefined,
                 note: draft.completionNote.trim() || undefined,
@@ -1636,7 +1936,7 @@ export default function FeedbackFormScreen(props: Props) {
             }
           }
           try {
-            await completePropertyFeedbackProject(token, 'deep_cleaning', feedbackId, projectId, {
+            await completePropertyFeedbackProject(submissionToken, 'deep_cleaning', feedbackId, projectId, {
               note: draft.completionNote.trim() || undefined,
               detail: draft.detail.trim(),
               source_task_id: feedbackSourceTaskId || undefined,
@@ -1679,7 +1979,7 @@ export default function FeedbackFormScreen(props: Props) {
         const resolvedMedia = await resolvePendingFeedbackMedia('daily_necessities')
         const resolvedDailyDrafts = resolvedMedia.nextDailyDrafts
         const results = await createPropertyFeedbackBatch(
-          token,
+          submissionToken,
           resolvedDailyDrafts.map((draft) => ({
             kind: 'daily_necessities' as const,
             property_id: propertyId,
@@ -1714,10 +2014,14 @@ export default function FeedbackFormScreen(props: Props) {
         dismissCreateSuccess(successCount, resolvedDailyDrafts.filter((draft) => failedIds.has(draft.clientId)).map((_, idx) => `日用品记录${idx + 1}`))
       }
       await refreshLists({ force: true })
-    } catch {
-      Alert.alert(t('common_error'), '提交失败，请稍后重试')
+    } catch (error) {
+      Alert.alert(
+        t('common_error'),
+        feedbackSourceFailureMessage(error) || '提交失败，文字和照片已保留，请稍后重试。',
+      )
     } finally {
       setSubmitting(false)
+      submissionInFlightRef.current = false
     }
   }
 
@@ -2204,13 +2508,68 @@ export default function FeedbackFormScreen(props: Props) {
     openRecordEditor(target)
   }, [detailItem, queuedEditItem, actionOpen, dailyEditOpen, recordEditOpen])
 
+  function retryFeedbackDraftStorage() {
+    Alert.alert(
+      '重新读取本机草稿？',
+      '重新读取会再次校验当前账号和房源；如果找到已保存草稿，会用它替换本页尚未持久化的修改。不会读取或绑定其他账号的草稿。',
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '安全重试',
+          onPress: () => {
+            draftStorageMutationGenerationRef.current += 1
+            draftOwnershipBlockedRef.current = true
+            setDraftStorageSavedSignature('')
+            setDraftStorageRetryNonce((value) => value + 1)
+          },
+        },
+      ],
+    )
+  }
+
   return (
     <>
       <ScrollView ref={scrollRef} style={styles.page} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
-        {!task ? (
+        {!task || !draftOwnerHydrationReady ? (
           <Text style={styles.muted}>{t('common_loading')}</Text>
         ) : (
           <View style={styles.pageStack}>
+            {!isInspectionPanelBatchMode && !feedbackReadOnly && draftStorageLockReason ? (
+              <View style={styles.draftStorageWarningBanner} testID="feedback-draft-storage-locked-banner">
+                <Ionicons name="warning-outline" size={20} color="#B91C1C" />
+                <View style={styles.historyReadOnlyTextWrap}>
+                  <Text style={styles.draftStorageWarningTitle}>草稿尚未保存到本机</Text>
+                  <Text style={styles.draftStorageWarningText}>当前文字和照片仅保留在本页面内存中。请勿关闭、返回或离开本页；系统没有覆盖或删除原草稿。</Text>
+                  <AppButton
+                    label="安全重试读取草稿"
+                    onPress={retryFeedbackDraftStorage}
+                    size="compact"
+                    tone="outline"
+                    style={styles.draftStorageRetryButton}
+                    testID="feedback-draft-storage-retry"
+                  />
+                </View>
+              </View>
+            ) : null}
+            {!isInspectionPanelBatchMode
+            && !feedbackReadOnly
+            && !draftStorageLockReason
+            && currentDraftHasContent
+            && draftStorageSavedSignature === currentDraftStorageSignature ? (
+              <View style={styles.draftStorageSavedBanner} testID="feedback-draft-storage-saved-banner">
+                <Ionicons name="checkmark-circle-outline" size={18} color="#166534" />
+                <Text style={styles.draftStorageSavedText}>草稿已保存到本机</Text>
+              </View>
+            ) : null}
+            {!isInspectionPanelBatchMode && !feedbackSourceTaskId ? (
+              <View style={styles.sourceWarningBanner} testID="feedback-source-missing-banner">
+                <Ionicons name="warning-outline" size={20} color="#B45309" />
+                <View style={styles.historyReadOnlyTextWrap}>
+                  <Text style={styles.sourceWarningTitle}>任务来源需要刷新</Text>
+                  <Text style={styles.sourceWarningText}>当前页面没有明确的清洁任务来源。系统不会猜测或绑定同房源的其他任务，照片和文字可继续保留，但会在上传前停止提交。</Text>
+                </View>
+              </View>
+            ) : null}
             {feedbackReadOnly ? (
               <View style={styles.historyReadOnlyBanner} testID="feedback-history-read-only-banner">
                 <Ionicons name="eye-outline" size={20} color="#1D4ED8" />
@@ -3150,6 +3509,15 @@ const styles = StyleSheet.create({
   historyReadOnlyTextWrap: { flex: 1, minWidth: 0 },
   historyReadOnlyTitle: { color: '#1D4ED8', fontSize: 15, fontWeight: '900' },
   historyReadOnlyText: { marginTop: 4, color: '#475569', fontSize: 13, fontWeight: '600', lineHeight: 19 },
+  sourceWarningBanner: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 14, borderRadius: 16, borderWidth: hairline(), borderColor: '#FCD34D', backgroundColor: '#FFFBEB' },
+  sourceWarningTitle: { color: '#92400E', fontSize: 15, fontWeight: '900' },
+  sourceWarningText: { marginTop: 4, color: '#78350F', fontSize: 13, fontWeight: '600', lineHeight: 19 },
+  draftStorageWarningBanner: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 14, borderRadius: 16, borderWidth: hairline(), borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' },
+  draftStorageWarningTitle: { color: '#991B1B', fontSize: 15, fontWeight: '900' },
+  draftStorageWarningText: { marginTop: 4, color: '#7F1D1D', fontSize: 13, fontWeight: '600', lineHeight: 19 },
+  draftStorageRetryButton: { marginTop: 10, alignSelf: 'flex-start' },
+  draftStorageSavedBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 14, borderWidth: hairline(), borderColor: '#BBF7D0', backgroundColor: '#F0FDF4' },
+  draftStorageSavedText: { color: '#166534', fontSize: 13, fontWeight: '800' },
   suggestList: { marginTop: 8, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: hairline(), borderColor: '#E2E8F0', overflow: 'hidden' },
   suggestItem: { paddingHorizontal: 12, paddingVertical: 11, borderBottomWidth: hairline(), borderBottomColor: '#E5E7EB' },
   suggestItemTitle: { color: '#111827', fontWeight: '800' },

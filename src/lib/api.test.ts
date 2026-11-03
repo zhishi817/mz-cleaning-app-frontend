@@ -12,12 +12,14 @@ jest.mock('expo-file-system', () => ({
 
 function response(status: number, body: unknown) {
   const text = JSON.stringify(body)
-  return {
+  const value: any = {
     ok: status >= 200 && status < 300,
     status,
     text: jest.fn(async () => text),
     json: jest.fn(async () => body),
-  } as any
+  }
+  value.clone = jest.fn(() => response(status, body))
+  return value
 }
 
 beforeEach(() => {
@@ -122,4 +124,51 @@ test.each([401, 403])('task-list permission status %s fails before reading a pen
     view: 'mine',
   })).rejects.toMatchObject({ status, code: status === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN', retryable: false })
   expect(text).not.toHaveBeenCalled()
+})
+
+test.each([
+  [401, 'UNAUTHORIZED'],
+  [403, 'FORBIDDEN'],
+  [404, 'property_feedback_source_task_not_found'],
+] as const)('property feedback create preserves status and server error code for %s', async (status, expectedCode) => {
+  globalThis.fetch = jest.fn(async () => response(status, { code: expectedCode })) as any
+  const api = require('./api') as typeof import('./api')
+
+  await expect(api.createPropertyFeedback('token', {
+    kind: 'deep_cleaning',
+    property_id: 'property-1',
+    source_task_id: 'cleaning-task-1',
+    areas: ['浴室'],
+    detail: '深清记录',
+    media_urls: ['cleaning/before.jpg'],
+  })).rejects.toMatchObject({ status, code: expectedCode })
+})
+
+test('property feedback project create preserves a structured 403 error', async () => {
+  globalThis.fetch = jest.fn(async () => response(403, { code: 'FORBIDDEN' })) as any
+  const api = require('./api') as typeof import('./api')
+
+  await expect(api.createPropertyFeedbackProject(
+    'token',
+    'deep_cleaning',
+    'feedback-1',
+    { name: '浴室深清', area: '浴室' },
+  )).rejects.toMatchObject({ status: 403, code: 'FORBIDDEN' })
+})
+
+test('property feedback project completion preserves a structured 401 error', async () => {
+  globalThis.fetch = jest.fn(async () => response(401, { code: 'UNAUTHORIZED' })) as any
+  const api = require('./api') as typeof import('./api')
+
+  await expect(api.completePropertyFeedbackProject(
+    'token',
+    'deep_cleaning',
+    'feedback-1',
+    'project-1',
+    {
+      source_task_id: 'cleaning-task-1',
+      before_photos: ['cleaning/before.jpg'],
+      after_photos: ['cleaning/after.jpg'],
+    },
+  )).rejects.toMatchObject({ status: 401, code: 'UNAUTHORIZED' })
 })
