@@ -1,4 +1,4 @@
-import { checkoutTimeForDisplay, cleanGuestRequestText, guestRequestForDisplay, isLateCheckoutDisplay, newCodeForDisplay, oldCodeForDisplay } from './turnoverDisplay'
+import { checkoutTimeForDisplay, cleanGuestRequestText, guestRequestForDisplay, isLateCheckoutDisplay, newCodeForDisplay, oldCodeForDisplay, passwordTaskIdsForFields } from './turnoverDisplay'
 
 describe('guest request display', () => {
   it('treats placeholder guest request values as empty', () => {
@@ -100,5 +100,40 @@ describe('guest request display', () => {
     })).toBe('orderless-new')
     expect(newCodeForDisplay({ new_code: 'legacy-new-without-side-metadata' })).toBe('legacy-new-without-side-metadata')
     expect(oldCodeForDisplay({ old_code: 'legacy-old-without-side-metadata' })).toBe('legacy-old-without-side-metadata')
+  })
+
+  it('uses exact password targets independently of blank values and never falls back to execution sources', () => {
+    const checkoutOnlyExecutionCard = {
+      active_source_ids: ['checkout-source'],
+      source_id: 'checkout-source',
+      turnover_display: {
+        old_code: null,
+        old_code_task_id: 'checkout-source',
+        new_code: null,
+        new_code_task_id: 'checkin-source',
+        active_source_ids: ['checkout-source'],
+      },
+    }
+    expect(passwordTaskIdsForFields(checkoutOnlyExecutionCard, ['new_code'])).toEqual(['checkin-source'])
+    expect(passwordTaskIdsForFields(checkoutOnlyExecutionCard, ['old_code', 'new_code'])).toEqual(['checkout-source', 'checkin-source'])
+
+    const staleCachedProjection = {
+      ...checkoutOnlyExecutionCard,
+      turnover_display: {
+        ...checkoutOnlyExecutionCard.turnover_display,
+        new_code_task_id: null,
+      },
+    }
+    expect(passwordTaskIdsForFields(staleCachedProjection, ['new_code'])).toEqual([])
+    expect(passwordTaskIdsForFields(staleCachedProjection, ['old_code', 'new_code'])).toEqual([])
+  })
+
+  it('fails closed when two password fields claim the same target task', () => {
+    expect(passwordTaskIdsForFields({
+      turnover_display: {
+        old_code_task_id: 'ambiguous-shared-target',
+        new_code_task_id: 'ambiguous-shared-target',
+      },
+    }, ['old_code', 'new_code'])).toEqual([])
   })
 })

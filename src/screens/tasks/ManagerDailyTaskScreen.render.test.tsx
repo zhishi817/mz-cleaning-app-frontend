@@ -25,6 +25,15 @@ const mockTask: any = {
   end_time: '1pm',
   old_code: 'old-code',
   new_code: 'new-code',
+  turnover_display: {
+    checkout_order_id: 'checkout-order-1',
+    checkin_order_id: 'checkin-order-1',
+    old_code: 'old-code',
+    old_code_task_id: 'cleaning-1',
+    new_code: 'new-code',
+    new_code_task_id: 'inspection-1',
+    active_source_ids: ['cleaning-1'],
+  },
   password_authority: { old_code_status: 'needs_review', new_code_status: 'source_linked' },
   guest_special_request: '保留原位',
   keys_required_checkin: 2,
@@ -49,6 +58,8 @@ const mockTask: any = {
     { id: 'register_guest_ready_outside_key', label: '登记钥匙外挂', placement: 'more', enabled: true, target: 'TaskDetail', intent: 'manager', source_id: 'checkin-order-1' },
   ],
 }
+
+let mockFoundTask: any = null
 
 const mockAuthState = {
   token: 'local-preview-token',
@@ -109,7 +120,7 @@ jest.mock('../../lib/api', () => ({
 }))
 
 jest.mock('../../lib/workTasksStore', () => ({
-  findWorkTaskItemByAnyId: () => mockTask,
+  findWorkTaskItemByAnyId: () => mockFoundTask || mockTask,
   getWorkTasksSnapshot: () => ({ items: [mockTask] }),
   patchWorkTaskItem: jest.fn(async () => {}),
   patchWorkTaskItems: jest.fn(async () => {}),
@@ -142,6 +153,7 @@ function flattenedText(node: any): string[] {
 beforeEach(() => {
   jest.clearAllMocks()
   mockConsumablesResponse = defaultConsumablesResponse
+  mockFoundTask = null
 })
 
 test('manager status obeys authoritative key-handover completion and explicit absence', () => {
@@ -236,6 +248,7 @@ test('pure check-in manager card hides old password and verifies only new passwo
       checkin_order_id: 'checkin-order-1',
       old_code: 'legacy-checkin-old',
       new_code: 'new-code',
+      new_code_task_id: 'cleaning-1',
     }
     const ui = render(
       <I18nProvider>
@@ -271,6 +284,7 @@ test('checkout-only manager card hides new password and verifies only old passwo
     mockTask.turnover_display = {
       checkout_order_id: 'checkout-order-1',
       old_code: 'old-code',
+      old_code_task_id: 'cleaning-1',
       new_code: 'stale-checkout-new',
     }
     const ui = render(
@@ -662,7 +676,7 @@ test('password authority shows review state and same-value verification previews
 
   await waitFor(() => expect(api.previewCleaningTaskPasswordAuthority).toHaveBeenCalledWith(
     mockAuthState.token,
-    { task_ids: ['cleaning-1'], fields: ['old_code', 'new_code'] },
+    { task_ids: ['cleaning-1', 'inspection-1'], fields: ['old_code', 'new_code'] },
   ))
   const confirmation = alertSpy.mock.calls.find((call) => call[0] === '确认核对密码来源？')
   expect(String(confirmation?.[1] || '')).toContain('关联更新：2 条')
@@ -675,6 +689,7 @@ test('password authority shows review state and same-value verification previews
     mockAuthState.token,
     expect.objectContaining({
       task_ids: ['cleaning-1'],
+      password_task_ids: ['cleaning-1', 'inspection-1'],
       password_verification: expect.objectContaining({ fields: ['old_code', 'new_code'], client: 'mobile' }),
     }),
   ))
@@ -734,6 +749,154 @@ test('changed password previews the affected chain and requires explicit confirm
   ui.unmount()
 })
 
+test('blank first-time new password refreshes a stale target projection and saves against the exact check-in task', async () => {
+  const alertSpy = jest.spyOn(Alert, 'alert')
+  const store = jest.requireMock('../../lib/workTasksStore') as any
+  const before = {
+    active_source_ids: mockTask.active_source_ids,
+    inspection_mode: mockTask.inspection_mode,
+    turnover_display: mockTask.turnover_display,
+  }
+  try {
+    mockTask.active_source_ids = ['cleaning-1']
+    mockTask.inspection_mode = 'pending_decision'
+    mockTask.turnover_display = {
+      checkout_order_id: 'checkout-order-1',
+      checkin_order_id: 'checkin-order-1',
+      old_code: 'old-code',
+      old_code_task_id: 'cleaning-1',
+      new_code: null,
+      new_code_task_id: null,
+      active_source_ids: ['cleaning-1'],
+    }
+    const provideRefreshedTarget = async () => {
+      mockFoundTask = {
+        ...mockTask,
+        turnover_display: {
+          ...mockTask.turnover_display,
+          new_code_task_id: 'checkin-refreshed-target',
+        },
+      }
+      return true
+    }
+    store.requestWorkTasksRefresh
+      .mockImplementationOnce(provideRefreshedTarget)
+      .mockImplementationOnce(provideRefreshedTarget)
+
+    const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+    const ui = render(
+      <I18nProvider>
+        <ManagerDailyTaskScreen
+          navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+          route={{ key: 'manager-blank-new-code-target-refresh', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+        />
+      </I18nProvider>,
+    )
+
+    expect(mockTask).not.toHaveProperty('inspector_id')
+    fireEvent.changeText(ui.getByPlaceholderText('新密码'), 'first-new-code')
+    fireEvent.press(ui.getByText('保存修改'))
+
+    await waitFor(() => expect(store.requestWorkTasksRefresh).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'force',
+      reason: 'manager_password_preview_target_missing',
+    })))
+    expect(ui.getByDisplayValue('first-new-code')).toBeTruthy()
+    await waitFor(() => expect(api.previewCleaningTaskPasswordAuthority).toHaveBeenCalledWith(
+      mockAuthState.token,
+      { task_ids: ['checkin-refreshed-target'], fields: ['new_code'] },
+    ))
+    const confirmation = alertSpy.mock.calls.find((call) => call[0] === '确认保存密码修改？')
+    const confirmButton = (confirmation?.[2] as any[])?.find((button) => button.text === '确认保存')
+    await act(async () => {
+      confirmButton.onPress()
+    })
+
+    await waitFor(() => expect(api.updateCleaningTaskManagerFields).toHaveBeenCalledWith(
+      mockAuthState.token,
+      expect.objectContaining({
+        task_ids: ['cleaning-1'],
+        password_task_ids: ['checkin-refreshed-target'],
+        new_code: 'first-new-code',
+      }),
+    ))
+    ui.unmount()
+  } finally {
+    Object.assign(mockTask, before)
+    mockFoundTask = null
+  }
+})
+
+test('offline target refresh sends no password request and keeps the draft for retry', async () => {
+  const store = jest.requireMock('../../lib/workTasksStore') as any
+  const before = mockTask.turnover_display
+  try {
+    mockTask.turnover_display = {
+      checkout_order_id: 'checkout-order-1',
+      checkin_order_id: 'checkin-order-1',
+      old_code: 'old-code',
+      old_code_task_id: 'cleaning-1',
+      new_code: null,
+      new_code_task_id: null,
+      active_source_ids: ['cleaning-1'],
+    }
+    store.requestWorkTasksRefresh.mockRejectedValueOnce(new Error('offline'))
+    const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+    const ui = render(
+      <I18nProvider>
+        <ManagerDailyTaskScreen
+          navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+          route={{ key: 'manager-password-target-offline', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+        />
+      </I18nProvider>,
+    )
+    fireEvent.changeText(ui.getByPlaceholderText('新密码'), 'offline-draft')
+    fireEvent.press(ui.getByText('保存修改'))
+    await waitFor(() => expect(store.requestWorkTasksRefresh).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'manager_password_preview_target_missing',
+    })))
+    expect(api.previewCleaningTaskPasswordAuthority).not.toHaveBeenCalled()
+    expect(api.updateCleaningTaskManagerFields).not.toHaveBeenCalled()
+    expect(ui.getByDisplayValue('offline-draft')).toBeTruthy()
+    ui.unmount()
+  } finally {
+    mockTask.turnover_display = before
+  }
+})
+
+test('a lost save response ignores a repeated confirmation and keeps the password draft', async () => {
+  const alertSpy = jest.spyOn(Alert, 'alert')
+  let rejectUpdate: ((error: Error) => void) | null = null
+  ;(api.updateCleaningTaskManagerFields as jest.Mock).mockImplementationOnce(() => new Promise((_resolve, reject) => {
+    rejectUpdate = reject
+  }))
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <ManagerDailyTaskScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'manager-password-response-lost', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+      />
+    </I18nProvider>,
+  )
+  fireEvent.changeText(ui.getByPlaceholderText('旧密码'), 'response-lost-draft')
+  fireEvent.press(ui.getByText('保存修改'))
+  await waitFor(() => expect(api.previewCleaningTaskPasswordAuthority).toHaveBeenCalled())
+  const confirmation = alertSpy.mock.calls.find((call) => call[0] === '确认保存密码修改？')
+  const confirmButton = (confirmation?.[2] as any[])?.find((button) => button.text === '确认保存')
+  await act(async () => {
+    confirmButton.onPress()
+    confirmButton.onPress()
+  })
+  await waitFor(() => expect(api.updateCleaningTaskManagerFields).toHaveBeenCalledTimes(1))
+  await act(async () => {
+    rejectUpdate?.(new Error('response_lost'))
+  })
+  await waitFor(() => expect(alertSpy).toHaveBeenCalledWith(expect.any(String), 'response_lost'))
+  expect(ui.getByDisplayValue('response-lost-draft')).toBeTruthy()
+  ui.unmount()
+})
+
 test('role-split turnover previews and saves passwords against both exact source tasks', async () => {
   const alertSpy = jest.spyOn(Alert, 'alert')
   const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
@@ -766,6 +929,8 @@ test('role-split turnover previews and saves passwords against both exact source
       </I18nProvider>,
     )
 
+    fireEvent.changeText(ui.getByPlaceholderText('旧密码'), 'updated-old-code')
+    fireEvent.changeText(ui.getByPlaceholderText('新密码'), 'updated-new-code')
     fireEvent.press(ui.getByTestId('manager-password-authority-verify'))
     await waitFor(() => expect(api.previewCleaningTaskPasswordAuthority).toHaveBeenCalledWith(
       mockAuthState.token,
@@ -781,6 +946,8 @@ test('role-split turnover previews and saves passwords against both exact source
       expect.objectContaining({
         task_ids: ['checkout-source-1', 'checkin-source-1'],
         password_task_ids: ['checkout-source-1', 'checkin-source-1'],
+        old_code: 'updated-old-code',
+        new_code: 'updated-new-code',
         password_verification: expect.objectContaining({ fields: ['old_code', 'new_code'] }),
       }),
     ))

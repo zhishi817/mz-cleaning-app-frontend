@@ -117,6 +117,66 @@ test('manual cleaning create sends an explicit link decision and preserves struc
   expect(Object.prototype.hasOwnProperty.call(body, 'old_code')).toBe(false)
 })
 
+test('manual checkout link candidates and create payload use the reverse explicit protocol', async () => {
+  const api = require('./api') as typeof import('./api')
+  const fetchMock = jest.fn()
+    .mockResolvedValueOnce(response(200, {
+      items: [{
+        id: 'FIXTURE-CHECKIN-TASK-001',
+        property_id: 'FIXTURE-PROPERTY-001',
+        property_code: 'FIXTURE-PROP-CODE-001',
+        task_date: '2026-11-04',
+        checkin_time: '3pm',
+        status: 'assigned',
+        inspection_scope: 'inspect_and_hang',
+      }],
+    }))
+    .mockResolvedValueOnce(response(200, { id: 'FIXTURE-CHECKOUT-TASK-001' }))
+  globalThis.fetch = fetchMock as any
+
+  await expect(api.listManualCheckoutLinkCandidates('token', {
+    property_id: 'FIXTURE-PROPERTY-001',
+    task_date: '2026-11-04',
+  })).resolves.toEqual([expect.objectContaining({
+    id: 'FIXTURE-CHECKIN-TASK-001',
+    checkin_time: '3pm',
+    inspection_scope: 'inspect_and_hang',
+  })])
+
+  await api.createManualCleaningTask('token', {
+    request_id: '3dd48a62-6861-4e55-a17f-c1814511076d',
+    create_mode: 'checkout',
+    task_date: '2026-11-04',
+    property_id: 'FIXTURE-PROPERTY-001',
+    linked_checkin_task_id: 'FIXTURE-CHECKIN-TASK-001',
+    checkout_link_decision: 'link',
+  })
+  const createBody = JSON.parse(String((fetchMock as jest.Mock).mock.calls[1][1]?.body || '{}'))
+  expect(createBody).toEqual(expect.objectContaining({
+    request_id: '3dd48a62-6861-4e55-a17f-c1814511076d',
+    linked_checkin_task_id: 'FIXTURE-CHECKIN-TASK-001',
+    checkout_link_decision: 'link',
+  }))
+})
+
+test('reverse candidates fail closed for password-only and out-of-scope rows', async () => {
+  const api = require('./api') as typeof import('./api')
+  globalThis.fetch = jest.fn(async () => response(200, {
+    items: [{
+      id: 'CHECKIN-PASSWORD-ONLY',
+      property_id: 'FIXTURE-PROPERTY-001',
+      property_code: 'FIXTURE-PROP-CODE-001',
+      task_date: '2026-11-04',
+      checkin_time: '3pm',
+      inspection_scope: 'password_only',
+    }],
+  })) as any
+  await expect(api.listManualCheckoutLinkCandidates('token', {
+    property_id: 'FIXTURE-PROPERTY-001',
+    task_date: '2026-11-04',
+  })).rejects.toMatchObject({ code: 'INVALID_RESPONSE', retryable: true })
+})
+
 test('queue request can handle 401 without invalidating the global session', async () => {
   const fetchMock = jest.fn(async () => response(401, { message: 'token expired' }))
   globalThis.fetch = fetchMock as any

@@ -33,6 +33,7 @@ export function hasAnyPermission(user: any, codes: string[]) {
 
 export function isTaskManagerUser(user: any) {
   return hasAnyRole(user, ['admin', 'offline_manager', 'customer_service'])
+    || hasPermission(user, 'cleaning.schedule.manage')
 }
 
 export function canSwitchTaskMode(user: any) {

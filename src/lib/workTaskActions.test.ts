@@ -22,6 +22,19 @@ test('任务卡恢复进入各角色原页面，历史记录保持只读', () =>
   })).toEqual({ screen: 'InspectionPanel', params: { taskId: base.id, readOnly: true } })
 
   expect(navigationForWorkTaskRolePage({
+    task: {
+      ...base,
+      task_kind: 'execution',
+      execution_role: 'execution',
+      task_type: 'checkin_clean',
+      inspection_scope: 'password_only',
+      read_only_views: { ...base.read_only_views, media_scope: 'inspector', lockbox_video: true },
+    },
+    fallbackTaskId: base.id,
+    isTaskInspector: true,
+  })).toEqual({ screen: 'TaskDetail', params: { id: base.id } })
+
+  expect(navigationForWorkTaskRolePage({
     task: { ...base, task_kind: 'cleaning' },
     fallbackTaskId: base.id,
     isTaskManager: true,

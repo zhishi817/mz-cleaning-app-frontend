@@ -474,11 +474,13 @@ export function preferredNoticeActionForTask(task: WorkTaskItem | null | undefin
 export type WorkTaskEntryRoute = WorkTaskActionRoute | { screen: 'ManagerDailyTask'; params: { taskId: string } }
 
 function workRecordExecutionRole(task: WorkTaskItem) {
+  const explicitRole = lower((task as any)?.execution_role || task.task_kind)
+  if (explicitRole === 'execution') return explicitRole
   const scope = lower((task as any)?.read_only_views?.media_scope)
   if (scope === 'cleaner') return 'cleaning'
   if (scope === 'inspector') return 'inspection'
   if (scope === 'manager') return 'manager'
-  return lower((task as any)?.execution_role || task.task_kind)
+  return explicitRole
 }
 
 export function navigationForWorkTaskRolePage(params: {

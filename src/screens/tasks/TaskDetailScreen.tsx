@@ -68,6 +68,7 @@ import { taskBusinessDateKey } from '../../lib/taskBusinessDate'
 import { dailyTaskPhaseHistoryLines } from '../../lib/dailyTaskPresentation'
 import { mergeTaskFormPhotos, taskFormPhotoReadOnlyRelationIds, type TaskFormPhoto } from '../../lib/taskFormPhotos'
 import { buildCleaningMediaVideoSource } from '../../lib/cleaningMedia'
+import { hasPermission } from '../../lib/roles'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'TaskDetail'>
 type OfflineEditUserOption = { id: string; username?: string | null; display_name?: string | null }
@@ -247,7 +248,10 @@ export default function TaskDetailScreen(props: Props) {
   const { width, height } = useWindowDimensions()
   const roleNames = useMemo(() => roleNamesOf(user), [user])
   const activeRole = String((user as any)?.role || '').trim().toLowerCase()
-  const canManagerView = useMemo(() => roleNames.some(isManagerRole), [roleNames])
+  const canManagerView = useMemo(
+    () => roleNames.some(isManagerRole) || hasPermission(user, 'cleaning.schedule.manage'),
+    [roleNames, user],
+  )
   const canViewLockboxVideo = useMemo(
     () => roleNames.some((role) => ['admin', 'offline_manager', 'customer_service', 'cleaning_inspector', 'cleaner_inspector'].includes(String(role).trim().toLowerCase())),
     [roleNames],
@@ -480,15 +484,18 @@ export default function TaskDetailScreen(props: Props) {
         )
     void formPhotoRequest.then((server) => {
       if (cancelled) return
-      const allowedSources = readOnlyMediaScope === 'cleaner'
-        ? new Set(['completion', 'consumable', 'restock', 'issue'])
-        : readOnlyMediaScope === 'inspector'
-          ? new Set(['inspection', 'restock', 'issue'])
-          : null
       setReadOnlyTaskPhotos(mergeTaskFormPhotos(server?.items || [], []).filter((photo) => {
-        if (photo.source === 'lockbox_video') return readOnlyViews?.lockbox_video === true
-        if (photo.source === 'key') return readOnlyViews?.guest_key_photo === true && !hasProjectedReadOnlyKeyPhoto
-        return allowedSources == null || allowedSources.has(String(photo.source || '').trim())
+        const source = String(photo.source || '').trim()
+        if (source === 'lockbox_video') return readOnlyViews?.lockbox_video === true
+        if (source === 'key') return readOnlyViews?.guest_key_photo === true && !hasProjectedReadOnlyKeyPhoto
+        if (source === 'inspection') return readOnlyViews?.inspection_photos === true
+        if (source === 'completion' || source === 'consumable') return readOnlyViews?.cleaner_photos === true
+        if (source === 'restock' || source === 'issue') {
+          if (readOnlyMediaScope === 'inspector') return readOnlyViews?.inspection_photos === true
+          if (readOnlyMediaScope === 'cleaner') return readOnlyViews?.cleaner_photos === true
+          return readOnlyViews?.inspection_photos === true || readOnlyViews?.cleaner_photos === true
+        }
+        return false
       }))
     }).catch((error: any) => {
       if (cancelled) return

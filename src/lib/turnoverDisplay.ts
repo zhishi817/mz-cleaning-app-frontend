@@ -83,12 +83,13 @@ export function hasCheckinPasswordField(task: any) {
 
 export function passwordTaskIdsForFields(task: any, fields: Array<'old_code' | 'new_code'>) {
   const display = turnoverDisplayOf(task)
-  const exact = uniqueTextList([
-    ...(fields.includes('old_code') ? [display?.old_code_task_id] : []),
-    ...(fields.includes('new_code') ? [display?.new_code_task_id] : []),
-  ])
-  if (exact.length === fields.length) return exact
-  return uniqueTextList([...exact, ...activeSourceIdsFromTask(task)])
+  const requestedFields = Array.from(new Set(fields))
+  const targets = requestedFields.map((field) => field === 'old_code'
+    ? cleanText(display?.old_code_task_id)
+    : cleanText(display?.new_code_task_id))
+  if (targets.some((target) => !target)) return []
+  const exact = uniqueTextList(targets)
+  return exact.length === requestedFields.length ? exact : []
 }
 
 export function activeSourceIdsFromTask(task: any) {

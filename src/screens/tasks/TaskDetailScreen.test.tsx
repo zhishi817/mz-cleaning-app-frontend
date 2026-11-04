@@ -493,6 +493,72 @@ test('inspector completed record can view inspection photos and the exact-task g
   }
 })
 
+test('password-only execution history shows its exact lockbox video without cleaner photos or edit controls', async () => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousTask = { ...snapshot.items[0] }
+  const previousUser = { ...mockAuthState.user }
+  const api = require('../../lib/api')
+  mockAuthState.user = { id: 'mia-1', username: 'Mia', role: 'cleaning_inspector' }
+  snapshot.items[0] = {
+    ...previousTask,
+    id: 'password-only-record',
+    task_kind: 'execution',
+    task_type: 'checkin_clean',
+    inspection_scope: 'password_only',
+    execution_role: 'execution',
+    execution_semantics: 'key_or_password_action',
+    source_id: 'password-only-source',
+    source_ids: ['password-only-source'],
+    active_source_ids: ['password-only-source'],
+    work_record_read_only: true,
+    work_record_visible: true,
+    work_record_state: 'completed',
+    completed_by_user_id: 'mia-1',
+    available_actions: [],
+    read_only_views: {
+      property_access: true,
+      guest_context: true,
+      lock_codes: false,
+      lockbox_video: true,
+      cleaner_photos: false,
+      inspection_photos: false,
+      guest_key_photo: false,
+      media_scope: 'inspector',
+      media_source_ids: ['password-only-source'],
+    },
+  }
+  api.getWorkTaskFormPhotos.mockResolvedValueOnce({
+    items: [
+      { id: 'password-only-video', task_id: 'password-only-source', source: 'lockbox_video', area: 'key_handover', url: 'cleaning/password-only-lockbox.mov' },
+      { id: 'cleaner-completion', task_id: 'password-only-source', source: 'completion', area: 'living', url: 'cleaning/cleaner-completion.jpg' },
+      { id: 'inspection-photo', task_id: 'password-only-source', source: 'inspection', label: '检查照片不应显示', url: 'cleaning/inspection.jpg' },
+      { id: 'restock-photo', task_id: 'password-only-source', source: 'restock', label: '补品照片不应显示', url: 'cleaning/restock.jpg' },
+    ],
+  })
+  const TaskDetailScreen = require('./TaskDetailScreen').default as React.ComponentType<any>
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() } as any} route={{ key: 'password-only-record', name: 'TaskDetail', params: { id: 'password-only-record' } } as any} />
+      </I18nProvider>,
+    )
+    await waitFor(() => {
+      expect(api.getWorkTaskFormPhotos).toHaveBeenCalledWith('t1', 'password-only-record', ['password-only-source'], 'inspector', { includeVideos: true })
+      expect(ui.getByTestId('task-detail-lockbox-video')).toBeTruthy()
+      expect(ui.queryByTestId('task-detail-read-only-photos')).toBeNull()
+      expect(ui.queryByText('检查照片不应显示')).toBeNull()
+      expect(ui.queryByText('补品照片不应显示')).toBeNull()
+      expect(ui.queryByTestId('task-detail-delete-key-photo')).toBeNull()
+      expect(ui.getByText('这是只读工作记录，不提供执行操作。')).toBeTruthy()
+    })
+  } finally {
+    snapshot.items[0] = previousTask
+    mockAuthState.user = previousUser
+  }
+})
+
 test('cleaning task with empty server actions does not fall back to generic mark flow', async () => {
   const store = require('../../lib/workTasksStore')
   const snapshot = store.getWorkTasksSnapshot()

@@ -347,6 +347,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const photoLoadInFlightKeyRef = useRef<string>('')
   const photoLoadInFlightPromiseRef = useRef<Promise<void> | null>(null)
   const lastPhotoLoadRef = useRef<{ key: string; at: number } | null>(null)
+  const saveInFlightRef = useRef(false)
 
   useEffect(() => {
     const currentTaskId = String(task?.id || '').trim()
@@ -590,10 +591,52 @@ export default function ManagerDailyTaskScreen(props: Props) {
     return unsub
   }, [loadTaskPhotos, props.navigation])
 
+  async function resolveExactPasswordTaskIds(
+    fields: Array<'old_code' | 'new_code'>,
+    reason: 'manager_password_preview_target_missing' | 'manager_password_save_target_missing',
+  ) {
+    const requestedFields = Array.from(new Set(fields))
+    const lookupIds = uniqueTextList([
+      task?.id,
+      ...executionTaskIdsForRole(task, task?.task_kind),
+    ])
+    const findCurrentTask = () => {
+      for (const id of lookupIds) {
+        const found = findWorkTaskItemByAnyId(id)
+        if (found) return found
+      }
+      return null
+    }
+    const exactFrom = (candidate: WorkTaskItem | null | undefined) => {
+      const ids = passwordTaskIdsForFields(candidate, requestedFields)
+      return ids.length === requestedFields.length ? ids : []
+    }
+    const cachedIds = exactFrom(findCurrentTask() || task)
+    if (cachedIds.length) return cachedIds
+    if (!token || !user?.id) throw new Error('无法刷新密码目标，请重新登录后重试')
+
+    const { date_from, date_to } = buildDetailFallbackRange()
+    const refreshResult = await requestWorkTasksRefresh({
+      token,
+      userId: String(user.id),
+      date_from,
+      date_to,
+      view: 'all',
+      mode: 'force',
+      reason,
+    })
+    if (refreshResult === false) throw new Error('密码目标刷新失败，请检查网络后重试')
+    const refreshedIds = exactFrom(findCurrentTask())
+    if (!refreshedIds.length) throw new Error('无法确认密码对应任务，请刷新任务后重试')
+    return refreshedIds
+  }
+
   async function onSave(options?: { verifyFields?: Array<'old_code' | 'new_code'> }) {
     if (!token) return Alert.alert(t('common_error'), '请先登录')
     if (!task) return
     if (!canEditManagerFields || workRecordReadOnly) return
+    if (saveInFlightRef.current) return
+    saveInFlightRef.current = true
     const taskIds = executionTaskIdsForRole(task, task.task_kind)
     try {
       setSaving(true)
@@ -637,7 +680,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
       const verificationFields = Array.from(new Set([...(options?.verifyFields || []), ...changedPasswordFields]))
         .filter((field) => (field === 'old_code' ? actualCheckoutTask : actualCheckinTask))
       if (verificationFields.length) {
-        payload.password_task_ids = passwordTaskIdsForFields(task, verificationFields)
+        payload.password_task_ids = await resolveExactPasswordTaskIds(verificationFields, 'manager_password_save_target_missing')
         payload.password_verification = {
           fields: verificationFields,
           request_id: passwordAuthorityRequestId(),
@@ -752,6 +795,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
     } finally {
+      saveInFlightRef.current = false
       setSaving(false)
     }
   }
@@ -771,10 +815,9 @@ export default function ManagerDailyTaskScreen(props: Props) {
     onConfirm: () => void
   }) {
     if (!token || !task || saving || workRecordReadOnly) return
-    const taskIds = passwordTaskIdsForFields(task, params.fields)
-    if (!taskIds.length) return Alert.alert('无法核对', '缺少任务 ID')
     try {
       setSaving(true)
+      const taskIds = await resolveExactPasswordTaskIds(params.fields, 'manager_password_preview_target_missing')
       const preview = await previewCleaningTaskPasswordAuthority(token, {
         task_ids: taskIds,
         fields: params.fields,

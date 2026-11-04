@@ -2,18 +2,18 @@
 
 ## FR-P1-TSK-09 — 客服密码来源状态与权威刷新
 
-- **Status:** active; MZ-091 same-order source correction is an isolated local candidate, not committed, pushed, merged or released.
-- **Maintenance scope:** Mobile task-list/detail password projection, `ManagerDailyTaskScreen`, MZ App password preview/save contract, and work-task cache reconciliation; paired Root authority is `root/CRL-20261102-001`.
-- **Last reviewed:** 2026-11-02 UTC
-- **Business outcome:** 客服、admin 和线下经理在每日任务详情必须看到适用密码字段的“待核对、系统生成、已关联来源、已人工核对”状态。同订单入住 `new_code` 是对应退房 `old_code` 的唯一自动来源；Root 明确返回 `turnover_display.old_code/new_code=null` 时，列表、详情、历史卡和管理编辑初值都必须保持空，绝不能回退顶层缓存、另一 source 或历史任务密码。纯入住不显示/编辑旧密码，纯退房不显示/编辑新密码；角色分拆合卡的预览/保存必须命中 checkout/checkin 精确来源任务。当前退房任务明确人工旧密码仍可显示，但只属于该任务。修改密码或显式同值核对前，客户端发送唯一 request ID 并读取不含密码值的影响预览；保存后强制读取 Root 权威状态，保存/传播/刷新失败恢复保存前显示。未核对只限制“密码已核对”的声明，不阻断其他客服字段或整项任务。
-- **Related CRLs:** `root/CRL-20261102-001` / `mobile/CRL-20261102-001`; supersedes the cross-order display assumptions in the earlier `CRL-20261101-004` pair.
+- **Status:** active; MZ-091 empty-password target recovery is an isolated local candidate, not committed, pushed, merged or released.
+- **Maintenance scope:** Mobile task-list/detail password projection, `ManagerDailyTaskScreen`, MZ App password preview/save contract, and work-task cache reconciliation; paired Root authority is `root/CRL-20261104-005`.
+- **Last reviewed:** 2026-11-04 UTC
+- **Business outcome:** 客服、admin 和线下经理在每日任务详情必须看到适用密码字段的“待核对、系统生成、已关联来源、已人工核对”状态。同订单入住 `new_code` 是对应退房 `old_code` 的唯一自动来源；Root 明确返回 `turnover_display.old_code/new_code=null` 时，列表、详情、历史卡和管理编辑初值都必须保持空，绝不能回退顶层缓存、另一 source 或历史任务密码。纯入住不显示/编辑旧密码，纯退房不显示/编辑新密码；角色分拆合卡的预览/保存必须命中 checkout/checkin 精确来源任务。密码值为空、`pending_decision`、无检查员或已安排检查都不影响适用字段的编辑；客户端只能提交字段对应的精确 target ID，不得用当前角色的 `active_source_ids` 猜目标。旧缓存缺 target 时必须先强制刷新并保留用户草稿；刷新失败、离线、无目标或多字段共用同一异常目标时零写入并提示重试。当前退房任务明确人工旧密码仍可显示，但只属于该任务。修改密码或显式同值核对前，客户端发送唯一 request ID并读取不含密码值的影响预览；保存后强制读取 Root 权威状态，保存/传播/刷新失败恢复保存前显示。未核对只限制“密码已核对”的声明，不阻断其他客服字段或整项任务。
+- **Related CRLs:** `root/CRL-20261104-005` / `mobile/CRL-20261104-002`; preserves `root/CRL-20261102-001` / `mobile/CRL-20261102-001` and supersedes the cross-order display assumptions in the earlier `CRL-20261101-004` pair.
 
 ### Test-to-invariant mapping
 
-- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — 显示待核对/已关联来源，先预览关联影响，再以同值 `password_verification` 保存；payload 不伪造密码变更，保存后强制刷新且不把密码局部补入缓存；刷新返回 `false` 或缺少目标任务不能提示成功，并恢复保存前权威显示。
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — 显示待核对/已关联来源，先预览关联影响，再以同值 `password_verification` 保存；空值 + pending + checkout-only source 会刷新出准确 check-in target 并保留草稿；双字段同改使用两侧精确 source；离线/缺目标零写入，响应丢失保留草稿，重复确认只发一次；保存后强制刷新且不把密码局部补入缓存。
 - `src/lib/workTasksStore.test.ts` — 带 `password_authority` 的脱敏事件不是安全局部补丁，必须触发权威刷新。
 - `src/lib/api.ts` — preview 和 save 类型只发送 task IDs、字段、request ID 与客户端，不在预览响应中接收密码值。
-- `src/lib/turnoverDisplay.test.ts`、`src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — Root 周转投影明确为空时，禁止从顶层旧缓存恢复旧/新密码；明确 pure-checkin/pure-checkout 时隐藏并拒绝操作不适用字段，角色分拆卡对旧/新密码使用精确 source task 并集，只有完全缺少任务类型与 `turnover_display` 的 legacy payload 才使用顶层值。
+- `src/lib/turnoverDisplay.test.ts`、`src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — Root 周转投影明确为空时，禁止从顶层旧缓存恢复旧/新密码；明确 pure-checkin/pure-checkout 时隐藏并拒绝操作不适用字段；密码 target 只取精确 field mapping，缺失或碰撞 fail closed，不回退 active execution source；只有完全缺少任务类型与 `turnover_display` 的 legacy payload 才使用顶层显示值。
 
 ### Delivery boundary
 

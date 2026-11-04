@@ -69,6 +69,8 @@ jest.mock('../../lib/api', () => ({
   createCleaningOfflineTask: jest.fn(async () => ({})),
   createManualCleaningTask: jest.fn(async () => ({})),
   listManualCheckinLinkCandidates: jest.fn(async () => []),
+  listManualCheckoutLinkCandidates: jest.fn(async () => []),
+  linkManualCleaningTurnover: jest.fn(async () => ({ ok: true })),
   listCleaningAppPropertyCodes: jest.fn(async () => []),
   listUsers: jest.fn(async () => []),
   listCleaningAppTasks: jest.fn(async () => []),
@@ -1351,6 +1353,7 @@ test('manual quick create sends only the password field applicable to the select
     fireEvent.press(ui.getByText('待同步退房'))
     fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-CODE-LINK-001')
     fireEvent.changeText(ui.getByLabelText('quick-create-lock-code'), 'synthetic-checkout-code')
+    await waitFor(() => expect(ui.getByTestId('quick-create-checkout-link-empty')).toBeTruthy())
     fireEvent.press(ui.getByTestId('quick-create-submit'))
 
     await waitFor(() => expect(createManualMock).toHaveBeenCalledTimes(2))
@@ -1359,6 +1362,8 @@ test('manual quick create sends only the password field applicable to the select
       create_mode: 'checkout',
       property_id: 'FIXTURE-PROPERTY-LINK-001',
       old_code: 'synthetic-checkout-code',
+      linked_checkin_task_id: null,
+      checkout_link_decision: 'independent',
     }))
     expect(Object.prototype.hasOwnProperty.call(checkoutPayload, 'new_code')).toBe(false)
     expect(Object.prototype.hasOwnProperty.call(checkoutPayload, 'linked_checkout_task_id')).toBe(false)
@@ -1378,6 +1383,7 @@ test('manual quick create sends only the password field applicable to the select
     fireEvent.press(ui.getByTestId('quick-create-open'))
     fireEvent.press(ui.getByText('待同步退房'))
     fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-CODE-LINK-001')
+    await waitFor(() => expect(ui.getByTestId('quick-create-checkout-link-empty')).toBeTruthy())
     fireEvent.press(ui.getByTestId('quick-create-submit'))
     await waitFor(() => expect(createManualMock).toHaveBeenCalledTimes(4))
     const blankCheckoutPayload = createManualMock.mock.calls[3][1]
@@ -1438,6 +1444,65 @@ test.each(['keys_hung', 'completed'])('checkin quick create auto-links the sole 
       checkin_link_decision: 'link',
     }))
     expect(Object.prototype.hasOwnProperty.call(payload, 'old_code')).toBe(false)
+  } finally {
+    ui.unmount()
+    listCandidatesMock.mockReset()
+    listCandidatesMock.mockResolvedValue([])
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('checkout quick create auto-links the sole reliable checkin and sends a stable request id', async () => {
+  const api = require('../../lib/api')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const listPropertiesMock = api.listCleaningAppPropertyCodes as jest.Mock
+  const listCandidatesMock = api.listManualCheckoutLinkCandidates as jest.Mock
+  const createManualMock = api.createManualCleaningTask as jest.Mock
+  listPropertiesMock.mockResolvedValue([{ id: 'FIXTURE-PROPERTY-LINK-001', code: 'FIXTURE-PROP-CODE-LINK-001' }])
+  listCandidatesMock.mockReset()
+  listCandidatesMock.mockResolvedValue([{
+    id: 'checkin-active-1',
+    property_id: 'FIXTURE-PROPERTY-LINK-001',
+    property_code: 'FIXTURE-PROP-CODE-LINK-001',
+    task_date: mockTodayKey,
+    checkin_time: '3pm',
+    status: 'assigned',
+    inspection_scope: 'inspect_and_hang',
+  }])
+  createManualMock.mockReset()
+  createManualMock.mockResolvedValue({})
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-reverse-link', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    fireEvent.press(await ui.findByTestId('quick-create-open'))
+    fireEvent.press(ui.getByText('待同步退房'))
+    await waitFor(() => expect(listPropertiesMock).toHaveBeenCalled())
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-CODE-LINK-001')
+    await waitFor(() => expect(ui.getByLabelText('关联入住任务-checkin-active-1')).toBeTruthy())
+    fireEvent.press(ui.getByTestId('quick-create-submit'))
+    await waitFor(() => expect(createManualMock).toHaveBeenCalledTimes(1))
+    expect(createManualMock.mock.calls[0][1]).toEqual(expect.objectContaining({
+      create_mode: 'checkout',
+      linked_checkin_task_id: 'checkin-active-1',
+      checkout_link_decision: 'link',
+      request_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    }))
+    expect(Object.prototype.hasOwnProperty.call(createManualMock.mock.calls[0][1], 'new_code')).toBe(false)
   } finally {
     ui.unmount()
     listCandidatesMock.mockReset()
@@ -1768,6 +1833,244 @@ test('failed checkin quick create keeps its applicable input and remains single-
   } finally {
     ui.unmount()
     alertSpy.mockRestore()
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('manual create replay conflict freezes the original request instead of rotating into a duplicate create', async () => {
+  const api = require('../../lib/api')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  const listPropertiesMock = api.listCleaningAppPropertyCodes as jest.Mock
+  const listCandidatesMock = api.listManualCheckinLinkCandidates as jest.Mock
+  const createManualMock = api.createManualCleaningTask as jest.Mock
+  const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+  listPropertiesMock.mockResolvedValue([
+    { id: 'FIXTURE-PROPERTY-REPLAY-001', code: 'FIXTURE-PROP-REPLAY-001' },
+    { id: 'FIXTURE-PROPERTY-REPLAY-002', code: 'FIXTURE-PROP-REPLAY-002' },
+  ])
+  listCandidatesMock.mockReset()
+  listCandidatesMock.mockResolvedValue([])
+  createManualMock.mockReset()
+  createManualMock.mockRejectedValue(Object.assign(new Error('该创建请求已用于不同内容'), {
+    code: 'manual_cleaning_create_replay_conflict',
+    status: 409,
+  }))
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-create-replay-conflict', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    fireEvent.press(await ui.findByTestId('quick-create-open'))
+    await waitFor(() => expect(listPropertiesMock).toHaveBeenCalled())
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-REPLAY-001')
+    fireEvent.changeText(ui.getByLabelText('quick-create-guest-note'), '响应丢失后的本地修改')
+    await waitFor(() => expect(ui.getByTestId('quick-create-link-empty')).toBeTruthy())
+    fireEvent.press(ui.getByTestId('quick-create-submit'))
+
+    await waitFor(() => expect(ui.getByTestId('quick-create-replay-conflict')).toBeTruthy())
+    expect(createManualMock).toHaveBeenCalledTimes(1)
+    const originalRequestId = createManualMock.mock.calls[0][1].request_id
+    expect(String(originalRequestId || '')).toMatch(/^[0-9a-f-]{36}$/i)
+    expect(ui.getByTestId('quick-create-submit').props.accessibilityState?.disabled).toBe(true)
+    expect(ui.getByLabelText('quick-create-property').props.editable).toBe(false)
+    expect(ui.getByLabelText('quick-create-date').props.editable).toBe(false)
+    expect(ui.getByLabelText('quick-create-guest-note').props.editable).toBe(false)
+
+    // Even a synthetic change event (which a real disabled native field cannot
+    // emit) must not clear the freeze or rotate into a second semantic attempt.
+    fireEvent.changeText(ui.getByLabelText('quick-create-property'), 'FIXTURE-PROP-REPLAY-002')
+    fireEvent.changeText(ui.getByLabelText('quick-create-date'), '2026-11-05')
+    await waitFor(() => expect(ui.getByTestId('quick-create-replay-conflict')).toBeTruthy())
+    expect(ui.getByTestId('quick-create-submit').props.accessibilityState?.disabled).toBe(true)
+    fireEvent.press(ui.getByTestId('quick-create-submit'))
+    expect(createManualMock).toHaveBeenCalledTimes(1)
+    expect(ui.getByDisplayValue('响应丢失后的本地修改')).toBeTruthy()
+  } finally {
+    ui.unmount()
+    alertSpy.mockRestore()
+    listCandidatesMock.mockReset()
+    listCandidatesMock.mockResolvedValue([])
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('manager can link an existing standalone checkout to the unique authoritative checkin candidate', async () => {
+  const api = require('../../lib/api')
+  const store = require('../../lib/workTasksStore')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  snapshot.items = [{
+    ...previousItems[0],
+    id: 'turnover-link-source',
+    source_id: 'checkout-source-1',
+    source_ids: ['checkout-source-1'],
+    task_type: 'checkout_clean',
+    checkout_time: '10am',
+    checkin_time: null,
+    start_time: '10am',
+    end_time: null,
+    title: 'FO1602 退房',
+    property_id: 'p1',
+    property: { ...previousItems[0].property, id: 'p1', code: 'FO1602' },
+    scheduled_date: mockTodayKey,
+    date: mockTodayKey,
+  }]
+  const listCandidatesMock = api.listManualCheckoutLinkCandidates as jest.Mock
+  const linkTurnoverMock = api.linkManualCleaningTurnover as jest.Mock
+  listCandidatesMock.mockReset()
+  listCandidatesMock.mockResolvedValue([{
+    id: 'checkin-candidate-1',
+    property_id: 'p1',
+    property_code: 'FO1602',
+    task_date: mockTodayKey,
+    checkin_time: '3pm',
+    status: 'assigned',
+    inspection_scope: 'inspect_and_hang',
+  }])
+  linkTurnoverMock.mockReset()
+  linkTurnoverMock.mockResolvedValue({ ok: true })
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-existing-turnover-link', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByLabelText('task-card-turnover-link-source')).toBeTruthy())
+    expandTask(ui, 'turnover-link-source')
+    fireEvent.press(await ui.findByTestId('task-action-turnover-link-source-link-turnover'), { stopPropagation: jest.fn() })
+    await waitFor(() => expect(listCandidatesMock).toHaveBeenCalledWith('local:test', {
+      property_id: 'p1',
+      task_date: mockTodayKey,
+    }))
+    fireEvent.press(await ui.findByText('确认关联'))
+    await waitFor(() => expect(linkTurnoverMock).toHaveBeenCalledWith('local:test', {
+      checkout_task_id: 'checkout-source-1',
+      checkin_task_id: 'checkin-candidate-1',
+    }))
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+    listCandidatesMock.mockReset()
+    listCandidatesMock.mockResolvedValue([])
+    linkTurnoverMock.mockReset()
+    linkTurnoverMock.mockResolvedValue({ ok: true })
+    mockAuthState.user = previousUser
+    mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
+    mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
+  }
+})
+
+test('existing turnover link ignores an older response after the same source is reopened', async () => {
+  const api = require('../../lib/api')
+  const store = require('../../lib/workTasksStore')
+  const previousUser = mockAuthState.user
+  const previousRoleState = { ...mockRoleState }
+  const snapshot = store.getWorkTasksSnapshot()
+  const previousItems = snapshot.items.slice()
+  mockAuthState.user = { id: 'admin-1', username: 'admin-user', role: 'admin', roles: ['admin'] }
+  mockRoleState.canSwitchTaskMode = false
+  mockRoleState.isTaskManagerUser = true
+  snapshot.items = [{
+    ...previousItems[0],
+    id: 'turnover-link-race-source',
+    source_id: 'checkout-race-source-1',
+    source_ids: ['checkout-race-source-1'],
+    task_type: 'checkout_clean',
+    checkout_time: '10am',
+    checkin_time: null,
+    start_time: '10am',
+    end_time: null,
+    title: 'FO1602 退房',
+    property_id: 'p1',
+    property: { ...previousItems[0].property, id: 'p1', code: 'FO1602' },
+    scheduled_date: mockTodayKey,
+    date: mockTodayKey,
+  }]
+  const listCandidatesMock = api.listManualCheckoutLinkCandidates as jest.Mock
+  const candidateResolvers: Array<(rows: any[]) => void> = []
+  listCandidatesMock.mockReset()
+  listCandidatesMock.mockImplementation(() => new Promise<any[]>((resolve) => {
+    candidateResolvers.push(resolve)
+  }))
+
+  const TasksScreen = require('./TasksScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <TasksScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'tasks-existing-turnover-link-race', name: 'TasksList' } as any}
+      />
+    </I18nProvider>,
+  )
+
+  try {
+    await waitFor(() => expect(ui.getByLabelText('task-card-turnover-link-race-source')).toBeTruthy())
+    expandTask(ui, 'turnover-link-race-source')
+    fireEvent.press(await ui.findByTestId('task-action-turnover-link-race-source-link-turnover'), { stopPropagation: jest.fn() })
+    await waitFor(() => expect(listCandidatesMock).toHaveBeenCalledTimes(1))
+    fireEvent.press(ui.getByLabelText('关闭同日周转关联'))
+    fireEvent.press(await ui.findByTestId('task-action-turnover-link-race-source-link-turnover'), { stopPropagation: jest.fn() })
+    await waitFor(() => expect(listCandidatesMock).toHaveBeenCalledTimes(2))
+
+    await act(async () => {
+      candidateResolvers[1]([{
+        id: 'checkin-race-new',
+        property_id: 'p1',
+        property_code: 'FO1602',
+        task_date: mockTodayKey,
+        checkin_time: '5pm',
+        status: 'assigned',
+        inspection_scope: 'inspect_and_hang',
+      }])
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(ui.getByText('FO1602 · 5pm入住')).toBeTruthy())
+
+    await act(async () => {
+      candidateResolvers[0]([{
+        id: 'checkin-race-old',
+        property_id: 'p1',
+        property_code: 'FO1602',
+        task_date: mockTodayKey,
+        checkin_time: '3pm',
+        status: 'assigned',
+        inspection_scope: 'inspect_and_hang',
+      }])
+      await Promise.resolve()
+    })
+    expect(ui.queryByText('FO1602 · 3pm入住')).toBeNull()
+    expect(ui.getByText('FO1602 · 5pm入住')).toBeTruthy()
+  } finally {
+    ui.unmount()
+    snapshot.items = previousItems
+    listCandidatesMock.mockReset()
+    listCandidatesMock.mockResolvedValue([])
     mockAuthState.user = previousUser
     mockRoleState.canSwitchTaskMode = previousRoleState.canSwitchTaskMode
     mockRoleState.isTaskManagerUser = previousRoleState.isTaskManagerUser
