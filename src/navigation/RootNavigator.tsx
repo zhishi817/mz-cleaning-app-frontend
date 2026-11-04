@@ -161,7 +161,7 @@ async function refreshWorkTasksForNotice(params: { token: string; user: any; tas
   const userId = String(params.user?.id || '').trim()
   if (!userId) return
   const existingTask = findWorkTaskItemByAnyId(params.taskRouteId)
-  const baseDateRaw = String(params.noticeData?.date || existingTask?.scheduled_date || (existingTask as any)?.date || '').slice(0, 10)
+  const baseDateRaw = String(params.noticeData?.date || params.noticeData?.task_date || existingTask?.scheduled_date || (existingTask as any)?.date || '').slice(0, 10)
   const parsedBase = /^\d{4}-\d{2}-\d{2}$/.test(baseDateRaw) ? new Date(`${baseDateRaw}T00:00:00`) : new Date()
   await requestWorkTasksRefresh({
     token: params.token,

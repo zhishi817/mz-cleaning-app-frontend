@@ -1,5 +1,201 @@
 # Change Release Ledger
 
+## CRL-20261104-004 — MZ-065/091/106 Mobile 统一特性分支发布单元
+
+- **Repository:** `mobile`
+- **Status:** integrated on current `Dev`; complete Mobile CI passed; user-authorized independent feature-branch commit/push only; not merged, built, OTA-published or device-verified
+- **Board items:** `MZ-065`, `MZ-091`, `MZ-106`
+- **Updated:** 2026-11-04 UTC
+- **Outcome:** 在最新 Mobile Dev 上统一保留 MZ-065 的双向/存量周转关联与稳定 request ID、MZ-091 的精确空密码目标刷新恢复，以及 MZ-106 的 password-only 历史视频只读入口；`TaskDetailScreen` 的重叠改动已组合，不放宽媒体 capability 或角色权限。
+
+### Implementation / Scope
+
+- Canonical details and per-file mappings remain in `mobile/CRL-20261104-001` through `003` and the Feature Regression Registry.
+- Root dependency is the paired feature branch recorded by `root/CRL-20261104-007`；Root API/migration must be released before or together with Mobile，but no release is authorized in this unit。
+
+### Validation
+
+- Mobile CRL audit — PASS（21/21 changed paths）；`git diff --check` — PASS。
+- `CI=true npm run check:ci` — PASS：ledger range/audit、typecheck、lint 0 errors（existing warnings only）、button contract、fast regression and full Jest（85 suites / 844 tests）。
+- Physical iOS/Android playback、native weak-network/response-loss acceptance、protected-account end-to-end and OTA build — NOT RUN。
+
+### Publication / Dependencies
+
+- Authorized target: independent Mobile feature branch only. Final commit and remote SHA are recorded in the handoff because a commit cannot self-record its own immutable SHA.
+- Merge to `Dev`/`main`, native build, OTA publication and store release remain separate actions requiring approval.
+
+### Risks / Release Notes
+
+- Root and Mobile must be coordinated for MZ-065/091/106 to avoid a compatibility window; MZ-107 is Root-only.
+- No credentials, environment values, production payloads, media URLs or real passwords were added.
+
+## CRL-20261104-003 — MZ-106 仅改密码历史视频保持执行详情页
+
+- **Repository:** `mobile`
+- **Status:** ready local candidate; focused and complete Mobile quality gates passed; not committed, pushed, merged, built or OTA-published
+- **Board item:** `MZ-106`
+- **Updated:** 2026-11-04 UTC
+- **Request:** 配合 Root 恢复检查人员已完成“仅改密码”任务的历史挂钥匙视频；该记录仍是执行记录，只读显示视频，不得变成普通检查页或显示清洁完成照片和写控件。
+- **Outcome:** 历史路由优先保留服务端明确的 `execution_role=execution`，即使媒体授权使用现有 `inspector` scope，也继续打开 `TaskDetail`。详情页沿既有精确 source 请求挂钥匙视频，只读显示播放器，并逐项服从 Root 的照片 capability；清洁完成照、检查照、补品照、删除、补传和执行控件不出现。
+
+### Implementation
+
+- Previous behavior: 历史路由优先把 `read_only_views.media_scope=inspector` 解释为普通检查记录；Root 修复视频授权后，password-only execution 会被送到错误的 `InspectionPanel`。
+- New behavior: 明确的 `execution_role=execution` 优先于媒体读取 scope，继续进入通用执行详情；历史媒体响应在客户端再次按 `lockbox_video / cleaner_photos / inspection_photos / guest_key_photo` capability 过滤，`inspector` scope 本身不能放行检查或补品照片。普通 inspection/cleaning/manager 历史路由不变。
+- Boundaries: 不改变播放器、上传队列、媒体缓存、活动任务、角色权限或照片分类；Mobile 只消费 Root 返回的精确 source、media ID 授权结果和 capability。
+
+### Files / Areas
+
+- `src/lib/workTaskActions.ts` — modified: 历史 execution 角色优先路由。
+- `src/lib/workTaskActions.test.ts` — modified: password-only execution 与普通检查历史路由回归。
+- `src/screens/tasks/TaskDetailScreen.tsx` — modified: 只读媒体按来源逐项服从 capability，不让媒体 scope 单独放行照片。
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — modified: 精确视频请求、只读播放器、清洁/检查/补品照片和写控件隐藏回归。
+- `docs/change-release-ledger.md` — modified: 本变更登记。
+
+### Impact / Dependencies
+
+- API / database / migration: none。
+- Navigation: 只影响服务端明确标记为 `execution` 的只读工作记录；inspection/cleaning/manager 路由保持原样。
+- Native dependencies/build config: none；代码可通过 OTA 交付，但真实 iOS/Android 视频播放仍需发布前验收。
+- Dependency: paired `root/CRL-20261104-003` 提供精确历史能力和媒体 GET 授权；两端必须协调发布。
+
+### Validation
+
+- `npm test -- --runInBand src/lib/workTaskActions.test.ts src/screens/tasks/TaskDetailScreen.test.tsx` — PASS，2 suites / 66 tests；password-only execution 的检查照和补品照负例均保持隐藏。
+- `npm run typecheck` — PASS。
+- `eslint` on changed source/tests — PASS with 0 errors; existing test-file `require()` warnings remain baseline style warnings。
+- `CI=true npm run check:ci` — PASS：ledger auditor 与当前变更覆盖、TypeScript、lint（0 errors）、按钮合同、fast regression 及完整 Jest（84 suites / 827 tests）全部通过；仓库既有异步 `act(...)` console warnings 仍为非阻断基线输出。
+- Final `python3 scripts/audit_change_release_ledger.py` 与 `git diff --check` — PASS；5/5 changed paths 均已登记，无 whitespace 错误。
+- Physical iOS/Android/protected-account playback — NOT RUN；仍需发布前真机验收。
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** not prepared
+- **Untracked review:** none; clean isolated clone contains only this CRL's tracked changes
+
+### Release Attempts
+
+- None. User authorized implementation and testing only; no commit, push, PR, merge, build or OTA authorization was inferred.
+
+### Risks / Release Notes
+
+- Root 若先于本 Mobile 修复部署，旧客户端会把新 inspector media scope 当作普通检查历史；发布计划必须消除该兼容窗口。
+- 回滚为同时撤销本路由优先级和 paired Root 能力补丁；无本地草稿或服务器数据迁移。
+- Sensitive-information review: 仅含合成任务、人员和媒体 key；未加入凭据、令牌、生产链接或媒体内容。
+- Git state: isolated branch `codex/mz106-password-only-history-video`; not staged or committed.
+
+## CRL-20261104-002 — MZ-091 移动端空密码目标刷新恢复
+
+- **Repository:** `mobile`
+- **Status:** ready isolated local candidate; focused/full aggregate, governance audit and independent review passed; not committed, pushed, merged, built, OTA-published or released
+- **Board item:** `MZ-091`
+- **Updated:** 2026-11-04 17:20 UTC
+- **Request:** 不论检查是否安排、是否有检查员或密码是否首次为空，原权限允许编辑的当前任务都必须能更新适用密码；缓存缺目标时自动恢复，不能把密码写到当前角色的错误执行 source。
+- **Outcome:** Mobile 只按 `old_code_task_id/new_code_task_id` 精确提交密码目标。旧缓存缺 ID 时，预览和保存前强制刷新并从原卡或执行 source 重新定位；仍无唯一目标或离线则不发送 preview/save，保留输入供重试。重复确认由单次保存锁合并。
+
+### Implementation
+
+- Previous behavior: 字段缺精确 target 时 `passwordTaskIdsForFields` 会把 `active_source_ids/source_ids/source_id` 加入 payload；pending-decision checkout-only 卡因此用 checkout task 提交首次 `new_code`，后端正确拒绝 `password_field_not_applicable`。
+- New behavior: helper 对每个字段要求非空且互不碰撞的精确 target；缺失即 fail closed。管理详情先查看当前 cache，必要时强制全量刷新，并用原卡 ID/执行 source 重找权威任务；刷新不重置 React 密码草稿。
+- Failure/retry behavior: 离线、刷新拒绝、刷新后仍无目标均零写入并保留草稿；保存响应丢失不做自动重复写，草稿保留供人工重试；同一次确认的重复点击只发一个写请求。
+- Protected behavior: 角色、历史/终态只读、字段适用性、普通字段 task IDs、active source、权威保存后刷新、同订单传播和后端 task type 校验不变。
+
+### Files / Areas
+
+- `src/lib/turnoverDisplay.ts` — modified: 密码字段只返回完整、互不碰撞的精确 target IDs。
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — modified: 缺 target 时强制刷新/重找，零错误回退和单次保存锁。
+- `src/lib/turnoverDisplay.test.ts` — modified: 空值精确目标、缺目标及碰撞 fail-closed。
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — modified: pending/no-inspector/checkout-only 首次新码、双字段、离线、响应丢失和重复确认。
+- `docs/feature-regression-registry.md` — modified: FR-P1-TSK-09 目标刷新不变量。
+- `docs/change-release-ledger.md` — modified: 本发布单元记录。
+
+### Impact / Dependencies
+
+- API: 既有 preview/save payload；不新增字段或路由。`password_task_ids` 不再包含猜测的 execution source。
+- Database / migration: none。
+- Config / native/runtime/dependencies: none。
+- Related units: paired `root/CRL-20261104-005`; preserves `mobile/CRL-20261102-001` and FR-P1-TSK-09。
+- Release order: Root 必须先于或与 Mobile 配对；单独 OTA 在旧 Root 上只能安全失败并提示重试。
+
+### Validation
+
+- `jest --runInBand --no-cache src/lib/turnoverDisplay.test.ts src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — PASS，2 suites / 36 tests。
+- `npm run typecheck` — PASS。
+- `npm run lint` — PASS，0 errors；1004 个既有仓库 warning，未作无关清理。
+- `CI=true npm run check:full` — PASS；typecheck、lint 0 errors（1004 baseline warnings）、button audit、fast 8 suites / 138 tests、full 84 suites / 831 tests。
+- `python3 scripts/audit_change_release_ledger.py` — PASS，6/6 changed paths recorded。Mobile 无独立 feature-registry audit script；配对 Root registry audit PASS（39 FRs / 307 mappings）。
+- Candidate patch SHA-256（排除本 ledger）：`0b9baa2fd5737af62853f20cdb2c8fb2576f873d96480610837c58788df6da93`。
+- Independent read-only review — GO for current uncommitted local candidate quality，P0/P1/P2 = 0/0/0；审查期间测试 mock 隔离与 paired Root CRL reference 已纠正，reviewer 对最终 fingerprint 独立复跑 2 suites / 36 tests、6/6 ledger 与 `git diff --check` 均 PASS。此 GO 不授权 commit/push/EAS/OTA。
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** not prepared
+- **Untracked review:** not prepared；本地 `node_modules` 仅为忽略的测试依赖链接，不属于候选。
+
+### Release Attempts
+
+- None；用户仅授权本地修复与测试，未授权暂存、提交、推送、EAS build 或 OTA。
+
+### Risks / Release Notes
+
+- 回滚：撤销四个 runtime/test hunk 与本 CRL/FR 更新；无数据迁移或本地草稿格式变化。
+- Sensitive-information review: 测试仅用虚构值/ID；未记录真实密码、手机号、token、cookie、私钥、数据库 URL、`.env`、设备日志或生产数据。
+- Production/API writes: none；未调用生产保存接口、EAS 或数据库。
+- Non-blocking gaps: 未逐条做刷新返回 false、刷新后任务消失/卡 ID 改变、双字段仅一侧缺 target 的屏幕测试；代码路径均 fail closed，helper 已覆盖缺失/碰撞。未做弱网、模拟器/真机、native build、OTA 或生产验收。
+- Git state: isolated local branch `codex/mz091-password-target-fix-local`; uncommitted。
+
+## CRL-20261104-001 — MZ-065 移动端退房反向与存量周转关联
+
+- **Repository:** `mobile`
+- **Status:** isolated latest-Dev source candidate GO after independent review (0 P0/P1/P2); full Mobile gate passed; production release remains NO-GO pending paired Root real-PostgreSQL and Mobile simulator/device verification; not committed, pushed, merged, built, OTA-published or released
+- **Updated:** 2026-11-04 UTC
+- **Request:** 配合 Root MZ-065 完成任意创建顺序的显式周转关联：新增退房可选择已有入住，既有两张独立卡可补关联，弱网重试不重复创建；不得退回同房同日盲合、扩大角色权限或覆盖昨天已合入的入住候选竞态/重启保护。
+- **Outcome:** 在 `Dev@2f30696ee160f17c2774e5be0039bf79ed74d0d2` 已有入住→退房权威候选流程上对称增加退房→入住候选、0/1/多选择、失败关闭、409 刷新和稳定 request ID；经理可从单 source 卡打开专用存量关联。创建回执冲突会冻结整张表单和原 request ID，房源、日期、模式或候选刷新均不能解除冻结，只有关闭后明确开始新操作才生成新 ID。Root 对锁定任务产生持久检查提醒时，拥有 `cleaning.schedule.manage` 的自定义角色也按明确权限进入 all 视图和管理任务详情，通知携带的旧任务业务日用于精确刷新范围，不依赖硬编码角色。旧 `main@59e8059` 草稿已排除，不作为候选。
+
+### Files / Areas
+
+- `src/lib/api.ts` — 扩展人工创建反向字段与稳定 `request_id`；增加只读入住候选及专用存量关联 API，严格校验房源/日期/DTO，`password_only` 或越界响应 fail-closed。
+- `src/lib/api.test.ts` — 覆盖反向候选 DTO、创建 payload、request ID、结构化冲突及 `password_only` 拒绝。
+- `src/lib/manualTurnoverLink.ts` — 稳定 UUID request ID、候选最小化/去重、0/1/多默认与刷新协调；不从房号日期推断关系。
+- `src/lib/manualTurnoverLink.test.ts` — 覆盖候选选择、刷新、去重、独立决策和 request ID。
+- `src/screens/tabs/TasksScreen.tsx` — 最新 Dev 新增表单保留原候选竞态、输入和 App 重启保护，增加退房反向选择、关系冲突刷新、网络错误同 request 重试及经理存量关联 modal；回执冲突保留原 request ID、冻结全部可编辑字段和再次提交并刷新列表，候选 scope effect 不得清除冻结或换 ID；存量关联候选以单调 request sequence 加 source/side/property/date 快照共同判定，关闭后重开同一 source 时旧响应不能覆盖新结果；不会把独立创建误报成“订单同步后自动关联”。
+- `src/screens/tabs/TasksScreen.test.tsx` — 覆盖 checkout 反向唯一候选、request ID、回执冲突冻结（包括合成房源/日期变化不能解冻）、经理存量关联真实点击、同 source 关闭重开后的旧响应隔离、密码字段适用性及原入住流程回归。
+- `src/lib/roles.ts`, `src/lib/roles.test.ts` — 保留既有业务经理角色，并让明确拥有 `cleaning.schedule.manage` 的自定义角色获得清洁任务 manager 视图；其他只读或无关权限不扩大。
+- `src/screens/notices/NoticeDetailScreen.tsx`, `src/navigation/RootNavigator.tsx`, `src/screens/tasks/TaskDetailScreen.tsx` — 持久检查提醒使用服务端补充的准确 `task_date` 刷新范围；自定义排班管理员从通知进入管理任务详情，且详情 fallback 继续使用 all 视图。
+- `src/screens/notices/NoticeDetailScreen.test.tsx` — 覆盖自定义排班管理员断线重进通知后刷新 all 范围并进入 `ManagerDailyTask`。
+- `docs/change-release-ledger.md` — 记录 paired Root 依赖、验证、敏感数据与发布边界。
+
+### Impact / Dependencies
+
+- Affected roles: 仅复用当前可见人工新增/经理任务操作入口的既有角色；Mobile 不新增权限码，不绕过 Root 的创建/关联权限。
+- Root remains authoritative: candidate eligibility, active/cancelled state, exact property/date, `password_only`, occupancy and relation conflicts are revalidated by Root transaction. Mobile loading/error stays unknown and disables submit.
+- Stable request ID survives ordinary network/timeout retries; 409 relationship conflict refreshes candidates and begins a new semantic attempt。创建回执冲突不会自动换 ID，而是冻结再次提交并刷新列表，让用户先核对可能已成功的原任务。No password, guest data, media URL or token is added to logs or local persistence.
+- Existing task/card state, source tasks, assignments, media, evidence, task transitions and offline upload flows are unchanged. This Mobile candidate does not implement order-topology mutation；paired Root keeps locked/terminal tasks unchanged, detaches only a relationship that became invalid, never auto-relinks, and persists a permission-scoped review notice. The Mobile addition only makes that authorized notice actionable for custom schedule-manager roles.
+- Dependency: `root/CRL-20261104-006`, including prepared `manual_cleaning_task_create_receipts` migration. Root migration/API must deploy before or together with this Mobile OTA; no release is authorized.
+
+### Validation
+
+- `npm run typecheck` — PASS.
+- `CI=true npm test -- --runInBand --no-cache src/lib/roles.test.ts src/screens/notices/NoticeDetailScreen.test.tsx` — PASS（2 suites / 19 tests），含自定义排班管理员通知深链。
+- `npm test -- --runInBand --no-cache src/lib/api.test.ts src/lib/manualTurnoverLink.test.ts src/screens/tabs/TasksScreen.test.tsx` — PASS（最终场景均包含在全量门；TasksScreen 97 tests）。复审后新增的同 source 关闭重开旧响应隔离也以单文件命令定向复核通过，同时 `npm run typecheck` 再次 PASS。
+- `CI=true npm run check:ci` — PASS: ledger audit, typecheck, lint (0 errors / baseline warnings), button audit, 8 suites / 138 fast tests and 85 suites / 838 complete tests. 全量门首次运行暴露 `TasksScreen` 直接导入新权限 helper、旧 Jest mock 未提供该导出的问题；页面改为复用已有 `isTaskManagerUser` 后全量门通过。独立复审确认 0 P0/P1/P2；其唯一非阻断旧响应竞态已按上一条定向回归收口，并再次通过最终全量门。
+- iOS simulator, Android emulator, physical iOS, physical Android, EAS/native build, real weak-network response-loss, protected account, OTA and production API verification — NOT RUN.
+
+### Risk / Rollback
+
+- Risk is limited to manager manual create/link UI and paired Root protocol. Root remains fail-closed; a stale or ambiguous candidate returns conflict instead of linking.
+- Rollback is this Mobile diff plus paired Root API/migration rollout decision; never roll back by editing production task relations. Existing Root forward protocol remains compatible with older Mobile clients.
+- Sensitive-data review: diff contains no environment files, endpoints, credentials, tokens, cookies, task payloads, guest records, passwords, media or device logs. `node_modules` is ignored and excluded.
+
+### Git / Release Boundary
+
+- Branch: `codex/mz065-bidirectional-turnover-link-mobile-dev`; base `Dev@2f30696ee160f17c2774e5be0039bf79ed74d0d2` (merged PR #76).
+- Candidate: `/Users/zhishi/Documents/Codex/2026-11-04/task-3/mobile-dev-candidate`.
+- Old-main backup: `/Users/zhishi/Documents/Codex/2026-11-04/task-3/mobile-candidate`, base `main@59e8059`, stash `codex-mz065-mobile-old-main-backup`; explicitly excluded from delivery.
+- No staging, commit, push, PR, merge, EAS build, OTA, native release, production API write or database operation occurred.
+
 ## CRL-20261102-001 — MZ-091 移动端同订单密码空值权威显示
 
 - **Repository:** `mobile`

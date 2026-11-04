@@ -1039,6 +1039,7 @@ export async function previewCleaningTaskPasswordAuthority(
 export async function createManualCleaningTask(
   token: string,
   params: {
+    request_id?: string
     create_mode: 'checkout' | 'checkin' | 'turnover' | 'stayover'
     task_date: string
     property_id: string
@@ -1052,6 +1053,8 @@ export async function createManualCleaningTask(
     guest_special_request?: string | null
     linked_checkout_task_id?: string | null
     checkin_link_decision?: 'link' | 'independent' | null
+    linked_checkin_task_id?: string | null
+    checkout_link_decision?: 'link' | 'independent' | null
   },
 ) {
   const urls = buildUrlCandidates('cleaning/tasks')
@@ -1121,6 +1124,89 @@ export async function listManualCheckinLinkCandidates(
     throw new ApiError('入住关联候选与当前房源或日期不一致，请刷新后重试', 0, 'INVALID_RESPONSE', true)
   }
   return items
+}
+
+export type ManualCleaningTurnoverLinkCandidate = {
+  id: string
+  property_id: string
+  property_code: string
+  task_date: string
+  checkout_time?: string | null
+  checkin_time?: string | null
+  status?: string | null
+  inspection_scope?: 'inspect_and_hang' | 'password_only' | null
+}
+
+export async function listManualCheckoutLinkCandidates(
+  token: string,
+  params: { property_id: string; task_date: string },
+): Promise<ManualCleaningTurnoverLinkCandidate[]> {
+  const sp = new URLSearchParams()
+  sp.set('property_id', String(params.property_id || '').trim())
+  sp.set('task_date', String(params.task_date || '').trim())
+  const urls = buildUrlCandidates(`cleaning/tasks/checkout-link-candidates?${sp.toString()}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw await toApiErrorFromResponse(res)
+  const body = (await parseJsonOrThrow(res)) as { items?: unknown }
+  if (!Array.isArray(body?.items)) {
+    throw new ApiError('退房关联候选返回格式异常，请稍后重试', 0, 'INVALID_RESPONSE', true)
+  }
+  const items = body.items.map((item: any) => ({
+    id: String(item?.id || '').trim(),
+    property_id: String(item?.property_id || '').trim(),
+    property_code: String(item?.property_code || '').trim(),
+    task_date: String(item?.task_date || '').slice(0, 10),
+    checkin_time: String(item?.checkin_time || '').trim() || null,
+    status: String(item?.status || '').trim() || null,
+    inspection_scope: item?.inspection_scope === 'password_only'
+      ? 'password_only' as const
+      : item?.inspection_scope === 'inspect_and_hang'
+        ? 'inspect_and_hang' as const
+        : null,
+  }))
+  const expectedPropertyId = String(params.property_id || '').trim()
+  const expectedTaskDate = String(params.task_date || '').trim()
+  if (items.some((item) => !item.id
+    || !item.property_id
+    || !/^\d{4}-\d{2}-\d{2}$/.test(item.task_date)
+    || item.property_id !== expectedPropertyId
+    || item.task_date !== expectedTaskDate
+    || item.inspection_scope === 'password_only')) {
+    throw new ApiError('退房关联候选与当前房源、日期或检查模式不一致，请刷新后重试', 0, 'INVALID_RESPONSE', true)
+  }
+  return items
+}
+
+export async function linkManualCleaningTurnover(
+  token: string,
+  params: { checkout_task_id: string; checkin_task_id: string },
+) {
+  const urls = buildUrlCandidates('cleaning/tasks/turnover-links')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+      15000,
+    )
+    if (lastRes.status !== 404) break
+  }
+  const res = lastRes as Response
+  if (!res.ok) throw await toApiErrorFromResponse(res)
+  return (await parseJsonOrThrow(res)) as {
+    ok: true
+    checkout_task_id: string
+    checkin_task_id: string
+    linked_checkout_task_id: string
+    idempotent: boolean
+  }
 }
 
 export async function createCleaningOfflineTask(

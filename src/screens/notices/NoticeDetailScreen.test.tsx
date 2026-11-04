@@ -540,6 +540,74 @@ test('notice task entry uses the manager detail for admin cleaning tasks', async
   mockWorkTask = null
 })
 
+test('schedule-manage custom role opens the persistent review notice in manager task detail', async () => {
+  const previousRole = mockStoredUser.role
+  const previousRoles = mockStoredUser.roles
+  const previousPermissions = mockStoredUser.permissions
+  const { requestWorkTasksRefresh } = jest.requireMock('../../lib/workTasksStore') as { requestWorkTasksRefresh: jest.Mock }
+  requestWorkTasksRefresh.mockClear()
+  mockStoredUser.role = 'custom_scheduler'
+  mockStoredUser.roles = ['custom_scheduler']
+  mockStoredUser.permissions = ['cleaning.schedule.manage']
+  const reviewTask = {
+    id: 'w-topology-review',
+    task_kind: 'cleaning',
+    source_type: 'cleaning_tasks',
+    source_id: 'ct-topology-review',
+    title: 'SYN1602 清洁',
+    scheduled_date: '2026-11-30',
+    task_type: 'checkout_clean',
+    status: 'assigned',
+    property: { id: 'p-review', code: 'SYN1602' },
+  }
+  mockWorkTask = null
+  requestWorkTasksRefresh.mockImplementationOnce(async () => {
+    mockWorkTask = reviewTask
+  })
+  await initNoticesStore()
+  await upsertNotices([{
+    id: 'topology-review-notice',
+    type: 'update',
+    title: '清洁任务需人工检查',
+    summary: '锁定任务未自动移动',
+    content: '订单房源或日期已变化；锁定任务未自动移动，请由排班管理人员检查。',
+    createdAt: '2026-11-04T00:00:00.000Z',
+    unread: true,
+    data: {
+      kind: 'cleaning_order_topology_review_required',
+      action: 'open_task',
+      task_id: 'ct-topology-review',
+      task_date: '2026-11-30',
+    },
+  }], { replace: true })
+  const navigation = { setOptions: jest.fn(), canGoBack: () => true, goBack: jest.fn(), navigate: jest.fn() }
+
+  try {
+    const ui = render(
+      <I18nProvider>
+        <NoticeDetailScreen
+          navigation={navigation as any}
+          route={{ key: 'notice-topology-review', name: 'NoticeDetail', params: { id: 'topology-review-notice' } } as any}
+        />
+      </I18nProvider>,
+    )
+    await waitFor(() => expect(ui.getByText('查看任务')).toBeTruthy())
+    fireEvent.press(ui.getByText('查看任务'))
+    await waitFor(() => expect(navigation.navigate).toHaveBeenCalledWith('ManagerDailyTask', { taskId: 'w-topology-review' }))
+    expect(requestWorkTasksRefresh).toHaveBeenCalledWith(expect.objectContaining({
+      date_from: '2026-11-23',
+      date_to: '2027-01-29',
+      view: 'all',
+      reason: 'notice_detail_task_navigation',
+    }))
+  } finally {
+    mockWorkTask = null
+    mockStoredUser.role = previousRole
+    mockStoredUser.roles = previousRoles
+    mockStoredUser.permissions = previousPermissions
+  }
+})
+
 test('guest-ready notice detail returns customer service to the original manager editor', async () => {
   const previousRole = mockStoredUser.role
   const previousRoles = mockStoredUser.roles

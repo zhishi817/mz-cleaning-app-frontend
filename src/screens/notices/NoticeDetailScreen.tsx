@@ -205,7 +205,7 @@ export default function NoticeDetailScreen(props: Props) {
       const storedUser = await getStoredUser()
       const userId = String(storedUser?.id || '').trim()
       const existingTask = findWorkTaskItemByAnyId(taskRouteId)
-      const baseDateRaw = String((noticeData as any)?.date || existingTask?.scheduled_date || (existingTask as any)?.date || '').slice(0, 10)
+      const baseDateRaw = String((noticeData as any)?.date || (noticeData as any)?.task_date || existingTask?.scheduled_date || (existingTask as any)?.date || '').slice(0, 10)
       const parsedBase = /^\d{4}-\d{2}-\d{2}$/.test(baseDateRaw) ? new Date(`${baseDateRaw}T00:00:00`) : new Date()
       if (token && userId) {
         await requestWorkTasksRefresh({
