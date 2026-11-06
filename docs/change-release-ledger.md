@@ -157,15 +157,15 @@
 - Base: `github/Dev@51e3c051f50f9a264f0c08a4c2616e4caf8729a1`; fetched at `2026-11-06T12:38:38Z`
 - Candidate patch SHA-256: `301cf834435a96761dca6c1e751a928f7e2143e3b7061890543a5a33016a901f`; excludes `docs/change-release-ledger.md`
 - Source-equivalence evidence: initial extracted source fingerprint was `4750142e28e6e123b2ac5105fb5b51c9fb953fe5240260f9083607ed30efb665` under the retained no-index-new-file convention. The final candidate intentionally differs only in `api` legacy strict-schema compatibility, exact receipt-version/entry completeness fail-closed checks, Screen-level malformed-response no-cache/no-success handling, their focused tests and governance records; task/password/topology/permission business rules are unchanged.
-- Commit SHA: not committed
-- Dependencies: paired exact Root candidate from `github/Dev@710a5adec511ff6ca3e87e9041f98c4a2817a7b5`; Root must precede any later Mobile delivery
-- Required validation: `PASS` for final focused/full Mobile and paired Root final-code PG/API/complete gates plus exact pre-commit audit (13 staged files / 95 non-ledger hunks); bound independent re-review is pending
+- Commit SHA: `50ad66a8d26d75671d03354b24490c9b3373b9ad`; candidate content commit
+- Dependencies: `root/CRL-20261106-001@a58130b93f4a37624cee41f1f8489b3cf96bb660`; `root/CRL-20261106-002@a58130b93f4a37624cee41f1f8489b3cf96bb660`
+- Required validation: `PASS`; final focused/full Mobile and paired Root final-code PG/API/complete gates, exact pre-commit audit (13 staged files / 95 non-ledger hunks), independent re-review and clean content commit all passed
 - Shared-hunk review: `PASS`; independent reviewer matched all 13 staged files / 95 non-ledger hunks to the selected 091/110 unit
 - Generated-file review: `PASS`; the selected measurement source script is intentional, post-test cleanup completed, and the final staged range has no untracked or unselected path
-- Technical state: `candidate`
+- Technical state: `committed`
 - User authorization: `selected-for-commit`; evidence: user instructed “提交091/110”. Push, PR, merge, build, OTA, deployment and production writes were not authorized.
 - Independent review: `GO for local commit`; P0/P1/P2 = 0/0/0. Reviewer independently matched base, branch, fingerprint `301cf834435a96761dca6c1e751a928f7e2143e3b7061890543a5a33016a901f`, 13 files / 95 hunks, reran the API/receipt/Screen flow (3 suites / 64 tests), and confirmed both prior review rounds are closed. Non-blocking P3: numeric JSON strings for keys/sequence are normalized with `Number()`; paired Root emits numbers.
-- Action conclusion: `GO` for the user-authorized local commit only; push, PR, merge, build, OTA, deployment and production writes remain unauthorized
+- Action conclusion: `GO`; blockers: none. Local content commit `50ad66a8d26d75671d03354b24490c9b3373b9ad` completed; push, PR, merge, build, OTA, deployment and production writes remain unauthorized
 
 ### Risks / Release Notes
 
