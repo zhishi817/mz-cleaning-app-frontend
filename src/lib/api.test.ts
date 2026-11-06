@@ -177,6 +177,76 @@ test('reverse candidates fail closed for password-only and out-of-scope rows', a
   })).rejects.toMatchObject({ code: 'INVALID_RESPONSE', retryable: true })
 })
 
+test('manager fields retries once with an unambiguous legacy payload only after strict-schema rejection', async () => {
+  const api = require('./api') as typeof import('./api')
+  const fetchMock = jest.fn()
+    .mockResolvedValueOnce(response(400, {
+      _errors: ["Unrecognized key(s) in object: 'operation_id', 'items'"],
+    }))
+    .mockResolvedValueOnce(response(201, { ok: true, updated: 2 }))
+  globalThis.fetch = fetchMock as any
+
+  await expect(api.updateCleaningTaskManagerFields('token', {
+    operation_id: 'opaque-manager-save-1',
+    task_ids: ['checkout-1', 'checkin-1'],
+    items: [
+      { id: 'checkout-1', checkout_time: '10:30am', guest_special_request: 'same request' },
+      { id: 'checkin-1', checkin_time: '3:30pm', guest_special_request: 'same request' },
+    ],
+    password_task_ids: ['checkin-1'],
+    new_code: 'SYNTH-NEW',
+    password_verification: { fields: ['new_code'], request_id: 'opaque-manager-save-1', client: 'mobile' },
+  })).resolves.toEqual({ ok: true, updated: 2 })
+
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+  const modern = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body || '{}'))
+  const legacy = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body || '{}'))
+  expect(modern).toMatchObject({ operation_id: 'opaque-manager-save-1', items: expect.any(Array) })
+  expect(legacy).toMatchObject({
+    task_ids: ['checkout-1', 'checkin-1'],
+    checkout_time: '10:30am',
+    checkin_time: '3:30pm',
+    guest_special_request: 'same request',
+    new_code: 'SYNTH-NEW',
+    password_verification: { request_id: 'opaque-manager-save-1' },
+  })
+  expect(legacy).not.toHaveProperty('operation_id')
+  expect(legacy).not.toHaveProperty('items')
+  expect(fetchMock.mock.calls[1]?.[0]).toBe(fetchMock.mock.calls[0]?.[0])
+  expect(fetchMock.mock.calls[1]?.[1]?.method).toBe(fetchMock.mock.calls[0]?.[1]?.method)
+})
+
+test('manager fields never retries an uncertain failure as a legacy save', async () => {
+  const api = require('./api') as typeof import('./api')
+  const fetchMock = jest.fn(async () => response(400, { _errors: ['business validation failed'] }))
+  globalThis.fetch = fetchMock as any
+
+  await expect(api.updateCleaningTaskManagerFields('token', {
+    operation_id: 'opaque-manager-save-2',
+    task_ids: ['checkin-1'],
+    items: [{ id: 'checkin-1', checkin_time: '4pm' }],
+  })).rejects.toThrow('business validation failed')
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+})
+
+test('manager fields fails closed when per-task values cannot be represented by the old schema', async () => {
+  const api = require('./api') as typeof import('./api')
+  const fetchMock = jest.fn(async () => response(400, {
+    _errors: ["Unrecognized key(s) in object: 'operation_id', 'items'"],
+  }))
+  globalThis.fetch = fetchMock as any
+
+  await expect(api.updateCleaningTaskManagerFields('token', {
+    operation_id: 'opaque-manager-save-3',
+    task_ids: ['checkout-1', 'checkin-1'],
+    items: [
+      { id: 'checkout-1', guest_special_request: 'first' },
+      { id: 'checkin-1', guest_special_request: 'second' },
+    ],
+  })).rejects.toThrow('旧后端无法安全表示多个任务的不同字段值')
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+})
+
 test('queue request can handle 401 without invalidating the global session', async () => {
   const fetchMock = jest.fn(async () => response(401, { message: 'token expired' }))
   globalThis.fetch = fetchMock as any

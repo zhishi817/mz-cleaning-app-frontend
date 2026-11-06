@@ -6,6 +6,13 @@ import { notifyAuthInvalidated } from './authEvents'
 import { invalidateCleaningMediaCache } from './cleaningMediaCache'
 import { isDailyTaskExecutionVisible, type DailyTaskExecutionVisibilityOptions } from './dailyTaskExecutionVisibility'
 import { recordTaskLoadStage } from './taskLoadDiagnostics'
+import {
+  isManagerTaskSaveReceiptSupported,
+  managerTaskPatchFromAuthoritativeUpdates,
+  managerTaskSaveEventOperationId,
+  managerTaskSaveReceiptOperationId,
+  type ManagerTaskSaveReceipt,
+} from './managerTaskSaveReceipt'
 
 export type WorkTaskItem = WorkTask & {
   date: string
@@ -62,6 +69,7 @@ type WorkTaskStreamEvent = {
 }
 
 const STORAGE_PREFIX = 'mzstay.work_tasks.store.v1:'
+const MANAGER_FIELDS_AUTHORITY_PREFIX = 'mzstay.work_tasks.manager_fields_authority.v1:'
 const RECONNECT_DELAY_MS = 1500
 const HEALTH_CHECK_INTERVAL_MS = 15000
 const STREAM_IDLE_TIMEOUT_MS = 65000
@@ -186,12 +194,27 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let healthTimer: ReturnType<typeof setInterval> | null = null
 let lastStreamActivityAt = 0
 const refreshWorkTasksInFlight = new Map<string, Promise<boolean>>()
+const localPatchCaptureOwners = new Map<string, Map<symbol, number>>()
 const workTasksHydrations = new Map<string, Promise<boolean>>()
 const persistQueues = new Map<string, Promise<void>>()
 let localPatchRevision = 0
 const localPatchRevisionsByBucket = new Map<string, Map<string, number>>()
+const localTaskPatchesByBucket = new Map<string, Map<string, Array<{ revision: number; patch: Partial<WorkTaskItem> }>>>()
 let workTasksRefreshForeground = true
 let refreshCoordinatorEpoch = 0
+
+type ManagerSaveOperationState = {
+  sessionEpoch: number
+  bucketKey: string | null
+  projectionKey: string | null
+  status: 'pending' | 'failed' | 'completed'
+  suppressedEvent: boolean
+  projectionRefreshRequired: boolean
+  projectionSequenceBySource: Record<string, number>
+  fallbackTimer: ReturnType<typeof setTimeout> | null
+}
+
+const managerSaveOperations = new Map<string, ManagerSaveOperationState>()
 
 type WorkTasksRefreshParams = {
   token: string
@@ -256,6 +279,10 @@ function envKey() {
 
 function storageKey(bucketKey: string) {
   return `${STORAGE_PREFIX}${bucketKey}`
+}
+
+function managerFieldsAuthorityKey(userId: string) {
+  return `${MANAGER_FIELDS_AUTHORITY_PREFIX}${envKey()}:${String(userId || '').trim()}`
 }
 
 function normalizedAuthorityValues(values: unknown[] | undefined) {
@@ -440,6 +467,13 @@ function closeStream() {
   streamEs = null
 }
 
+function clearManagerSaveOperations() {
+  for (const operation of managerSaveOperations.values()) {
+    if (operation.fallbackTimer) clearTimeout(operation.fallbackTimer)
+  }
+  managerSaveOperations.clear()
+}
+
 export function deactivateWorkTasksRealtime() {
   const hadSession = workTasksSessionIdentity !== null
   const previousConnectionState = state.sseConnectionState
@@ -450,6 +484,7 @@ export function deactivateWorkTasksRealtime() {
   closeStream()
   stopHealthTimer()
   clearWorkTasksRefreshCoordinator()
+  clearManagerSaveOperations()
   lastStreamActivityAt = 0
   setConnectionState('idle')
   if (hadSession && previousConnectionState === 'idle') emit()
@@ -901,6 +936,40 @@ function shouldIgnoreByVersion(task: WorkTaskItem, event: WorkTaskStreamEvent) {
   return false
 }
 
+function eventConflictsWithManagerReceipt(task: WorkTaskItem, event: WorkTaskStreamEvent) {
+  const managerSequenceBySource = ((task as any)?._managerFieldsSequenceBySource
+    && typeof (task as any)._managerFieldsSequenceBySource === 'object')
+    ? (task as any)._managerFieldsSequenceBySource as Record<string, number>
+    : null
+  const eventSequence = Number(event.sequence_no || 0)
+  if (!managerSequenceBySource || !eventSequence) return false
+  const eventSourceIds = Array.from(new Set([
+    ...(Array.isArray(event.source_ref_ids) ? event.source_ref_ids : []),
+    String(event.task_id || '').replace(/^cleaning_task:/, ''),
+  ].map((value) => String(value || '').trim()).filter(Boolean)))
+  return eventSourceIds.some((sourceId) => Number(managerSequenceBySource[sourceId] || 0) >= eventSequence)
+}
+
+function managerProjectionReceiptCoversEvent(event: WorkTaskStreamEvent) {
+  const eventSequence = Number(event.sequence_no || 0)
+  if (!eventSequence) return false
+  const directSourceId = String(event.task_id || '').replace(/^cleaning_task:/, '').trim()
+  const eventSourceIds = directSourceId
+    ? [directSourceId]
+    : Array.from(new Set((Array.isArray(event.source_ref_ids) ? event.source_ref_ids : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)))
+  if (!eventSourceIds.length) return false
+  return Array.from(managerSaveOperations.values()).some((operation) => (
+    operation.sessionEpoch === workTasksSessionEpoch
+    && operation.bucketKey === state.bucketKey
+    && operation.projectionKey === state.projectionKey
+    && operation.status === 'completed'
+    && operation.projectionRefreshRequired
+    && eventSourceIds.some((sourceId) => Number(operation.projectionSequenceBySource[sourceId] || 0) >= eventSequence)
+  ))
+}
+
 function eventDirectlyTargetsTask(task: WorkTaskItem, event: WorkTaskStreamEvent) {
   const eventTaskId = String(event.task_id || '').trim()
   if (!eventTaskId) return false
@@ -1145,6 +1214,16 @@ function clearWorkTasksRefreshCoordinator() {
 
 function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
   updateLastReceivedEventId(String(event.event_id || '').trim() || null)
+  const managerOperationId = managerTaskSaveEventOperationId(event)
+  const managerOperation = managerOperationId ? managerSaveOperations.get(managerOperationId) : null
+  const managerEventTargetsReadOnly = findTaskIndexesForEvent(event).some((index) => state.items[index]?.work_record_read_only === true)
+  if (managerOperation && managerOperation.sessionEpoch === workTasksSessionEpoch && !managerEventTargetsReadOnly) {
+    managerOperation.suppressedEvent = true
+    if (managerOperation.status === 'failed') {
+      void requestActiveWorkTasksRefresh('consistency', 'manager_save_response_missing').catch(() => {})
+    }
+    return
+  }
   const eventType = String(event.event_type || '').trim()
   const scope = String(event.change_scope || '').trim()
   const membershipChanged = scope === 'membership'
@@ -1165,6 +1244,14 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
   // an offline/failed refresh cannot leave stale physical-access data visible.
   const readOnlyCapabilitiesRevoked = revokeCachedReadOnlyCapabilitiesForEvent(event, membershipChanged)
   if (eventRequiresGuestReadyAuthorityRefresh(event)) {
+    if (!membershipChanged && !managerEventTargetsReadOnly && managerProjectionReceiptCoversEvent(event)) {
+      // The accepted manager receipt already applied this source sequence and
+      // the saving screen has scheduled the one required projection refresh.
+      // Do not turn its same/older SSE echo into a second 15-day list request.
+      // A newer sequence, membership event or read-only target still follows
+      // the normal server-authoritative force-refresh path below.
+      return
+    }
     // Early-arrival qualification and outside-key state are server-authoritative
     // and coupled to role-scoped actions. Never combine a partial time/event
     // patch with a cached projection; refetch the complete task immediately.
@@ -1210,6 +1297,16 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
   const indexes = findTaskIndexesForEvent(event)
   if (!indexes.length) {
     void requestActiveWorkTasksRefresh('consistency', 'task_missing_for_patch')
+    return
+  }
+  if (indexes.some((index) => {
+    const task = state.items[index]
+    return task?.work_record_read_only !== true && eventConflictsWithManagerReceipt(task, event)
+  })) {
+    // A manager receipt is authoritative for only its returned fields. An older
+    // event for the same source can still contain unrelated status/assignment
+    // changes, so neither merge nor discard it: reconcile the whole projection.
+    void requestActiveWorkTasksRefresh('consistency', 'manager_receipt_event_order_conflict').catch(() => {})
     return
   }
   const items = state.items.slice()
@@ -1372,6 +1469,169 @@ export function getWorkTasksSnapshot() {
   return state
 }
 
+export function beginManagerTaskSaveOperation(operationId0: string) {
+  const operationId = String(operationId0 || '').trim()
+  if (!operationId || !workTasksSessionIdentity) return false
+  const previous = managerSaveOperations.get(operationId)
+  if (previous?.fallbackTimer) clearTimeout(previous.fallbackTimer)
+  const operation: ManagerSaveOperationState = {
+    sessionEpoch: workTasksSessionEpoch,
+    bucketKey: state.bucketKey,
+    projectionKey: state.projectionKey,
+    status: 'pending',
+    suppressedEvent: previous?.suppressedEvent === true,
+    projectionRefreshRequired: false,
+    projectionSequenceBySource: {},
+    fallbackTimer: null,
+  }
+  operation.fallbackTimer = setTimeout(() => {
+    const current = managerSaveOperations.get(operationId)
+    if (current !== operation) return
+    managerSaveOperations.delete(operationId)
+    if (current.status === 'failed' || current.suppressedEvent) {
+      void requestActiveWorkTasksRefresh(
+        'consistency',
+        current.status === 'failed' ? 'manager_save_response_missing_timeout' : 'manager_save_receipt_timeout',
+      ).catch(() => {})
+    }
+  }, 30_000)
+  managerSaveOperations.set(operationId, operation)
+  return true
+}
+
+export function failManagerTaskSaveOperation(operationId0: string) {
+  const operationId = String(operationId0 || '').trim()
+  const operation = managerSaveOperations.get(operationId)
+  if (!operation) return
+  operation.status = 'failed'
+  if (operation.suppressedEvent) {
+    void requestActiveWorkTasksRefresh('consistency', 'manager_save_response_missing').catch(() => {})
+  }
+}
+
+export async function applyManagerTaskSaveReceipt(receipt: ManagerTaskSaveReceipt | null | undefined) {
+  const operationId = managerTaskSaveReceiptOperationId(receipt)
+  const operation = operationId ? managerSaveOperations.get(operationId) : null
+  if (!isManagerTaskSaveReceiptSupported(receipt)) {
+    if (!operation || operation.sessionEpoch !== workTasksSessionEpoch) {
+      return {
+        supported: false,
+        accepted: false,
+        appliedItems: 0,
+        persisted: false,
+        projectionRefreshRequired: true,
+      }
+    }
+    operation.status = 'completed'
+    if (operation.fallbackTimer) clearTimeout(operation.fallbackTimer)
+    operation.fallbackTimer = setTimeout(() => {
+      if (managerSaveOperations.get(operationId) === operation) managerSaveOperations.delete(operationId)
+    }, 60_000)
+    return {
+      supported: false,
+      accepted: true,
+      appliedItems: 0,
+      persisted: false,
+      projectionRefreshRequired: true,
+    }
+  }
+  if (!operation || operation.sessionEpoch !== workTasksSessionEpoch) {
+    return {
+      supported: true,
+      accepted: false,
+      appliedItems: 0,
+      persisted: false,
+      projectionRefreshRequired: true,
+    }
+  }
+  operation.status = 'completed'
+  if (operation.fallbackTimer) clearTimeout(operation.fallbackTimer)
+  operation.fallbackTimer = setTimeout(() => {
+    if (managerSaveOperations.get(operationId) === operation) managerSaveOperations.delete(operationId)
+  }, 60_000)
+
+  const updates = Array.isArray(receipt?.authoritative_updates) ? receipt.authoritative_updates : []
+  operation.projectionRefreshRequired = receipt?.projection_refresh_required === true
+  operation.projectionSequenceBySource = updates.reduce<Record<string, number>>((sequences, update) => {
+    const sourceId = String(update?.task_id || '').trim()
+    const sequence = Number(update?.sequence_no || 0)
+    if (sourceId && sequence > Number(sequences[sourceId] || 0)) sequences[sourceId] = sequence
+    return sequences
+  }, {})
+  const receiptSessionEpoch = workTasksSessionEpoch
+  const receiptSessionIdentity = workTasksSessionIdentity ? { ...workTasksSessionIdentity } : null
+  const receiptBucketKey = state.bucketKey
+  const receiptProjectionKey = state.projectionKey
+  const receiptContextIsCurrent = () => (
+    managerSaveOperations.get(operationId) === operation
+    && workTasksSessionEpoch === receiptSessionEpoch
+    && sameWorkTasksSessionIdentity(workTasksSessionIdentity, receiptSessionIdentity)
+    && state.bucketKey === receiptBucketKey
+    && state.projectionKey === receiptProjectionKey
+  )
+  const markerAt = new Date().toISOString()
+  let markerPersisted = false
+  const userId = String(receiptSessionIdentity?.userId || '').trim()
+  if (userId) {
+    try {
+      await setJson(managerFieldsAuthorityKey(userId), { updatedAt: markerAt })
+      markerPersisted = true
+    } catch {
+      recordTaskLoadStage('task_cache.manager_authority_marker_error', { errorClass: 'storage' })
+    }
+  }
+  if (!receiptContextIsCurrent()) {
+    return {
+      supported: true,
+      accepted: false,
+      appliedItems: 0,
+      persisted: false,
+      projectionRefreshRequired: true,
+    }
+  }
+
+  // Re-read state after the asynchronous marker write so concurrent receipts
+  // compose. The context check above also prevents an old receipt from being
+  // merged into a new user, role projection or date bucket.
+  let appliedItems = 0
+  const items = state.items.map((task) => {
+    if (task.work_record_read_only === true) return task
+    const patch = managerTaskPatchFromAuthoritativeUpdates(task as any, updates)
+    if (!patch) return task
+    appliedItems += 1
+    const next = reconcileExecutionListVisibilityAfterPatch(
+      { ...task, ...patch },
+      Object.keys(patch),
+      { includeManagerUnassignedOffline: activeRealtimeParams?.includeManagerUnassignedOffline === true },
+    )
+    recordLocalTaskPatch(state.bucketKey, next.id, patch)
+    return next
+  })
+  let cachePersisted = true
+  if (appliedItems) {
+    const nextState = { ...state, items, updatedAt: markerAt }
+    state = nextState
+    emit()
+    cachePersisted = await persist(nextState)
+    if (!receiptContextIsCurrent()) {
+      return {
+        supported: true,
+        accepted: false,
+        appliedItems: 0,
+        persisted: false,
+        projectionRefreshRequired: true,
+      }
+    }
+  }
+  return {
+    supported: true,
+    accepted: true,
+    appliedItems,
+    persisted: markerPersisted && cachePersisted,
+    projectionRefreshRequired: receipt?.projection_refresh_required === true || (updates.length > 0 && appliedItems === 0),
+  }
+}
+
 export async function activateWorkTasksRealtime(params: ActiveRealtimeParams) {
   const callerIsCurrent = params.isCurrent || (() => true)
   const next: ActiveRealtimeParams = {
@@ -1432,7 +1692,7 @@ export async function patchWorkTaskItem(id0: string, patch: Partial<WorkTaskItem
   )
   const items = state.items.slice()
   items[idx] = next
-  recordLocalTaskPatch(state.bucketKey, next.id)
+  recordLocalTaskPatch(state.bucketKey, next.id, patch)
   state = { ...state, items, updatedAt: new Date().toISOString() }
   emit()
   await persist()
@@ -1455,7 +1715,7 @@ export async function patchWorkTaskItems(patches0: Array<{ id: string; patch: Pa
       Object.keys(patch),
       { includeManagerUnassignedOffline: activeRealtimeParams?.includeManagerUnassignedOffline === true },
     )
-    recordLocalTaskPatch(state.bucketKey, next.id)
+    recordLocalTaskPatch(state.bucketKey, next.id, patch)
     return next
   })
   if (!changed) return
@@ -1530,17 +1790,23 @@ export async function initWorkTasksStore(params: {
   const hydration = (async () => {
     let timer: ReturnType<typeof setTimeout> | null = null
     let saved: StoreState | null = null
+    let managerAuthority: { updatedAt?: string | null } | null = null
     let timedOut = false
     try {
-      saved = await Promise.race([
-        getJson<StoreState>(storageKey(key)),
-        new Promise<null>((resolve) => {
+      const hydrated = await Promise.race([
+        Promise.all([
+          getJson<StoreState>(storageKey(key)),
+          getJson<{ updatedAt?: string | null }>(managerFieldsAuthorityKey(params.session.userId)),
+        ]),
+        new Promise<[null, null]>((resolve) => {
           timer = setTimeout(() => {
             timedOut = true
-            resolve(null)
+            resolve([null, null])
           }, HYDRATION_WAIT_MS)
         }),
       ])
+      saved = hydrated[0]
+      managerAuthority = hydrated[1]
     } catch {
       recordTaskLoadStage('task_cache.hydration_error', { errorClass: 'storage' })
     } finally {
@@ -1550,6 +1816,12 @@ export async function initWorkTasksStore(params: {
     if (!isCurrentSession() || hydrationGeneration !== workTasksHydrationGeneration) {
       recordTaskLoadStage('task_cache.hydration_stale', { errorClass: 'stale' })
       return false
+    }
+    const authorityAt = Date.parse(String(managerAuthority?.updatedAt || ''))
+    const savedAt = Date.parse(String(saved?.updatedAt || ''))
+    if (Number.isFinite(authorityAt) && (!Number.isFinite(savedAt) || authorityAt > savedAt)) {
+      saved = null
+      recordTaskLoadStage('task_cache.hydration_manager_authority_invalidated')
     }
     state = buildStateFromSaved(saved, key, projectionKey)
     recordTaskLoadStage(saved?.projectionKey === projectionKey
@@ -1593,13 +1865,38 @@ function workTaskIdentityValues(task: Partial<WorkTaskItem> | WorkTask) {
     .filter(Boolean)
 }
 
-function recordLocalTaskPatch(bucketKey: string | null, taskId0: string) {
+function mergeLocalTaskPatch(previous: Partial<WorkTaskItem>, patch: Partial<WorkTaskItem>) {
+  const merged: Partial<WorkTaskItem> = { ...previous, ...patch }
+  for (const key of ['turnover_display', 'password_authority', 'key_tags'] as const) {
+    const before = (previous as any)?.[key]
+    const after = (patch as any)?.[key]
+    if (before && typeof before === 'object' && after && typeof after === 'object') {
+      ;(merged as any)[key] = { ...before, ...after }
+    }
+  }
+  return merged
+}
+
+function recordLocalTaskPatch(bucketKey: string | null, taskId0: string, patch: Partial<WorkTaskItem>) {
   const bucket = String(bucketKey || '').trim()
   const taskId = String(taskId0 || '').trim()
   if (!bucket || !taskId) return
+  const hasInFlightBucketRefresh = Array.from(localPatchCaptureOwners.entries())
+    .some(([refreshKey, owners]) => refreshKey.startsWith(`${bucket}|`)
+      && Array.from(owners.values()).some((sessionEpoch) => sessionEpoch === workTasksSessionEpoch))
+  if (!hasInFlightBucketRefresh) return
   const revisions = localPatchRevisionsByBucket.get(bucket) || new Map<string, number>()
-  revisions.set(taskId, ++localPatchRevision)
+  const revision = ++localPatchRevision
+  revisions.set(taskId, revision)
   localPatchRevisionsByBucket.set(bucket, revisions)
+  const patches = localTaskPatchesByBucket.get(bucket) || new Map<string, Array<{ revision: number; patch: Partial<WorkTaskItem> }>>()
+  const entries = patches.get(taskId) || []
+  entries.push({
+    revision,
+    patch,
+  })
+  patches.set(taskId, entries)
+  localTaskPatchesByBucket.set(bucket, patches)
 }
 
 function taskIdsPatchedAfter(bucketKey: string, revision: number) {
@@ -1610,19 +1907,54 @@ function taskIdsPatchedAfter(bucketKey: string, revision: number) {
     .map(([taskId]) => taskId))
 }
 
+function taskPatchesAfter(bucketKey: string, revision: number) {
+  const patches = localTaskPatchesByBucket.get(bucketKey)
+  return new Map(Array.from(patches?.entries() || [])
+    .map(([taskId, entries]) => [
+      taskId,
+      {
+        revision: Math.max(0, ...entries.filter((entry) => entry.revision > revision).map((entry) => entry.revision)),
+        patch: entries
+          .filter((entry) => entry.revision > revision)
+          .reduce((patch, entry) => mergeLocalTaskPatch(patch, entry.patch), {} as Partial<WorkTaskItem>),
+      },
+    ] as const)
+    .filter(([, entry]) => Object.keys(entry.patch).length > 0))
+}
+
+export function __workTasksLocalPatchEntryCountForTests() {
+  return Array.from(localTaskPatchesByBucket.values()).reduce(
+    (count, patches) => count + Array.from(patches.values()).reduce((bucketCount, entries) => bucketCount + entries.length, 0),
+    0,
+  )
+}
+
 function clearPatchedTaskIdsThrough(bucketKey: string, revision: number) {
   const revisions = localPatchRevisionsByBucket.get(bucketKey)
-  if (!revisions) return
-  for (const [taskId, patchedRevision] of revisions.entries()) {
-    if (patchedRevision <= revision) revisions.delete(taskId)
+  if (revisions) {
+    for (const [taskId, patchedRevision] of revisions.entries()) {
+      if (patchedRevision <= revision) revisions.delete(taskId)
+    }
+    if (!revisions.size) localPatchRevisionsByBucket.delete(bucketKey)
   }
-  if (!revisions.size) localPatchRevisionsByBucket.delete(bucketKey)
+  const patches = localTaskPatchesByBucket.get(bucketKey)
+  if (patches) {
+    for (const [taskId, entries] of patches.entries()) {
+      const remaining = entries.filter((entry) => entry.revision > revision)
+      if (remaining.length) patches.set(taskId, remaining)
+      else patches.delete(taskId)
+    }
+    if (!patches.size) localTaskPatchesByBucket.delete(bucketKey)
+  }
 }
 
 export function mergeRemoteWorkTaskItems(
   remote: WorkTaskItem[],
   previous: WorkTaskItem[],
-  options?: { retainLocalTaskIds?: Iterable<string> },
+  options?: {
+    retainLocalTaskIds?: Iterable<string>
+    localPatches?: Map<string, Partial<WorkTaskItem> | { revision: number; patch: Partial<WorkTaskItem> }>
+  },
 ) {
   const previousByIdentity = new Map<string, WorkTaskItem>()
   const previousItemsByIdentity = new Map<string, WorkTaskItem>()
@@ -1635,6 +1967,24 @@ export function mergeRemoteWorkTaskItems(
 
   const retainLocalTaskIds = new Set(Array.from(options?.retainLocalTaskIds || []).map((id) => String(id || '').trim()).filter(Boolean))
   return (Array.isArray(remote) ? remote : []).map((item) => {
+    const previousSharedItems = Array.from(new Set(workTaskIdentityValues(item)
+      .map((identity) => previousItemsByIdentity.get(identity))
+      .filter(Boolean) as WorkTaskItem[]))
+    const localPatchEntries = uniq([
+      ...workTaskIdentityValues(item),
+      ...previousSharedItems.flatMap((previousItem) => workTaskIdentityValues(previousItem)),
+    ])
+      .map((identity, index) => {
+        const raw = options?.localPatches?.get(identity)
+        if (!raw) return null
+        if ('patch' in raw && typeof raw.revision === 'number') return { revision: raw.revision, index, patch: raw.patch }
+        return { revision: 0, index, patch: raw }
+      })
+      .filter(Boolean) as Array<{ revision: number; index: number; patch: Partial<WorkTaskItem> }>
+    const localPatch = localPatchEntries
+      .sort((a, b) => a.revision - b.revision || a.index - b.index)
+      .reduce((patch, entry) => mergeLocalTaskPatch(patch, entry.patch), {} as Partial<WorkTaskItem>)
+    if (Object.keys(localPatch).length) return redactReadOnlyWorkRecord(mergeLocalTaskPatch(item, localPatch) as WorkTaskItem)
     const locallyPatchedItem = workTaskIdentityValues(item)
       .map((identity) => retainLocalTaskIds.has(identity) ? previousItemsByIdentity.get(identity) : null)
       .find(Boolean)
@@ -1668,46 +2018,65 @@ async function executeWorkTasksRefresh(params: WorkTasksRefreshParams, canApply:
     const initialized = await initWorkTasksStore({ bucketKey, projectionKey, session: params, canApply: isCurrent })
     if (!initialized || !isCurrent() || state.bucketKey !== bucketKey || state.projectionKey !== projectionKey) return false
     const refreshStartPatchRevision = localPatchRevision
-    let remote: WorkTask[]
+    const captureOwner = Symbol(refreshKey)
+    let captureLocalPatches = true
+    const captureOwners = localPatchCaptureOwners.get(refreshKey) || new Map<symbol, number>()
+    captureOwners.set(captureOwner, sessionEpoch)
+    localPatchCaptureOwners.set(refreshKey, captureOwners)
+    const releaseLocalPatchCapture = () => {
+      const currentOwners = localPatchCaptureOwners.get(refreshKey)
+      if (!currentOwners) return
+      currentOwners.delete(captureOwner)
+      if (!currentOwners.size) localPatchCaptureOwners.delete(refreshKey)
+    }
     try {
-      remote = await listWorkTasks(params.token, { date_from: params.date_from, date_to: params.date_to, view: params.view })
-    } catch (error) {
-      const status = Number((error as any)?.status || 0)
-      if ((status === 401 || status === 403)
-        && isSessionCurrent()
-        && state.bucketKey === bucketKey
-        && state.projectionKey === projectionKey) {
-        state = emptyStoreState(bucketKey, projectionKey, true)
-        recordTaskLoadStage('task_refresh.permission_fail_closed', { status, errorClass: 'auth' })
-        emit()
-        await persist(state)
+      let remote: WorkTask[]
+      try {
+        remote = await listWorkTasks(params.token, { date_from: params.date_from, date_to: params.date_to, view: params.view })
+      } catch (error) {
+        const status = Number((error as any)?.status || 0)
+        if ((status === 401 || status === 403)
+          && isSessionCurrent()
+          && state.bucketKey === bucketKey
+          && state.projectionKey === projectionKey) {
+          state = emptyStoreState(bucketKey, projectionKey, true)
+          recordTaskLoadStage('task_refresh.permission_fail_closed', { status, errorClass: 'auth' })
+          emit()
+          await persist(state)
+        }
+        throw error
       }
-      throw error
-    }
-    if (!isCurrent() || state.bucketKey !== bucketKey || state.projectionKey !== projectionKey) {
-      recordTaskLoadStage('task_refresh.response_stale', { errorClass: 'stale' })
-      return false
-    }
-    const mappedRemote = remote.map(mapRemoteTask).filter((t) => t.date !== 'unknown')
-    const locallyPatchedTaskIds = taskIdsPatchedAfter(bucketKey, refreshStartPatchRevision)
-    const items = mergeRemoteWorkTaskItems(mappedRemote, state.items, { retainLocalTaskIds: locallyPatchedTaskIds })
-    clearPatchedTaskIdsThrough(bucketKey, refreshStartPatchRevision)
+      if (!isCurrent() || state.bucketKey !== bucketKey || state.projectionKey !== projectionKey) {
+        recordTaskLoadStage('task_refresh.response_stale', { errorClass: 'stale' })
+        return false
+      }
+      const mappedRemote = remote.map(mapRemoteTask).filter((t) => t.date !== 'unknown')
+      const mergeThroughPatchRevision = localPatchRevision
+      const locallyPatchedTaskIds = taskIdsPatchedAfter(bucketKey, refreshStartPatchRevision)
+      const localPatches = taskPatchesAfter(bucketKey, refreshStartPatchRevision)
+      const items = mergeRemoteWorkTaskItems(mappedRemote, state.items, { retainLocalTaskIds: locallyPatchedTaskIds, localPatches })
+      clearPatchedTaskIdsThrough(bucketKey, mergeThroughPatchRevision)
+      releaseLocalPatchCapture()
+      captureLocalPatches = false
 
-    const now = new Date().toISOString()
-    clearBucketDirty(bucketKey)
-    state = {
-      ...state,
-      items,
-      bucketKey,
-      projectionKey,
-      ready: true,
-      updatedAt: now,
-      lastFullSyncTimestamp: now,
+      const now = new Date().toISOString()
+      clearBucketDirty(bucketKey)
+      state = {
+        ...state,
+        items,
+        bucketKey,
+        projectionKey,
+        ready: true,
+        updatedAt: now,
+        lastFullSyncTimestamp: now,
+      }
+      emit()
+      recordTaskLoadStage('task_refresh.applied')
+      await persist(state)
+      return true
+    } finally {
+      if (captureLocalPatches) releaseLocalPatchCapture()
     }
-    emit()
-    recordTaskLoadStage('task_refresh.applied')
-    await persist(state)
-    return true
   })()
 
   refreshWorkTasksInFlight.set(refreshKey, run)

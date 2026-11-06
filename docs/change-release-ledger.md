@@ -1,5 +1,231 @@
 # Change Release Ledger
 
+## CRL-20261106-001 — MZ-110 管理任务保存局部权威回执
+
+- **Repository:** `mobile`
+- **Status:** verified latest-Dev local commit candidate; final focused, complete release validation, exact staged audit and independent re-review passed; not pushed, merged, built, OTA-published, deployed or production-verified
+- **Board item:** `MZ-110`
+- **Updated:** 2026-11-06 UTC
+- **Request:** manager-fields 保存成功后只消费服务端确认的当前/关联任务，不再让按钮等待前后七天列表查询，同时保持跨日投影、事件回声、并发、缓存重开、权限失效和旧后端兼容。
+- **Outcome:** 保存携带稳定 operation ID，优先把版本化 authoritative receipt 事务性落入任务缓存；只有回执缺失、版本不支持、投影确需协调或权威事件来自其他客户端时才后台刷新。当前客户端事件回声按 operation ID/sequence 去重，避免入住时间保存发出两次相同 15 天查询。
+
+### Implementation
+
+- `managerTaskSaveReceipt` 严格解析服务器回执，拒绝未知版本/不完整更新，不猜测密码、状态或关联拓扑。
+- `api` 只在旧 Root 明确以 strict-schema 400 拒绝未知 `operation_id/items`（事务执行前失败）时做一次 legacy payload 重试；逐任务值必须可无歧义折叠。网络错误、5xx、409、不确定结果或冲突 item 均不自动重试。
+- `workTasksStore` 对已确认 source 更新执行规范 ID 合并、跨桶缓存更新和持久化；并发/过期响应继续受 revision/sequence 保护，缺失回执走旧刷新兜底。
+- `ManagerDailyTaskScreen` 在一次保存语义期间复用 operation ID；响应丢失后的同一编辑可安全重试，新编辑生成新 ID。保存 UI 不等待非必要的 15 天 GET。
+- `measure-manager-task-save-receipt.mjs` 仅测合成请求数、字节和延迟模型，不冒充线上 CPU 或端到端实测。
+
+### Files / Areas
+
+- `src/lib/api.ts`、`src/lib/api.test.ts` — additive operation ID/receipt contract 与旧 strict Root 的事务前、单次、无歧义兼容重试边界。
+- `src/lib/managerTaskSaveOperation.ts`、`src/lib/managerTaskSaveOperation.test.ts` — 稳定语义操作身份与重试/新编辑边界。
+- `src/lib/managerTaskSaveReceipt.ts`、`src/lib/managerTaskSaveReceipt.test.ts` — 版本化权威回执解析和 fail-closed 兼容。
+- `src/lib/workTasksStore.ts`、`src/lib/workTasksStore.test.ts` — 局部权威合并、持久化、事件回声、投影和旧响应保护。
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx`、`src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — 保存协调、重试、失败/回滚和列表查询计数。
+- `scripts/measure-manager-task-save-receipt.mjs` — 合成性能模型。
+- `docs/feature-regression-registry.md` — FR-P1-TSK-09 回执/查询/重放保护；与 MZ-091 共享。
+- `docs/change-release-ledger.md` — 本 CRL 与共享 Release Attempt。
+
+### Impact / Dependencies
+
+- API: 只增加 operation ID 和可选回执消费；旧 strict Root 明确拒绝新键时只在已知零执行的 400 后做一次安全 legacy 重试，成功但缺回执则后台权威刷新；旧 Mobile 忽略 Root 新字段。
+- Database / migration / native dependency / config: none。
+- Roles / task status / password source / manual confirmation / topology / media: unchanged。
+- Dependency: paired exact `root/CRL-20261106-001` and `root/CRL-20261106-002`; Root must precede any later Mobile delivery。
+- Related unit: `mobile/CRL-20261106-002`。
+
+### Validation
+
+- Automation: PASS on final code — typecheck and five focused suites / 143 tests passed, including exact strict-schema 400 retry, uncertain-error no-retry, unrepresentable-item fail-closed, malformed entry rejection, Screen-level unknown/incomplete receipt no-cache/no-success handling and same-operation later success. `CI=true npm run check:release` exited 0 with ledger 13/13, typecheck, lint (0 errors; 1044 existing warnings), button contract, 8 fast suites / 155 tests and 87 full suites / 885 tests. Controlled synthetic measurement remains 1 to 0 list requests and modeled 374.3 ms to 57.2 ms (84.7%); it is not production latency, CPU or customer-network evidence.
+- Real API / isolated database: PASS — fresh source-equivalent paired Root loopback API/disposable PostgreSQL topology, atomic/replay/receipt/password-chain tests passed on local-only synthetic instances; all test services and data directories were removed. No production endpoint or data was accessed.
+- Web real interaction: N/A — Mobile repository has no Web delivery surface; paired Root Web report is recorded in Root CRLs.
+- App physical device: NOT RUN on the final compatibility/fail-closed candidate. Retained pre-follow-up context: `/tmp/mz110-final.iphone.fa4WOj/evidence/FINAL-PHYSICAL-IPHONE-VERIFICATION.md`, SHA-256 `50d9d6743842653a907dcc7cd32396a8d8275b2ea9de2a8ebf3b614e2671a2b7`; Android physical and real weak-network were also not run.
+- Critical validation conclusion: PASS for the authorized local commit; final focused, complete release validation, exact staged audit and independent re-review passed. Final incremental device/weak-network and production verification remain explicitly out of scope.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none; five selected new helper/test/measurement files are staged explicitly and no other untracked path remains.
+- `docs/feature-regression-registry.md` — SHA-256: `08e3a8a4ab01a79d43a004293c879bb3e513bec66ff7a18c97a9cdaf9ab8e5db`
+- `docs/feature-regression-registry.md` — SHA-256: `13b307691e6f8db7ef8970e17cdcc2b763e05cace99d23e59ee1f506d3a00993`
+- `docs/feature-regression-registry.md` — SHA-256: `87f7e9d4a70c2faec1cb87f9ce16f1a30649cb015496f0f12713ab6893e18901`
+- `docs/feature-regression-registry.md` — SHA-256: `9cb669641e260f12515074136da3d52c83448eb0d3e910282e082f83e0c08008`
+- `docs/feature-regression-registry.md` — SHA-256: `b310b694ab638dc918c3d663c8f1bdd49fd58a7833c2ae3317e40c24ed480ad0`
+- `docs/feature-regression-registry.md` — SHA-256: `f939d3a3c842f6fcd6eb6f57337ab55dcc1114e731f7c9aca83236b7697f7142`
+- `scripts/measure-manager-task-save-receipt.mjs` — SHA-256: `753bd5ff6c729473f71b507cacb57a116e2dba1cb360350fe6314feada7ee91e`
+- `src/lib/api.test.ts` — SHA-256: `5f63c724a9bc354aa8fd1f4619c53421dbeb124f923429613993682e232e9a97`
+- `src/lib/api.ts` — SHA-256: `2effc1f6db2f668cfb5c6670d0a92d2f45e710469f8516cf26c7d34005f2cd9c`
+- `src/lib/api.ts` — SHA-256: `3383ce2d83a161749e77be04209c7eba842c2e5bccbdf186662bb1d3da242e56`
+- `src/lib/api.ts` — SHA-256: `a3954695558bae6f0a8e66ba1bbc6f73b68a606425fc8dd3b9e955e8a9026c6d`
+- `src/lib/api.ts` — SHA-256: `a481dd0670502cf3f5f5a8597733b6ff048c0544efc420b1aaae3ce9e7d78f5c`
+- `src/lib/api.ts` — SHA-256: `b6e9c6b5fb42814f944d284428fdc71736181422979d8c1b02e94a0f08e959e3`
+- `src/lib/api.ts` — SHA-256: `c10afa5b8bc6c292c70c42e1b8b36fde667efc3b3f3fd78c4a2cba4edb000b04`
+- `src/lib/api.ts` — SHA-256: `d638ee15c33344327d4f45741560f18e7143da1e9d3bf16e116573b0c86923cd`
+- `src/lib/api.ts` — SHA-256: `e8b48a726d896eace1fb7b8186b6710c4b9939451e5e1683ecd3f949bd1d32d5`
+- `src/lib/api.ts` — SHA-256: `eae740816baf1f47e3e93682c6f2465c7a5672f586a118412fdc08a80919d442`
+- `src/lib/managerTaskSaveOperation.test.ts` — SHA-256: `1920264e2ea65704c507985089292ea844e454c03d7ff68f5a25c9d447797881`
+- `src/lib/managerTaskSaveOperation.ts` — SHA-256: `c525838ac3f3eea58b8cd71f415a4f95e5c18480f094f25a6a9dddc99d63b359`
+- `src/lib/managerTaskSaveReceipt.test.ts` — SHA-256: `f74a116561e8cc8693766c05e9c973992f7998c9205c3668e805eae6a30e0e7a`
+- `src/lib/managerTaskSaveReceipt.ts` — SHA-256: `3b8d2824d9be581bb9e63c8218bb58969fdda806a4f0a21c3eb91b546b51a997`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `0a17da2b3bad0fa32c9c9b7f1421f3ea63cbc233c38a0712506feac96bdbbc39`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `3abe8328419e240203f7b98a9e149d4f17703857a1b1037cdea3b7d85df17321`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `5ec8ee1924f0bb27f6bfc8c4d32cccd3e126282fcd6576baaca2baa6f947483d`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `70cee31dcfe7c062833e58382d675b503595b359e33b5f7384116da33f76878a`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `7fed65c7ee9f41aa19c05c87054f7816978e721f5d0a963a51a1a83b66099920`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `ad3debd042527c6493365fba937ae6b100ba85c2ee8512fda58ff20bbc1ad41a`
+- `src/lib/workTasksStore.ts` — SHA-256: `0c645526013a596f8d82f337a061bebe83a2ac92aab3873e6e617b66e8afa0d1`
+- `src/lib/workTasksStore.ts` — SHA-256: `0dc456b3a6391928ecad6703d71729e06557cd646e657496b3c6de2861700659`
+- `src/lib/workTasksStore.ts` — SHA-256: `1991b6e92174f0afb0bfc038eb0cfa0ad85441720e0c29b59f8c5f98d535df63`
+- `src/lib/workTasksStore.ts` — SHA-256: `2be196652282cdaaf4471e89cd10fbad53c8a3880397a4295a7ad2a0bb8b3328`
+- `src/lib/workTasksStore.ts` — SHA-256: `345d237a5c37915ea45d42a15ca6c740d3e0becabf2380cec073b63cf504a284`
+- `src/lib/workTasksStore.ts` — SHA-256: `362480d3b4d1fe8bc4befaf8a7737379cd8841d81d3b64e686ca3f5dd4a11483`
+- `src/lib/workTasksStore.ts` — SHA-256: `3b498d48fe503b580052bbbf654df65fe071bdd56e4bef369676202141b069e8`
+- `src/lib/workTasksStore.ts` — SHA-256: `4075b428b4f01f0eff2875168abb467b0217e0f78a9daedfc8492daa0c8a19e8`
+- `src/lib/workTasksStore.ts` — SHA-256: `44544ee0446fcb65b2dc2766491b961114de02b3a2180644f4173b3acccabd7a`
+- `src/lib/workTasksStore.ts` — SHA-256: `4b373125c868cd3da80b055aee6a86c21b1ab1dd29e8d35ad0b3b28c0cfad3e1`
+- `src/lib/workTasksStore.ts` — SHA-256: `553a211f79c79baeae3b5fde843fe6f9f1020ef7cb7c3b727d5db16161ebe081`
+- `src/lib/workTasksStore.ts` — SHA-256: `6d7d280cb1e74547f1f076eb5517200e26010553d694b7a50c60acaf22ed8843`
+- `src/lib/workTasksStore.ts` — SHA-256: `6eba28ae3c17e6157ceeeecef51da5974cf7b5075f28b6deb2811b8586ad8a6f`
+- `src/lib/workTasksStore.ts` — SHA-256: `7bb4c50c03a1a0c8ecc07e9cd732b08c97eeab5e99787b22e19c3dad59afc002`
+- `src/lib/workTasksStore.ts` — SHA-256: `7ecde11e21590c5355629a0c25a5fa376ac19a6f3c4beb6fa463d7f4e690c27a`
+- `src/lib/workTasksStore.ts` — SHA-256: `a258456311ce595540e777932c0c91439d33c857d9c862ded98b3468177938e0`
+- `src/lib/workTasksStore.ts` — SHA-256: `a2c143dd4878c70abed95872f67bb1d15e74a0bc9b308c59b17e7ff27c84c4b7`
+- `src/lib/workTasksStore.ts` — SHA-256: `a5e87b3663550734f66bc451717f7fcd0fc0b1a7aa4114c94589a77ccf35685e`
+- `src/lib/workTasksStore.ts` — SHA-256: `a67f57dc2f3343cb200c7a70be69ad007183fb2908e3a393d0fc1604b0d25271`
+- `src/lib/workTasksStore.ts` — SHA-256: `a93924369855d4be3da5d906ad18f9b2e3c0797de582a0e5b92f45b67ad45853`
+- `src/lib/workTasksStore.ts` — SHA-256: `b3499effcf3063c1c1757dba4ff8dffe25e89f61891ded3f74d147fc8513fa36`
+- `src/lib/workTasksStore.ts` — SHA-256: `b3d5d2517015bdffc89b7457ff65ed57bc7898d32ffe5fa8303e30f8f06148ca`
+- `src/lib/workTasksStore.ts` — SHA-256: `b5c9ad486a376cc8c500a5fc2b6ea059aaa21f8d54ea1d5feedd35e833787384`
+- `src/lib/workTasksStore.ts` — SHA-256: `bb688ab8c88429f782fc84a81dc557ac2f88b1ca6a8287413795b9ec72c76435`
+- `src/lib/workTasksStore.ts` — SHA-256: `bd79a095cb24e7f645bcc52c4e0bb4dadfe9bf8aee51ed5e4e8689d9c0565339`
+- `src/lib/workTasksStore.ts` — SHA-256: `bdc135ae54440da033ee5a3b1b7acb211b115287db11639f46af3759af60d3e4`
+- `src/lib/workTasksStore.ts` — SHA-256: `bfeadde09430234d76e099b353f68c3670d2a4c0b7c31c7c79d0e8646734e6e9`
+- `src/lib/workTasksStore.ts` — SHA-256: `c079e4ba2520510c9db4e3f3b128f812a3c0d12a17f5d63a994885ef35907573`
+- `src/lib/workTasksStore.ts` — SHA-256: `c17425bb4eb82cefa8a933ee19f0bc3dfc6af8b27bd6927de698991d6f82c440`
+- `src/lib/workTasksStore.ts` — SHA-256: `d2bf7cb80ac6f9d4abad8b600a01931d10fb08f4b1e38e2aebffe0a218436ef7`
+- `src/lib/workTasksStore.ts` — SHA-256: `e03adf68bb3330d523657fa1584f134a89db0b3477d0a75c4de6211ebc75aad8`
+- `src/lib/workTasksStore.ts` — SHA-256: `e0f855f07b2c096359f342f4d45ab46a2f9364359752470830c4e1e20056e2c3`
+- `src/lib/workTasksStore.ts` — SHA-256: `e9fb7fedcdcf4e07bae6e046f425988536a54909c3e2cce41a5400f2b2dd2e0c`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `0c680c2134e162c688ce19cb34ba7aa7d25b13ce0697729c59838dc68a2c0ae5`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `3ed74ff8b23ae5a87b6111643df37926a700ed465eaf9c25e08b8dc9d534daa2`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `45c7e347ec9f91449a0206d31ea1576b2a9c09ecbd39b0167792622450c123c6`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `5112f4adede6087d010a6277a18bede64bfa9ababbde3ce04ce6196d96821cbe`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `560744b70a2d41bfb04b6557f77170ab4c7240ca58f24263baa1f2decddbd04a`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `76a43142154352146d9b6eb85c068092a6968f62de04a2141d489b5ec0b32342`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `98cfbc6040db69ab301b63f89c9488f3d602e93faee8bba875bd66b67311182d`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `9ad5a67bc2d825ae293e6883ef9fb74a397935fd48e4ab4418c831ae98b96179`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `a392260601d4f2de78990f95c5d7e0ff13d274e5271cf3cf86386890c16ccc22`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `abe753b2005b5f9eea125fb8f5bad5ed34271afb83f4a56c7ea06f422079dc05`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `acb568503dab4cf5f6d0a3db6aa80ccab619e5475f486b3f942f9e1652c1b889`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `ad6b5c8bfd994072a15ab21f172981809aa6e560adb5900720e3daca602731bd`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `d7b42b2fc4e788025f7bf16d7238f3787a9fa133dfa53c7679c48c5bab5a72f3`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `f522005880ee7ed1ce1dca35982962bf89ca26c33e03bae3cba39edf2e29b324`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `000a4bbb89505a92bed6a93adb94c55b196f5d3b649c3697b85327ce69a8eb3b`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `083bba50577461322a2e9c78610f71a8eff9cd8b5a954b6475aa8533aa6f1477`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `0b7aac48575017384f60b71acc968cfd3941c450a7eb22a3492a364f3494a318`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `1062befa6e70176ebd268872d2d5b1e7f04474f92d3c228e9273bfc39ba64a79`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `216e75caf572cdc194d40b1f719adc34cd820610c174f834f310e86c84b346e5`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `2407e165ac48d6960aacf6db125c75c5d35a1ee4d431b6385be9506cc17480ff`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `24520f6c07c1a6394f3f1c93f949c36267474ed4dde2c1861706a54b5cbb2993`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `4556f4fe8ade076c38794a315cb27da0b5396ca5dddcd6834524f35abd9c28af`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `7a768a7fd203cf6d58354f17aaa3a8ddc540070d1ca787ec2018654f23b325d7`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `7a87316a5858d4353fa30028a85b47d14e7b8ddad6d8eefbc193f33aa3c2ff0f`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `88f183a33f0e0a5cccb6725b7b1367f65c5405a2a2fa0fd9bbd7b1ad4bc7bfcb`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `896265ea970dd19dbdd384449cc5e007addf5c26ed43e7834d8c4e3059156539`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `9dc0a4064345ea9970aae578cdb5ab23329ed6da238cd45be774bcb38e11be9f`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `a3f928477d9efad4134587fd532072c705cec08beaa0e4dd213fefad031313de`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `a8405949d1604560e997841eb891e1b128ddd17b816ab0bb676f3b55fdc3e67e`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `c1630766f835a67c5427ed499ed4a1461db9d53b8bf01f3c52886e24c2407f44`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `c9bffd9d95205fc6f2f6c373c4eb026aef57f1f948dc44d2b4778836af67ddb7`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `d47fdabe328bd3475055e1f08259398a689321554d6e121f53044ef94daf0b0d`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `e808627d87c0d1ca2722a800f224ed5e05c34224bfcc6e3781bd5f4fad558bae`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `fb1a6831c08199290a30ffeec6e22346c7e7a02f8e56da37e27f9493d3801d15`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `fb5749a8a4f3222a8d95cffa2d024b0c93f0246c070ba49343c55e16d18936a4`
+
+### Release Attempts
+
+#### RA-20261106-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261106-001`, `CRL-20261106-002`
+- Selected CRL identities: `mobile/CRL-20261106-001`, `mobile/CRL-20261106-002`
+- Intended action: `commit`
+- Branch: `codex/mz091-mz110-release-local`
+- Base: `github/Dev@51e3c051f50f9a264f0c08a4c2616e4caf8729a1`; fetched at `2026-11-06T12:38:38Z`
+- Candidate patch SHA-256: `301cf834435a96761dca6c1e751a928f7e2143e3b7061890543a5a33016a901f`; excludes `docs/change-release-ledger.md`
+- Source-equivalence evidence: initial extracted source fingerprint was `4750142e28e6e123b2ac5105fb5b51c9fb953fe5240260f9083607ed30efb665` under the retained no-index-new-file convention. The final candidate intentionally differs only in `api` legacy strict-schema compatibility, exact receipt-version/entry completeness fail-closed checks, Screen-level malformed-response no-cache/no-success handling, their focused tests and governance records; task/password/topology/permission business rules are unchanged.
+- Commit SHA: not committed
+- Dependencies: paired exact Root candidate from `github/Dev@710a5adec511ff6ca3e87e9041f98c4a2817a7b5`; Root must precede any later Mobile delivery
+- Required validation: `PASS` for final focused/full Mobile and paired Root final-code PG/API/complete gates plus exact pre-commit audit (13 staged files / 95 non-ledger hunks); bound independent re-review is pending
+- Shared-hunk review: `PASS`; independent reviewer matched all 13 staged files / 95 non-ledger hunks to the selected 091/110 unit
+- Generated-file review: `PASS`; the selected measurement source script is intentional, post-test cleanup completed, and the final staged range has no untracked or unselected path
+- Technical state: `candidate`
+- User authorization: `selected-for-commit`; evidence: user instructed “提交091/110”. Push, PR, merge, build, OTA, deployment and production writes were not authorized.
+- Independent review: `GO for local commit`; P0/P1/P2 = 0/0/0. Reviewer independently matched base, branch, fingerprint `301cf834435a96761dca6c1e751a928f7e2143e3b7061890543a5a33016a901f`, 13 files / 95 hunks, reran the API/receipt/Screen flow (3 suites / 64 tests), and confirmed both prior review rounds are closed. Non-blocking P3: numeric JSON strings for keys/sequence are normalized with `Number()`; paired Root emits numbers.
+- Action conclusion: `GO` for the user-authorized local commit only; push, PR, merge, build, OTA, deployment and production writes remain unauthorized
+
+### Risks / Release Notes
+
+- Local commit is not an OTA, deployment or production recovery claim. Root must precede any later Mobile delivery.
+- Old Root compatibility deliberately retains a background full refresh, so query reduction requires paired Root response support.
+- The strict legacy retry removes `operation_id` because old Root rejects it. A legacy request whose response is lost may repeat an event/notice on retry; Root-first delivery is mandatory, and full operation-level response-loss safety requires the paired Root.
+- Synthetic measurement reports modeled latency/request bytes only; it is not online CPU or customer-network evidence.
+- Sensitive-information review: `PASS`; exact staged diff contains no user-mentioned password values, credential/private-key/database-URL pattern or production endpoint; retained device request evidence is sanitized.
+- Git state: uncommitted, not pushed, no PR, not merged, not built, not OTA-published or deployed.
+
+## CRL-20261106-002 — MZ-091 移动端保存重放身份与缓存恢复
+
+- **Repository:** `mobile`
+- **Status:** verified latest-Dev local commit candidate; final focused, complete release validation, shared exact staged audit and independent re-review passed; not pushed, built, OTA-published or deployed
+- **Board item:** `MZ-091`
+- **Updated:** 2026-11-06 UTC
+- **Request:** Mobile 保存响应丢失时使用同一语义 operation ID 安全重试；真实新编辑必须生成新 ID，不能重复事件或错误覆盖密码/钥匙/任务缓存。
+- **Outcome:** 一次确认的标准化任务/字段快照绑定 operation ID，失败或响应丢失保留该身份；成功确认后才清除。Root 回执被严格消费和持久化，刷新失败不会把已确认密码恢复成旧缓存。
+
+### Implementation
+
+- stable snapshot excludes UI-only ordering noise while preserving exact source IDs, field presence and values；same semantic retry reuses ID, changed semantic payload rotates it。
+- success/replay consumes only exact v1 receipts with an explicit updates array; missing, unknown-version or incomplete receipt falls back to existing full refresh without optimistic password guessing。旧 strict Root 只在明确 schema 400 零执行后做一次可无歧义表达的 legacy retry。
+- save lock, navigation/date changes, stale list responses, multi-field/task receipt, cache reopen and current-bucket coordination have focused regressions。
+
+### Files / Areas
+
+- Shared with `mobile/CRL-20261106-001`: `src/lib/api.ts`, operation/receipt helpers and tests, `src/lib/workTasksStore.ts` plus tests, manager screen plus render tests, FR registry and ledger。
+
+### Impact / Dependencies
+
+- API/database/migration/native dependency/config: no breaking API and no Mobile schema migration。
+- Roles, password applicability, task/status/topology and save permission rules: unchanged。
+- Dependency: paired `root/CRL-20261106-002` provides durable actor + operation receipt and exact atomic replay；paired MZ-110 Root receipt supplies optimized success path。
+
+### Validation
+
+- Automation: PASS — final follow-up typecheck and five focused suites / 143 tests passed；the complete release gate passed 8 fast suites / 155 tests and 87 full suites / 885 tests as recorded under `mobile/CRL-20261106-001`.
+- Real API / isolated database: PASS — fresh source-equivalent paired Root real loopback API/disposable PostgreSQL evidence passed as recorded in `mobile/CRL-20261106-001`; no production endpoint or data was accessed.
+- Web real interaction: N/A — Mobile repository has no Web delivery surface.
+- App physical device: NOT RUN on the final follow-up candidate; retained pre-follow-up iPhone report SHA-256 `50d9d6743842653a907dcc7cd32396a8d8275b2ea9de2a8ebf3b614e2671a2b7` is context only. Android physical and real weak-network remain not run.
+- Critical validation conclusion: PASS for the authorized local commit; shared final validation, exact audit and independent re-review in `mobile/CRL-20261106-001` passed.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared; exact shared hunk scope is recorded under `mobile/CRL-20261106-001`
+- **Untracked review:** none; selected new helper/test/measurement files are included in the shared prepared scope
+
+### Release Attempts
+
+- Shared commit attempt: `mobile/CRL-20261106-001` / `RA-20261106-001` selects both exact CRLs.
+
+### Risks / Release Notes
+
+- A commit does not authorize push, PR, merge, EAS build, OTA, deployment or production writes.
+- Rollback must remove stable operation identity and receipt/cache consumption together；no server or Mobile database migration rollback。
+- Sensitive-information review: `PASS`; tests use synthetic values only and no real password, credential, production endpoint or user-mentioned password value enters the staged commit.
+- Git state: uncommitted, not pushed, no PR, not merged, not built, not OTA-published or deployed.
+
 ## CRL-20261104-004 — MZ-065/091/106 Mobile 统一特性分支发布单元
 
 - **Repository:** `mobile`

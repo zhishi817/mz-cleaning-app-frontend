@@ -2,22 +2,26 @@
 
 ## FR-P1-TSK-09 — 客服密码来源状态与权威刷新
 
-- **Status:** active; MZ-091 empty-password target recovery is an isolated local candidate, not committed, pushed, merged or released.
+- **Status:** active; MZ-091 response-loss plus MZ-110 local authoritative receipt coordination are one isolated local candidate, not committed, pushed, merged or released.
 - **Maintenance scope:** Mobile task-list/detail password projection, `ManagerDailyTaskScreen`, MZ App password preview/save contract, and work-task cache reconciliation; paired Root authority is `root/CRL-20261104-005`.
-- **Last reviewed:** 2026-11-04 UTC
-- **Business outcome:** 客服、admin 和线下经理在每日任务详情必须看到适用密码字段的“待核对、系统生成、已关联来源、已人工核对”状态。同订单入住 `new_code` 是对应退房 `old_code` 的唯一自动来源；Root 明确返回 `turnover_display.old_code/new_code=null` 时，列表、详情、历史卡和管理编辑初值都必须保持空，绝不能回退顶层缓存、另一 source 或历史任务密码。纯入住不显示/编辑旧密码，纯退房不显示/编辑新密码；角色分拆合卡的预览/保存必须命中 checkout/checkin 精确来源任务。密码值为空、`pending_decision`、无检查员或已安排检查都不影响适用字段的编辑；客户端只能提交字段对应的精确 target ID，不得用当前角色的 `active_source_ids` 猜目标。旧缓存缺 target 时必须先强制刷新并保留用户草稿；刷新失败、离线、无目标或多字段共用同一异常目标时零写入并提示重试。当前退房任务明确人工旧密码仍可显示，但只属于该任务。修改密码或显式同值核对前，客户端发送唯一 request ID并读取不含密码值的影响预览；保存后强制读取 Root 权威状态，保存/传播/刷新失败恢复保存前显示。未核对只限制“密码已核对”的声明，不阻断其他客服字段或整项任务。
-- **Related CRLs:** `root/CRL-20261104-005` / `mobile/CRL-20261104-002`; preserves `root/CRL-20261102-001` / `mobile/CRL-20261102-001` and supersedes the cross-order display assumptions in the earlier `CRL-20261101-004` pair.
+- **Last reviewed:** 2026-11-06 UTC
+- **Business outcome:** 客服、admin 和线下经理在每日任务详情必须看到适用密码字段的“待核对、系统生成、已关联来源、已人工核对”状态。同订单入住 `new_code` 是对应退房 `old_code` 的唯一自动来源；Root 明确返回 `turnover_display.old_code/new_code=null` 时，列表、详情、历史卡和管理编辑初值都必须保持空，绝不能回退顶层缓存、另一 source 或历史任务密码。纯入住不显示/编辑旧密码，纯退房不显示/编辑新密码；角色分拆合卡的预览/保存必须命中 checkout/checkin 精确来源任务。密码值为空、`pending_decision`、无检查员或已安排检查都不影响适用字段的编辑；客户端只能提交字段对应的精确 target ID，不得用当前角色的 `active_source_ids` 猜目标。旧缓存缺 target 时必须先强制刷新并保留用户草稿；刷新失败、离线、无目标或多字段共用同一异常目标时零写入并提示重试。当前退房任务明确人工旧密码仍可显示，但只属于该任务。修改密码或显式同值核对前，客户端发送唯一 request ID并读取不含密码值的影响预览；服务端成功后只接受版本 1、显式 updates 数组且每项具备有效 task ID/type/权威字段的回执，把实际受影响 source 的最终值/权威状态合入当前卡并落盘，不等待前后 7 天全量列表。未知版本、不完整现代回执必须立即视为结果未确认：不走 legacy 本地 patch、不显示成功、不清除 operation 身份，并安排后台权威刷新；只有完全不带现代回执 marker 的真实旧后端成功响应可走兼容 patch。其他日期缓存由无密码 authority marker 失效；同 operation 的脱敏 SSE 不重复触发全量读取，check-in 保存只让回执覆盖的同源同序/旧序事件复用既定投影刷新，更新序号、其他客户端/未知事件、成员关系及只读历史撤权仍保留原安全刷新。旧 strict Root 若在事务前明确以 schema 400 拒绝 `operation_id/items`，Mobile 只可把无歧义逐任务值折叠成旧字段并重试一次；网络错误、5xx、409、不确定结果或不同逐任务值不得自动重试。回执缺失、响应丢失、缓存落盘失败及会改变角色投影的 check-in 时间只在保存结束后后台协调，不能恢复旧值或伪报传播结果；保存/传播本身失败仍保留草稿且不伪报成功。未核对只限制“密码已核对”的声明，不阻断其他客服字段或整项任务。
+- **Response-loss and per-task rule:** one manager save attempt keeps a stable operation ID across a network/response failure and uses that same value for password verification. Combined cards must send checkout/checkin time in per-task items bound to the exact old/new password target; missing or wrong-direction targets fail closed, while shared guest requests remain limited to the exact active source IDs. The server must replay the same actor/ID/recursively normalized payload without new receipts or events, reject the same ID with a changed payload, and accept a later intentional edit under a new ID. The client must not use content-wide deduplication across completed edits.
+- **Related CRLs:** `root/CRL-20261104-005` / `mobile/CRL-20261104-002`; response-loss follow-up `root/CRL-20261105-006` / `mobile/CRL-20261105-001`; local receipt optimization `root/CRL-20261106-001` / `mobile/CRL-20261106-001`; preserves `root/CRL-20261102-001` / `mobile/CRL-20261102-001` and supersedes the cross-order display assumptions in the earlier `CRL-20261101-004` pair.
 
 ### Test-to-invariant mapping
 
-- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — 显示待核对/已关联来源，先预览关联影响，再以同值 `password_verification` 保存；空值 + pending + checkout-only source 会刷新出准确 check-in target 并保留草稿；双字段同改使用两侧精确 source；离线/缺目标零写入，响应丢失保留草稿，重复确认只发一次；保存后强制刷新且不把密码局部补入缓存。
-- `src/lib/workTasksStore.test.ts` — 带 `password_authority` 的脱敏事件不是安全局部补丁，必须触发权威刷新。
-- `src/lib/api.ts` — preview 和 save 类型只发送 task IDs、字段、request ID 与客户端，不在预览响应中接收密码值。
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — 显示待核对/已关联来源，先预览关联影响，再以同值 `password_verification` 保存；空值 + pending + checkout-only source 会刷新出准确 check-in target并保留草稿；双字段同改使用两侧精确 source，合卡退房/入住时间写入不同 task item；纯退房钥匙只补 checkout 侧；离线/缺目标零写入；同一失败保存重试复用 operation ID，成功后的后续编辑使用新 ID，密码 request ID 与 operation ID 相同；未知/不完整现代回执不写缓存、不发成功通知并立即安排权威刷新，随后有效回执重试复用同一 operation ID；版本化回执保存不调用阻塞式 15 天刷新，立即重开保持新值；必要投影协调只由屏幕发出一次，真实日期桶切换的短暂空态不再触发第二个详情 fallback，网络 Promise 未结束时也先解除保存状态；从未解析成功的初次无缓存路由仍补查一次，同一挂载页面切换 token/角色/权限 authority 后也必须重新补查。
+- `src/lib/managerTaskSaveOperation.test.ts` — 完整 payload 递归规范化排序，不受 operation/password request ID 或对象插入顺序影响；checkout/checkin 时间只写精确 old/new target，缺目标 fail closed；响应丢失重试复用 ID，内容变化或成功后新编辑生成新 ID。
+- `src/lib/managerTaskSaveReceipt.test.ts` — 合卡 checkout/check-in 精确侧、人工保护最终值、关联 source、钥匙/时间/客需、多 source 序号和迟到旧回执保护；只接受 exact v1 + 显式 updates，且逐项验证 task ID/type、权威字段和值类型；未知版本、空壳/畸形 entry 与不完整 shape fail closed，并区分真实 legacy 成功响应。
+- `src/lib/workTasksStore.test.ts` — 未归属 `password_authority` 事件仍触发权威刷新；本 operation 的 receipt/SSE 去重零列表请求；投影回执覆盖的同序 guest-ready 回声与屏幕协调合计一次列表请求，而更新序号事件在当前在途刷新后继续执行第二次权威请求；authority marker 使其他日期旧缓存失效；旧列表响应只叠加精确本地字段并保留无关远端更新；未知/不完整 receipt 不写缓存并要求后台协调。
+- `src/lib/api.ts`、`src/lib/api.test.ts` — preview 只发送 task IDs/字段且不接收密码；save 使用版本化权威回执；旧 strict Root 的未知键 schema 400 只触发一次同 URL/method legacy 重试，逐任务值无歧义折叠，其他错误和冲突值零重试。
 - `src/lib/turnoverDisplay.test.ts`、`src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — Root 周转投影明确为空时，禁止从顶层旧缓存恢复旧/新密码；明确 pure-checkin/pure-checkout 时隐藏并拒绝操作不适用字段；密码 target 只取精确 field mapping，缺失或碰撞 fail closed，不回退 active execution source；只有完全缺少任务类型与 `turnover_display` 的 legacy payload 才使用顶层显示值。
 
 ### Delivery boundary
 
-- Root 后端必须先完成并部署，之后才可发布 Mobile OTA。单独 OTA 不会修复来源选择、事务或历史数据；本纠正不新增数据库迁移。
+- Root 后端必须先完成并部署，之后才可发布 Mobile OTA。单独 OTA 不会修复来源选择、事务或服务端回执；本纠正不新增数据库迁移，但 Mobile 源码变更意味着后续发布需要新的 OTA/native delivery 授权。
+- 旧 strict Root 的兼容请求必须移除其拒绝的 `operation_id`，因此该旧后端只能保证可保存并后台刷新，不能提供 MZ-091 的 operation-level 响应丢失幂等；若 legacy 请求执行后响应丢失，重试可能重复事件/通知。Root-first 是强制发布顺序，完整响应丢失安全只在配套 Root 上成立。
 - 不扩大角色权限、不读取或记录密码明文到审计、不自动修历史密码、不清缓存/草稿/上传队列，不改原生依赖或 runtime。真实账号、iOS/Android、弱网、数据库迁移和发布均未验收。
 
 ## FR-P1-UPD-01 — OTA 已下载与实际生效提示
@@ -337,12 +341,12 @@
 - **Status:** active
 - **Maintenance scope:** `mobile`
 - **Last reviewed:** 2026-08-31 Australia/Melbourne
-- **Business outcome:** 同一登录用户、日期范围与视图 bucket 的任务全量读取只通过 `workTasksStore` 的共享协调器发起。首次/强制操作立即执行；焦点与前台恢复在 60 秒内直接跳过；SSE 成员资格或未知一致性事件在窗口内合并为一次有界尾随同步；服务端因重连历史缺口发出的 `resync_required`、手动刷新、日期切换、通知跳转与写操作回执均为强制刷新。同步运行期间，额外触发最多保留一次后续同步，强制优先于一致性同步；认证层建立唯一的当前任务会话，登出或账户切换使旧请求、缓存 hydration、timer、pending、in-flight 等待状态和旧 SSE 启动全部失效。
-- **Related CRLs:** `mobile/CRL-20260830-004`.
+- **Business outcome:** 同一登录用户、日期范围与视图 bucket 的任务全量读取只通过 `workTasksStore` 的共享协调器发起。首次/强制操作立即执行；焦点与前台恢复在 60 秒内直接跳过；SSE 成员资格或未知一致性事件在窗口内合并为一次有界尾随同步；服务端因重连历史缺口发出的 `resync_required`、手动刷新、日期切换与通知跳转仍为强制刷新。manager-fields 写操作使用同一事务的版本化局部回执时，只合入实际受影响 source 并用 operation ID 去重本次 SSE，不再把 15 天 GET 置于保存等待；必要的详情投影刷新切换日期桶时，已解析过当前任务的页面不得把短暂空桶当作首次缺失再发第二个 15 天 fallback，而真正首次无缓存路由仍补查一次。旧后端、响应丢失、落盘失败或角色投影变化仍经共享协调器后台刷新，其他客户端/未知/权限事件不得被抑制。同步运行期间，额外触发最多保留一次后续同步，强制优先于一致性同步；认证层建立唯一的当前任务会话，登出或账户切换使旧请求、缓存 hydration、timer、pending、in-flight 等待状态和旧 SSE 启动全部失效。
+- **Related CRLs:** `mobile/CRL-20260830-004`; `root/CRL-20261106-001` / `mobile/CRL-20261106-001`.
 
 ### Test-to-invariant mapping
 
-- `src/lib/workTasksStore.test.ts` — 60 秒冷却按 user/date/view bucket 隔离；持续一致性事件最多形成一次有界尾随刷新；反复 focus 不产生尾随刷新；运行中的多个强制请求合并为一次后续同步；登出后下一账户不继承 timer 或冷却状态，旧账号慢响应不能覆盖新账号缓存或安排旧 token 的 follow-up，队列延迟的旧闭包也不能在新账户会话下发起读取或重建 SSE。
+- `src/lib/workTasksStore.test.ts` — 60 秒冷却按 user/date/view bucket 隔离；持续一致性事件最多形成一次有界尾随刷新；反复 focus 不产生尾随刷新；运行中的多个强制请求合并为一次后续同步；同 operation 回执/SSE 局部协调零额外列表请求，其他日期缓存失效，旧列表响应不吞并发无关字段；登出后下一账户不继承 timer 或冷却状态，旧账号慢响应不能覆盖新账号缓存或安排旧 token 的 follow-up，队列延迟的旧闭包也不能在新账户会话下发起读取或重建 SSE。
 - `src/screens/tabs/TasksScreen.test.tsx` — 任务屏调用共享刷新入口而不是自己维护第二个 debounce/interval；初始读取为 `force`，navigation focus 和 App foreground 均显式为 `passive`。
 - `src/screens/tasks/TaskDetailScreen.test.tsx` — 钥匙上传后仍触发带原因标记的强制任务投影刷新。
 

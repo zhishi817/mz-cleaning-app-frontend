@@ -3,6 +3,7 @@ import { notifyAuthInvalidated } from './authEvents'
 import { Directory, File, Paths } from 'expo-file-system'
 import { recordTaskLoadStage } from './taskLoadDiagnostics'
 import { beginAppRestartUnsafeOperation } from './appRestartSafety'
+import type { ManagerTaskSaveReceipt } from './managerTaskSaveReceipt'
 
 type Json = any
 type AuthenticatedRequestOptions = {
@@ -960,10 +961,15 @@ export type WorkTask = {
   property: WorkTaskProperty | null
 }
 
-export async function updateCleaningTaskManagerFields(
-  token: string,
-  params: {
+type CleaningTaskManagerFieldsParams = {
+    operation_id: string
     task_ids: string[]
+    items?: Array<{
+      id: string
+      checkout_time?: string | null
+      checkin_time?: string | null
+      guest_special_request?: string | null
+    }>
     password_task_ids?: string[]
     checkout_time?: string | null
     checkin_time?: string | null
@@ -976,11 +982,69 @@ export async function updateCleaningTaskManagerFields(
       request_id: string
       client: 'mobile'
     }
-  },
+}
+
+function managerFieldsUnsupportedStrictKeys(value: unknown) {
+  const messages: string[] = []
+  const visit = (node: unknown) => {
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item)
+      return
+    }
+    if (!node || typeof node !== 'object') return
+    for (const [key, item] of Object.entries(node as Record<string, unknown>)) {
+      if (key === '_errors' && Array.isArray(item)) {
+        for (const message of item) messages.push(String(message || ''))
+      } else {
+        visit(item)
+      }
+    }
+  }
+  visit(value)
+  const keys = messages
+    .filter((message) => /Unrecognized key/i.test(message))
+    .flatMap((message) => Array.from(message.matchAll(/'([^']+)'/g), (match) => String(match[1] || '').trim()))
+    .filter(Boolean)
+  if (!keys.length || keys.some((key) => key !== 'operation_id' && key !== 'items')) return null
+  return new Set(keys)
+}
+
+async function legacyManagerFieldsUnsupportedKeys(res: Response) {
+  if (res.status !== 400) return null
+  try {
+    return managerFieldsUnsupportedStrictKeys(await res.clone().json())
+  } catch {
+    return null
+  }
+}
+
+function legacyManagerFieldsPayload(params: CleaningTaskManagerFieldsParams, unsupportedKeys: Set<string>) {
+  const legacy: Record<string, any> = { ...params }
+  if (unsupportedKeys.has('items')) {
+    for (const item of params.items || []) {
+      for (const field of ['checkout_time', 'checkin_time', 'guest_special_request'] as const) {
+        if (!Object.prototype.hasOwnProperty.call(item, field)) continue
+        if (Object.prototype.hasOwnProperty.call(legacy, field) && legacy[field] !== item[field]) {
+          throw new Error('旧后端无法安全表示多个任务的不同字段值，请先更新后端再重试')
+        }
+        legacy[field] = item[field]
+      }
+    }
+    delete legacy.items
+  }
+  if (unsupportedKeys.has('operation_id')) delete legacy.operation_id
+  return legacy
+}
+
+export async function updateCleaningTaskManagerFields(
+  token: string,
+  params: CleaningTaskManagerFieldsParams,
 ) {
   const urls = buildUrlCandidates('mzapp/cleaning-tasks/manager-fields')
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
+  let selectedUrl = ''
+  let selectedMethod: 'PATCH' | 'POST' = 'PATCH'
   let exhausted = true
   for (const url of urls) {
     for (const method of ['PATCH', 'POST'] as const) {
@@ -991,12 +1055,27 @@ export async function updateCleaningTaskManagerFields(
       )
       if (lastRes.status === 404 || lastRes.status === 405) continue
       exhausted = false
+      selectedUrl = url
+      selectedMethod = method
       break
     }
     if (!exhausted) break
   }
-  const res = lastRes as Response
+  let res = lastRes as Response
   if (exhausted) throw new Error('后端未部署“客服编辑任务”接口，请更新后端 Dev 后重试')
+  const unsupportedKeys = await legacyManagerFieldsUnsupportedKeys(res)
+  if (!res.ok && unsupportedKeys) {
+    const legacyPayload = legacyManagerFieldsPayload(params, unsupportedKeys)
+    res = await fetchWithTimeout(
+      selectedUrl,
+      {
+        method: selectedMethod,
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(legacyPayload),
+      },
+      15000,
+    )
+  }
   if (!res.ok) {
     const msg = await parseErrorMessage(res)
     if (res.status === 400 && msg.includes('Unrecognized key') && msg.includes('keys_required')) {
@@ -1004,7 +1083,7 @@ export async function updateCleaningTaskManagerFields(
     }
     throw new Error(msg)
   }
-  return (await parseJsonOrThrow(res)) as any
+  return (await parseJsonOrThrow(res)) as ManagerTaskSaveReceipt & { ok?: boolean; skipped?: string | null; replayed?: boolean }
 }
 
 export async function previewCleaningTaskPasswordAuthority(

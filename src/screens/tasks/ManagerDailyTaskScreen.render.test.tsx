@@ -59,7 +59,8 @@ const mockTask: any = {
   ],
 }
 
-let mockFoundTask: any = null
+let mockFoundTask: any = undefined
+let mockWorkTasksStoreListener: (() => void) | null = null
 
 const mockAuthState = {
   token: 'local-preview-token',
@@ -115,17 +116,26 @@ jest.mock('../../lib/api', () => ({
     note: null,
   })),
   saveGuestLuggageNotice: jest.fn(),
-  updateCleaningTaskManagerFields: jest.fn(),
+  updateCleaningTaskManagerFields: jest.fn(async () => ({ ok: true })),
   uploadMzappMedia: jest.fn(),
 }))
 
 jest.mock('../../lib/workTasksStore', () => ({
-  findWorkTaskItemByAnyId: () => mockFoundTask || mockTask,
+  applyManagerTaskSaveReceipt: jest.fn(async () => ({ supported: false, appliedItems: 0, persisted: false, projectionRefreshRequired: true })),
+  beginManagerTaskSaveOperation: jest.fn(() => true),
+  failManagerTaskSaveOperation: jest.fn(),
+  findWorkTaskItemByAnyId: () => mockFoundTask === undefined ? mockTask : mockFoundTask,
   getWorkTasksSnapshot: () => ({ items: [mockTask] }),
   patchWorkTaskItem: jest.fn(async () => {}),
   patchWorkTaskItems: jest.fn(async () => {}),
+  reconcileActiveWorkTasksAfterLocalPatch: jest.fn(async () => false),
   requestWorkTasksRefresh: jest.fn(async () => {}),
-  subscribeWorkTasks: jest.fn(() => () => {}),
+  subscribeWorkTasks: jest.fn((listener: () => void) => {
+    mockWorkTasksStoreListener = listener
+    return () => {
+      if (mockWorkTasksStoreListener === listener) mockWorkTasksStoreListener = null
+    }
+  }),
 }))
 
 jest.mock('../../lib/noticesStore', () => ({ prependNotice: jest.fn(async () => {}) }))
@@ -153,7 +163,8 @@ function flattenedText(node: any): string[] {
 beforeEach(() => {
   jest.clearAllMocks()
   mockConsumablesResponse = defaultConsumablesResponse
-  mockFoundTask = null
+  mockFoundTask = undefined
+  mockWorkTasksStoreListener = null
 })
 
 test('manager status obeys authoritative key-handover completion and explicit absence', () => {
@@ -649,11 +660,205 @@ test('key count stays local through note keyboard and scrolling, cancel keeps th
     mockAuthState.token,
     expect.objectContaining({
       task_ids: ['cleaning-1'],
-      guest_special_request: '更新后的特殊需求',
+      items: [{ id: 'cleaning-1', guest_special_request: '更新后的特殊需求' }],
       keys_required: 1,
     }),
   ))
   expect(api.updateCleaningTaskManagerFields).toHaveBeenCalledTimes(1)
+})
+
+test('checkout-only key save patches the checkout side and never reports a check-in-side cache value', async () => {
+  const store = jest.requireMock('../../lib/workTasksStore') as any
+  const before = {
+    task_type: mockTask.task_type,
+    has_checkin_task: mockTask.has_checkin_task,
+    keys_required: mockTask.keys_required,
+    keys_required_checkout: mockTask.keys_required_checkout,
+    keys_required_checkin: mockTask.keys_required_checkin,
+    turnover_display: mockTask.turnover_display,
+  }
+  try {
+    mockTask.task_type = 'checkout_clean'
+    mockTask.has_checkin_task = false
+    mockTask.keys_required = 1
+    mockTask.keys_required_checkout = 1
+    delete mockTask.keys_required_checkin
+    mockTask.turnover_display = {
+      checkout_order_id: 'checkout-order-1',
+      old_code: 'old-code',
+      old_code_task_id: 'cleaning-1',
+      new_code: null,
+      new_code_task_id: null,
+      active_source_ids: ['cleaning-1'],
+    }
+    const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+    const ui = render(
+      <I18nProvider>
+        <ManagerDailyTaskScreen
+          navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+          route={{ key: 'manager-checkout-only-keys', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+        />
+      </I18nProvider>,
+    )
+
+    expect(ui.getByTestId('manager-keys-current').props.children).toBe('1 套')
+    fireEvent.press(ui.getByTestId('manager-keys-edit'))
+    fireEvent.press(ui.getByTestId('manager-keys-option-2'))
+    fireEvent.press(ui.getByText('保存修改'))
+
+    await waitFor(() => expect(api.updateCleaningTaskManagerFields).toHaveBeenCalledWith(
+      mockAuthState.token,
+      expect.objectContaining({ task_ids: ['cleaning-1'], keys_required: 2 }),
+    ))
+    await waitFor(() => expect(store.patchWorkTaskItem).toHaveBeenCalledWith(
+      mockTask.id,
+      expect.objectContaining({ keys_required: 2, keys_required_checkout: 2 }),
+    ))
+    const cachePatch = store.patchWorkTaskItem.mock.calls.at(-1)?.[1]
+    expect(cachePatch).not.toHaveProperty('keys_required_checkin')
+    ui.unmount()
+  } finally {
+    Object.assign(mockTask, before)
+    if (before.keys_required === undefined) delete mockTask.keys_required
+    if (before.keys_required_checkout === undefined) delete mockTask.keys_required_checkout
+    if (before.keys_required_checkin === undefined) delete mockTask.keys_required_checkin
+  }
+})
+
+test('manager save retries reuse one operation id and a later edit gets a new id', async () => {
+  const alertSpy = jest.spyOn(Alert, 'alert')
+  ;(api.updateCleaningTaskManagerFields as jest.Mock)
+    .mockRejectedValueOnce(new Error('response_lost'))
+    .mockResolvedValue({ ok: true })
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <ManagerDailyTaskScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'manager-operation-retry', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  fireEvent.changeText(ui.getByTestId('manager-guest-note'), 'response lost draft')
+  fireEvent.press(ui.getByText('保存修改'))
+  await waitFor(() => expect(alertSpy).toHaveBeenCalledWith(expect.any(String), 'response_lost'))
+  const firstPayload = (api.updateCleaningTaskManagerFields as jest.Mock).mock.calls[0]?.[1]
+  expect(firstPayload.operation_id).toMatch(/^mobile-manager-save-/)
+
+  fireEvent.press(ui.getByText('保存修改'))
+  await waitFor(() => expect(api.updateCleaningTaskManagerFields).toHaveBeenCalledTimes(2))
+  const retryPayload = (api.updateCleaningTaskManagerFields as jest.Mock).mock.calls[1]?.[1]
+  expect(retryPayload.operation_id).toBe(firstPayload.operation_id)
+
+  fireEvent.changeText(ui.getByTestId('manager-guest-note'), 'intentional later edit')
+  fireEvent.press(ui.getByText('保存修改'))
+  await waitFor(() => expect(api.updateCleaningTaskManagerFields).toHaveBeenCalledTimes(3))
+  const laterPayload = (api.updateCleaningTaskManagerFields as jest.Mock).mock.calls[2]?.[1]
+  expect(laterPayload.operation_id).not.toBe(firstPayload.operation_id)
+  ui.unmount()
+})
+
+test.each([
+  ['unknown version', { ok: true, manager_fields_receipt_version: 2, authoritative_updates: [] }],
+  ['incomplete v1', { ok: true, manager_fields_receipt_version: 1 }],
+])('a %s receipt never takes the legacy cache path and keeps the operation id for retry', async (_label, response) => {
+  const alertSpy = jest.spyOn(Alert, 'alert')
+  const store = jest.requireMock('../../lib/workTasksStore') as any
+  const notices = jest.requireMock('../../lib/noticesStore') as any
+  ;(api.updateCleaningTaskManagerFields as jest.Mock)
+    .mockResolvedValueOnce(response)
+    .mockImplementationOnce(async (_token: string, payload: any) => ({
+      ok: true,
+      operation_id: payload.operation_id,
+      manager_fields_receipt_version: 1,
+      authoritative_updates: [],
+      projection_refresh_required: false,
+    }))
+  store.applyManagerTaskSaveReceipt
+    .mockResolvedValueOnce({
+      supported: false,
+      accepted: true,
+      appliedItems: 0,
+      persisted: false,
+      projectionRefreshRequired: true,
+    })
+    .mockResolvedValueOnce({
+      supported: true,
+      accepted: true,
+      appliedItems: 0,
+      persisted: true,
+      projectionRefreshRequired: false,
+    })
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <ManagerDailyTaskScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: `manager-invalid-receipt-${_label}`, name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  fireEvent.changeText(ui.getByTestId('manager-guest-note'), 'receipt must be authoritative')
+  fireEvent.press(ui.getByText('保存修改'))
+  await waitFor(() => expect(alertSpy).toHaveBeenCalledWith(
+    expect.any(String),
+    '保存回执异常，已安排后台权威刷新，请稍后重试',
+  ))
+  await waitFor(() => expect(store.requestWorkTasksRefresh).toHaveBeenCalledWith(expect.objectContaining({
+    mode: 'consistency',
+    reason: 'manager_task_receipt_invalid',
+  })))
+  const firstPayload = (api.updateCleaningTaskManagerFields as jest.Mock).mock.calls[0]?.[1]
+  expect(firstPayload.operation_id).toMatch(/^mobile-manager-save-/)
+  expect(store.patchWorkTaskItem).not.toHaveBeenCalled()
+  expect(store.patchWorkTaskItems).not.toHaveBeenCalled()
+  expect(store.reconcileActiveWorkTasksAfterLocalPatch).not.toHaveBeenCalled()
+  expect(notices.prependNotice).not.toHaveBeenCalled()
+
+  fireEvent.press(ui.getByText('保存修改'))
+  await waitFor(() => expect(api.updateCleaningTaskManagerFields).toHaveBeenCalledTimes(2))
+  const retryPayload = (api.updateCleaningTaskManagerFields as jest.Mock).mock.calls[1]?.[1]
+  expect(retryPayload.operation_id).toBe(firstPayload.operation_id)
+  expect(store.patchWorkTaskItem).not.toHaveBeenCalled()
+  await waitFor(() => expect(alertSpy).toHaveBeenCalledWith(expect.any(String), '已保存'))
+  ui.unmount()
+})
+
+test('a late old-backend response rejected after a session switch never patches the new session cache', async () => {
+  const store = jest.requireMock('../../lib/workTasksStore') as any
+  ;(api.updateCleaningTaskManagerFields as jest.Mock).mockResolvedValueOnce({ ok: true })
+  store.applyManagerTaskSaveReceipt.mockResolvedValueOnce({
+    supported: false,
+    accepted: false,
+    appliedItems: 0,
+    persisted: false,
+    projectionRefreshRequired: true,
+  })
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <ManagerDailyTaskScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'manager-late-legacy-session-switch', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  fireEvent.changeText(ui.getByTestId('manager-guest-note'), 'must not cross authority sessions')
+  fireEvent.press(ui.getByText('保存修改'))
+  await waitFor(() => expect(store.applyManagerTaskSaveReceipt).toHaveBeenCalled())
+  await waitFor(() => expect(ui.getByText('保存修改')).toBeTruthy())
+  expect(store.patchWorkTaskItem).not.toHaveBeenCalled()
+  expect(store.patchWorkTaskItems).not.toHaveBeenCalled()
+  expect(store.reconcileActiveWorkTasksAfterLocalPatch).not.toHaveBeenCalled()
+  expect(store.requestWorkTasksRefresh).not.toHaveBeenCalledWith(expect.objectContaining({
+    reason: 'manager_task_saved_legacy_backend',
+  }))
+  const notices = jest.requireMock('../../lib/noticesStore') as any
+  expect(notices.prependNotice).not.toHaveBeenCalled()
+  ui.unmount()
 })
 
 test('password authority shows review state and same-value verification previews impact before an atomic save', async () => {
@@ -694,12 +899,14 @@ test('password authority shows review state and same-value verification previews
     }),
   ))
   const submitted = (api.updateCleaningTaskManagerFields as jest.Mock).mock.calls.at(-1)?.[1]
+  expect(submitted.operation_id).toMatch(/^mobile-manager-save-/)
+  expect(submitted.password_verification.request_id).toBe(submitted.operation_id)
   expect(submitted).not.toHaveProperty('old_code')
   expect(submitted).not.toHaveProperty('new_code')
-  expect(store.requestWorkTasksRefresh).toHaveBeenCalledWith(expect.objectContaining({ mode: 'force', reason: 'manager_task_saved' }))
+  await waitFor(() => expect(store.requestWorkTasksRefresh).toHaveBeenCalledWith(expect.objectContaining({ mode: 'force', reason: 'manager_task_saved_legacy_backend' })))
   await waitFor(() => expect(alertSpy).toHaveBeenCalledWith(
     expect.any(String),
-    expect.stringContaining('权威状态刷新失败'),
+    '已保存',
   ))
   for (const [, patch] of store.patchWorkTaskItem.mock.calls) {
     expect(patch).not.toHaveProperty('old_code')
@@ -747,6 +954,211 @@ test('changed password previews the affected chain and requires explicit confirm
   const submitted = (api.updateCleaningTaskManagerFields as jest.Mock).mock.calls.at(-1)?.[1]
   expect(submitted).not.toHaveProperty('new_code')
   ui.unmount()
+})
+
+test('successful check-in password save applies the receipt without awaiting a 15-day refresh and survives immediate reopen', async () => {
+  const alertSpy = jest.spyOn(Alert, 'alert')
+  const store = jest.requireMock('../../lib/workTasksStore') as any
+  const before = {
+    task_type: mockTask.task_type,
+    has_checkin_task: mockTask.has_checkin_task,
+    turnover_display: mockTask.turnover_display,
+    password_authority: mockTask.password_authority,
+  }
+  try {
+    mockTask.task_type = 'checkin_clean'
+    mockTask.has_checkin_task = true
+    mockTask.turnover_display = {
+      checkin_order_id: 'checkin-order-1',
+      old_code: null,
+      old_code_task_id: null,
+      new_code: 'CI-INITIAL',
+      new_code_task_id: 'cleaning-1',
+      active_source_ids: ['cleaning-1'],
+    }
+    mockTask.password_authority = { new_code_status: 'needs_review' }
+    ;(api.updateCleaningTaskManagerFields as jest.Mock).mockImplementationOnce(async (_token: string, payload: any) => ({
+      ok: true,
+      operation_id: payload.operation_id,
+      manager_fields_receipt_version: 1,
+      authoritative_updates: [{ task_id: 'cleaning-1', task_type: 'checkin_clean', new_code: 'MOB-CI-914', sequence_no: 801 }],
+      projection_refresh_required: false,
+    }))
+    store.applyManagerTaskSaveReceipt.mockImplementationOnce(async () => {
+      mockFoundTask = {
+        ...mockTask,
+        new_code: 'MOB-CI-914',
+        turnover_display: {
+          ...mockTask.turnover_display,
+          new_code: 'MOB-CI-914',
+          new_code_authority_status: 'manual_confirmed',
+        },
+        password_authority: { new_code_status: 'manual_confirmed' },
+      }
+      return { supported: true, appliedItems: 1, persisted: true, projectionRefreshRequired: false }
+    })
+
+    const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+    const renderScreen = (key: string) => render(
+      <I18nProvider>
+        <ManagerDailyTaskScreen
+          navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+          route={{ key, name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+        />
+      </I18nProvider>,
+    )
+    const first = renderScreen('manager-checkin-password-cache-first')
+    fireEvent.changeText(first.getByPlaceholderText('新密码'), 'MOB-CI-914')
+    fireEvent.press(first.getByText('保存修改'))
+    await waitFor(() => expect(api.previewCleaningTaskPasswordAuthority).toHaveBeenCalled())
+    const confirmation = alertSpy.mock.calls.find((call) => call[0] === '确认保存密码修改？')
+    const confirmButton = (confirmation?.[2] as any[])?.find((button) => button.text === '确认保存')
+    await act(async () => {
+      confirmButton.onPress()
+    })
+
+    await waitFor(() => expect(store.applyManagerTaskSaveReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      manager_fields_receipt_version: 1,
+      authoritative_updates: [expect.objectContaining({ task_id: 'cleaning-1', new_code: 'MOB-CI-914' })],
+    })))
+    expect(store.patchWorkTaskItem).not.toHaveBeenCalled()
+    expect(store.reconcileActiveWorkTasksAfterLocalPatch).not.toHaveBeenCalled()
+    expect(store.requestWorkTasksRefresh).not.toHaveBeenCalledWith(expect.objectContaining({ reason: expect.stringContaining('manager_task') }))
+    await waitFor(() => expect(first.getByDisplayValue('MOB-CI-914')).toBeTruthy())
+    first.unmount()
+
+    const reopened = renderScreen('manager-checkin-password-cache-reopen')
+    expect(reopened.getByDisplayValue('MOB-CI-914')).toBeTruthy()
+    reopened.unmount()
+  } finally {
+    Object.assign(mockTask, before)
+    mockFoundTask = null
+  }
+})
+
+test('a projection reconciliation ignores its transient empty detail bucket and issues only one list request', async () => {
+  const alertSpy = jest.spyOn(Alert, 'alert')
+  const store = jest.requireMock('../../lib/workTasksStore') as any
+  ;(api.updateCleaningTaskManagerFields as jest.Mock).mockImplementationOnce(async (_token: string, payload: any) => ({
+    ok: true,
+    operation_id: payload.operation_id,
+    manager_fields_receipt_version: 1,
+    authoritative_updates: [{ task_id: 'inspection-1', task_type: 'checkin_clean', checkin_time: '2:45pm', sequence_no: 901 }],
+    projection_refresh_required: true,
+  }))
+  store.applyManagerTaskSaveReceipt.mockResolvedValueOnce({
+    supported: true,
+    appliedItems: 1,
+    persisted: true,
+    projectionRefreshRequired: true,
+  })
+  let resolveProjectionRefresh!: (value: boolean) => void
+  store.requestWorkTasksRefresh.mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+    resolveProjectionRefresh = resolve
+  }))
+
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <ManagerDailyTaskScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'manager-receipt-background-projection', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+      />
+    </I18nProvider>,
+  )
+  fireEvent.changeText(ui.getByTestId('manager-checkin-time'), '2:45pm')
+  fireEvent.press(ui.getByText('保存修改'))
+
+  await waitFor(() => expect(store.requestWorkTasksRefresh).toHaveBeenCalledWith(expect.objectContaining({
+    mode: 'consistency',
+    reason: 'manager_task_projection_reconcile',
+  })))
+  // The real store initializes the new 15-day detail bucket as empty before
+  // its list response arrives. That transient emit must not be mistaken for a
+  // genuinely missing task and trigger manager_task_fallback.
+  act(() => {
+    mockFoundTask = null
+    mockWorkTasksStoreListener?.()
+  })
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(store.requestWorkTasksRefresh).toHaveBeenCalledTimes(1)
+  await waitFor(() => expect(alertSpy).toHaveBeenCalledWith(expect.any(String), '已保存'))
+
+  act(() => {
+    mockFoundTask = { ...mockTask, checkin_time: '2:45pm', end_time: '2:45pm' }
+    mockWorkTasksStoreListener?.()
+    resolveProjectionRefresh(true)
+  })
+  await waitFor(() => expect(store.requestWorkTasksRefresh).toHaveBeenCalledTimes(1))
+  expect(store.requestWorkTasksRefresh).not.toHaveBeenCalledWith(expect.objectContaining({ reason: 'manager_task_fallback' }))
+  ui.unmount()
+})
+
+test('an initially uncached route still performs one detail fallback request', async () => {
+  const store = jest.requireMock('../../lib/workTasksStore') as any
+  mockFoundTask = null
+
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const ui = render(
+    <I18nProvider>
+      <ManagerDailyTaskScreen
+        navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+        route={{ key: 'manager-initially-uncached', name: 'ManagerDailyTask', params: { taskId: 'uncached-task-1' } } as any}
+      />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(store.requestWorkTasksRefresh).toHaveBeenCalledTimes(1))
+  expect(store.requestWorkTasksRefresh).toHaveBeenCalledWith(expect.objectContaining({
+    mode: 'force',
+    reason: 'manager_task_fallback',
+  }))
+  ui.unmount()
+})
+
+test('a same-user authority session change resets the resolved-route fallback guard', async () => {
+  const store = jest.requireMock('../../lib/workTasksStore') as any
+  const beforeToken = mockAuthState.token
+  const beforeRole = mockAuthState.user.role
+  const beforeRoles = mockAuthState.user.roles
+  const beforePermissions = (mockAuthState.user as any).permissions
+  let ui: ReturnType<typeof render> | null = null
+  try {
+    const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+    ui = render(
+      <I18nProvider>
+        <ManagerDailyTaskScreen
+          navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) } as any}
+          route={{ key: 'manager-authority-session-change', name: 'ManagerDailyTask', params: { taskId: mockTask.id } } as any}
+        />
+      </I18nProvider>,
+    )
+    expect(store.requestWorkTasksRefresh).not.toHaveBeenCalled()
+
+    mockAuthState.token = 'rotated-local-preview-token'
+    mockAuthState.user.role = 'admin'
+    mockAuthState.user.roles = ['admin']
+    ;(mockAuthState.user as any).permissions = ['cleaning.schedule.manage']
+    act(() => {
+      mockFoundTask = null
+      mockWorkTasksStoreListener?.()
+    })
+
+    await waitFor(() => expect(store.requestWorkTasksRefresh).toHaveBeenCalledTimes(1))
+    expect(store.requestWorkTasksRefresh).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'force',
+      reason: 'manager_task_fallback',
+      token: 'rotated-local-preview-token',
+    }))
+  } finally {
+    ui?.unmount()
+    mockAuthState.token = beforeToken
+    mockAuthState.user.role = beforeRole
+    mockAuthState.user.roles = beforeRoles
+    if (beforePermissions === undefined) delete (mockAuthState.user as any).permissions
+    else (mockAuthState.user as any).permissions = beforePermissions
+  }
 })
 
 test('blank first-time new password refreshes a stale target projection and saves against the exact check-in task', async () => {
@@ -929,6 +1341,8 @@ test('role-split turnover previews and saves passwords against both exact source
       </I18nProvider>,
     )
 
+    fireEvent.changeText(ui.getByPlaceholderText('例如 11am'), '10:30am')
+    fireEvent.changeText(ui.getByTestId('manager-checkin-time'), '2:30pm')
     fireEvent.changeText(ui.getByPlaceholderText('旧密码'), 'updated-old-code')
     fireEvent.changeText(ui.getByPlaceholderText('新密码'), 'updated-new-code')
     fireEvent.press(ui.getByTestId('manager-password-authority-verify'))
@@ -946,6 +1360,10 @@ test('role-split turnover previews and saves passwords against both exact source
       expect.objectContaining({
         task_ids: ['checkout-source-1', 'checkin-source-1'],
         password_task_ids: ['checkout-source-1', 'checkin-source-1'],
+        items: [
+          { id: 'checkin-source-1', checkin_time: '2:30pm' },
+          { id: 'checkout-source-1', checkout_time: '10:30am' },
+        ],
         old_code: 'updated-old-code',
         new_code: 'updated-new-code',
         password_verification: expect.objectContaining({ fields: ['old_code', 'new_code'] }),
