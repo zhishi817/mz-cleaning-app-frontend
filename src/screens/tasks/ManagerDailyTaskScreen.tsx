@@ -29,10 +29,10 @@ import { useAppRestartBlocker } from '../../lib/appRestartSafety'
 import { useI18n } from '../../lib/i18n'
 import { canLoadLiveSourceMediaForDailyTask } from '../../lib/dailyTaskExecutionVisibility'
 import { prependNotice } from '../../lib/noticesStore'
-import { hasAnyRole, roleNamesOf } from '../../lib/roles'
+import { hasAnyRole, permissionCodesOf, roleNamesOf } from '../../lib/roles'
 import { hairline, moderateScale } from '../../lib/scale'
 import { getEffectiveTaskStatus, guestCheckoutCanDriveTaskStatus, hasAuthoritativeKeyHandoverProjection, hasCompletedKeyHandover, isTaskWorkflowProgressStatus } from '../../lib/taskVisualTheme'
-import { findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, patchWorkTaskItems, requestWorkTasksRefresh, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
+import { applyManagerTaskSaveReceipt, beginManagerTaskSaveOperation, failManagerTaskSaveOperation, findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, patchWorkTaskItems, reconcileActiveWorkTasksAfterLocalPatch, requestWorkTasksRefresh, subscribeWorkTasks, type WorkTaskItem, type WorkTasksView } from '../../lib/workTasksStore'
 import { actionDisabledReasonText, availableActionsForTask, guestReadyCachePatchAfterCheckinTimeChange, guestReadyMutationTarget, guestReadyOperationId, isGuestReadyNotificationAction, mergeGuestReadyNotificationActions, navigationForWorkTaskAction, workTaskMatchesGuestReadyTarget } from '../../lib/workTaskActions'
 import { buildCleaningMediaVideoSource } from '../../lib/cleaningMedia'
 import { CLEANING_SCENE_PHOTO_IDS, CLEANING_SCENE_PHOTO_LABEL } from '../../lib/cleaningScenePhotoTemplate'
@@ -47,6 +47,8 @@ import {
   type ManagerDailyTaskPhotoLoadIssue,
   type ManagerDailyTaskPhotoSource,
 } from '../../lib/managerDailyTaskPhotos'
+import { buildManagerTaskFieldItems, managerTaskSaveOperation, type ManagerTaskSaveOperation } from '../../lib/managerTaskSaveOperation'
+import { isLegacyManagerTaskSaveResponse } from '../../lib/managerTaskSaveReceipt'
 import { executionTaskIdsForRole, hasCheckoutPasswordField, newCodeForDisplay, oldCodeForDisplay, passwordTaskIdsForFields } from '../../lib/turnoverDisplay'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
@@ -56,8 +58,8 @@ import WorkRecordReadOnlyInfo from '../../components/WorkRecordReadOnlyInfo'
 
 type Props = NativeStackScreenProps<TasksStackParamList, 'ManagerDailyTask'>
 
-function passwordAuthorityRequestId() {
-  return `mobile-password-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+function managerTaskSaveRequestId() {
+  return `mobile-manager-save-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 function passwordAuthorityLabel(status: unknown) {
@@ -294,10 +296,24 @@ export default function ManagerDailyTaskScreen(props: Props) {
   }, [])
 
   const task = useMemo(() => findWorkTaskItemByAnyId(props.route.params.taskId), [props.route.params.taskId, storeVersion])
+  const roleNames = useMemo(() => roleNamesOf(user), [user])
+  const permissionCodes = useMemo(() => permissionCodesOf(user), [user])
+  const activeRole = String((user as any)?.role || '').trim().toLowerCase()
+  const resolvedRouteTaskKeyRef = useRef('')
+  const requestedRouteTaskId = String(props.route.params.taskId || '').trim()
+  const requestedRouteTaskKey = JSON.stringify([
+    String(user?.id || '').trim(),
+    String(token || '').trim(),
+    activeRole,
+    [...roleNames].sort(),
+    [...permissionCodes].sort(),
+    requestedRouteTaskId,
+  ])
+  useEffect(() => {
+    if (task && requestedRouteTaskId) resolvedRouteTaskKeyRef.current = requestedRouteTaskKey
+  }, [task, requestedRouteTaskId, requestedRouteTaskKey])
   const actualCheckinTask = useMemo(() => hasActualCheckinTask(task), [task])
   const actualCheckoutTask = useMemo(() => hasCheckoutPasswordField(task), [task])
-  const roleNames = useMemo(() => roleNamesOf(user), [user])
-  const activeRole = String((user as any)?.role || '').trim().toLowerCase()
   const canEditManagerFields = hasAnyRole(user, ['customer_service', 'admin', 'offline_manager'])
   const canSeeUnclean = hasAnyRole(user, ['admin', 'offline_manager'])
 
@@ -348,6 +364,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const photoLoadInFlightPromiseRef = useRef<Promise<void> | null>(null)
   const lastPhotoLoadRef = useRef<{ key: string; at: number } | null>(null)
   const saveInFlightRef = useRef(false)
+  const managerSaveOperationRef = useRef<ManagerTaskSaveOperation | null>(null)
 
   useEffect(() => {
     const currentTaskId = String(task?.id || '').trim()
@@ -356,6 +373,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     }
     if (syncedTaskIdRef.current === currentTaskId) return
     syncedTaskIdRef.current = currentTaskId
+    managerSaveOperationRef.current = null
     setCheckoutTime(String((task as any)?.start_time || (task as any)?.checkout_time || '').trim())
     setCheckinTime(String((task as any)?.end_time || (task as any)?.checkin_time_note || (task as any)?.checkin_time || '').trim())
     setOldCode(oldCodeForDisplay(task))
@@ -382,6 +400,12 @@ export default function ManagerDailyTaskScreen(props: Props) {
   useEffect(() => {
     if (task) return
     if (!token || !user?.id) return
+    // This fallback is only for an initially uncached/deep-linked task. Once
+    // this route has resolved, a refresh may temporarily publish its new date
+    // bucket as empty before the response applies. Treating that transition as
+    // a missing task queues a duplicate detail-range force refresh. A completed
+    // authoritative refresh that removes the task is also final for this route.
+    if (resolvedRouteTaskKeyRef.current === requestedRouteTaskKey) return
     let cancelled = false
     const view: WorkTasksView = 'all'
     const { date_from, date_to } = buildDetailFallbackRange()
@@ -394,7 +418,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [task, token, user?.id, props.route.params.taskId])
+  }, [task, token, user?.id, requestedRouteTaskKey])
 
   const workRecordReadOnly = task?.work_record_read_only === true
   const historicalMediaSourceIds = useMemo(() => workRecordReadOnly
@@ -641,6 +665,8 @@ export default function ManagerDailyTaskScreen(props: Props) {
     try {
       setSaving(true)
       let refreshFailed = false
+      let receiptOutcome: Awaited<ReturnType<typeof applyManagerTaskSaveReceipt>> | null = null
+      let activeOperationId = ''
       const norm = (v: any) => String(v ?? '').replace(/\s+/g, ' ').trim()
       const toNull = (v: any) => {
         const s = norm(v)
@@ -683,15 +709,68 @@ export default function ManagerDailyTaskScreen(props: Props) {
         payload.password_task_ids = await resolveExactPasswordTaskIds(verificationFields, 'manager_password_save_target_missing')
         payload.password_verification = {
           fields: verificationFields,
-          request_id: passwordAuthorityRequestId(),
           client: 'mobile',
         }
       }
-      const keysForOtherFields = Object.keys(payload).filter((k) => k !== 'task_ids')
+      const display = (task as any)?.turnover_display || {}
+      const items = buildManagerTaskFieldItems({
+        taskIds,
+        checkoutTaskId: display.old_code_task_id,
+        checkinTaskId: display.new_code_task_id,
+        fields: {
+          ...(payload.checkout_time !== undefined ? { checkout_time: payload.checkout_time } : {}),
+          ...(payload.checkin_time !== undefined ? { checkin_time: payload.checkin_time } : {}),
+          ...(payload.guest_special_request !== undefined ? { guest_special_request: payload.guest_special_request } : {}),
+        },
+      })
+      const savePayload: any = { ...payload, ...(items.length ? { items } : {}) }
+      delete savePayload.checkout_time
+      delete savePayload.checkin_time
+      delete savePayload.guest_special_request
+      const keysForOtherFields = Object.keys(savePayload).filter((k) => k !== 'task_ids')
       let saveResult: any = null
       if (keysForOtherFields.length) {
         if (!taskIds.length) throw new Error('缺少任务ID')
-        saveResult = await updateCleaningTaskManagerFields(token, payload)
+        const operation = managerTaskSaveOperation(managerSaveOperationRef.current, savePayload, managerTaskSaveRequestId)
+        managerSaveOperationRef.current = operation
+        activeOperationId = operation.id
+        beginManagerTaskSaveOperation(operation.id)
+        savePayload.operation_id = operation.id
+        if (savePayload.password_verification) savePayload.password_verification.request_id = operation.id
+        try {
+          saveResult = await updateCleaningTaskManagerFields(token, savePayload)
+          receiptOutcome = await applyManagerTaskSaveReceipt({
+            ...(saveResult || {}),
+            operation_id: saveResult?.operation_id || operation.id,
+          })
+          if (
+            receiptOutcome.supported !== true
+            && receiptOutcome.accepted !== false
+            && !isLegacyManagerTaskSaveResponse(saveResult)
+          ) {
+            if (token && user?.id) {
+              const { date_from, date_to } = buildDetailFallbackRange()
+              void requestWorkTasksRefresh({
+                token,
+                userId: String(user.id),
+                date_from,
+                date_to,
+                view: 'all',
+                mode: 'consistency',
+                reason: 'manager_task_receipt_invalid',
+              }).catch(() => {})
+            }
+            throw new Error('保存回执异常，已安排后台权威刷新，请稍后重试')
+          }
+        } catch (error) {
+          failManagerTaskSaveOperation(operation.id)
+          throw error
+        }
+        managerSaveOperationRef.current = null
+        // The request belonged to a session that has since been deactivated or
+        // replaced. Do not write cache, notices, form state or refreshes into
+        // the new authority context even if the old HTTP request succeeded.
+        if (receiptOutcome.accepted === false) return
       }
       setCheckoutTime(payload.checkout_time !== undefined ? String(payload.checkout_time || '').trim() : String(prevCheckout || '').trim())
       setCheckinTime(payload.checkin_time !== undefined ? String(payload.checkin_time || '').trim() : String(prevCheckin || '').trim())
@@ -709,18 +788,49 @@ export default function ManagerDailyTaskScreen(props: Props) {
       if (payload.guest_special_request !== undefined) changedLines.push(fmt('客人需求', payload.guest_special_request, prevGuest))
       if (needKeysUpdate) changedLines.push(fmt('需挂钥匙套数', nextKeysValue, prevKeys))
 
-      if (task?.id) {
+      if (task?.id && receiptOutcome?.supported !== true && receiptOutcome?.accepted !== false) {
         const patch: any = {}
         if (payload.checkout_time !== undefined) patch.start_time = payload.checkout_time
         if (payload.checkin_time !== undefined) Object.assign(patch, checkinTimeDisplayPatch(task, payload.checkin_time))
         if (payload.checkout_time !== undefined) patch.checkout_time = payload.checkout_time
         if (payload.checkin_time !== undefined) patch.checkin_time = payload.checkin_time
         if (payload.guest_special_request !== undefined) patch.guest_special_request = payload.guest_special_request
+        if (payload.old_code !== undefined || payload.new_code !== undefined) {
+          const turnoverDisplay = {
+            ...(((task as any)?.turnover_display && typeof (task as any).turnover_display === 'object')
+              ? (task as any).turnover_display
+              : {}),
+          }
+          const passwordAuthority = {
+            ...(((task as any)?.password_authority && typeof (task as any).password_authority === 'object')
+              ? (task as any).password_authority
+              : {}),
+          }
+          if (payload.old_code !== undefined) {
+            patch.old_code = payload.old_code
+            turnoverDisplay.old_code = payload.old_code
+            turnoverDisplay.old_code_authority_status = 'manual_confirmed'
+            passwordAuthority.old_code_status = 'manual_confirmed'
+          }
+          if (payload.new_code !== undefined) {
+            patch.new_code = payload.new_code
+            turnoverDisplay.new_code = payload.new_code
+            turnoverDisplay.new_code_authority_status = 'manual_confirmed'
+            passwordAuthority.new_code_status = 'manual_confirmed'
+          }
+          patch.turnover_display = turnoverDisplay
+          patch.password_authority = passwordAuthority
+        }
         if (needKeysUpdate) {
-          const checkout0 = Number((task as any)?.keys_required_checkout ?? 1)
-          const checkoutK = Number.isFinite(checkout0) && checkout0 >= 2 ? 2 : 1
-          patch.keys_required_checkin = nextKeysValue
-          patch.keys_required = Math.max(checkoutK, nextKeysValue)
+          if (actualCheckinTask) {
+            const checkout0 = Number((task as any)?.keys_required_checkout ?? 1)
+            const checkoutK = Number.isFinite(checkout0) && checkout0 >= 2 ? 2 : 1
+            patch.keys_required_checkin = nextKeysValue
+            patch.keys_required = Math.max(checkoutK, nextKeysValue)
+          } else if (actualCheckoutTask) {
+            patch.keys_required_checkout = nextKeysValue
+            patch.keys_required = nextKeysValue
+          }
         }
         const mergedCheckout = payload.checkout_time !== undefined ? payload.checkout_time : prevCheckout
         const mergedCheckin = payload.checkin_time !== undefined ? payload.checkin_time : prevCheckin
@@ -776,22 +886,41 @@ export default function ManagerDailyTaskScreen(props: Props) {
       }
       if (token && user?.id) {
         const { date_from, date_to } = buildDetailFallbackRange()
-        try {
-          const refreshResult = await requestWorkTasksRefresh({ token, userId: String(user.id), date_from, date_to, view: 'all', mode: 'force', reason: 'manager_task_saved' })
-          if (refreshResult === false) throw new Error('authoritative_refresh_rejected')
+        if (receiptOutcome?.supported === true) {
           const refreshed = findWorkTaskItemByAnyId(String(task.id || ''))
-          if (!refreshed) throw new Error('authoritative_task_missing')
-          setOldCode(oldCodeForDisplay(refreshed))
-          setNewCode(newCodeForDisplay(refreshed))
-        } catch {
-          refreshFailed = true
-          setOldCode(String(prevOldCode || '').trim())
-          setNewCode(String(prevNewCode || '').trim())
+          if (refreshed) {
+            setOldCode(oldCodeForDisplay(refreshed))
+            setNewCode(newCodeForDisplay(refreshed))
+          }
+          if (!receiptOutcome.persisted || receiptOutcome.projectionRefreshRequired) {
+            refreshFailed = !receiptOutcome.persisted
+            void requestWorkTasksRefresh({
+              token,
+              userId: String(user.id),
+              date_from,
+              date_to,
+              view: 'all',
+              mode: 'consistency',
+              reason: receiptOutcome.persisted ? 'manager_task_projection_reconcile' : 'manager_task_receipt_persist_failed',
+            }).catch(() => {})
+          }
+        } else if (activeOperationId && receiptOutcome?.accepted !== false) {
+          // Older backends do not return the authoritative receipt. Keep the
+          // confirmed local values, then reconcile in the background without
+          // making the save spinner wait for the 15-day task-list request.
+          void (async () => {
+            try {
+              let refreshResult = await reconcileActiveWorkTasksAfterLocalPatch()
+              if (!refreshResult) {
+                refreshResult = await requestWorkTasksRefresh({ token, userId: String(user.id), date_from, date_to, view: 'all', mode: 'force', reason: 'manager_task_saved_legacy_backend' })
+              }
+            } catch {}
+          })()
         }
       }
       setKeysDirty(false)
       const skippedAll = !saveResult || saveResult?.skipped
-      Alert.alert(t('common_ok'), refreshFailed ? '已保存；权威状态刷新失败，当前密码显示已恢复为刷新前状态，请稍后重试' : skippedAll ? '已保存（无变化）' : '已保存')
+      Alert.alert(t('common_ok'), refreshFailed ? '已保存；本地缓存写入失败，已安排后台权威刷新，请稍后重新打开核对' : skippedAll ? '已保存（无变化）' : '已保存')
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
     } finally {

@@ -1,11 +1,15 @@
 import {
+  __workTasksLocalPatchEntryCountForTests,
+  applyManagerTaskSaveReceipt,
   activateWorkTasksRealtime,
+  beginManagerTaskSaveOperation,
   canViewReadOnlyWorkRecordLockCodes,
   deactivateWorkTasksRealtime,
   establishWorkTasksSession,
   eventRequiresGuestReadyAuthorityRefresh,
   eventRequiresKeyHandoverAuthorityRefresh,
   findWorkTaskItemByAnyId,
+  failManagerTaskSaveOperation,
   getWorkTasksSnapshot,
   initWorkTasksStore,
   isSafePatchEvent,
@@ -45,7 +49,8 @@ beforeEach(() => {
   EventSource.mockClear()
   storage.getJson.mockReset()
   storage.getJson.mockResolvedValue(null)
-  storage.setJson.mockClear()
+  storage.setJson.mockReset()
+  storage.setJson.mockResolvedValue(undefined)
   api.listWorkTasks.mockReset()
   api.listWorkTasks.mockResolvedValue([])
   for (const key of Object.keys(mockStreamListeners)) delete mockStreamListeners[key]
@@ -212,6 +217,696 @@ test('keeps authoritative self-complete progress current across a safe realtime 
     source_task_ids: ['bo717-checkout', 'bo717-checkin'],
     status: 'keys_hung',
   })
+})
+
+test('applies a manager save receipt without a list request and suppresses its duplicate SSE events', async () => {
+  const api = require('./api')
+  api.listWorkTasks.mockResolvedValueOnce([makeTask({
+    id: 'cleaning_tasks_manager_turnover:receipt-1',
+    source_ids: ['checkout-receipt-1', 'checkin-receipt-1'],
+    active_source_ids: ['checkout-receipt-1', 'checkin-receipt-1'],
+    turnover_display: {
+      old_code_task_id: 'checkout-receipt-1',
+      new_code_task_id: 'checkin-receipt-1',
+      old_code: 'OLD-BEFORE',
+      new_code: 'NEW-BEFORE',
+    },
+  } as any)])
+  await activateWorkTasksRealtime({ token: 't1', userId: 'refresh-user', date_from: '2026-07-25', date_to: '2026-07-25', view: 'all' })
+  await requestWorkTasksRefresh({ token: 't1', userId: 'refresh-user', date_from: '2026-07-25', date_to: '2026-07-25', view: 'all', mode: 'force', reason: 'seed' })
+  api.listWorkTasks.mockClear()
+
+  expect(beginManagerTaskSaveOperation('mobile-manager-save-receipt-1')).toBe(true)
+  const passwordEvent = {
+    event_id: 'evt-manager-receipt-1',
+    task_id: 'cleaning_task:checkout-receipt-1',
+    source_ref_ids: ['checkout-receipt-1'],
+    event_type: 'TASK_UPDATED',
+    change_scope: 'detail',
+    changed_fields: ['old_code', 'password_authority'],
+    payload: {
+      patch: { password_authority: { old_code_status: 'source_linked' } },
+      password_sync: { request_id: 'mobile-manager-save-receipt-1' },
+    },
+  }
+  mockStreamListeners.work_task_event?.[0]?.({ type: 'work_task_event', data: JSON.stringify(passwordEvent), lastEventId: passwordEvent.event_id })
+  await Promise.resolve()
+  expect(api.listWorkTasks).not.toHaveBeenCalled()
+
+  const result = await applyManagerTaskSaveReceipt({
+    operation_id: 'mobile-manager-save-receipt-1',
+    manager_fields_receipt_version: 1,
+    projection_refresh_required: false,
+    authoritative_updates: [{
+      task_id: 'checkout-receipt-1',
+      task_type: 'checkout_clean',
+      old_code: 'OLD-AFTER',
+      old_code_authority_status: 'source_linked',
+      old_code_source_task_id: 'checkin-receipt-1',
+      old_code_source_order_id: 'order-receipt-1',
+      old_code_source_field: 'new_code',
+      guest_special_request: 'receipt-current',
+      sequence_no: 501,
+    }],
+  })
+  expect(result).toMatchObject({ supported: true, appliedItems: 1, persisted: true, projectionRefreshRequired: false })
+  expect(findWorkTaskItemByAnyId('checkout-receipt-1')).toMatchObject({
+    old_code: 'OLD-AFTER',
+    guest_special_request: 'receipt-current',
+    turnover_display: { old_code: 'OLD-AFTER', old_code_authority_status: 'source_linked' },
+  })
+  expect(api.listWorkTasks).not.toHaveBeenCalled()
+
+  mockStreamListeners.work_task_event?.[0]?.({ type: 'work_task_event', data: JSON.stringify({
+    ...passwordEvent,
+    event_id: 'evt-manager-receipt-1-late',
+  }), lastEventId: 'evt-manager-receipt-1-late' })
+  await Promise.resolve()
+  expect(api.listWorkTasks).not.toHaveBeenCalled()
+
+  const staleOtherOperationEvent = {
+    ...passwordEvent,
+    event_id: 'evt-manager-other-operation-stale',
+    sequence_no: 500,
+    changed_fields: ['status'],
+    payload: {
+      patch: { status: 'in_progress' },
+      manager_fields: { operation_id: 'some-other-operation' },
+    },
+  }
+  mockStreamListeners.work_task_event?.[0]?.({
+    type: 'work_task_event',
+    data: JSON.stringify(staleOtherOperationEvent),
+    lastEventId: staleOtherOperationEvent.event_id,
+  })
+  await Promise.resolve()
+  expect(findWorkTaskItemByAnyId('checkout-receipt-1')).toMatchObject({
+    status: 'assigned',
+    guest_special_request: 'receipt-current',
+  })
+  expect(Object.values(getWorkTasksSnapshot().dirtyBuckets).some((value) => (
+    String(value).startsWith('manager_receipt_event_order_conflict:')
+  ))).toBe(true)
+})
+
+test('coalesces a projection-required manager receipt and its same-sequence guest-ready SSE echo into one list request', async () => {
+  jest.useFakeTimers()
+  const api = require('./api')
+  const task = makeTask({
+    id: 'cleaning_tasks_manager_turnover:projection-coalesce',
+    source_ids: ['checkout-projection-coalesce', 'checkin-projection-coalesce'],
+    active_source_ids: ['checkout-projection-coalesce', 'checkin-projection-coalesce'],
+    turnover_display: {
+      old_code_task_id: 'checkout-projection-coalesce',
+      new_code_task_id: 'checkin-projection-coalesce',
+    },
+  } as any)
+  api.listWorkTasks.mockResolvedValueOnce([task])
+  await activateWorkTasksRealtime({ token: 't1', userId: 'refresh-user', date_from: '2026-07-20', date_to: '2026-08-03', view: 'all' })
+  await requestWorkTasksRefresh({ token: 't1', userId: 'refresh-user', date_from: '2026-07-20', date_to: '2026-08-03', view: 'all', mode: 'force', reason: 'seed' })
+  await jest.advanceTimersByTimeAsync(60_001)
+  api.listWorkTasks.mockClear()
+
+  expect(beginManagerTaskSaveOperation('mobile-manager-save-projection-coalesce')).toBe(true)
+  await expect(applyManagerTaskSaveReceipt({
+    operation_id: 'mobile-manager-save-projection-coalesce',
+    manager_fields_receipt_version: 1,
+    projection_refresh_required: true,
+    authoritative_updates: [{
+      task_id: 'checkin-projection-coalesce',
+      task_type: 'checkin_clean',
+      checkin_time: '2:45pm',
+      sequence_no: 901,
+    }],
+  })).resolves.toMatchObject({ supported: true, accepted: true, projectionRefreshRequired: true })
+
+  let releaseProjectionRefresh!: (items: WorkTaskItem[]) => void
+  api.listWorkTasks.mockImplementationOnce(() => new Promise<WorkTaskItem[]>((resolve) => {
+    releaseProjectionRefresh = resolve
+  }))
+  await requestWorkTasksRefresh({
+    token: 't1',
+    userId: 'refresh-user',
+    date_from: '2026-07-20',
+    date_to: '2026-08-03',
+    view: 'all',
+    mode: 'consistency',
+    reason: 'manager_task_projection_reconcile',
+  })
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+
+  mockStreamListeners.work_task_event?.[0]?.({
+    type: 'work_task_event',
+    data: JSON.stringify({
+      event_id: 'evt-projection-coalesce-same-sequence',
+      event_type: 'TASK_UPDATED',
+      change_scope: 'list',
+      task_id: 'cleaning_task:checkin-projection-coalesce',
+      source_ref_ids: ['checkin-projection-coalesce'],
+      sequence_no: 901,
+      changed_fields: ['checkin_time', 'end_time', 'guest_ready_notification'],
+      payload: { patch: { checkin_time: '2:45pm', end_time: '2:45pm' } },
+    }),
+  })
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+
+  releaseProjectionRefresh([{ ...task, checkin_time: '2:45pm', end_time: '2:45pm' } as any])
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+})
+
+test('queues a second authoritative list request for a newer guest-ready sequence during manager projection reconciliation', async () => {
+  jest.useFakeTimers()
+  const api = require('./api')
+  const task = makeTask({
+    id: 'cleaning_tasks_manager_turnover:projection-newer',
+    source_ids: ['checkout-projection-newer', 'checkin-projection-newer'],
+    active_source_ids: ['checkout-projection-newer', 'checkin-projection-newer'],
+    turnover_display: {
+      old_code_task_id: 'checkout-projection-newer',
+      new_code_task_id: 'checkin-projection-newer',
+    },
+  } as any)
+  api.listWorkTasks.mockResolvedValueOnce([task])
+  await activateWorkTasksRealtime({ token: 't1', userId: 'refresh-user', date_from: '2026-07-20', date_to: '2026-08-03', view: 'all' })
+  await requestWorkTasksRefresh({ token: 't1', userId: 'refresh-user', date_from: '2026-07-20', date_to: '2026-08-03', view: 'all', mode: 'force', reason: 'seed' })
+  await jest.advanceTimersByTimeAsync(60_001)
+  api.listWorkTasks.mockClear()
+
+  expect(beginManagerTaskSaveOperation('mobile-manager-save-projection-newer')).toBe(true)
+  await applyManagerTaskSaveReceipt({
+    operation_id: 'mobile-manager-save-projection-newer',
+    manager_fields_receipt_version: 1,
+    projection_refresh_required: true,
+    authoritative_updates: [{
+      task_id: 'checkin-projection-newer',
+      task_type: 'checkin_clean',
+      checkin_time: '2:45pm',
+      sequence_no: 901,
+    }],
+  })
+
+  let releaseProjectionRefresh!: (items: WorkTaskItem[]) => void
+  let confirmNewerRefreshStarted!: () => void
+  const newerRefreshStarted = new Promise<void>((resolve) => {
+    confirmNewerRefreshStarted = resolve
+  })
+  api.listWorkTasks
+    .mockImplementationOnce(() => new Promise<WorkTaskItem[]>((resolve) => {
+      releaseProjectionRefresh = resolve
+    }))
+    .mockImplementationOnce(async () => {
+      confirmNewerRefreshStarted()
+      return [{ ...task, checkin_time: '3:00pm', end_time: '3:00pm' } as any]
+    })
+  await requestWorkTasksRefresh({
+    token: 't1',
+    userId: 'refresh-user',
+    date_from: '2026-07-20',
+    date_to: '2026-08-03',
+    view: 'all',
+    mode: 'consistency',
+    reason: 'manager_task_projection_reconcile',
+  })
+
+  mockStreamListeners.work_task_event?.[0]?.({
+    type: 'work_task_event',
+    data: JSON.stringify({
+      event_id: 'evt-projection-newer-sequence',
+      event_type: 'TASK_UPDATED',
+      change_scope: 'list',
+      task_id: 'cleaning_task:checkin-projection-newer',
+      source_ref_ids: ['checkin-projection-newer'],
+      sequence_no: 902,
+      changed_fields: ['checkin_time', 'end_time', 'guest_ready_notification'],
+      payload: { patch: { checkin_time: '3:00pm', end_time: '3:00pm' } },
+    }),
+  })
+  await Promise.resolve()
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+
+  releaseProjectionRefresh([{ ...task, checkin_time: '2:45pm', end_time: '2:45pm' } as any])
+  await newerRefreshStarted
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(2)
+  for (let attempt = 0; attempt < 20 && (getWorkTasksSnapshot().items[0] as any)?.checkin_time !== '3:00pm'; attempt += 1) await Promise.resolve()
+  expect(getWorkTasksSnapshot().items[0]).toMatchObject({ checkin_time: '3:00pm', end_time: '3:00pm' })
+})
+
+test('rejects late versioned and legacy manager responses after the session changes', async () => {
+  const storage = require('./storage')
+  expect(beginManagerTaskSaveOperation('old-session-save')).toBe(true)
+  deactivateWorkTasksRealtime()
+  establishWorkTasksSession({ token: 'new-token', userId: 'new-session-user', role: 'cleaner' })
+  storage.setJson.mockClear()
+
+  await expect(applyManagerTaskSaveReceipt({
+    operation_id: 'old-session-save',
+    manager_fields_receipt_version: 1,
+    authoritative_updates: [{
+      task_id: 'checkout-1',
+      task_type: 'checkout_clean',
+      old_code: 'MUST-NOT-CROSS-SESSIONS',
+      sequence_no: 600,
+    }],
+  })).resolves.toMatchObject({ supported: true, accepted: false, appliedItems: 0, persisted: false, projectionRefreshRequired: true })
+  await expect(applyManagerTaskSaveReceipt({ operation_id: 'old-session-save' })).resolves.toMatchObject({
+    supported: false,
+    accepted: false,
+    appliedItems: 0,
+    persisted: false,
+    projectionRefreshRequired: true,
+  })
+  expect(storage.setJson).not.toHaveBeenCalled()
+})
+
+test.each([
+  { manager_fields_receipt_version: 2, authoritative_updates: [] },
+  { manager_fields_receipt_version: 1 },
+])('falls back to authority refresh for an unknown or incomplete receipt: %j', async (receipt) => {
+  const storage = require('./storage')
+  const operationId = `unsupported-receipt-${receipt.manager_fields_receipt_version}`
+  expect(beginManagerTaskSaveOperation(operationId)).toBe(true)
+  await expect(applyManagerTaskSaveReceipt({ operation_id: operationId, ...receipt })).resolves.toMatchObject({
+    supported: false,
+    accepted: true,
+    appliedItems: 0,
+    persisted: false,
+    projectionRefreshRequired: true,
+  })
+  expect(storage.setJson).not.toHaveBeenCalled()
+})
+
+test('fails closed when the session changes while an authoritative receipt is awaiting storage', async () => {
+  const api = require('./api')
+  const storage = require('./storage')
+  const params = { token: 't1', userId: 'refresh-user', date_from: '2026-07-29', date_to: '2026-07-29', view: 'all' as const }
+  api.listWorkTasks.mockResolvedValueOnce([makeTask({
+    id: 'session-race-card',
+    source_id: 'session-race-source',
+    date: '2026-07-29',
+    scheduled_date: '2026-07-29',
+    old_code: 'OLD-SESSION-VALUE',
+    turnover_display: { old_code_task_id: 'session-race-source', old_code: 'OLD-SESSION-VALUE' },
+  } as any)])
+  await activateWorkTasksRealtime(params)
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'session-race-seed' })
+
+  let releaseMarker!: () => void
+  storage.setJson.mockClear()
+  storage.setJson.mockImplementation((key: string) => (
+    String(key).includes('manager_fields_authority')
+      ? new Promise<void>((resolve) => { releaseMarker = resolve })
+      : Promise.resolve()
+  ))
+  expect(beginManagerTaskSaveOperation('session-race-save')).toBe(true)
+  const applying = applyManagerTaskSaveReceipt({
+    operation_id: 'session-race-save',
+    manager_fields_receipt_version: 1,
+    authoritative_updates: [{
+      task_id: 'session-race-source',
+      task_type: 'checkout_clean',
+      old_code: 'MUST-NOT-APPLY-AFTER-SWITCH',
+      sequence_no: 620,
+    }],
+  })
+  expect(storage.setJson.mock.calls.filter((call: any[]) => String(call[0]).includes('manager_fields_authority'))).toHaveLength(1)
+  deactivateWorkTasksRealtime()
+  establishWorkTasksSession({ token: 'new-token', userId: 'new-session-user' })
+  releaseMarker()
+
+  await expect(applying).resolves.toMatchObject({ supported: true, accepted: false, appliedItems: 0, persisted: false })
+  expect(findWorkTaskItemByAnyId('session-race-source')).toBeNull()
+  expect(storage.setJson.mock.calls.filter((call: any[]) => String(call[0]).includes('manager_fields_authority'))).toHaveLength(1)
+})
+
+test('fails closed when the active date bucket changes while a receipt is awaiting storage', async () => {
+  const api = require('./api')
+  const storage = require('./storage')
+  const first = { token: 't1', userId: 'refresh-user', date_from: '2026-07-30', date_to: '2026-07-30', view: 'all' as const }
+  api.listWorkTasks.mockResolvedValueOnce([makeTask({
+    id: 'bucket-race-card',
+    source_id: 'bucket-race-source',
+    date: '2026-07-30',
+    scheduled_date: '2026-07-30',
+    guest_special_request: 'first-bucket',
+  } as any)])
+  await activateWorkTasksRealtime(first)
+  await requestWorkTasksRefresh({ ...first, mode: 'force', reason: 'bucket-race-first-seed' })
+
+  let releaseMarker!: () => void
+  storage.setJson.mockClear()
+  storage.setJson.mockImplementation((key: string) => (
+    String(key).includes('manager_fields_authority')
+      ? new Promise<void>((resolve) => { releaseMarker = resolve })
+      : Promise.resolve()
+  ))
+  expect(beginManagerTaskSaveOperation('bucket-race-save')).toBe(true)
+  const applying = applyManagerTaskSaveReceipt({
+    operation_id: 'bucket-race-save',
+    manager_fields_receipt_version: 1,
+    authoritative_updates: [{
+      task_id: 'bucket-race-source',
+      task_type: 'checkout_clean',
+      guest_special_request: 'must-not-cross-buckets',
+      sequence_no: 630,
+    }],
+  })
+
+  const second = { ...first, date_from: '2026-07-31', date_to: '2026-07-31' }
+  api.listWorkTasks.mockResolvedValueOnce([makeTask({
+    id: 'second-bucket-card',
+    source_id: 'second-bucket-source',
+    date: '2026-07-31',
+    scheduled_date: '2026-07-31',
+    guest_special_request: 'second-bucket-safe',
+  } as any)])
+  await activateWorkTasksRealtime(second)
+  await requestWorkTasksRefresh({ ...second, mode: 'force', reason: 'bucket-race-second-seed' })
+  releaseMarker()
+
+  await expect(applying).resolves.toMatchObject({ supported: true, accepted: false, appliedItems: 0, persisted: false })
+  expect(getWorkTasksSnapshot().bucketKey).toBe(makeWorkTasksBucketKey(second))
+  expect(findWorkTaskItemByAnyId('second-bucket-source')).toMatchObject({ guest_special_request: 'second-bucket-safe' })
+  expect(findWorkTaskItemByAnyId('bucket-race-source')).toBeNull()
+})
+
+test('composes concurrent authoritative receipts after their marker writes settle', async () => {
+  const api = require('./api')
+  const storage = require('./storage')
+  const params = { token: 't1', userId: 'refresh-user', date_from: '2026-08-01', date_to: '2026-08-01', view: 'all' as const }
+  api.listWorkTasks.mockResolvedValueOnce([makeTask({
+    id: 'concurrent-receipt-card',
+    source_id: 'concurrent-checkout',
+    source_ids: ['concurrent-checkout', 'concurrent-checkin'],
+    active_source_ids: ['concurrent-checkout', 'concurrent-checkin'],
+    date: '2026-08-01',
+    scheduled_date: '2026-08-01',
+    turnover_display: {
+      old_code_task_id: 'concurrent-checkout',
+      new_code_task_id: 'concurrent-checkin',
+      old_code: 'OLD-BEFORE',
+      new_code: 'NEW-BEFORE',
+    },
+  } as any)])
+  await activateWorkTasksRealtime(params)
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'concurrent-receipt-seed' })
+
+  const markerResolvers: Array<() => void> = []
+  storage.setJson.mockImplementation((key: string) => {
+    if (String(key).includes('manager_fields_authority')) {
+      return new Promise<void>((resolve) => markerResolvers.push(resolve))
+    }
+    return Promise.resolve()
+  })
+  expect(beginManagerTaskSaveOperation('concurrent-save-a')).toBe(true)
+  expect(beginManagerTaskSaveOperation('concurrent-save-b')).toBe(true)
+  const applyingA = applyManagerTaskSaveReceipt({
+    operation_id: 'concurrent-save-a',
+    manager_fields_receipt_version: 1,
+    authoritative_updates: [{
+      task_id: 'concurrent-checkout',
+      task_type: 'checkout_clean',
+      old_code: 'OLD-AFTER-A',
+      sequence_no: 640,
+    }],
+  })
+  const applyingB = applyManagerTaskSaveReceipt({
+    operation_id: 'concurrent-save-b',
+    manager_fields_receipt_version: 1,
+    authoritative_updates: [{
+      task_id: 'concurrent-checkin',
+      task_type: 'checkin_clean',
+      new_code: 'NEW-AFTER-B',
+      sequence_no: 641,
+    }],
+  })
+  expect(markerResolvers).toHaveLength(2)
+  markerResolvers[0]()
+  await expect(applyingA).resolves.toMatchObject({ accepted: true, appliedItems: 1, persisted: true })
+  markerResolvers[1]()
+  await expect(applyingB).resolves.toMatchObject({ accepted: true, appliedItems: 1, persisted: true })
+
+  expect(findWorkTaskItemByAnyId('concurrent-receipt-card')).toMatchObject({
+    old_code: 'OLD-AFTER-A',
+    new_code: 'NEW-AFTER-B',
+    turnover_display: { old_code: 'OLD-AFTER-A', new_code: 'NEW-AFTER-B' },
+  })
+})
+
+test('marks a supported receipt with no active-card match for background coordination', async () => {
+  expect(beginManagerTaskSaveOperation('receipt-no-active-match')).toBe(true)
+  await expect(applyManagerTaskSaveReceipt({
+    operation_id: 'receipt-no-active-match',
+    manager_fields_receipt_version: 1,
+    authoritative_updates: [{
+      task_id: 'related-task-in-another-bucket',
+      task_type: 'checkout_clean',
+      old_code: 'SYNTHETIC-OTHER-BUCKET',
+      sequence_no: 610,
+    }],
+  })).resolves.toMatchObject({
+    supported: true,
+    accepted: true,
+    appliedItems: 0,
+    persisted: true,
+    projectionRefreshRequired: true,
+  })
+})
+
+test('schedules bounded recovery when both the manager response and its SSE are lost', async () => {
+  const api = require('./api')
+  await activateWorkTasksRealtime({ token: 't1', userId: 'refresh-user', date_from: '2026-07-25', date_to: '2026-07-25', view: 'all' })
+  api.listWorkTasks.mockClear()
+  jest.useFakeTimers()
+  expect(beginManagerTaskSaveOperation('response-and-event-lost')).toBe(true)
+  failManagerTaskSaveOperation('response-and-event-lost')
+  await jest.advanceTimersByTimeAsync(30_000)
+  expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
+})
+
+test('merges only a post-request local patch over a stale list response', () => {
+  const remote = makeTask({
+    id: 'task-merge-local-patch',
+    guest_special_request: 'remote-old',
+    status: 'in_progress',
+    unrelated_remote_field: 'new-from-server',
+    turnover_display: { old_code: 'REMOTE', unrelated_projection_field: 'server-new' },
+  } as any)
+  const previous = makeTask({
+    id: 'task-merge-local-patch',
+    guest_special_request: 'local-new',
+    status: 'assigned',
+    unrelated_remote_field: 'stale-local',
+    turnover_display: { old_code: 'LOCAL', unrelated_projection_field: 'stale-local' },
+  } as any)
+  const merged = mergeRemoteWorkTaskItems([remote], [previous], {
+    retainLocalTaskIds: ['task-merge-local-patch'],
+    localPatches: new Map([['task-merge-local-patch', {
+      guest_special_request: 'local-new',
+      turnover_display: { old_code: 'LOCAL' },
+    } as any]]),
+  })[0] as any
+  expect(merged).toMatchObject({
+    guest_special_request: 'local-new',
+    status: 'in_progress',
+    unrelated_remote_field: 'new-from-server',
+    turnover_display: { old_code: 'LOCAL', unrelated_projection_field: 'server-new' },
+  })
+})
+
+test('does not relabel a pre-request field as post-request when another local field changes during refresh', async () => {
+  const api = require('./api')
+  const params = { token: 't1', userId: 'refresh-user', date_from: '2026-07-27', date_to: '2026-07-27', view: 'all' as const }
+  api.listWorkTasks.mockResolvedValueOnce([makeTask({
+    id: 'revision-boundary-card',
+    source_id: 'revision-boundary-source',
+    date: '2026-07-27',
+    scheduled_date: '2026-07-27',
+    guest_special_request: 'seed',
+    checkout_time: '10am',
+  } as any)])
+  await activateWorkTasksRealtime(params)
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'revision-boundary-seed' })
+  await patchWorkTaskItem('revision-boundary-card', { guest_special_request: 'local-before-request' } as any)
+  expect(__workTasksLocalPatchEntryCountForTests()).toBe(0)
+
+  let resolveList!: (items: WorkTaskItem[]) => void
+  api.listWorkTasks.mockImplementationOnce(() => new Promise((resolve) => { resolveList = resolve }))
+  const refresh = requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'revision-boundary-refresh' })
+  await Promise.resolve()
+  await patchWorkTaskItem('revision-boundary-card', { checkout_time: '11am' } as any)
+  expect(__workTasksLocalPatchEntryCountForTests()).toBe(1)
+  resolveList([makeTask({
+    id: 'revision-boundary-card',
+    source_id: 'revision-boundary-source',
+    date: '2026-07-27',
+    scheduled_date: '2026-07-27',
+    guest_special_request: 'remote-after-request-started',
+    checkout_time: '10am',
+    unrelated_remote_field: 'keep-remote',
+  } as any)])
+  await refresh
+  expect(__workTasksLocalPatchEntryCountForTests()).toBe(0)
+
+  expect(findWorkTaskItemByAnyId('revision-boundary-card')).toMatchObject({
+    guest_special_request: 'remote-after-request-started',
+    checkout_time: '11am',
+    unrelated_remote_field: 'keep-remote',
+  })
+})
+
+test('keeps the new-session patch capture owner when an old same-bucket request settles', async () => {
+  const api = require('./api')
+  const userId = 'same-user-token-rotation'
+  const oldParams = { token: 'old-token', userId, date_from: '2026-07-27', date_to: '2026-07-27', view: 'all' as const }
+  const currentTask = makeTask({
+    id: 'token-rotation-card',
+    source_id: 'token-rotation-source',
+    date: '2026-07-27',
+    scheduled_date: '2026-07-27',
+    old_code: 'OLD-BEFORE',
+    turnover_display: { old_code_task_id: 'token-rotation-source', old_code: 'OLD-BEFORE' },
+  } as any)
+  establishWorkTasksSession({ token: oldParams.token, userId })
+  api.listWorkTasks.mockResolvedValueOnce([currentTask])
+  await requestWorkTasksRefresh({ ...oldParams, mode: 'force', reason: 'token-rotation-seed' })
+
+  let resolveOldList!: (items: WorkTaskItem[]) => void
+  api.listWorkTasks.mockImplementationOnce(() => new Promise((resolve) => { resolveOldList = resolve }))
+  const oldRefresh = requestWorkTasksRefresh({ ...oldParams, mode: 'force', reason: 'old-token-in-flight' })
+  await Promise.resolve()
+
+  const newParams = { ...oldParams, token: 'new-token' }
+  establishWorkTasksSession({ token: newParams.token, userId })
+  let resolveNewList!: (items: WorkTaskItem[]) => void
+  api.listWorkTasks.mockImplementationOnce(() => new Promise((resolve) => { resolveNewList = resolve }))
+  const newRefresh = requestWorkTasksRefresh({ ...newParams, mode: 'force', reason: 'new-token-in-flight' })
+  await Promise.resolve()
+
+  resolveOldList([currentTask])
+  await expect(oldRefresh).resolves.toBe(false)
+
+  expect(beginManagerTaskSaveOperation('token-rotation-save')).toBe(true)
+  await expect(applyManagerTaskSaveReceipt({
+    operation_id: 'token-rotation-save',
+    manager_fields_receipt_version: 1,
+    authoritative_updates: [{
+      task_id: 'token-rotation-source',
+      task_type: 'checkout_clean',
+      old_code: 'OLD-AFTER-RECEIPT',
+      sequence_no: 710,
+    }],
+  })).resolves.toMatchObject({ supported: true, accepted: true, appliedItems: 1, persisted: true })
+
+  resolveNewList([currentTask])
+  await expect(newRefresh).resolves.toBe(true)
+  expect(findWorkTaskItemByAnyId('token-rotation-card')).toMatchObject({
+    old_code: 'OLD-AFTER-RECEIPT',
+    turnover_display: { old_code: 'OLD-AFTER-RECEIPT' },
+  })
+  expect(__workTasksLocalPatchEntryCountForTests()).toBe(0)
+
+  expect(beginManagerTaskSaveOperation('token-rotation-save-after-refresh')).toBe(true)
+  await expect(applyManagerTaskSaveReceipt({
+    operation_id: 'token-rotation-save-after-refresh',
+    manager_fields_receipt_version: 1,
+    authoritative_updates: [{
+      task_id: 'token-rotation-source',
+      task_type: 'checkout_clean',
+      old_code: 'OLD-AFTER-ALL-REFRESHES',
+      sequence_no: 711,
+    }],
+  })).resolves.toMatchObject({ supported: true, accepted: true, appliedItems: 1, persisted: true })
+  expect(__workTasksLocalPatchEntryCountForTests()).toBe(0)
+})
+
+test('carries an in-flight local patch across a canonical card id change through shared source identity', async () => {
+  const api = require('./api')
+  const params = { token: 't1', userId: 'refresh-user', date_from: '2026-07-28', date_to: '2026-07-28', view: 'all' as const }
+  api.listWorkTasks.mockResolvedValueOnce([makeTask({
+    id: 'old-canonical-card',
+    source_id: 'canonical-source',
+    source_ids: ['canonical-source', 'canonical-related'],
+    date: '2026-07-28',
+    scheduled_date: '2026-07-28',
+    guest_special_request: 'seed',
+  } as any)])
+  await activateWorkTasksRealtime(params)
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'canonical-change-seed' })
+
+  let resolveList!: (items: WorkTaskItem[]) => void
+  api.listWorkTasks.mockImplementationOnce(() => new Promise((resolve) => { resolveList = resolve }))
+  const refresh = requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'canonical-change-refresh' })
+  await Promise.resolve()
+  await patchWorkTaskItem('old-canonical-card', { guest_special_request: 'local-during-refresh' } as any)
+  resolveList([makeTask({
+    id: 'new-canonical-card',
+    source_id: 'canonical-source',
+    source_ids: ['canonical-source', 'canonical-related'],
+    date: '2026-07-28',
+    scheduled_date: '2026-07-28',
+    guest_special_request: 'remote-stale',
+    unrelated_remote_field: 'new-server-field',
+  } as any)])
+  await refresh
+
+  expect(findWorkTaskItemByAnyId('new-canonical-card')).toMatchObject({
+    id: 'new-canonical-card',
+    guest_special_request: 'local-during-refresh',
+    unrelated_remote_field: 'new-server-field',
+  })
+})
+
+test('merges patches from two old source cards when a stale response combines them into one canonical card', () => {
+  const previous = [
+    makeTask({ id: 'old-checkout-card', source_id: 'source-checkout', source_ids: ['source-checkout'] } as any),
+    makeTask({ id: 'old-checkin-card', source_id: 'source-checkin', source_ids: ['source-checkin'] } as any),
+  ]
+  const remote = [makeTask({
+    id: 'new-turnover-card',
+    source_id: 'source-checkout',
+    source_ids: ['source-checkout', 'source-checkin'],
+    guest_special_request: 'remote-stale',
+    checkout_time: '10am',
+    unrelated_remote_field: 'keep-server',
+  } as any)]
+  const merged = mergeRemoteWorkTaskItems(remote, previous, {
+    localPatches: new Map([
+      ['old-checkout-card', { revision: 20, patch: { checkout_time: '11am' } }],
+      ['old-checkin-card', { revision: 21, patch: { guest_special_request: 'local-both-sources' } }],
+    ]),
+  })
+
+  expect(merged[0]).toMatchObject({
+    id: 'new-turnover-card',
+    checkout_time: '11am',
+    guest_special_request: 'local-both-sources',
+    unrelated_remote_field: 'keep-server',
+  })
+})
+
+test('invalidates an older cached date bucket after a manager authority receipt', async () => {
+  const storage = require('./storage')
+  storage.getJson.mockImplementation(async (key: string) => {
+    if (String(key).includes('manager_fields_authority')) return { updatedAt: '2026-11-06T10:00:01.000Z' }
+    return {
+      items: [makeTask({ id: 'stale-other-date' })],
+      bucketKey: makeWorkTasksBucketKey({ userId: 'refresh-user', date_from: '2026-07-26', date_to: '2026-07-26', view: 'all' }),
+      projectionKey: 'unscoped-v1:all',
+      ready: true,
+      updatedAt: '2026-11-06T10:00:00.000Z',
+      lastReceivedEventId: null,
+      lastFullSyncTimestamp: '2026-11-06T10:00:00.000Z',
+      dirtyBuckets: {},
+      sseConnectionState: 'idle',
+    }
+  })
+  const bucketKey = makeWorkTasksBucketKey({ userId: 'refresh-user', date_from: '2026-07-26', date_to: '2026-07-26', view: 'all' })
+  await initWorkTasksStore({ bucketKey, projectionKey: 'unscoped-v1:all', session: { token: 't1', userId: 'refresh-user' } })
+  expect(getWorkTasksSnapshot().items).toEqual([])
 })
 
 test('keeps a local checkout marker when the refreshed cleaning payload omits the field', () => {
@@ -1623,7 +2318,8 @@ test('shares one real hydration promise and marks an empty current projection re
 
   const first = initWorkTasksStore({ bucketKey, projectionKey, session: { token: 't1', userId } })
   const second = initWorkTasksStore({ bucketKey, projectionKey, session: { token: 't1', userId } })
-  expect(storage.getJson).toHaveBeenCalledTimes(1)
+  expect(storage.getJson).toHaveBeenCalledTimes(2)
+  expect(storage.getJson.mock.calls.some((call: any[]) => String(call[0]).includes('manager_fields_authority'))).toBe(true)
   expect(getWorkTasksSnapshot()).toMatchObject({ bucketKey, projectionKey, ready: false, items: [] })
 
   releaseStorage(null)
