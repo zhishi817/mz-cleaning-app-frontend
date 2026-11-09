@@ -1640,7 +1640,7 @@ export type PropertyFeedback = {
   created_by?: string | null
   created_by_name?: string | null
   created_at: string
-  status: 'open' | 'in_progress' | 'resolved' | 'cancelled' | 'need_replace' | 'replaced' | 'no_action'
+  status: 'open' | 'in_progress' | 'pending_review' | 'closed' | 'resolved' | 'cancelled' | 'need_replace' | 'replaced' | 'no_action'
   workflow_status?: 'pending_assignment' | 'assigned' | 'in_progress' | 'pending_review' | 'closed' | 'cancelled' | string | null
   resolved_at?: string | null
   completed_at?: string | null
@@ -1650,6 +1650,7 @@ export type PropertyFeedback = {
   repair_notes?: string | null
   project_items?: PropertyFeedbackProject[] | null
   capabilities?: {
+    mutation_locked?: boolean
     can_edit_content: boolean
     can_edit_completion_content?: boolean
     can_correct_completion?: boolean
@@ -1707,14 +1708,16 @@ export async function listDailyNecessityOptions(token: string, params?: { keywor
 
 export async function listPropertyFeedbacks(
   token: string,
-  params: { property_id?: string; property_code?: string; source_task_id?: string; status?: string[]; limit?: number },
+  params: { property_id?: string; property_code?: string; source_task_id?: string; history_scope?: 'property'; status?: string[]; limit?: number; offset?: number },
 ) {
   const sp = new URLSearchParams()
   if (params.property_id) sp.set('property_id', params.property_id)
   if (params.property_code) sp.set('property_code', params.property_code)
   if (params.source_task_id) sp.set('source_task_id', params.source_task_id)
+  if (params.history_scope) sp.set('history_scope', params.history_scope)
   if (params.status?.length) sp.set('status', params.status.join(','))
   if (params.limit) sp.set('limit', String(params.limit))
+  if (params.offset != null) sp.set('offset', String(params.offset))
   const urls = buildUrlCandidates(`mzapp/property-feedbacks?${sp.toString()}`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
@@ -1920,8 +1923,9 @@ export async function updatePropertyFeedback(
         note?: string
         media_urls?: string[]
       },
+  access?: { source_task_id: string; history_scope: 'property' },
 ) {
-  const urls = buildUrlCandidates(`mzapp/property-feedbacks/${encodeURIComponent(kind)}/${encodeURIComponent(feedbackId)}`)
+  const urls = buildUrlCandidates(`mzapp/property-feedbacks/${encodeURIComponent(kind)}/${encodeURIComponent(feedbackId)}${access ? `?source_task_id=${encodeURIComponent(access.source_task_id)}&history_scope=property` : ''}`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
   for (const url of urls) {
@@ -1967,8 +1971,9 @@ export async function deletePropertyFeedback(
   token: string,
   kind: 'maintenance' | 'deep_cleaning' | 'daily_necessities',
   feedbackId: string,
+  access?: { source_task_id: string; history_scope: 'property' },
 ) {
-  const urls = buildUrlCandidates(`mzapp/property-feedbacks/${encodeURIComponent(kind)}/${encodeURIComponent(feedbackId)}`)
+  const urls = buildUrlCandidates(`mzapp/property-feedbacks/${encodeURIComponent(kind)}/${encodeURIComponent(feedbackId)}${access ? `?source_task_id=${encodeURIComponent(access.source_task_id)}&history_scope=property` : ''}`)
   if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
   let lastRes: Response | null = null
   for (const url of urls) {

@@ -43,6 +43,7 @@ export type CleaningMediaImageVariant = 'original' | 'thumbnail' | 'preview'
 type CleaningMediaProxyVariant = CleaningMediaImageVariant | 'source'
 
 export type CleaningMediaAccessOptions = {
+  historyScope?: 'property'
   accessTaskId?: string | null
   accessWorkTaskId?: string | null
   accessSourceIds?: string[] | null
@@ -61,7 +62,7 @@ function cleaningMediaProxyUrl(reference: string, variant: CleaningMediaProxyVar
   const query = key ? `key=${encodeURIComponent(key)}` : `url=${encodeURIComponent(reference)}`
   const variantQuery = variant === 'original' ? '' : `&variant=${variant}`
   const taskId = cleanText(options?.accessTaskId)
-  const taskQuery = taskId ? `&source_task_id=${encodeURIComponent(taskId)}` : ''
+  const taskQuery = taskId ? `&source_task_id=${encodeURIComponent(taskId)}${options?.historyScope === 'property' ? '&history_scope=property' : ''}` : ''
   const workTaskId = cleanText(options?.accessWorkTaskId)
   const workTaskQuery = workTaskId ? `&work_task_id=${encodeURIComponent(workTaskId)}` : ''
   const sourceIds = Array.from(new Set((Array.isArray(options?.accessSourceIds) ? options?.accessSourceIds : [])

@@ -475,3 +475,18 @@ test.each([200, 500])('feedback create bounds a %s response body that never fini
   await jest.advanceTimersByTimeAsync(30_000)
   await rejected
 })
+
+test('MZ-084 property history access context is explicitly sent for list, edit and delete', async () => {
+  const fetchMock = jest.fn(async () => response(200, []))
+  globalThis.fetch = fetchMock as any
+  const api = require('./api') as typeof import('./api')
+  const access = { source_task_id: 'current-task', history_scope: 'property' as const }
+  await api.listPropertyFeedbacks('fixture-token', { property_id: 'fixture-property', ...access })
+  await api.updatePropertyFeedback('fixture-token', 'maintenance', 'old-record', { detail: 'fixture edit' }, access)
+  await api.deletePropertyFeedback('fixture-token', 'maintenance', 'old-record', access)
+  expect(fetchMock).toHaveBeenCalledTimes(3)
+  for (const call of fetchMock.mock.calls as any[]) {
+    expect(call[0]).toContain('source_task_id=current-task')
+    expect(call[0]).toContain('history_scope=property')
+  }
+})

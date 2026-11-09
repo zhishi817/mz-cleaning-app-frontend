@@ -4488,6 +4488,20 @@ test.each([
     },
     {
       ...base,
+      id: 'stayover-unassigned-visible',
+      source_type: 'cleaning_tasks',
+      source_id: 'stayover-unassigned-visible',
+      task_kind: 'cleaning',
+      task_type: 'stayover_clean',
+      title: '未分配入住中清洁',
+      status: 'pending',
+      assignee_id: null,
+      cleaner_id: null,
+      inspector_id: null,
+      execution_list_visible: true,
+    },
+    {
+      ...base,
       id: 'maintenance-review-hidden',
       source_type: 'property_maintenance',
       source_id: 'maintenance-review-hidden',
@@ -4539,6 +4553,7 @@ test.each([
     expect(ui.getByLabelText('task-card-maintenance-assigned-visible')).toBeTruthy()
     expect(ui.getByLabelText('task-card-offline-done-visible')).toBeTruthy()
     expect(ui.getByLabelText('task-card-turnover-unassigned-visible')).toBeTruthy()
+    expect(ui.getByLabelText('task-card-stayover-unassigned-visible')).toBeTruthy()
     expect(ui.queryByLabelText('task-card-maintenance-review-hidden')).toBeNull()
     expect(ui.queryByLabelText('task-card-maintenance-closed-hidden')).toBeNull()
     expect(ui.queryByLabelText('task-card-necessities-unassigned-hidden')).toBeNull()

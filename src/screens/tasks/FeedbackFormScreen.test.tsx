@@ -237,7 +237,7 @@ test('业务保存成功但历史刷新失败时保持已保存状态且不提�
   )
 
   await waitFor(() => expect(ui.getByDisplayValue('刷新失败验证')).toBeTruthy())
-  await waitFor(() => expect(api.listPropertyFeedbacks).toHaveBeenCalledTimes(3))
+  await waitFor(() => expect(api.listPropertyFeedbacks).toHaveBeenCalledTimes(5))
   fireEvent.press(ui.getByText('提交记录'))
   await waitFor(() => expect(ui.getByText('业务已保存 1 条')).toBeTruthy())
   expect(ui.getByText(/历史列表刷新失败.*不要重复提交/)).toBeTruthy()
@@ -301,7 +301,7 @@ test('清洁和检查人员都能查看同一任务房源已报问题', async ()
       </I18nProvider>,
     )
     await waitFor(() => {
-      expect(ui.getByText('本任务报修记录')).toBeTruthy()
+      expect(ui.getByText('房源历史反馈')).toBeTruthy()
       expect(ui.getByText('客厅：水龙头漏水')).toBeTruthy()
     })
     expect(listPropertyFeedbacks).toHaveBeenCalledWith('test-token', expect.objectContaining({ property_id: 'property-1', source_task_id: 'cleaning-1' }))
@@ -341,11 +341,11 @@ test('仅查看反馈权限隐藏新增和记录编辑入口', async () => {
   expect(ui.queryByRole('button', { name: '删除反馈记录' })).toBeNull()
 })
 
-test('仅查看入口水合新鲜可编辑缓存时仍强制清除修改能力', async () => {
+test('房源历史不水合旧授权缓存，等待当前服务器确认后才显示', async () => {
   const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
   const storage = require('../../lib/storage') as { getJson: jest.Mock }
   const { listPropertyFeedbacks } = require('../../lib/api') as { listPropertyFeedbacks: jest.Mock }
-  storage.getJson.mockImplementation(async (key: string) => String(key).startsWith('feedback_history_open_')
+  storage.getJson.mockImplementation(async (key: string) => String(key).startsWith('feedback_property_history_v2_')
     ? {
         pending: [{
           id: 'cached-editable-feedback',
@@ -371,7 +371,8 @@ test('仅查看入口水合新鲜可编辑缓存时仍强制清除修改能力',
     </I18nProvider>,
   )
 
-  await waitFor(() => expect(ui.getByText('客厅：缓存中的旧报修')).toBeTruthy())
+  await waitFor(() => expect(listPropertyFeedbacks).toHaveBeenCalled())
+  expect(ui.queryByText('客厅：缓存中的旧报修')).toBeNull()
   expect(ui.queryByRole('button', { name: '编辑反馈记录' })).toBeNull()
   expect(ui.queryByRole('button', { name: '调整反馈类型' })).toBeNull()
   expect(ui.queryByRole('button', { name: '删除反馈记录' })).toBeNull()
@@ -509,7 +510,7 @@ test('历史反馈加载失败时隐藏后端细节并允许重试', async () =>
   listPropertyFeedbacks.mockResolvedValue([])
   fireEvent.press(ui.getByRole('button', { name: '重新加载历史反馈' }))
   await waitFor(() => {
-    expect(listPropertyFeedbacks.mock.calls.length).toBe(callsBeforeRetry + 3)
+    expect(listPropertyFeedbacks.mock.calls.length).toBe(callsBeforeRetry + 5)
   })
 })
 
@@ -1698,7 +1699,7 @@ test('真实维修执行人可补充维修后图文，失败后重试不重复�
   expect(api.updatePropertyFeedback).toHaveBeenLastCalledWith('test-token', 'maintenance', 'maintenance-edit-1', {
     note: '已更换漏网并测试',
     repair_photo_urls: ['cleaning/maintenance-after-old.jpg', 'cleaning/maintenance-after-new.jpg'],
-  })
+  }, { source_task_id: 'cleaning-1', history_scope: 'property' })
   expect(api.updatePropertyFeedback.mock.calls[0][3]).not.toHaveProperty('area')
   expect(api.updatePropertyFeedback.mock.calls[0][3]).not.toHaveProperty('detail')
   expect(api.updatePropertyFeedback.mock.calls[0][3]).not.toHaveProperty('media_urls')
@@ -1779,7 +1780,7 @@ test('多张维修后照片部分上传失败后只重试尚未上传的照片',
       'cleaning/maintenance-after-partial-1.jpg',
       'cleaning/maintenance-after-partial-2.jpg',
     ],
-  })
+  }, { source_task_id: 'cleaning-1', history_scope: 'property' })
 })
 
 test('待复核任务完工照片只读且补录照片删除后重开不会恢复', async () => {
@@ -1977,4 +1978,130 @@ test('维修后保存进行中会锁定按钮避免并发重复提交', async ()
     resolveUpdate?.({ ok: true, row: current })
   })
   await waitFor(() => expect(ui.queryByText('编辑记录')).toBeNull())
+})
+
+test('MZ-084 property history keeps cross-date authors and legacy source, separates review and collapsed solved', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default
+  const { listPropertyFeedbacks } = require('../../lib/api') as { listPropertyFeedbacks: jest.Mock }
+  const base = { property_id: 'property-1', kind: 'maintenance', detail: '历史问题', created_at: '2026-01-02T00:00:00Z', media_urls: [] }
+  listPropertyFeedbacks.mockImplementation(async (_token: string, params: any) => {
+    expect(params).toEqual(expect.objectContaining({ history_scope: 'property', source_task_id: 'cleaning-1' }))
+    if (params.status.includes('open')) return [{ ...base, id: 'legacy', source_task_id: null, status: 'open', detail: '旧漏水', created_by_name: '历史提交人' }]
+    if (params.status.includes('resolved')) return [{ ...base, id: 'review', status: 'pending_review', detail: '等待复核' }, { ...base, id: 'done', status: 'resolved', detail: '已修好的柜门' }]
+    return []
+  })
+  const ui = render(<I18nProvider><FeedbackFormScreen navigation={{ setOptions: jest.fn() }} route={{ params: { taskId: 'w-feedback' } }} /></I18nProvider>)
+  await waitFor(() => expect(ui.getByText('旧漏水')).toBeTruthy())
+  expect(ui.getByText('房源历史反馈')).toBeTruthy()
+  expect(ui.getByText(/历史提交人/)).toBeTruthy()
+  expect(ui.getByText('等待复核')).toBeTruthy()
+  expect(ui.queryByText('已修好的柜门')).toBeNull()
+  expect(ui.queryByRole('button', { name: '编辑反馈记录' })).toBeNull()
+  fireEvent.press(ui.getByText('展开'))
+  expect(ui.getByText('已修好的柜门')).toBeTruthy()
+})
+
+test('MZ-084 mutation lock blocks deletion without overriding server-authorized manager editing', () => {
+  const { feedbackHistoryItemForMode } = require('./FeedbackFormScreen')
+  expect(feedbackHistoryItemForMode({ capabilities: { mutation_locked: true, can_edit_content: true, can_delete: true } }, false).capabilities).toEqual(expect.objectContaining({ can_edit_content: true, can_delete: false }))
+})
+
+test('MZ-084 history finishing first does not discard the pending inspection-panel draft', async () => {
+  jest.useFakeTimers()
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default
+  const panelDraft = require('../../lib/inspectionPanelFeedbackDraft') as {
+    getInspectionPanelFeedbackDraft: jest.Mock
+    setInspectionPanelFeedbackDraft: jest.Mock
+    clearInspectionPanelFeedbackDraft: jest.Mock
+  }
+  const { listPropertyFeedbacks } = require('../../lib/api') as { listPropertyFeedbacks: jest.Mock }
+  let resolveDraft!: (value: any) => void
+  panelDraft.getInspectionPanelFeedbackDraft.mockReset().mockImplementation(() => new Promise((resolve) => { resolveDraft = resolve }))
+  panelDraft.setInspectionPanelFeedbackDraft.mockClear()
+  panelDraft.clearInspectionPanelFeedbackDraft.mockClear()
+  listPropertyFeedbacks.mockReset().mockResolvedValue([])
+  const ui = render(<I18nProvider><FeedbackFormScreen navigation={{ setOptions: jest.fn() }} route={{ params: { taskId: 'w-feedback', source: 'inspection_panel_batch', sourceTaskId: 'cleaning-1' } }} /></I18nProvider>)
+  try {
+    await waitFor(() => expect(listPropertyFeedbacks).toHaveBeenCalledTimes(5))
+    await act(async () => { await Promise.all(listPropertyFeedbacks.mock.results.map((result) => result.value)) })
+    expect(panelDraft.clearInspectionPanelFeedbackDraft).not.toHaveBeenCalled()
+    await act(async () => {
+      resolveDraft({
+        kind: 'deep_cleaning',
+        maintenanceDrafts: [],
+        deepCleaningDrafts: [{ clientId: 'history-first-draft', area: '浴室', detail: '历史先完成的未提交草稿', media: ['file:///pending-panel.jpg'] }],
+        dailyDrafts: [],
+        photo_meta: {},
+      })
+    })
+    await act(async () => { await jest.advanceTimersByTimeAsync(350) })
+    expect(panelDraft.clearInspectionPanelFeedbackDraft).not.toHaveBeenCalled()
+    expect(ui.getByDisplayValue('历史先完成的未提交草稿')).toBeTruthy()
+    expect(ui.getByRole('button', { name: '删除照片 1' })).toBeTruthy()
+    expect(panelDraft.clearInspectionPanelFeedbackDraft).not.toHaveBeenCalled()
+    fireEvent.changeText(ui.getByDisplayValue('历史先完成的未提交草稿'), '继续编辑已恢复草稿')
+    await act(async () => { await jest.advanceTimersByTimeAsync(350) })
+    expect(panelDraft.setInspectionPanelFeedbackDraft).toHaveBeenLastCalledWith('w-feedback', expect.objectContaining({
+      deepCleaningDrafts: [expect.objectContaining({ detail: '继续编辑已恢复草稿', media: ['file:///pending-panel.jpg'] })],
+    }))
+    expect(panelDraft.clearInspectionPanelFeedbackDraft).not.toHaveBeenCalled()
+  } finally {
+    ui.unmount()
+    panelDraft.getInspectionPanelFeedbackDraft.mockReset().mockResolvedValue(null)
+    listPropertyFeedbacks.mockReset().mockResolvedValue([])
+    jest.useRealTimers()
+  }
+})
+
+test('MZ-084 malformed partial history stays an explicit retry error, not empty success', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default
+  const { listPropertyFeedbacks } = require('../../lib/api') as { listPropertyFeedbacks: jest.Mock }
+  listPropertyFeedbacks.mockResolvedValueOnce({ partial: true })
+  const ui = render(<I18nProvider><FeedbackFormScreen navigation={{ setOptions: jest.fn() }} route={{ params: { taskId: 'w-feedback' } }} /></I18nProvider>)
+  await waitFor(() => expect(ui.getByText('历史反馈暂时无法加载，请稍后重试。')).toBeTruthy())
+  expect(ui.queryByText('暂无处理中维修反馈')).toBeNull()
+  expect(ui.getByRole('button', { name: '重新加载历史反馈' })).toBeTruthy()
+})
+
+test('MZ-084 paginates past 50 solved without hiding old outstanding or review reports', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default
+  const { listPropertyFeedbacks } = require('../../lib/api') as { listPropertyFeedbacks: jest.Mock }
+  const base = { property_id: 'property-1', kind: 'maintenance', created_at: '2026-01-02T00:00:00Z', media_urls: [] }
+  const solved = Array.from({ length: 51 }, (_, i) => ({ ...base, id: `solved-${i}`, status: 'resolved', detail: `已解决-${i}` }))
+  listPropertyFeedbacks.mockImplementation(async (_token: string, params: any) => {
+    const rows = params.status.includes('resolved') ? solved
+      : params.status.includes('pending_review') ? [{ ...base, id: 'old-review', status: 'pending_review', detail: '旧待复核' }]
+        : params.status.includes('need_replace') ? [{ ...base, id: 'old-daily', kind: 'daily_necessities', status: 'need_replace', item_name: '旧待换物品', detail: '旧待更换' }] : []
+    return rows.slice(params.offset, params.offset + params.limit)
+  })
+  const ui = render(<I18nProvider><FeedbackFormScreen navigation={{ setOptions: jest.fn() }} route={{ params: { taskId: 'w-feedback' } }} /></I18nProvider>)
+  await waitFor(() => expect(ui.getByText('旧待复核')).toBeTruthy())
+  expect(ui.getByText(/旧待换物品/)).toBeTruthy()
+  expect(listPropertyFeedbacks).toHaveBeenCalledWith('test-token', expect.objectContaining({ status: ['resolved', 'closed'], offset: 50 }))
+  fireEvent.press(ui.getByText('展开'))
+  expect(ui.getByText('已解决-50')).toBeTruthy()
+})
+
+test('MZ-084 changed authorization clears visible history and detail on denied refresh', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default
+  const { listPropertyFeedbacks } = require('../../lib/api') as { listPropertyFeedbacks: jest.Mock }
+  const originalUser = mockUser
+  const originalTask = mockWorkTask
+  const row = { id: 'revoke-row', property_id: 'property-1', kind: 'daily_necessities', item_name: '撤权物品', created_at: '2026-01-02T00:00:00Z', status: 'need_replace', detail: '撤权前内容', note: '撤权前编辑私有内容', media_urls: [], capabilities: { can_edit_content: true, can_delete: true } }
+  listPropertyFeedbacks.mockResolvedValue([row])
+  const screen = () => <I18nProvider><FeedbackFormScreen navigation={{ setOptions: jest.fn() }} route={{ params: { taskId: 'w-feedback' } }} /></I18nProvider>
+  const ui = render(screen())
+  await waitFor(() => expect(ui.getByRole('button', { name: '编辑反馈记录' })).toBeTruthy())
+  fireEvent.press(ui.getByRole('button', { name: '编辑反馈记录' }))
+  await waitFor(() => expect(ui.getByDisplayValue('撤权前编辑私有内容')).toBeTruthy())
+  listPropertyFeedbacks.mockRejectedValue(Object.assign(new Error('denied'), { status: 403 }))
+  mockUser = { ...mockUser, role: 'cleaner', roles: ['cleaner'] }
+  ui.rerender(screen())
+  await waitFor(() => expect(ui.getByText('历史反馈暂时无法加载，请稍后重试。')).toBeTruthy())
+  expect(ui.queryByText('撤权前内容')).toBeNull()
+  expect(ui.queryByDisplayValue('撤权前编辑私有内容')).toBeNull()
+  ui.unmount()
+  mockUser = originalUser
+  mockWorkTask = originalTask
+  listPropertyFeedbacks.mockResolvedValue([])
 })

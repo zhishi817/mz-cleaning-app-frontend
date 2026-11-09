@@ -14,6 +14,7 @@ type Props = {
   reference?: string | null
   localUri?: string | null
   thumbnailReference?: string | null
+  historyScope?: 'property'
   accessTaskId?: string | null
   accessWorkTaskId?: string | null
   accessSourceIds?: string[] | null
@@ -37,7 +38,7 @@ function retryableUnavailableFailure(): CleaningMediaReadFailure {
   return { status: null, message: '照片暂时无法加载，点击重试', retryable: true }
 }
 
-export default function CleaningMediaPreview({ token, reference, localUri, thumbnailReference, accessTaskId, accessWorkTaskId, accessSourceIds, mediaScope, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate, loadPreview = true, style, resizeMode = 'contain', testID }: Props) {
+export default function CleaningMediaPreview({ token, reference, localUri, thumbnailReference, historyScope, accessTaskId, accessWorkTaskId, accessSourceIds, mediaScope, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate, loadPreview = true, style, resizeMode = 'contain', testID }: Props) {
   const [previewLoaded, setPreviewLoaded] = useState(false)
   const [previewFailed, setPreviewFailed] = useState(false)
   const [thumbnailFailed, setThumbnailFailed] = useState(false)
@@ -47,8 +48,8 @@ export default function CleaningMediaPreview({ token, reference, localUri, thumb
   const [thumbnailReadFailure, setThumbnailReadFailure] = useState<CleaningMediaReadFailure | null>(null)
   const [previewReadFailure, setPreviewReadFailure] = useState<CleaningMediaReadFailure | null>(null)
   const [cacheEpoch, setCacheEpoch] = useState(getCleaningMediaCacheEpoch)
-  const thumbnailSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || thumbnailReference || reference, 'thumbnail', { accessTaskId, accessWorkTaskId, accessSourceIds, mediaScope, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }), [accessSourceIds, accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, localUri, mediaScope, offlineWorkTaskMedia, reference, thumbnailReference, token])
-  const previewSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || reference, 'preview', { accessTaskId, accessWorkTaskId, accessSourceIds, mediaScope, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }), [accessSourceIds, accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, localUri, mediaScope, offlineWorkTaskMedia, reference, token])
+  const thumbnailSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || thumbnailReference || reference, 'thumbnail', { historyScope, accessTaskId, accessWorkTaskId, accessSourceIds, mediaScope, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }), [historyScope, accessSourceIds, accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, localUri, mediaScope, offlineWorkTaskMedia, reference, thumbnailReference, token])
+  const previewSource = useMemo(() => buildCleaningMediaImageSource(token, localUri || reference, 'preview', { historyScope, accessTaskId, accessWorkTaskId, accessSourceIds, mediaScope, guestLuggageId, offlineWorkTaskMedia, dayEndUserId, dayEndDate }), [historyScope, accessSourceIds, accessTaskId, accessWorkTaskId, dayEndDate, dayEndUserId, guestLuggageId, localUri, mediaScope, offlineWorkTaskMedia, reference, token])
   const thumbnailNeedsCache = isHttpUri(thumbnailSource.uri)
   const previewNeedsCache = loadPreview && isHttpUri(previewSource.uri)
 
@@ -65,7 +66,7 @@ export default function CleaningMediaPreview({ token, reference, localUri, thumb
     setCachedPreviewUri(null)
     setThumbnailReadFailure(null)
     setPreviewReadFailure(null)
-  }, [accessSourceIds, accessTaskId, accessWorkTaskId, cacheEpoch, dayEndDate, dayEndUserId, guestLuggageId, localUri, loadPreview, mediaScope, offlineWorkTaskMedia, reference, thumbnailReference, token])
+  }, [historyScope, accessSourceIds, accessTaskId, accessWorkTaskId, cacheEpoch, dayEndDate, dayEndUserId, guestLuggageId, localUri, loadPreview, mediaScope, offlineWorkTaskMedia, reference, thumbnailReference, token])
 
   useEffect(() => {
     if (!thumbnailNeedsCache) return undefined

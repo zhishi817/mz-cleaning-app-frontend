@@ -95,8 +95,9 @@ test('permission projection changes across roles, permissions, view and manager-
     makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: ['tasks.manage'], activeRole: 'cleaner', view: 'mine' }),
     makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: [], activeRole: 'cleaner', view: 'all' }),
     makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: [], activeRole: 'cleaner', view: 'mine', includeManagerUnassignedOffline: true }),
+    makeWorkTasksProjectionKey({ roles: ['cleaner'], permissions: [], activeRole: 'cleaner', view: 'mine', includeManagerUnassignedStayoverCleaning: true }),
   ]
-  expect(new Set([base, ...variants])).toHaveProperty('size', 5)
+  expect(new Set([base, ...variants])).toHaveProperty('size', 6)
   expect(makeWorkTasksProjectionKey({
     roles: ['cleaner', 'admin', 'cleaner'],
     permissions: ['b', 'a', 'a'],
@@ -177,6 +178,30 @@ test('recomputes a cached visible projection when local or SSE visibility inputs
     { includeManagerUnassignedOffline: true },
   ).execution_list_visible).toBe(true)
   expect(mergePatchIntoTask({ ...offline, assignee_id: null }, statusPatch).execution_list_visible).toBe(false)
+
+  const stayover = makeTask({
+    id: 'stayover:visibility',
+    task_kind: 'cleaning',
+    task_type: 'stayover_clean',
+    source_type: 'cleaning_tasks',
+    execution_list_visible: true,
+    assignee_id: null,
+    cleaner_id: null,
+  } as any)
+  expect(reconcileExecutionListVisibilityAfterPatch(
+    stayover,
+    ['status'],
+  ).execution_list_visible).toBe(false)
+  expect(reconcileExecutionListVisibilityAfterPatch(
+    stayover,
+    ['status'],
+    { includeManagerUnassignedStayoverCleaning: true },
+  ).execution_list_visible).toBe(true)
+  expect(mergePatchIntoTask(
+    stayover,
+    statusPatch,
+    { includeManagerUnassignedStayoverCleaning: true },
+  ).execution_list_visible).toBe(true)
 })
 
 test('keeps authoritative self-complete progress current across a safe realtime patch', () => {
@@ -1529,6 +1554,68 @@ test('keeps an authorized manager-all unassigned offline card visible after a lo
   expect(getWorkTasksSnapshot().items[0]).toMatchObject({
     id: task.id,
     status: 'in_progress',
+    execution_list_visible: true,
+  })
+})
+
+test('keeps an authorized manager-all unassigned stayover visible through local, SSE and manager receipt patches', async () => {
+  const api = require('./api')
+  const params = refreshParams({ userId: 'manager-stayover-patch-user', view: 'all' })
+  const task = makeTask({
+    id: 'stayover-manager-patch',
+    source_type: 'cleaning_tasks',
+    task_kind: 'cleaning',
+    task_type: 'stayover_clean',
+    source_id: 'stayover-manager-patch',
+    scheduled_date: params.date_from,
+    date: params.date_from,
+    status: 'pending',
+    assignee_id: null,
+    cleaner_id: null,
+    execution_list_visible: true,
+  } as any)
+  api.listWorkTasks.mockResolvedValue([task])
+  establishWorkTasksSession({ token: params.token, userId: params.userId })
+
+  await requestWorkTasksRefresh({ ...params, mode: 'force', reason: 'manager_stayover_patch_initial' })
+  await activateWorkTasksRealtime({ ...params, includeManagerUnassignedStayoverCleaning: true })
+  await patchWorkTaskItem(task.id, { status: 'in_progress' })
+
+  mockStreamListeners.work_task_event?.[0]({
+    type: 'work_task_event',
+    data: JSON.stringify({
+      event_id: 'event-stayover-manager-patch',
+      event_type: 'TASK_UPDATED',
+      change_scope: 'list',
+      task_id: task.id,
+      source_ref_ids: [task.source_id],
+      changed_fields: ['urgency'],
+      payload: { patch: { urgency: 'high' } },
+    }),
+  })
+
+  expect(getWorkTasksSnapshot().items).toHaveLength(1)
+  expect(getWorkTasksSnapshot().items[0]).toMatchObject({
+    id: task.id,
+    status: 'in_progress',
+    urgency: 'high',
+    execution_list_visible: true,
+  })
+
+  expect(beginManagerTaskSaveOperation('stayover-manager-receipt')).toBe(true)
+  await expect(applyManagerTaskSaveReceipt({
+    operation_id: 'stayover-manager-receipt',
+    manager_fields_receipt_version: 1,
+    authoritative_updates: [{
+      task_id: task.id,
+      task_type: 'stayover_clean',
+      guest_special_request: 'Synthetic stayover request',
+      sequence_no: 100,
+    }],
+  })).resolves.toMatchObject({ supported: true, accepted: true, appliedItems: 1, persisted: true })
+  expect(getWorkTasksSnapshot().items[0]).toMatchObject({
+    id: task.id,
+    guest_special_request: 'Synthetic stayover request',
     execution_list_visible: true,
   })
 })

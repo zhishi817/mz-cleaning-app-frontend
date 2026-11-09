@@ -1151,13 +1151,15 @@ export default function TasksScreen(props: Props) {
     return canManagerMode && mode === 'manager' ? view : 'mine'
   }, [canManagerMode, mode, view])
   const includeManagerUnassignedOffline = canTaskManagerView && mode === 'manager' && view === 'all'
+  const includeManagerUnassignedStayoverCleaning = canTaskManagerView && mode === 'manager' && view === 'all'
   const currentTaskProjectionKey = useMemo(() => makeWorkTasksProjectionKey({
     roles: roleNames,
     permissions: permissionCodes,
     activeRole,
     view: effectiveView,
     includeManagerUnassignedOffline,
-  }), [activeRole, effectiveView, includeManagerUnassignedOffline, permissionCodes, roleNames])
+    includeManagerUnassignedStayoverCleaning,
+  }), [activeRole, effectiveView, includeManagerUnassignedOffline, includeManagerUnassignedStayoverCleaning, permissionCodes, roleNames])
   const currentTaskBucketKey = useMemo(() => {
     if (status !== 'signedIn' || !user?.id || !token) return null
     return makeWorkTasksBucketKey({ userId: user.id, date_from: range.date_from, date_to: range.date_to, view: effectiveView })
@@ -1291,6 +1293,7 @@ export default function TasksScreen(props: Props) {
         view: effectiveView,
         projectionKey: currentTaskProjectionKey,
         includeManagerUnassignedOffline,
+        includeManagerUnassignedStayoverCleaning,
         isCurrent,
       })
       if (!realtimeActive || !isCurrent()) return
@@ -1309,7 +1312,7 @@ export default function TasksScreen(props: Props) {
     } finally {
       if (!silent && isCurrent()) setRefreshing(false)
     }
-  }, [currentTaskDisplayScope, currentTaskProjectionKey, effectiveView, handleTaskRefreshFailure, includeManagerUnassignedOffline, range.date_from, range.date_to, startOfflineQueueMaintenance, status, token, user?.id])
+  }, [currentTaskDisplayScope, currentTaskProjectionKey, effectiveView, handleTaskRefreshFailure, includeManagerUnassignedOffline, includeManagerUnassignedStayoverCleaning, range.date_from, range.date_to, startOfflineQueueMaintenance, status, token, user?.id])
 
   useEffect(() => {
     if (status === 'signedIn' && token && user?.id) return
@@ -1755,9 +1758,9 @@ export default function TasksScreen(props: Props) {
 
   const selectedTasks = useMemo(() => {
     const list = (tasksByDate.get(selectedDate) || []).filter((task) => {
-      if (!isDailyTaskListVisible(task, { includeManagerUnassignedOffline })) return false
+      if (!isDailyTaskListVisible(task, { includeManagerUnassignedOffline, includeManagerUnassignedStayoverCleaning })) return false
       if (task.work_record_visible === true && task.work_record_read_only === true) return true
-      if (!includeManagerUnassignedOffline) return hasMobileExecutor(task)
+      if (!includeManagerUnassignedOffline && !includeManagerUnassignedStayoverCleaning) return hasMobileExecutor(task)
       if (isCleaningExecutionTask(task) || isInspectionExecutionTask(task) || isKeyHandoverExecutionTask(task)) return true
       if (isPropertyFollowupTask(task)) return hasMobileExecutor(task)
       return true
@@ -1791,11 +1794,12 @@ export default function TasksScreen(props: Props) {
       return String(a.title || '').localeCompare(String(b.title || ''))
     })
     return reconcileDailyTaskDisplay(list)
-  }, [canManagerMode, includeManagerUnassignedOffline, mode, period, selectedDate, tasksByDate])
+  }, [canManagerMode, includeManagerUnassignedOffline, includeManagerUnassignedStayoverCleaning, mode, period, selectedDate, tasksByDate])
 
   const dailyGroupStats = useMemo(() => dailyTaskGroupCounts(selectedTasks, {
     includeManagerUnassignedOffline,
-  }), [includeManagerUnassignedOffline, selectedTasks])
+    includeManagerUnassignedStayoverCleaning,
+  }), [includeManagerUnassignedOffline, includeManagerUnassignedStayoverCleaning, selectedTasks])
   const dailyStatusStats = useMemo(
     () => dailyTaskStatusCounts(selectedTasks, selectedDate),
     [selectedDate, selectedTasks],

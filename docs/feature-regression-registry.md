@@ -250,20 +250,21 @@
 
 ## FR-P1-TSK-02 — 日常任务执行列表权威可见性
 
-- **Status:** active; local integrated candidate, not released.
+- **Status:** active; MZ-099 is selected in the combined latest-Dev Root/Mobile candidate, not committed, pushed or released.
 - **Maintenance scope:** `mobile`; paired Root projection is root/CRL-20261010-001.
-- **Last reviewed:** 2026-10-10 UTC
-- **Business outcome:** 审核中、已关闭和未分配任务不得进入日常执行列表；服务端显式拒绝、来源工作流状态和类型别名优先，未知房源跟进来源 fail-closed，普通合法完成任务保留。
-- **Related CRLs:** `mobile/CRL-20261010-001`.
+- **Last reviewed:** 2026-11-09 UTC
+- **Business outcome:** 审核中、已关闭任务不得进入日常执行列表；普通清洁员 `mine` 与管理角色 `mine` 继续排除未分配任务。唯一新增例外是 Root 明确投影为可见、已排期且仍有效的未分配 `stayover_clean`：只有 admin、offline_manager、customer_service 的管理模式 `all` 视图显示并进入既有安排流程。客户端不得把它当周转任务、不得仅凭标题猜测、不得借普通未分配线下开关放宽，也不得让维修、深清、日用品等 assignment-first 类别进入。服务端显式拒绝、来源工作流状态和类型别名优先，未知房源跟进来源 fail-closed，普通合法完成任务保留。
+- **Related CRLs:** `mobile/CRL-20261010-001`; MZ-099 pair `root/CRL-20261103-005` / `mobile/CRL-20261109-002`; historical Mobile source `mobile/CRL-20261103-006`.
 
 ### Test-to-invariant mapping
 
-- `src/lib/dailyTaskExecutionVisibility.test.ts` — 审核状态、别名、分派、合法完成和显式投影矩阵。
-- `src/lib/workTasksStore.test.ts`, `src/screens/tabs/TasksScreen.test.tsx` — 服务端字段保真与页面使用共享 helper。
+- `src/lib/dailyTaskExecutionVisibility.test.ts` — 审核状态、别名、分派、合法完成、显式投影，以及未分配入住中清洁只对 manager-all 放行的矩阵。
+- `src/lib/workTasksStore.test.ts` — 权限投影缓存键区分 stayover 管理范围；完整激活 manager-all realtime 参数后，本地 patch、安全 SSE patch 与最新基线的 manager 保存权威回执均保留该任务，默认/mine helper 仍隐藏。
+- `src/screens/tabs/TasksScreen.test.tsx` — admin、offline_manager、customer_service 管理列表显示 Root 已授权的未分配入住中清洁，同时继续隐藏未分配房源跟进。
 
 ### Delivery boundary
 
-- 不删除审核/历史记录，不改变 Root 鉴权或数据库；真实账号和设备验收另行执行。
+- 不删除审核/历史记录，不改变任务状态、人员、self-complete 流程、Root 角色鉴权或数据库；真实账号、缓存重进、iOS/Android 和发布验收另行执行。Root 必须先部署，再发布 Mobile。
 
 ## FR-P1-MED-07 — 挂钥匙视频上传与任务保存单一所有权
 
@@ -519,3 +520,13 @@
 - 需与 root 专用读取路由同批发布；仅移动端合并或 OTA 均不足以让认证图片显示。
 - 发布后以凭证提交者、admin、finance_staff、customer_service 与无关角色验证记录 → 详情 → 大图；未提交草稿不进行生产持久化验证。
 - 不覆盖 R2 ACL 修改、历史对象迁移、旧 `/mzapp/expenses` 或网页发票页面。
+
+## FR-P1-FDB-03 — 房源历史反馈与当前授权上下文
+
+- **Scope:** mobile / backend; **Status:** selected candidate, not released; **Last review:** 2026-11-09 UTC.
+- **Business outcome:** 当前任务授权覆盖该房源跨日期、跨作者及 legacy source NULL 历史。处理中、待复核、已解决不混组；已解决默认折叠。客户端只消费服务端能力，不按姓名推断所有权。锁定记录所有人不能删除；原作者编辑锁和管理/完工特殊编辑由服务器裁决。现场角色不显示财务字段。
+- **Test mapping:** `FeedbackFormScreen.test.tsx` asserts opt-in current-task context, legacy authors, review versus collapsed solved, fail-closed partial results and capabilities; history-first/deferred inspection-panel draft regression preserves unsent text/media and prevents blank-autosave deletion. `api.test.ts` asserts list/edit/delete query; `cleaningMedia.test.ts` asserts thumbnail/preview opt-in context. These are sufficient for client wiring, partial for end-to-end authorization/privacy, which requires paired Root tests.
+- **Validation strategy:** focused Jest, typecheck, full check:ci, fixture-only actual component web preview; real native/media/network separately verified. No production test writes.
+- **最后验证:** `mobile/CRL-20261109-001`, 2026-11-09, deterministic history-first draft regression failed before the fix and passed after it; final selected focused and complete check:ci evidence is recorded in the current Release Attempt, using OS deny-all-network and inherited Node preloader; native verification NOT RUN. Historical source evidence belongs to `mobile/CRL-20261107-001` and is not final candidate evidence.
+- **相关 CRL:** `mobile/CRL-20261109-001`, paired `root/CRL-20261107-001`; historical Mobile source `mobile/CRL-20261107-001`.
+- **Non-protection scope:** financial DTO redaction and DB lock enforcement are backend boundaries; web preview does not prove physical device behavior.

@@ -44,6 +44,7 @@ type ActiveRealtimeParams = {
   view: WorkTasksView
   projectionKey?: string
   includeManagerUnassignedOffline?: boolean
+  includeManagerUnassignedStayoverCleaning?: boolean
   isCurrent?: () => boolean
 }
 
@@ -308,12 +309,14 @@ function projectionKeyFromAuthority(
   authorityKey: string,
   view: WorkTasksView,
   includeManagerUnassignedOffline = false,
+  includeManagerUnassignedStayoverCleaning = false,
 ) {
   return [
     'projection-v1',
     authorityKey,
     `view=${view === 'all' ? 'all' : 'mine'}`,
     `manager_unassigned=${includeManagerUnassignedOffline ? '1' : '0'}`,
+    `manager_unassigned_stayover=${includeManagerUnassignedStayoverCleaning ? '1' : '0'}`,
   ].join('|')
 }
 
@@ -332,11 +335,13 @@ export function makeWorkTasksProjectionKey(params: {
   activeRole?: string | null
   view: WorkTasksView
   includeManagerUnassignedOffline?: boolean
+  includeManagerUnassignedStayoverCleaning?: boolean
 }) {
   return projectionKeyFromAuthority(
     makeWorkTasksAuthorityKey(params),
     params.view,
     params.includeManagerUnassignedOffline === true,
+    params.includeManagerUnassignedStayoverCleaning === true,
   )
 }
 
@@ -390,6 +395,7 @@ function sameRealtimeParams(a: ActiveRealtimeParams | null, b: ActiveRealtimePar
     && a.view === b.view
     && a.projectionKey === b.projectionKey
     && a.includeManagerUnassignedOffline === b.includeManagerUnassignedOffline
+    && a.includeManagerUnassignedStayoverCleaning === b.includeManagerUnassignedStayoverCleaning
 }
 
 function sameStreamIdentity(a: StreamIdentity | null, b: StreamIdentity | null) {
@@ -1322,6 +1328,7 @@ function applyWorkTaskEvent(event: WorkTaskStreamEvent) {
     if (shouldIgnoreByVersion(prev, event)) continue
     items[index] = mergePatchIntoTask(prev, event, {
       includeManagerUnassignedOffline: activeRealtimeParams?.includeManagerUnassignedOffline === true,
+      includeManagerUnassignedStayoverCleaning: activeRealtimeParams?.includeManagerUnassignedStayoverCleaning === true,
     })
     changed = true
   }
@@ -1602,7 +1609,10 @@ export async function applyManagerTaskSaveReceipt(receipt: ManagerTaskSaveReceip
     const next = reconcileExecutionListVisibilityAfterPatch(
       { ...task, ...patch },
       Object.keys(patch),
-      { includeManagerUnassignedOffline: activeRealtimeParams?.includeManagerUnassignedOffline === true },
+      {
+        includeManagerUnassignedOffline: activeRealtimeParams?.includeManagerUnassignedOffline === true,
+        includeManagerUnassignedStayoverCleaning: activeRealtimeParams?.includeManagerUnassignedStayoverCleaning === true,
+      },
     )
     recordLocalTaskPatch(state.bucketKey, next.id, patch)
     return next
@@ -1642,6 +1652,7 @@ export async function activateWorkTasksRealtime(params: ActiveRealtimeParams) {
     view: params.view === 'all' ? 'all' : 'mine',
     projectionKey: normalizeProjectionKey(params.projectionKey, params.view === 'all' ? 'all' : 'mine'),
     includeManagerUnassignedOffline: params.includeManagerUnassignedOffline === true,
+    includeManagerUnassignedStayoverCleaning: params.includeManagerUnassignedStayoverCleaning === true,
   }
   if (!next.token || !next.userId || !next.date_from || !next.date_to) return false
   const sessionEpoch = workTasksSessionEpoch
@@ -1688,7 +1699,10 @@ export async function patchWorkTaskItem(id0: string, patch: Partial<WorkTaskItem
   const next = reconcileExecutionListVisibilityAfterPatch(
     { ...prev, ...patch },
     Object.keys(patch),
-    { includeManagerUnassignedOffline: activeRealtimeParams?.includeManagerUnassignedOffline === true },
+    {
+      includeManagerUnassignedOffline: activeRealtimeParams?.includeManagerUnassignedOffline === true,
+      includeManagerUnassignedStayoverCleaning: activeRealtimeParams?.includeManagerUnassignedStayoverCleaning === true,
+    },
   )
   const items = state.items.slice()
   items[idx] = next
@@ -1713,7 +1727,10 @@ export async function patchWorkTaskItems(patches0: Array<{ id: string; patch: Pa
     const next = reconcileExecutionListVisibilityAfterPatch(
       { ...task, ...patch },
       Object.keys(patch),
-      { includeManagerUnassignedOffline: activeRealtimeParams?.includeManagerUnassignedOffline === true },
+      {
+        includeManagerUnassignedOffline: activeRealtimeParams?.includeManagerUnassignedOffline === true,
+        includeManagerUnassignedStayoverCleaning: activeRealtimeParams?.includeManagerUnassignedStayoverCleaning === true,
+      },
     )
     recordLocalTaskPatch(state.bucketKey, next.id, patch)
     return next

@@ -46,10 +46,14 @@ const expectedVisible = [
 
 describe('daily task execution visibility', () => {
   it.each(['admin', 'offline_manager', 'customer_service'])('keeps the same execution matrix for %s', () => {
-    expect(cases.filter((task) => isDailyTaskExecutionVisible(task, { includeManagerUnassignedOffline: true })).map((task) => task.id)).toEqual([
+    expect(cases.filter((task) => isDailyTaskExecutionVisible(task, {
+      includeManagerUnassignedOffline: true,
+      includeManagerUnassignedStayoverCleaning: true,
+    })).map((task) => task.id)).toEqual([
       ...expectedVisible.slice(0, 8),
       'offline-unassigned',
       ...expectedVisible.slice(8),
+      'stayover-unassigned',
     ])
   })
 
@@ -61,6 +65,10 @@ describe('daily task execution visibility', () => {
     expect(isDailyTaskExecutionVisible(unassignedNecessities, { includeManagerUnassignedOffline: true })).toBe(false)
     expect(isDailyTaskExecutionVisible(cases.find((task) => task.id === 'external-maintenance-unassigned')!, { includeManagerUnassignedOffline: true })).toBe(false)
     expect(isDailyTaskExecutionVisible(cases.find((task) => task.id === 'external-maintenance-unassigned-mislabeled')!, { includeManagerUnassignedOffline: true })).toBe(false)
+    const unassignedStayover = cases.find((task) => task.id === 'stayover-unassigned')!
+    expect(isDailyTaskExecutionVisible(unassignedStayover)).toBe(false)
+    expect(isDailyTaskExecutionVisible(unassignedStayover, { includeManagerUnassignedOffline: true })).toBe(false)
+    expect(isDailyTaskExecutionVisible(unassignedStayover, { includeManagerUnassignedStayoverCleaning: true })).toBe(true)
   })
 
   it('keeps every ordinary offline assignment state across past, current and future selected dates', () => {
@@ -130,6 +138,16 @@ describe('daily task execution visibility', () => {
       scheduled_date: scheduled,
       assignee_id: null,
     }, { includeManagerUnassignedOffline: true })).toBe(true)
+    expect(isDailyTaskExecutionVisible({
+      execution_list_visible: true,
+      source_type: 'cleaning_tasks',
+      task_kind: 'cleaning',
+      task_type: 'stayover_clean',
+      status: 'pending',
+      scheduled_date: scheduled,
+      assignee_id: null,
+      cleaner_id: null,
+    }, { includeManagerUnassignedStayoverCleaning: true })).toBe(true)
   })
 
   it('does not refetch current-assignee media for a former executor record', () => {
