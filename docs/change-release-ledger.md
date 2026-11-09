@@ -167,11 +167,12 @@
 - Required validation: `PASS`; final Mobile focused 7/278, fast 8/156, full 87/894, ledger 57 tests, typecheck, lint 0 errors/133 warnings and buttons actual exit 0; Root final paired release gate also passed this Mobile code. OS/Node deny-all-network isolation. Native/device/real weak-network and production acceptance remain NOT RUN.
 - Shared-hunk review: `PASS`; exact 17-path/101-hunk scope and paired integration reviewed; no additional source change since final code review.
 - Generated-file review: `PASS`; no secrets, environment files, dependencies, previews, caches, build/native output or production payloads selected.
-- Technical state: `committed`
+- Technical state: `pushed`; selected content and first push receipt are confirmed on origin; this delivery-evidence update follows on the same branch.
 - User authorization: `approved-for-push`; explicit selected five-task commit/push/PR request and same-repository one-branch instruction. Draft PR to Dev; no merge, deployment, database mutation or OTA.
 - Independent review: `GO for paired push and Draft PR`; independent reviewer directly checked both exact committed ranges and dependencies; no P0/P1/P2. Subsequent bookkeeping-only receipts are permitted if content fingerprints stay fixed and local precommit/range gates have no blockers.
 - Action conclusion: `GO`; blockers: none for normal non-force selected-branch push and Draft PR creation. Standalone report retains its cross-repository limitation; paired review supplies independent verification.
-- Remote evidence: pre-push read confirmed no existing same-name branch or PR; no push attempted yet.
+- Remote evidence: first normal non-force push succeeded and live ls-remote confirmed `origin/codex/mz-077-084-099-100-111-20261109@8f2bdc17ed63d0b2c1f4c8a3fab8823f9c735b14`. GitHub created open Draft PR #79, https://github.com/zhishi817/mz-cleaning-app-frontend/pull/79, at `2026-11-09T07:42:26Z`, base Dev `d438a6177b403825ec65d82fc8b4d054c346c5a1`, initial head `8f2bdc17ed63d0b2c1f4c8a3fab8823f9c735b14`. Remote CI is pending; final receipt head and its exact CI are verified externally after this metadata-only commit.
+- Delivery boundary: this records actual branch/PR creation, not merge, deployment, OTA or production acceptance. Content SHA/fingerprint unchanged; subsequent metadata-only push uses the same branch and no force.
 
 
 
