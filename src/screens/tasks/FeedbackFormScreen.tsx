@@ -163,17 +163,16 @@ const DAILY_STATUS_OPTIONS = [
 ] as const
 
 const DAILY_OPTIONS_CACHE_KEY = 'feedback_daily_necessity_options_v1'
-const FEEDBACK_HISTORY_CACHE_TTL_MS = 3 * 60 * 1000
 const FEEDBACK_DRAFT_CACHE_VERSION = 2
 const FEEDBACK_HISTORY_LOAD_ERROR = '历史反馈暂时无法加载，请稍后重试。'
 function feedbackHistoryCacheKey(propertyId: string, propertyCode: string, userId: string, sourceTaskId: string) {
   const owner = String(userId || '').trim() || 'anon'
   const source = String(sourceTaskId || '').trim() || 'property'
-  return `feedback_history_open_${owner}_${String(propertyId || '').trim()}_${String(propertyCode || '').trim()}_${source}`
+  return `feedback_property_history_v2_${owner}_${String(propertyId || '').trim()}_${String(propertyCode || '').trim()}_${source}`
 }
 
 export function feedbackHistoryItemForMode(item: PropertyFeedback, readOnly: boolean): PropertyFeedback {
-  if (!readOnly) return item
+  if (!readOnly) return item.capabilities?.mutation_locked ? { ...item, capabilities: { ...item.capabilities, can_delete: false } } : item
   return {
     ...item,
     capabilities: {
@@ -348,7 +347,9 @@ function statusLabel(item?: PropertyFeedback | null) {
   if (s === 'need_replace') return '待更换'
   if (s === 'replaced') return '已更换'
   if (s === 'no_action') return '无需更换'
-  if (s === 'resolved' && String(item.review_status || '').trim() === 'pending') return '已完成（待复核）'
+  if (s === 'pending_review') return '已完成（待复核）'
+  if (s === 'closed') return '已解决'
+  if (s === 'resolved' && (item.status === 'pending_review' || String(item.review_status || '').trim() === 'pending')) return '已完成（待复核）'
   if (s === 'resolved') return '已完成'
   if (s === 'in_progress') return '处理中'
   if (s === 'cancelled') return '已取消'
@@ -1159,43 +1160,55 @@ export default function FeedbackFormScreen(props: Props) {
     props.navigation.setOptions({ title })
   }, [props.navigation, kind])
 
+  const clearHistoryInteractions = useCallback(() => {
+    setDetailItem(null)
+    setViewerOpen(false)
+    setViewerUrls([])
+    setQueuedEditItem(null)
+    setRecordEditOpen(false)
+    setRecordEditFeedback(null)
+    setRecordEditCorrectionReason('')
+    setRecordEditOperationId('')
+    setDailyEditOpen(false)
+    setDailyEditItem(null)
+    setDailyEditItemName('')
+    setDailyEditItemSku(null)
+    setDailyEditQty('1')
+    setDailyEditNote('')
+    setDailyEditMedia([])
+    setMoveOpen(false)
+    setMoveItem(null)
+    setActionOpen(false)
+    setActionFeedback(null)
+    setActionProject(null)
+    setRecordArea(null)
+    setTimePickerOpen(false)
+    setProjectForm(buildDefaultProject('maintenance'))
+  }, [])
+
+  const historyRoleIdentity = JSON.stringify([(user as any)?.role, (user as any)?.roles])
   useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        const cached = await getJson<FeedbackHistoryCache | PropertyFeedback[]>(feedbackHistoryCacheKey(propertyId, propertyCode, userKey, feedbackSourceTaskId))
-        if (cancelled || !cached) return
-        if (Array.isArray(cached)) {
-          const normalized = { pending: uniqFeedbacks(cached.map((item) => feedbackHistoryItemForMode(item, feedbackReadOnly))), resolved: [], updated_at: 0 }
-          historyCacheRef.current = normalized
-          if (!normalized.pending.length) return
-          setPending(normalized.pending)
-          return
-        }
-        const normalized = {
-          pending: uniqFeedbacks((Array.isArray(cached.pending) ? cached.pending : []).map((item) => feedbackHistoryItemForMode(item, feedbackReadOnly))),
-          resolved: uniqFeedbacks((Array.isArray(cached.resolved) ? cached.resolved : []).map((item) => feedbackHistoryItemForMode(item, feedbackReadOnly))),
-          updated_at: Number(cached.updated_at || 0) || 0,
-        }
-        historyCacheRef.current = normalized
-        if (!normalized.pending.length && !normalized.resolved.length) return
-        setPending(normalized.pending)
-        setResolved(normalized.resolved)
-      } catch {}
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [propertyId, propertyCode, userKey, feedbackSourceTaskId, feedbackReadOnly])
+    historyCacheRef.current = null
+    historyRefreshRef.current = null
+    setPending([])
+    setResolved([])
+    clearHistoryInteractions()
+    setResolvedExpanded(false)
+  }, [token, propertyId, propertyCode, userKey, feedbackSourceTaskId, feedbackReadOnly, historyRoleIdentity])
+
+  const historyScopeIdentity = `${token || ''}:${userKey}:${propertyId}:${propertyCode}:${feedbackSourceTaskId}:${feedbackReadOnly}:${historyRoleIdentity}`
+  const historyScopeIdentityRef = useRef(historyScopeIdentity)
+  historyScopeIdentityRef.current = historyScopeIdentity
 
   async function refreshLists(options?: { force?: boolean; silent?: boolean }) {
-    if (!token || (!propertyId && !propertyCode) || !feedbackSourceTaskId) return false
+    if (!token || (!propertyId && !propertyCode) || !feedbackSourceTaskId) {
+      setListError('缺少当前任务或房源授权信息，请返回任务后重新加载。')
+      return false
+    }
+    const capturedScope = historyScopeIdentity
     const force = !!options?.force
     const cache = historyCacheRef.current
-    const now = Date.now()
     const hasCache = !!(cache && (cache.pending.length || cache.resolved.length))
-    const isFresh = !!(cache && cache.updated_at > 0 && now - cache.updated_at < FEEDBACK_HISTORY_CACHE_TTL_MS)
-    if (!force && isFresh) return true
     if (historyRefreshRef.current) {
       if (!force) return historyRefreshRef.current
       await historyRefreshRef.current.catch(() => {})
@@ -1205,21 +1218,37 @@ export default function FeedbackFormScreen(props: Props) {
       if (shouldShowLoading) setLoadingList(true)
       setListError(null)
       try {
-        const [openList, dailyList, resolvedList] = await Promise.all([
-          listPropertyFeedbacks(token, { property_id: propertyId || undefined, property_code: propertyCode || undefined, source_task_id: feedbackSourceTaskId, status: ['open', 'in_progress'], limit: 50 }),
-          listPropertyFeedbacks(token, { property_id: propertyId || undefined, property_code: propertyCode || undefined, source_task_id: feedbackSourceTaskId, status: ['need_replace', 'replaced', 'no_action'], limit: 50 }),
-          listPropertyFeedbacks(token, { property_id: propertyId || undefined, property_code: propertyCode || undefined, source_task_id: feedbackSourceTaskId, status: ['resolved'], limit: 50 }),
-        ])
+        const loadGroup = async (status: string[]) => {
+          const rows: PropertyFeedback[] = []
+          const seen = new Set<string>()
+          for (;;) {
+            const page = await listPropertyFeedbacks(token, { property_id: propertyId || undefined, property_code: propertyCode || undefined, source_task_id: feedbackSourceTaskId, history_scope: 'property', status, limit: 50, offset: rows.length })
+            if (!Array.isArray(page)) throw new Error('历史返回不完整')
+            for (const row of page) {
+              const key = `${row.kind}:${row.id}`
+              if (seen.has(key)) throw new Error('历史分页已变化，请重试')
+              seen.add(key)
+              rows.push(row)
+            }
+            if (page.length < 50) return rows
+            if (capturedScope !== historyScopeIdentityRef.current) throw new Error('授权上下文已变化')
+          }
+        }
+        const [openList, dailyList, reviewList, resolvedList, dailySolvedList] = await Promise.all([
+          ['open', 'in_progress'], ['need_replace'], ['pending_review'], ['resolved', 'closed'], ['replaced', 'no_action'],
+        ].map(loadGroup))
+        if (![openList, dailyList, reviewList, resolvedList, dailySolvedList].every(Array.isArray)) throw new Error('历史返回不完整')
+        if (capturedScope !== historyScopeIdentityRef.current) return false
         const historyItem = (item: PropertyFeedback) => feedbackHistoryItemForMode(item, feedbackReadOnly)
         const nextPending = uniqFeedbacks(
           [...(Array.isArray(openList) ? openList : []), ...(Array.isArray(dailyList) ? dailyList : [])].filter((item) => {
             const status = String(item?.status || '').trim()
-            return status !== 'resolved' && status !== 'replaced' && status !== 'no_action'
+            return ['open', 'in_progress', 'need_replace'].includes(status)
           }).map(historyItem),
         )
         const nextResolved = uniqFeedbacks([
-          ...(Array.isArray(resolvedList) ? resolvedList : []).filter((x) => x.kind !== 'daily_necessities').map(historyItem),
-          ...(Array.isArray(dailyList) ? dailyList : []).filter((x) => {
+          ...[...reviewList, ...resolvedList].filter((x) => x.kind !== 'daily_necessities' && ['resolved', 'closed', 'pending_review'].includes(x.status)).map(historyItem),
+          ...(Array.isArray(dailySolvedList) ? dailySolvedList : []).filter((x) => {
             const status = String(x?.status || '').trim()
             return status === 'replaced' || status === 'no_action'
           }).map(historyItem),
@@ -1228,12 +1257,15 @@ export default function FeedbackFormScreen(props: Props) {
         setResolved(nextResolved)
         const nextCache = { pending: nextPending, resolved: nextResolved, updated_at: Date.now() }
         historyCacheRef.current = nextCache
-        void setJson(feedbackHistoryCacheKey(propertyId, propertyCode, userKey, feedbackSourceTaskId), nextCache)
         return true
       } catch {
+        if (capturedScope !== historyScopeIdentityRef.current) return false
         setListError(FEEDBACK_HISTORY_LOAD_ERROR)
-        if (!cache?.pending.length) setPending([])
-        if (!cache?.resolved.length) setResolved([])
+        setPending([])
+        setResolved([])
+        clearHistoryInteractions()
+        historyCacheRef.current = null
+        void removeStorage(feedbackHistoryCacheKey(propertyId, propertyCode, userKey, feedbackSourceTaskId))
         return false
       } finally {
         if (shouldShowLoading) setLoadingList(false)
@@ -1252,7 +1284,7 @@ export default function FeedbackFormScreen(props: Props) {
     const cache = historyCacheRef.current
     const hasCache = !!(cache && (cache.pending.length || cache.resolved.length))
     void refreshLists({ silent: hasCache })
-  }, [token, propertyId, propertyCode, feedbackSourceTaskId, isFocused])
+  }, [token, propertyId, propertyCode, feedbackSourceTaskId, isFocused, historyRoleIdentity])
 
   useEffect(() => {
     let cancelled = false
@@ -2333,10 +2365,9 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   function applyUpdatedFeedbackRow(row: PropertyFeedback | null | undefined) {
-    if (!row) return
+    if (historyScopeIdentity !== historyScopeIdentityRef.current || !row) return
     const status = String(row.status || '').trim()
-    const reviewStatus = String(row.review_status || '').trim()
-    const isResolvedPending = status === 'resolved' && reviewStatus === 'pending'
+    const isResolvedPending = ['resolved', 'closed', 'pending_review', 'replaced', 'no_action'].includes(status)
     setPending((prev) => uniqFeedbacks(prev.filter((item) => item.id !== row.id && `${item.kind}:${item.id}` !== `${row.kind}:${row.id}`)))
     if (isResolvedPending) {
       setResolved((prev) => uniqFeedbacks([row, ...prev.filter((item) => item.id !== row.id && `${item.kind}:${item.id}` !== `${row.kind}:${row.id}`)]))
@@ -2396,7 +2427,7 @@ export default function FeedbackFormScreen(props: Props) {
           void (async () => {
             try {
               setDeleteBusyId(`${item.kind}:${item.id}`)
-              await deletePropertyFeedback(token, item.kind, item.id)
+              await deletePropertyFeedback(token, item.kind, item.id, { source_task_id: feedbackSourceTaskId, history_scope: 'property' })
               removeFeedbackRow(item)
               await refreshLists({ force: true })
             } catch (e: any) {
@@ -2589,7 +2620,7 @@ export default function FeedbackFormScreen(props: Props) {
               note: repairNote,
               repair_photo_urls: editableAfterPhotos,
             } : {}),
-          })
+          }, { source_task_id: feedbackSourceTaskId, history_scope: 'property' })
           applyUpdatedFeedbackRow((resp.row as any) || buildEditedFeedbackFallback(recordEditFeedback, {
             before: beforePhotos,
             after: editableAfterPhotos,
@@ -2608,7 +2639,7 @@ export default function FeedbackFormScreen(props: Props) {
           areas: [recordArea],
           detail: String(projectForm.detail || '').trim(),
           media_urls: mediaUrls,
-        })
+        }, { source_task_id: feedbackSourceTaskId, history_scope: 'property' })
         applyUpdatedFeedbackRow((resp.row as any) || { ...buildEditedFeedbackFallback(recordEditFeedback), media_urls: mediaUrls })
         discardLocalPreviews(mediaUrls)
       }
@@ -2640,10 +2671,10 @@ export default function FeedbackFormScreen(props: Props) {
         quantity: Math.trunc(qty),
         note: dailyEditNote.trim(),
         media_urls: mediaUrls,
-      })
+      }, { source_task_id: feedbackSourceTaskId, history_scope: 'property' })
       discardLocalPreviews(mediaUrls)
       setDailyEditOpen(false)
-      if (detailItem?.id === dailyEditItem.id) setDetailItem((resp.row as any) || null)
+      if (historyScopeIdentity === historyScopeIdentityRef.current && detailItem?.id === dailyEditItem.id) setDetailItem((resp.row as any) || null)
       await refreshLists({ force: true })
     } catch (e: any) {
       Alert.alert(t('common_error'), String(e?.message || '保存失败'))
@@ -2665,6 +2696,9 @@ export default function FeedbackFormScreen(props: Props) {
     if (!detailItem || (detailItem.kind !== 'maintenance' && detailItem.kind !== 'deep_cleaning')) return null
     return buildHistoryProject(detailItem)
   }, [detailItem])
+  const awaitingReview = (item: PropertyFeedback) => item.kind !== 'daily_necessities' && (item.status === 'pending_review' || (item.status === 'resolved' && String(item.review_status || '').trim() === 'pending'))
+  const reviewHistory = resolved.filter(awaitingReview)
+  const solvedHistory = resolved.filter((item) => !awaitingReview(item))
   const pendingHistoryCount = pendingGroups.maintenance.length + pendingGroups.deep.length + pendingGroups.daily.length
   const currentDraftCount = kind === 'maintenance' ? maintenanceDrafts.length : kind === 'deep_cleaning' ? deepCleaningDrafts.length : kind === 'daily_necessities' ? dailyDrafts.length : 1
   const submitButtonLabel = submitting
@@ -2748,7 +2782,7 @@ export default function FeedbackFormScreen(props: Props) {
                 <Ionicons name="eye-outline" size={20} color="#1D4ED8" />
                 <View style={styles.historyReadOnlyTextWrap}>
                   <Text style={styles.historyReadOnlyTitle}>只读查看报修记录</Text>
-                  <Text style={styles.historyReadOnlyText}>当前入口只能查看这条任务关联的记录，不能新增、编辑或删除报修。</Text>
+                  <Text style={styles.historyReadOnlyText}>当前入口只能查看当前授权房源的历史记录，不能新增、编辑或删除报修。</Text>
                 </View>
               </View>
             ) : (
@@ -3016,8 +3050,8 @@ export default function FeedbackFormScreen(props: Props) {
             <View style={styles.historyCard}>
               <View style={styles.historyHeader}>
                 <View style={styles.historyTitleWrap}>
-                  <Text style={styles.historyTitle}>本任务报修记录</Text>
-                  <Text style={styles.historySubtitle}>仅显示与当前任务准确关联的记录，避免混入同房源其他日期或后续任务。</Text>
+                  <Text style={styles.historyTitle}>房源历史反馈</Text>
+                  <Text style={styles.historySubtitle}>查看本房源不同日期、不同提交人的反馈，先核对，避免重复报修。</Text>
                 </View>
                 <Pressable onPress={() => setExpanded((v) => !v)} style={({ pressed }) => [styles.historyToggle, pressed ? styles.pressed : null]}>
                   <Text style={styles.historyToggleText}>{expanded ? '收起' : '展开'}</Text>
@@ -3070,14 +3104,29 @@ export default function FeedbackFormScreen(props: Props) {
                       </View>
                       <View style={styles.historySectionHeadActions}>
                         <View style={styles.historySectionCount}>
-                          <Text style={styles.historySectionCountText}>{resolved.length}</Text>
+                          <Text style={styles.historySectionCountText}>{reviewHistory.length}</Text>
+                        </View>
+
+                      </View>
+                    </View>
+                    {<FeedbackGroup mutationsDisabled={submitting} token={token} accessTaskId={feedbackSourceTaskId} title="完工记录" items={reviewHistory} emptyText="暂无待复核记录" deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} />}
+                  </View>
+                  <View style={styles.historySection}>
+                    <View style={styles.historySectionHead}>
+                      <View style={styles.historySectionTextWrap}>
+                        <Text style={styles.historySectionTitle}>已解决</Text>
+                        <Text style={styles.historySectionSubtitle}>已解决的问题默认收起，需要时展开查看。</Text>
+                      </View>
+                      <View style={styles.historySectionHeadActions}>
+                        <View style={styles.historySectionCount}>
+                          <Text style={styles.historySectionCountText}>{solvedHistory.length}</Text>
                         </View>
                         <Pressable onPress={() => setResolvedExpanded((v) => !v)} style={({ pressed }) => [styles.historySectionToggle, pressed ? styles.pressed : null]}>
                           <Text style={styles.historySectionToggleText}>{resolvedExpanded ? '收起' : '展开'}</Text>
                         </Pressable>
                       </View>
                     </View>
-                    {resolvedExpanded ? <FeedbackGroup mutationsDisabled={submitting} token={token} accessTaskId={feedbackSourceTaskId} title="完工记录" items={resolved} emptyText="暂无待复核记录" deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} /> : null}
+                    {resolvedExpanded ? <FeedbackGroup mutationsDisabled={submitting} token={token} accessTaskId={feedbackSourceTaskId} title="完工记录" items={solvedHistory} emptyText="暂无已解决记录" deleteBusyId={deleteBusyId} onView={setDetailItem} onEdit={requestRecordEdit} onMove={requestMoveFeedback} onDelete={requestDeleteFeedback} onPreview={openViewer} /> : null}
                   </View>
                 </View>
               ) : null}
@@ -3478,7 +3527,7 @@ export default function FeedbackFormScreen(props: Props) {
             >
             {viewerUrls.map((u, idx) => (
                 <View key={`${u}-${idx}`} style={[styles.viewerSlide, { width: screenWidth }]}>
-                <CleaningMediaPreview token={token} reference={isLocalFeedbackDraftReference(u) ? undefined : u} localUri={isLocalFeedbackDraftReference(u) ? u : localPreviewByReference[u]} accessTaskId={viewerAccessTaskId} loadPreview={idx === viewerIndex} style={{ width: '100%', height: '100%' }} />
+                <CleaningMediaPreview historyScope="property" token={token} reference={isLocalFeedbackDraftReference(u) ? undefined : u} localUri={isLocalFeedbackDraftReference(u) ? u : localPreviewByReference[u]} accessTaskId={viewerAccessTaskId} loadPreview={idx === viewerIndex} style={{ width: '100%', height: '100%' }} />
               </View>
             ))}
             </ScrollView>
@@ -3561,7 +3610,7 @@ function PhotoStrip(props: { token?: string | null; accessTaskId?: string | null
       {props.urls.map((u, idx) => (
         <View key={feedbackPhotoStableKey(u, idx, props.localPreviewByReference)} style={styles.thumbItemWrap}>
           <Pressable onPress={() => props.onPress(props.urls, idx)} style={({ pressed }) => [styles.thumbWrap, pressed ? styles.pressed : null]}>
-            <CleaningMediaImage token={props.token} localUri={isLocalFeedbackDraftReference(u) ? u : props.localPreviewByReference?.[u]} remoteReference={isLocalFeedbackDraftReference(u) ? undefined : u} accessTaskId={props.accessTaskId} style={styles.thumb} />
+            <CleaningMediaImage historyScope="property" token={props.token} localUri={isLocalFeedbackDraftReference(u) ? u : props.localPreviewByReference?.[u]} remoteReference={isLocalFeedbackDraftReference(u) ? undefined : u} accessTaskId={props.accessTaskId} style={styles.thumb} />
           </Pressable>
           {props.onRemove && !props.removeDisabled && (props.canRemove ? props.canRemove(u, idx) : true) ? (
             <Pressable accessibilityRole="button" accessibilityLabel={`删除照片 ${idx + 1}`} onPress={() => props.onRemove?.(idx)} style={({ pressed }) => [styles.thumbDeleteBtn, pressed ? styles.pressed : null]}>
@@ -3606,10 +3655,11 @@ function FeedbackGroup(props: {
                 <View style={styles.feedbackMain}>
                   <Text style={styles.feedbackTitle}>{feedbackListTitle(item)}</Text>
                   <Text style={styles.feedbackMeta}>{statusLabel(item)}</Text>
+                  <Text style={styles.feedbackMeta}>{`${String(item.created_by_name || '').trim() || '未知提交人'} · ${fmtTime(item.created_at)}`}</Text>
                 </View>
                 {previewUrl ? (
                   <Pressable accessibilityRole="button" accessibilityLabel="查看反馈照片" onPress={() => props.onPreview(previewUrls, 0, props.accessTaskId)} style={({ pressed }) => [styles.feedbackThumbWrap, pressed ? styles.pressed : null]}>
-                    <CleaningMediaImage token={props.token} remoteReference={previewUrl} accessTaskId={props.accessTaskId} style={styles.feedbackThumb} resizeMode="cover" />
+                    <CleaningMediaImage historyScope="property" token={props.token} remoteReference={previewUrl} accessTaskId={props.accessTaskId} style={styles.feedbackThumb} resizeMode="cover" />
                     {previewUrls.length > 1 ? (
                       <View style={styles.feedbackThumbBadge}>
                         <Text style={styles.feedbackThumbBadgeText}>{previewUrls.length}</Text>

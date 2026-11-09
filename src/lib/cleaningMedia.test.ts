@@ -211,3 +211,12 @@ test('prefers remote media online and falls back to thumbnail offline or after r
     kind: 'thumbnail',
   })
 })
+
+test('property history media uses current authorized task in thumbnail and preview, opt-in only', () => {
+  for (const variant of ['thumbnail', 'preview'] as const) {
+    const source = buildCleaningMediaImageSource('fixture-token', 'deep-cleaning/legacy.jpg', variant, { accessTaskId: 'current-task', historyScope: 'property' })
+    expect(source.uri).toContain('source_task_id=current-task&history_scope=property')
+    expect(source.uri).not.toContain('work_task_id')
+  }
+  expect(buildCleaningMediaImageSource('fixture-token', 'deep-cleaning/legacy.jpg', 'thumbnail', { accessTaskId: 'current-task' }).uri).not.toContain('history_scope')
+})

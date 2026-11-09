@@ -19,6 +19,7 @@ export type DailyTaskExecutionCandidate = {
 
 export type DailyTaskExecutionVisibilityOptions = {
   includeManagerUnassignedOffline?: boolean
+  includeManagerUnassignedStayoverCleaning?: boolean
 }
 
 const REVIEW_ONLY_STATUSES = new Set(['pending_review', 'review_pending', 'awaiting_review'])
@@ -57,6 +58,11 @@ function isTurnoverTask(task: DailyTaskExecutionCandidate) {
   return TURNOVER_TYPES.has(normalized(task.task_type)) || TURNOVER_TYPES.has(normalized(task.task_kind))
 }
 
+function isStayoverTask(task: DailyTaskExecutionCandidate) {
+  if (normalized(task.source_type) !== 'cleaning_tasks') return false
+  return normalized(task.task_type) === 'stayover_clean' || normalized(task.task_kind) === 'stayover_clean'
+}
+
 function hasExecutor(task: DailyTaskExecutionCandidate) {
   const source = normalized(task.source_type)
   const kind = normalized(task.task_kind)
@@ -88,12 +94,14 @@ export function isDailyTaskExecutionVisible(
     const hasExecutorProjection = ['assignee_id', 'cleaner_id', 'inspector_id']
       .some((field) => Object.prototype.hasOwnProperty.call(task, field))
     if (source && hasExecutorProjection && !isTurnoverTask(task) && !hasExecutor(task)) {
+      if (options.includeManagerUnassignedStayoverCleaning === true && isStayoverTask(task)) return true
       return options.includeManagerUnassignedOffline === true && isOrdinaryOfflineDailyTask(task)
     }
     return true
   }
   if (!scheduledDate(task)) return false
   if (!isTurnoverTask(task) && !hasExecutor(task)) {
+    if (options.includeManagerUnassignedStayoverCleaning === true && isStayoverTask(task)) return true
     return options.includeManagerUnassignedOffline === true && isOrdinaryOfflineDailyTask(task)
   }
   return true
