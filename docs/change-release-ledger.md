@@ -152,6 +152,29 @@
 - Push readiness: `NOT VERIFIED` until final exact range reports and paired independent push review are complete; no push attempted.
 - Remote evidence: pre-push check found no existing same-name Mobile remote branch or PR; final remote freshness and duplicate check required immediately before normal non-force push.
 
+#### RA-20261109-003
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261109-001`, `CRL-20261109-002`, `CRL-20261109-003`
+- Selected CRL identities: `mobile/CRL-20261109-001`; `mobile/CRL-20261109-002`; `mobile/CRL-20261109-003`
+- Intended action: `push`
+- Branch: `codex/mz-077-084-099-100-111-20261109`
+- Base: `origin/Dev@d438a6177b403825ec65d82fc8b4d054c346c5a1`; fetched at `2026-11-09T07:30:49Z`; live pre-push ref remains unchanged
+- Candidate patch SHA-256: `9a595f77bdf9ba89a6078b9265e2266f8d943ba1f9cd7c73818cb858dae8d4ad`, excluding `docs/change-release-ledger.md`
+- Commit SHA: `d3b3b597a4fc8e5a8caa6764685075d5a6f69bb9`
+- Dependencies: `root/CRL-20261107-001@3811fd1a1936f20671435661db3d36518f088ab9`; `root/CRL-20261103-005@3811fd1a1936f20671435661db3d36518f088ab9`
+- Cross-repository dependency verification: independent paired push reviewer directly verified Root `a9c64f5b5a48ba28679734a2f924e2c16722bd6b...b614bb23ca0b292cf980b9d9925a847cece5b7cd` with content `3811fd1a1936f20671435661db3d36518f088ab9` and Mobile `d438a6177b403825ec65d82fc8b4d054c346c5a1...fa60db622b731b6074b0b25f2e391ad75b9ed2d7` with this content commit. Canonical dependencies, ancestry, clean trees, fingerprints and exact reports match. Root content fingerprint `e8835a5138c61aa8de422e1f3417230e573995dd30b3a9e4ad0307df44f9da62`. Both reports have no blockers and only the single-repository cross-reference limitation, which remains NOT VERIFIED in their raw output.
+- Required validation: `PASS`; final Mobile focused 7/278, fast 8/156, full 87/894, ledger 57 tests, typecheck, lint 0 errors/133 warnings and buttons actual exit 0; Root final paired release gate also passed this Mobile code. OS/Node deny-all-network isolation. Native/device/real weak-network and production acceptance remain NOT RUN.
+- Shared-hunk review: `PASS`; exact 17-path/101-hunk scope and paired integration reviewed; no additional source change since final code review.
+- Generated-file review: `PASS`; no secrets, environment files, dependencies, previews, caches, build/native output or production payloads selected.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; explicit selected five-task commit/push/PR request and same-repository one-branch instruction. Draft PR to Dev; no merge, deployment, database mutation or OTA.
+- Independent review: `GO for paired push and Draft PR`; independent reviewer directly checked both exact committed ranges and dependencies; no P0/P1/P2. Subsequent bookkeeping-only receipts are permitted if content fingerprints stay fixed and local precommit/range gates have no blockers.
+- Action conclusion: `GO`; blockers: none for normal non-force selected-branch push and Draft PR creation. Standalone report retains its cross-repository limitation; paired review supplies independent verification.
+- Remote evidence: pre-push read confirmed no existing same-name branch or PR; no push attempted yet.
+
+
+
 
 ### Risks / Release Notes
 
