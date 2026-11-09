@@ -129,6 +129,30 @@
 - Independent review: `GO for commit`; amended fingerprint `9a595f77bdf9ba89a6078b9265e2266f8d943ba1f9cd7c73818cb858dae8d4ad` independently matched; original P1 closed with deterministic red/green, remaining P0/P1/P2=0; final 87/894 full gate and actual exit 0 verified. Review scope excludes push, device validation and production delivery.
 - Action conclusion: `GO` for the exact reviewed content commit only. Push remains conditional on exchanged Root/Mobile content SHAs, exact range reports and paired independent verification. No merge, deployment or OTA.
 
+#### RA-20261109-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261109-001`, `CRL-20261109-002`, `CRL-20261109-003`
+- Selected CRL identities: `mobile/CRL-20261109-001`; `mobile/CRL-20261109-002`; `mobile/CRL-20261109-003`
+- Intended action: `commit`
+- Branch: `codex/mz-077-084-099-100-111-20261109`
+- Base: `origin/Dev@d438a6177b403825ec65d82fc8b4d054c346c5a1`; fetched at `2026-11-09T07:30:49Z`
+- Candidate patch SHA-256: `9a595f77bdf9ba89a6078b9265e2266f8d943ba1f9cd7c73818cb858dae8d4ad`, excluding `docs/change-release-ledger.md`
+- Commit SHA: `d3b3b597a4fc8e5a8caa6764685075d5a6f69bb9`; final unpublished content amendment, replaces original local `653590daa8a4c55a8abb7421575f8e6d81036d21` before any push
+- Dependencies: `root/CRL-20261107-001@3811fd1a1936f20671435661db3d36518f088ab9`; `root/CRL-20261103-005@3811fd1a1936f20671435661db3d36518f088ab9`
+- Cross-repository dependency verification: paired Root exact content `3811fd1a1936f20671435661db3d36518f088ab9`, base `a9c64f5b5a48ba28679734a2f924e2c16722bd6b`, content fingerprint `e8835a5138c61aa8de422e1f3417230e573995dd30b3a9e4ad0307df44f9da62` independently recomputed. Parent confirms final Root check:release exit 0, including this final Mobile 87/894 pair. Separate exact-pair push review pending; single-repository auditor cannot verify cross-repository dependencies and must retain NOT VERIFIED.
+- Required validation: `PASS`; exact final code focused 7/278, fast 8/156, full check:ci 87/894, ledger 57 tests, 17/17 coverage, typecheck, lint 0 errors/133 warnings and buttons; actual exit 0 under OS and Node deny-all-network. Root paired final gate also passed final Mobile 87/894.
+- Shared-hunk review: `PASS`; independent reviewer verified 17 paths / 101 non-ledger hunks; separate feature registry sections, MZ-099 latest-Dev receipt adaptation and corrected MZ-084 draft hydration.
+- Generated-file review: `PASS`; no environment file, secret, dependency tree, cache, preview, generated native artifact, build, deployment or production payload selected.
+- Content amendment evidence: after content commit, added only missing Release Attempts headings/shared references to CRL-002/003. Detached exact-Dev candidate precommit GO and original index matched full tree `e25960dcf0d5ec52ce51b1ff9c6521eb5bb99ff1`; independent GO for unpublished amendment, runtime/test fingerprint unchanged.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; user explicitly requested selected five tasks be committed/pushed with one branch/PR per repository; exact scoped workflow needs no repeated SHA prompt. Draft PR targets Dev; merge, deployment, database mutation and OTA are excluded.
+- Independent review: `GO for content commit and ledger-only unpublished amendment`; original P1 corrected with deterministic red/green, remaining P0/P1/P2=0, exact content fingerprint matched. Paired push review will separately inspect the final committed ranges.
+- Action conclusion: `GO`; blockers: none for this ledger-only content/dependency receipt.
+- Push readiness: `NOT VERIFIED` until final exact range reports and paired independent push review are complete; no push attempted.
+- Remote evidence: pre-push check found no existing same-name Mobile remote branch or PR; final remote freshness and duplicate check required immediately before normal non-force push.
+
+
 ### Risks / Release Notes
 
 - No source or frozen mixed worktree was staged or reset. Candidate is based on explicitly fetched latest Dev.
