@@ -100,16 +100,18 @@
 - Branch: `codex/mz-112-113-114-20261112`
 - Base: `origin/Dev@c5b87b5b38e602e5d852971a6455a828c90ad170`; fetched at `2026-11-12T02:49:24Z` (unchanged from initial fetch)
 - Candidate patch SHA-256: `31e321d61c6f1054e03a9d517d3575f65b5784be441b15fcb150698a9439c4f7`
-- Commit SHA: `not committed`
-- Dependencies: none
-- Cross-repository candidate pairing: root/CRL-20261110-004 and mobile/CRL-20261110-001 are jointly reviewed and tested. Exact committed dependencies will be recorded for the paired push attempt after both content commits exist; no independent deployment is authorized.
+- Commit SHA: `01fd8873bf6ebb6af2a1624160ca9a9f01cad638`; reviewed candidate content commit
+- Dependencies: `root/CRL-20261110-004@7e074ceb5bc8d65b87b8bce369dfed0bb0f0893d`
+- Cross-repository candidate pairing: exact content SHAs are now bound above; both final full gates and static contract match the reviewed content. Independent paired committed-range review follows before any push.
 - Required validation: PASS; final isolated check:ci exit 0 without Mobile Node preload: 57 ledger tests, TypeScript, lint 0 errors / 133 existing warnings, buttons, fast 8 suites / 156 tests, full 88 suites / 908 tests. TasksScreen/guard focused 2 suites / 101 tests PASS. Paired Root full and static contract passed.
 - Shared-hunk review: PASS; exact source manifests, exclusive files and additive shared-file union inspected; no unselected candidate changes.
 - Generated-file review: PASS; no environment files, credentials, production records, dist, node_modules, build cache or test logs staged.
-- Technical state: verified
+- Technical state: committed
 - User authorization: selected-for-commit; user explicitly requested “112/113/114 先提交推送创建PR吧”; this selected scope also authorizes subsequent ordinary branch pushes and Draft PRs, not merge, deploy, OTA or production data actions.
 - Independent review: GO; independent read-only review verified complete source/test/doc diff, both fingerprints, exact pre-commit gates and final logs. No unresolved P0/P1/P2; GO applies only to commit. Root 28 paths / 113 hunks and Mobile 10 paths / 23 hunks.
 - Action conclusion: GO; blockers: none for commit. Exact paired push review follows content commits.
+
+- Content receipt: committed cleanly with the independently reviewed non-ledger fingerprint. Not pushed; PR not created; not merged; not deployed; OTA not published; device/production verification not run.
 
 ### Risks / Release Notes
 
