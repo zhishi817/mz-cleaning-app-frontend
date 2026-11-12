@@ -3,6 +3,7 @@ import { Alert, KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, 
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
+import { File } from 'expo-file-system'
 import { ResizeMode, Video } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth'
@@ -296,6 +297,8 @@ export default function CleaningSelfCompleteScreen(props: Props) {
 
   const [completion, setCompletion] = useState<Record<PhotoArea, string[]>>(emptyCompletionPhotos)
   const completionRef = useRef(completion)
+  const [missingCompletionPreviews, setMissingCompletionPreviews] = useState<string[]>([])
+  const missingCompletionPreviewsRef = useRef<string[]>([])
   const [completionWatermarks, setCompletionWatermarks] = useState<Record<string, string>>({})
   const completionWatermarksRef = useRef<Record<string, string>>({})
   const [lockboxItem, setLockboxItem] = useState<InspectionMediaQueueItem | null>(null)
@@ -516,7 +519,20 @@ export default function CleaningSelfCompleteScreen(props: Props) {
             vacuum_used: [...completionRef.current.vacuum_used],
           }
       const nextWatermarks = serverReadOk ? {} : { ...completionWatermarksRef.current }
-      const pendingCompletionDraft = draft?.completion_submit_enabled && !draft.completion_business_saved
+      // Only a successful read for this task confirms an individual draft
+      // reference is already associated, including a lost save receipt.
+      const canonicalDraftReferences = new Set<string>()
+      if (!readOnly && serverReadOk) {
+        for (const item of r?.items || []) {
+          const sourceTaskId = String((item as any).task_id || '').trim()
+          if (sourceTaskId && sourceTaskId !== cleaningTaskId) continue
+          const rawArea = String(item.area || '').trim()
+          const area = rawArea === 'remote_controls' || rawArea === 'remote_ac' ? 'remote_tv' : rawArea
+          const reference = String((item as any).uploaded_key || item.url || '').trim()
+          if (reference) canonicalDraftReferences.add(JSON.stringify([area, reference]))
+        }
+      }
+      const pendingCompletionDraft = !draft?.completion_business_saved && (draft?.completion_submit_enabled || draft?.media?.some((media) => media.media_kind === 'completion_photo'))
       const serverItems = pendingCompletionDraft ? [] : (r?.items || [])
       let nextHistoricalVideo: { reference: string; taskId: string } | null = null
       let nextHistoricalKeyPhoto: { reference: string; taskId: string } | null = null
@@ -545,17 +561,35 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         if (!(a in next)) continue
         if (!next[a].includes(url)) next[a].push(url)
       }
+      const missingPreviews = new Set(serverReadOk ? [] : missingCompletionPreviewsRef.current)
       for (const media of draft?.media || []) {
         if (media.media_kind !== 'completion_photo') continue
         const rawArea = String(media.area || '').trim()
         const area = (rawArea === 'remote_controls' || rawArea === 'remote_ac' ? 'remote_tv' : rawArea) as PhotoArea
-        const url = String(media.remote_url || media.local_uri || '').trim()
+        // Object upload alone does not authorize the private read route. Keep
+        // the durable local evidence until the business save is acknowledged.
+        const localUri = String(media.local_uri || '').trim()
+        const remoteReference = String(media.remote_url || '').trim()
+        const canonicalRemote = !!draft?.completion_business_saved || canonicalDraftReferences.has(JSON.stringify([area, remoteReference]))
+        const url = canonicalRemote ? remoteReference : localUri || remoteReference
+        // Replace only this draft medium's previous UI source. A failed read
+        // must not preserve an earlier remote preview as new authority.
+        if (area in next) next[area] = next[area].filter((reference) => reference !== localUri && reference !== remoteReference)
+        missingPreviews.delete(localUri)
+        missingPreviews.delete(remoteReference)
+        if (!canonicalRemote && url) {
+          let localExists = false
+          try { localExists = localUri.startsWith('file://') && new File(localUri).exists } catch { /* unavailable local evidence */ }
+          if (!localExists) missingPreviews.add(url)
+        }
         if (!(area in next) || !url || next[area].includes(url)) continue
         next[area].push(url)
         if (String(media.local_uri || '').trim() === url && String(media.watermark_text || '').trim()) {
           nextWatermarks[url] = String(media.watermark_text || '').trim()
         }
       }
+      missingCompletionPreviewsRef.current = [...missingPreviews]
+      setMissingCompletionPreviews([...missingPreviews])
       setCompletion(next)
       setCompletionWatermarks(nextWatermarks)
       if (readOnly) {
@@ -1678,7 +1712,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                     <View style={styles.photoAreaHead}>
                       <View style={styles.photoAreaCopy}>
                         <Text style={styles.areaTitle}>{title}</Text>
-                        <Text style={styles.photoAreaHint}>{readOnly ? '本次保存记录' : hint}</Text>
+                        <Text style={styles.photoAreaHint}>{readOnly ? '本次保存记录' : isStayoverTask && area === 'shower_drain' ? '至少 1 张；多个浴室请分别拍摄，可添加多张' : hint}</Text>
                       </View>
                       <View style={styles.photoAreaActions}>
                         <StatusPill
@@ -1702,14 +1736,17 @@ export default function CleaningSelfCompleteScreen(props: Props) {
                         keyExtractor={(u, idx) => `${u}:${idx}`}
                         renderItem={(u, idx) => (
                           <View style={styles.thumbWrap}>
-                            <Pressable testID={`completion-photo-${area}-${idx}`} onPress={() => openViewer(list, idx)} style={({ pressed }) => [styles.thumbPress, pressed ? styles.pressed : null]}>
-                              <CleaningMediaImage
+                            <Pressable testID={`completion-photo-${area}-${idx}`} disabled={missingCompletionPreviews.includes(u)} onPress={() => {
+                              const previewable = list.filter((reference) => !missingCompletionPreviews.includes(reference))
+                              openViewer(previewable, previewable.indexOf(u))
+                            }} style={({ pressed }) => [styles.thumbPress, pressed ? styles.pressed : null]}>
+                              {missingCompletionPreviews.includes(u) ? <Text style={styles.warn}>本机照片缺失，暂不能预览；请重拍或重试保存已有上传记录。</Text> : <CleaningMediaImage
                                 token={token}
                                 localUri={String(u).startsWith('file://') ? u : null}
                                 remoteReference={u}
                                 {...historicalMediaAccess}
                                 style={styles.thumb}
-                              />
+                              />}
                             </Pressable>
                             {!readOnly ? <Pressable
                               onPress={() => onRemovePhoto(area, u)}

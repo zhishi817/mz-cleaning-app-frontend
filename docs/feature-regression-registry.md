@@ -1,5 +1,15 @@
 # Feature Regression Registry
 
+## FR-P1-MED-12 — MZ-114 入住中清洁未关联照片本机预览
+
+- **Status:** local Phase 3 candidate; runtime verification blocked, not released.
+- **Maintenance scope:** `CleaningSelfCompleteScreen` completion-draft display only; shared queues, authenticated proxy and renderers unchanged.
+- **Business outcome:** 对象上传成功但业务保存失败时，继续显示持久本机照片；退出重进保持同一来源。业务保存确认后才能切换受权远端来源。缺少本机文件显示明确缺失状态，不请求尚未关联的远端图片，不用缓存绕过 403，仍保留已有上传引用供明确重试。入住中浴室下水口至少一张、多浴室可添加多张；遥控器同框一张与重拍替换不变。
+- **Tests:** `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` covers two drains, failed-save local display, reentry, confirmed canonical transition, missing local URI/file and existing historical read-only regressions. `src/lib/cleaningConsumablesSubmitQueue.test.ts` covers network and permanent validation failure, retained local/remote identities, explicit retry without reupload, no background retry for permanent failure.
+- **Test containment:** `scripts/jest-network-guard.cjs`, `jest.config.js`, `jest.setup.ts`, `src/lib/testNetworkGuard.test.ts`, and explicit Contacts API fixtures prevent unmocked test transports. Clean-environment, absolute-preload focused run passed 4 suites / 63 tests including guard self-tests. After independent source review, guarded check:ci passed with 88 suites / 907 tests, TypeScript, lint (0 errors), buttons and ledger. This is transport containment, not an OS sandbox. Prior unguarded full-run network outcome is unknown.
+- **Dependencies:** `mobile/CRL-20261110-001` paired with `root/CRL-20261110-004`; backend drain cardinality and formal-completion lock repair must ship first after exact pair integration verification.
+- **Boundary:** No production API, database, R2, login, device, native build, commit, push, deploy or OTA evidence. Local tests are not end-to-end runtime verification.
+
 ## FR-P1-TSK-09 — 客服密码来源状态与权威刷新
 
 - **Status:** active; MZ-091 response-loss plus MZ-110 local authoritative receipt coordination are one isolated local candidate, not committed, pushed, merged or released.

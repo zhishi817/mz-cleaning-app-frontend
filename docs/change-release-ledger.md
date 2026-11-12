@@ -1,5 +1,152 @@
 # Change Release Ledger
 
+## CRL-20261110-001 — MZ-114 completion draft preview before business association
+- **Repository:** `mobile`
+- **Status:** verified combined candidate; complete local gates passed and independent commit review GO
+- **Updated:** 2026-11-12 UTC
+- **Request:** 用户“114开始修复”；入住中下水口至少一张，多个浴室可多张。Phase 3 narrow repair only.
+- **Outcome:** Completion drafts keep durable local previews until business save confirmation; missing local sources are explicit and never fall through to an unassociated private remote object.
+
+### Implementation
+
+- Previous behavior: refresh preferred remote_url immediately after object upload, even when completion_business_saved was false; the private proxy correctly denied unassociated objects.
+- New behavior: each draft medium may use its remote reference when completion_business_saved was already acknowledged, or a successful current same-task completion read returns that exact same-area reference. Otherwise it selects durable local_uri; unavailable local evidence gets a disabled explicit placeholder retaining upload identity for retry. This preserves already saved photos in mixed saved/new edits and handles a server save before its local receipt, without borrowing new authority from a failed read or another task/area. An acknowledged save retains authenticated remote rendering across GET failure. Historical read-only records remain server-authoritative.
+- Stayover drain hint explicitly permits multiple bathrooms; capture append, remote_tv replacement, all other quantities, payloads, roles, navigation and queue semantics are unchanged.
+- Network and permanent validation failure tests prove the existing queue retains the remote reference, retries business save without duplicate upload, and does not auto-retry permanent validation failures.
+
+### Files / Areas
+
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — completion draft source selection, missing-local placeholder and stayover drain hint.
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — local/reentry/canonical/two-drain/missing-source coverage.
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — explicit retry after validation failure without reupload.
+- `docs/feature-regression-registry.md` — FR-P1-MED-12 invariant and evidence mapping.
+- `docs/change-release-ledger.md` — isolated mobile change record.
+- `jest.config.js` — load test-only transport guard before test modules.
+- `jest.setup.ts` — fail tests on recorded unexpected network attempts, including swallowed errors.
+- `scripts/jest-network-guard.cjs` — deny default fetch, Node HTTP/HTTPS/TCP/TLS/HTTP2/DNS/UDP transport calls without invoking originals; record only transport/method/host; synthetic test origin and removed credential environment keys.
+- `src/lib/testNetworkGuard.test.ts` — no-socket synthetic guard self-tests and explicit mock compatibility.
+- `src/screens/tabs/ContactsScreen.test.tsx` — fixture mocks for contact/profile APIs previously called by mount without mocks.
+
+### Impact / Dependencies
+
+- API / database / schema / environment / native dependencies: no implementation changes. No production operation was authorized; an unexpected test-network attempt was flagged during full-suite verification (see Validation), with external outcome unverified.
+- Related unit: `root/CRL-20261110-004`, root base `cb0425fdeae33baa790b7d9d381e8153719770fa`; backend drain validation and formal-completion lock fixes must precede mobile delivery.
+- Mobile isolated detached candidate base `origin/Dev@c5b87b5b38e602e5d852971a6455a828c90ad170`; FETCH_HEAD timestamp 2026-11-10 11:07:17 UTC. Existing frozen worktree remains evidence only. Local and fetched origin/Dev ledgers had no 20261110 ID before allocation.
+- Exact root/mobile pair integration and Phase 4 delivery gate remain required; no release authorization implied.
+
+### Validation
+
+- Focused Jest (`CleaningSelfCompleteScreen.test.tsx`, `cleaningConsumablesSubmitQueue.test.ts`): PASS, 2 suites / 53 tests.
+- First `npm run check:ci`: blocked by missing existing `react-native-webview` dependency. Resolved locally without installation by an ignored per-package symlink tree and existing exact 13.15.0 package from the 2026-11-06 mobile-governance candidate; original dependencies untouched.
+- Second `npm run check:ci`: ledger-range tests PASS (57), current ledger coverage PASS (5/5), typecheck PASS, lint PASS (0 errors / 133 warnings), button audit PASS, fast Jest PASS (8 suites / 156 tests). Stopped with exit 130 at full-suite phase after a separate full-suite run triggered the safety blocker below. Full gate: BLOCKED, not a passing isolated verification.
+- Earlier unguarded full Jest log reported 87 suites / 898 assertions passed, followed by an open-handle warning. Polling was denied by the safety reviewer because the command unexpectedly contacts a production Render host; request details and external outcome remain unverified. The uncontained invocation was not retried. These totals are observed assertions, not accepted isolated verification. The separately scoped, reviewed containment and subsequent guarded verification below supersede the local test blocker without resolving the prior external outcome.
+- Final `git diff --check`: PASS. Final `python3 scripts/audit_change_release_ledger.py`: PASS, 10 changed paths / 10 recorded paths.
+- iOS simulator, Android emulator, physical iOS, physical Android, EAS/native build, real weak network and production authenticated media: not run.
+- Function state: CODE_FIXED → LOCAL_REGRESSION_PASSED after the final guarded aggregate below. FUNCTION_VERIFIED remains VERIFICATION_BLOCKED without runtime/device evidence.
+- Test-harness containment implemented under separately reviewed local-only scope after the unexpected network attempt. Initial unguarded test counts predate the guard; subsequent reviewed guarded focused verification is recorded below. The prior request outcome remains unknown. Contacts mount was identified statically as an unmocked GET path to `users/contacts` and `users/me`; saved logs do not establish resolved host or response.
+- Process evidence: check:ci session 47064 cancellation returned exit 130. Standalone Jest session 96348 later returned Unknown process id, which confirms only its absence from tool-managed sessions. Local process listing failed (pgrep unavailable via sysmond; ps operation not permitted); OS-level orphan-process absence is NOT VERIFIED. No further polling or network verification was attempted.
+- Later parent read-only escalated process listing succeeded and found no Jest process IDs, confirming absence at that later check only. Prior external request outcome remains unknown.
+- Containment is a test-transport guard, not an OS network sandbox. It now denies all exported DNS lookup/resolve/reverse variants and callback/promise Resolver prototype methods. Focused runs use env -i, an empty temporary HOME, absolute Node guard preload, and runInBand. Aggregate was approved after the final independent source review.
+- Guarded focused verification after the DNS extension: PASS, 4 suites / 63 tests, exit 0, 6.837 seconds. Includes guard self-test, Contacts, completion screen and submit queue; acknowledged-save/failed-GET and optional legacy media fixes included. Synthetic expected denials are asserted and consumed only by guard self-tests; no unexpected attempts reported.
+- Final independent source review: PASS, no remaining P0/P1/P2 runtime findings; expanded guard approved for clean-environment local aggregate only.
+- Final guarded `npm run check:ci`: PASS, exit 0. Clean env -i / temporary HOME / absolute NODE_OPTIONS guard preload / runInBand; no installation. Ledger-range tests 57 passed; ledger path coverage 10/10; TypeScript passed; lint 0 errors / 133 warnings; button audit passed with 27 documented legacy exclusions; fast Jest 8 suites / 156 tests; full Jest 88 suites / 907 tests in 64.001 seconds. No unexpected transport denial or open-handle warning in the final run. Existing React act warnings do not establish native correctness. Earlier unguarded totals remain historical, not accepted isolation evidence, and prior external request outcome remains unknown.
+- Independent-review P2 addressed in the existing screen/test scope: preserve individually confirmed existing remote photos within mixed drafts, retain removal on reentry, accept successful same-task/same-area read before receipt, and reject failed GET or task/area mismatch as new authority. These new cases passed in the reviewed guarded focused and aggregate runs; already acknowledged saves remain authenticated across GET failure.
+
+### Release validation 2026-11-12
+
+- New clean release worktrees preserve all four implementation sources and original frozen workspaces. Root 112/113/114 and Mobile 114 are one branch per independent repository.
+- Root integration corrected the stale PDF static assertion to forbid deep-cleaning GET schema writes, preserving all PDF auth/fail-closed tests. Mobile integration uses Node URL in transport diagnostics so default Jest setup does not capture a torn-down Expo global; added failure-getter regression, with deny behavior unchanged.
+- No dependency install, production API, production database write, migration, external synchronization, native build, deployment or OTA performed. Local PG verification used only a newly created identity-checked /tmp instance and synthetic records, then stopped it.
+- iOS simulator, Android emulator, physical iOS/Android, real weak network, device/authenticated production-media verification: not run. Earlier candidate-only UI/SQL evidence is historical and not a new production acceptance claim.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** `none`; selected additions inspected; generated output, temporary paired symlink and ignored dependencies excluded.
+- Shared-file hunks belong to the user-selected combined scope and are reviewed together.
+- `docs/feature-regression-registry.md` — SHA-256: `2459c2829684d5f67bc9cefef188d21a457d14cbc116b9bf076c44b17700dda6`
+- `jest.config.js` — SHA-256: `4ba6ff1084daf683aff13f9d47ac5aa5bb10a613af60f619add65ebbae77ef7a`
+- `jest.setup.ts` — SHA-256: `c3c0ab289ab4467911739900ef413ea8600c68b018a0ece82fb376a3ec708f5a`
+- `scripts/jest-network-guard.cjs` — SHA-256: `5447d94a67953023493768476bb7f443592685d8f354ad8fd946a24a39ddfac3`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `349b25eb5f7a6c259afdfbdd285a7012190d91511d904785e954145d2bf2ba68`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `7baca00c59f12af4dadf1f18d6f8df678ddf57772c2e3a672107fea60edb76dd`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `e4dc6681f4146da2bed517ef972eda02df935cc1dc9cd350b9bf407d6e27f42b`
+- `src/lib/testNetworkGuard.test.ts` — SHA-256: `d33c3a7e2c1b9d941b578180fb8bc9a7f44ec7441089a173eaa59031385015b1`
+- `src/screens/tabs/ContactsScreen.test.tsx` — SHA-256: `ada35ed0c58efaee390a022dad4b8e75bfc6b78076a639b636d9a8f7ae28b0be`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `3865a8e8ae119db0861a4e9254a6324e730bb8662ccc101878c92300e735048f`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `757b1ba0da1db3a1b6c2c3c2ac53e4464d976c6a50d0b3e61b4cb062fc265d02`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `75988f79228fad3e37740847e5ca30c0eca2166c3c923cc798cecbbf3e95a76f`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `d1b1fcf7a91c525c6f86341d66470b823567a004fc0b01c46ce96fc1925fa718`
+- `src/screens/tasks/CleaningSelfCompleteScreen.test.tsx` — SHA-256: `f96da99276fdd727ff9df7659cb07902fe17a4233755abe6dfdb83122cc59cbc`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `6c1bda9fbc5597ad6fd69d3b75938cef9c671a7e909f28e232e5096ef6dbaff2`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `6e7622dcf98be587d1b2ae506452686a8bd8e99ca3b9bd43773ba599f19ff2d8`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `70b9b4db03e6dcbd25b13c06ed47ea6e4d836fc0afd243e0218477420ab6c3dc`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `72011749badf612dbfa5b818fb183e9ab21a4235e74c0371568cfbfcc44d8b02`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `bb93dcc61de87bc07fd73fb58aa49ecf9cad3b468706b298020e86c14cefb3ca`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `da45611dda978394bc50bbd8c5d37c67aaf8f8538828a55ae453f988abd0acf7`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `e1909aee2f5322322d542a94e3a8dfdf7b140f1bb9703758c840d5ca7ef39ba8`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `ec4c8d4457c514caeeb48762c18adc7a334dbe757b0b8be610c09cbb3cc56cb7`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `ee03e65b903a99cb73bc447d6b4807d3e164e91ef6bf870c279432f54d2e109f`
+
+### Release Attempts
+
+#### RA-20261112-MZ112-113-114-MOBILE
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261110-001`
+- Selected CRL identities: `mobile/CRL-20261110-001`
+- Intended action: `commit`
+- Branch: `codex/mz-112-113-114-20261112`
+- Base: `origin/Dev@c5b87b5b38e602e5d852971a6455a828c90ad170`; fetched at `2026-11-12T02:49:24Z` (unchanged from initial fetch)
+- Candidate patch SHA-256: `31e321d61c6f1054e03a9d517d3575f65b5784be441b15fcb150698a9439c4f7`
+- Commit SHA: `01fd8873bf6ebb6af2a1624160ca9a9f01cad638`; reviewed candidate content commit
+- Dependencies: `root/CRL-20261110-004@7e074ceb5bc8d65b87b8bce369dfed0bb0f0893d`
+- Cross-repository candidate pairing: exact content SHAs are now bound above; both final full gates and static contract match the reviewed content. Independent paired committed-range review follows before any push.
+- Required validation: PASS; final isolated check:ci exit 0 without Mobile Node preload: 57 ledger tests, TypeScript, lint 0 errors / 133 existing warnings, buttons, fast 8 suites / 156 tests, full 88 suites / 908 tests. TasksScreen/guard focused 2 suites / 101 tests PASS. Paired Root full and static contract passed.
+- Shared-hunk review: PASS; exact source manifests, exclusive files and additive shared-file union inspected; no unselected candidate changes.
+- Generated-file review: PASS; no environment files, credentials, production records, dist, node_modules, build cache or test logs staged.
+- Technical state: committed
+- User authorization: selected-for-commit; user explicitly requested “112/113/114 先提交推送创建PR吧”; this selected scope also authorizes subsequent ordinary branch pushes and Draft PRs, not merge, deploy, OTA or production data actions.
+- Independent review: GO; independent read-only review verified complete source/test/doc diff, both fingerprints, exact pre-commit gates and final logs. No unresolved P0/P1/P2; GO applies only to commit. Root 28 paths / 113 hunks and Mobile 10 paths / 23 hunks.
+- Action conclusion: GO; blockers: none for commit. Exact paired push review follows content commits.
+
+- Content receipt: committed cleanly with the independently reviewed non-ledger fingerprint. Not pushed; PR not created; not merged; not deployed; OTA not published; device/production verification not run.
+
+#### RA-20261112-MZ112-113-114-MOBILE-PUSH
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261110-001`
+- Selected CRL identities: `mobile/CRL-20261110-001`
+- Intended action: `push`
+- Branch: `codex/mz-112-113-114-20261112`
+- Base: `origin/Dev@c5b87b5b38e602e5d852971a6455a828c90ad170`; fetched at `2026-11-12T02:49:24Z` (unchanged from initial fetch)
+- Candidate patch SHA-256: `31e321d61c6f1054e03a9d517d3575f65b5784be441b15fcb150698a9439c4f7`
+- Commit SHA: `01fd8873bf6ebb6af2a1624160ca9a9f01cad638`; reviewed candidate content commit
+- Dependencies: `root/CRL-20261110-004@7e074ceb5bc8d65b87b8bce369dfed0bb0f0893d`
+- Cross-repository candidate pairing: exact content SHAs are now bound above; both final full gates and static contract match the reviewed content. Independent paired committed-range review follows before any push.
+- Required validation: PASS; final isolated check:ci exit 0 without Mobile Node preload: 57 ledger tests, TypeScript, lint 0 errors / 133 existing warnings, buttons, fast 8 suites / 156 tests, full 88 suites / 908 tests. TasksScreen/guard focused 2 suites / 101 tests PASS. Paired Root full and static contract passed.
+- Shared-hunk review: PASS; exact source manifests, exclusive files and additive shared-file union inspected; no unselected candidate changes.
+- Generated-file review: PASS; no environment files, credentials, production records, dist, node_modules, build cache or test logs staged.
+- Technical state: pushed
+- User authorization: approved-for-push; latest explicit user request “112/113/114 先提交推送创建PR吧” covers these selected CRLs and this single temporary branch per repository, including ledger-only receipts. No merge/deployment/OTA/production writes.
+- Independent review: GO; independent paired technical push/PR review directly verified Root base cb0425fdeae33baa790b7d9d381e8153719770fa/content 7e074ceb5bc8d65b87b8bce369dfed0bb0f0893d/head 55096067675dc5080bdc8ca8be64865d865024b3 and Mobile base c5b87b5b38e602e5d852971a6455a828c90ad170/content 01fd8873bf6ebb6af2a1624160ca9a9f01cad638/head f192e7d71984d1c7ac0f269f50f1426bfe278055, both exact fingerprints, ancestry, CRL scope and clean state; no unresolved P0/P1/P2.
+- Action conclusion: GO; blockers: none for ordinary branch push and Draft PR targeting Dev. Pure ledger receipts are re-audited; content fingerprint must stay unchanged.
+
+- Cross-repository dependency verification: PASS by direct independent inspection of both exact repositories and their matching complete local regression/static-contract evidence. Both single-repository tools return NOT VERIFIED only because they cannot inspect the counterpart; no local blocker or other missing evidence. This separate paired GO does not relabel those tool results.
+- Publication order: Mobile matching branch first, then Root branch/PR, so Root CI cannot silently select baseline Mobile Dev. Remote exact-ref Phase 4 run will be tracked separately; no merge/deploy/OTA authorized.
+
+- First remote publication evidence (2026-11-12 UTC): ordinary push to `origin/codex/mz-112-113-114-20261112` succeeded and independent `git ls-remote` matched `9ca11cef9a4e5eb2f68997b186adf55676c977da`. The matching Mobile branch was present before Root PR creation.
+- PR evidence: https://github.com/zhishi817/mz-cleaning-app-frontend/pull/80; created Draft targeting `Dev`, paired PR https://github.com/zhishi817/MZ-property-system_V3/pull/452. Remote checks pending; no remote CI-pass or ready-to-merge claim.
+- Delivery boundary: not merged; no backend deployment, OTA, EAS, production data/API action, migration or backfill. Device/production acceptance not run. This ledger-only receipt preserves the independently reviewed content fingerprint and is audited before ordinary push.
+
+### Risks / Release Notes
+
+- Local file existence is not proof of image decodability. Native runtime, lifecycle interruption and real private-media access remain unverified. Missing local previews retain media references to avoid destroying acknowledged uploads.
+- Rollback: revert only this isolated candidate's listed hunks before any authorized release; do not touch frozen original worktrees or production data.
+- Sensitive-data review: synthetic fixtures only, no credentials, .env, production media or personal data read/logged. Shared auth/proxy/renderer/queue implementations unchanged.
+- Git state: uncommitted, unstaged, unpushed; no deploy, OTA or native build.
+
 ## CRL-20261109-001 — MZ-084 选定房源历史反馈候选提取
 
 - **Repository:** `mobile`

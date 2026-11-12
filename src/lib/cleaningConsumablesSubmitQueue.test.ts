@@ -493,7 +493,7 @@ test('keeps staged completion photos local while a separate consumables submit s
   })
 })
 
-test('keeps cleaner completion photo draft until idempotent business save succeeds', async () => {
+test.each(['网络中断', '浴室下水口照片数量校验失败'])('keeps uploaded completion evidence and retries only business save after %s', async (failure) => {
   const api = require('./api') as {
     isRetryableApiError: jest.Mock
     isTerminalAuthApiError: jest.Mock
@@ -505,7 +505,7 @@ test('keeps cleaner completion photo draft until idempotent business save succee
   api.isTerminalAuthApiError.mockReturnValue(false)
   api.uploadCleaningMedia.mockResolvedValue({ url: 'https://cdn.example.com/completion-living.jpg' })
   api.saveCompletionPhotos
-    .mockRejectedValueOnce(new Error('网络中断'))
+    .mockRejectedValueOnce(new Error(failure))
     .mockResolvedValueOnce({ ok: true })
 
   const draftMod = require('./cleaningConsumablesDraft') as typeof import('./cleaningConsumablesDraft')
@@ -543,6 +543,12 @@ test('keeps cleaner completion photo draft until idempotent business save succee
     media: [{ local_uri: 'file:///tmp/completion-living.jpg', remote_url: 'https://cdn.example.com/completion-living.jpg' }],
   })
 
+  // Permanent validation failures wait for an explicit user retry, never background retry.
+  if (failure !== '网络中断') {
+    await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+    expect(api.saveCompletionPhotos).toHaveBeenCalledTimes(1)
+    await draftMod.updateCleaningConsumablesDraft('completion-task-1', (current) => ({ ...current, submit_status: 'ready_to_submit', pending_submit: true }))
+  }
   await queueMod.enqueueCleaningConsumablesSubmit('completion-task-1')
   await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
