@@ -18,6 +18,8 @@ const mockSnapshot = { items: [{ ...baseMockTask }] }
 
 let mockLockboxQueueItems: any[] = []
 let mockInspectionMode = 'self_complete'
+let mockLocalPhotoExists = true
+jest.mock('expo-file-system', () => ({ File: class { get exists() { return mockLocalPhotoExists } } }))
 
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }))
 jest.mock('expo-av', () => {
@@ -105,7 +107,7 @@ jest.mock('../../components/ui/ResponsiveImageGrid', () => (props: any) => {
     props.items.map((item: any, index: number) => mockReact.createElement(View, { key: props.keyExtractor?.(item, index) || index }, props.renderItem(item, index))),
   )
 })
-jest.mock('../../components/CleaningMediaImage', () => () => null)
+jest.mock('../../components/CleaningMediaImage', () => (props: any) => require('react').createElement('MockCleaningMediaImage', props))
 jest.mock('../../components/CleaningMediaPreview', () => () => null)
 jest.mock('../../components/ui/SafeAreaBottomBar', () => () => null)
 jest.mock('../../components/ui/AppButton', () => (props: any) => {
@@ -140,6 +142,7 @@ beforeEach(() => {
   imagePicker.launchCameraAsync.mockResolvedValue({ canceled: true, assets: [] })
   mockSuppliesCatalogState.items = []
   mockInspectionMode = 'self_complete'
+  mockLocalPhotoExists = true
   const draft = require('../../lib/cleaningConsumablesDraft')
   draft.getCleaningConsumablesDraft.mockClear()
   draft.setCleaningConsumablesDraft.mockClear()
@@ -605,6 +608,7 @@ test('普通清洁历史把旧模式额外照片集中为只读记录且不恢�
 
 test('真正自完成历史仅只读显示本次挂钥匙记录，不把缺少记录标为待上传', async () => {
   mockInspectionMode = 'self_complete'
+  mockLocalPhotoExists = true
   mockSuppliesCatalogState.items = [{ id: 'current-only', label: '当前目录新品', required: true }]
   const previousTask = { ...mockSnapshot.items[0] }
   mockSnapshot.items[0] = {
@@ -1094,4 +1098,121 @@ test('补品草稿已清理时，服务端已保存的现场够用状态仍会�
     expect(ui.getAllByText('现场够用').length).toBeGreaterThan(0)
     expect(ui.getAllByText('待确认').length).toBeGreaterThan(0)
   })
+})
+
+function pendingDrainDraft() {
+  return {
+    completion_submit_enabled: true, completion_business_saved: false,
+    media: [1, 2].map((n) => ({ media_kind: 'completion_photo', area: 'shower_drain',
+      local_uri: `file:///drain-${n}.jpg`, remote_url: `cleaning/drain-${n}.jpg`, upload_status: 'uploaded' })),
+  }
+}
+
+function renderPendingCompletion() {
+  const Screen = require('./CleaningSelfCompleteScreen').default
+  const focus: { current?: () => void } = {}
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn(),
+    addListener: jest.fn((_event: string, callback: () => void) => { focus.current = callback; return () => {} }) }
+  const ui = render(<I18nProvider><Screen navigation={navigation} route={{ key: 'pending', name: 'CleaningSelfComplete', params: { taskId: 'w-cleaning' } }} /></I18nProvider>)
+  return { ui, focus }
+}
+
+test('uploaded but business-rejected multiple drains retain local previews on entry and reentry, then use canonical saved references', async () => {
+  const draft = require('../../lib/cleaningConsumablesDraft')
+  const api = require('../../lib/api')
+  api.getCompletionPhotos.mockResolvedValue({ items: [] })
+  draft.getCleaningConsumablesDraft.mockResolvedValue(pendingDrainDraft())
+  let mounted = renderPendingCompletion()
+  await waitFor(() => expect(mounted.ui.getByTestId('completion-photo-shower_drain-1')).toBeTruthy())
+  expect(mounted.ui.UNSAFE_getAllByType('MockCleaningMediaImage' as any).map((node) => node.props.localUri)).toEqual(['file:///drain-1.jpg', 'file:///drain-2.jpg'])
+  mounted.ui.unmount()
+  mounted = renderPendingCompletion()
+  await waitFor(() => expect(mounted.ui.getByTestId('completion-photo-shower_drain-1')).toBeTruthy())
+  expect(mounted.ui.UNSAFE_getAllByType('MockCleaningMediaImage' as any).map((node) => node.props.remoteReference)).toEqual(['file:///drain-1.jpg', 'file:///drain-2.jpg'])
+  draft.getCleaningConsumablesDraft.mockResolvedValue({ ...pendingDrainDraft(), completion_business_saved: true })
+  api.getCompletionPhotos.mockResolvedValue({ items: [1, 2].map((n) => ({ area: 'shower_drain', url: `cleaning/drain-${n}.jpg` })) })
+  await act(async () => mounted.focus.current?.())
+  await waitFor(() => expect(mounted.ui.UNSAFE_getAllByType('MockCleaningMediaImage' as any).map((node) => node.props.remoteReference)).toEqual(['cleaning/drain-1.jpg', 'cleaning/drain-2.jpg']))
+  expect(mounted.ui.UNSAFE_getAllByType('MockCleaningMediaImage' as any).every((node) => node.props.localUri === null && node.props.token === 'test-token')).toBe(true)
+  mounted.ui.unmount()
+})
+
+test.each([false, true])('missing pending local source is explicit and never requests private remote preview (empty URI: %s)', async (emptyUri) => {
+  const draft = require('../../lib/cleaningConsumablesDraft')
+  const api = require('../../lib/api')
+  api.getCompletionPhotos.mockResolvedValue({ items: [] })
+  mockLocalPhotoExists = false
+  const pending = pendingDrainDraft()
+  if (emptyUri) pending.media.forEach((media) => { media.local_uri = '' })
+  draft.getCleaningConsumablesDraft.mockResolvedValue(pending)
+  const { ui } = renderPendingCompletion()
+  await waitFor(() => expect(ui.getAllByText('本机照片缺失，暂不能预览；请重拍或重试保存已有上传记录。')).toHaveLength(2))
+  expect(ui.UNSAFE_queryAllByType('MockCleaningMediaImage' as any)).toHaveLength(0)
+  expect(ui.getByTestId('completion-photo-shower_drain-0').props.accessibilityState?.disabled).toBe(true)
+  ui.unmount()
+})
+
+
+test('mixed saved and new draft keeps current server-authorized remote previews and removal across reentry', async () => {
+  const api = require('../../lib/api')
+  const draft = require('../../lib/cleaningConsumablesDraft')
+  api.getCompletionPhotos.mockResolvedValue({ items: [1, 2].map((n) => ({ area: 'shower_drain', url: `cleaning/saved-${n}.jpg` })) })
+  draft.getCleaningConsumablesDraft.mockResolvedValue({ completion_submit_enabled: false, completion_business_saved: false,
+    media: [
+      { media_kind: 'completion_photo', area: 'shower_drain', local_uri: null, remote_url: 'cleaning/saved-1.jpg', upload_status: 'uploaded' },
+      { media_kind: 'completion_photo', area: 'shower_drain', local_uri: 'file:///new-drain.jpg', remote_url: 'cleaning/unassociated.jpg', upload_status: 'uploaded' },
+    ] })
+  for (let entry = 0; entry < 2; entry += 1) {
+    const { ui } = renderPendingCompletion()
+    await waitFor(() => expect(ui.getByTestId('completion-photo-shower_drain-1')).toBeTruthy())
+    expect(ui.UNSAFE_getAllByType('MockCleaningMediaImage' as any).map((node) => node.props.remoteReference)).toEqual(['cleaning/saved-1.jpg', 'file:///new-drain.jpg'])
+    expect(ui.queryByTestId('completion-photo-shower_drain-2')).toBeNull()
+    ui.unmount()
+  }
+})
+
+test('successful same-task same-area read confirms server save before its local receipt', async () => {
+  const api = require('../../lib/api')
+  const draft = require('../../lib/cleaningConsumablesDraft')
+  draft.getCleaningConsumablesDraft.mockResolvedValue(pendingDrainDraft())
+  api.getCompletionPhotos.mockResolvedValue({ items: [1, 2].map((n) => ({ task_id: 'cleaning-1', area: 'shower_drain', url: `cleaning/drain-${n}.jpg` })) })
+  mockLocalPhotoExists = false
+  const { ui, focus } = renderPendingCompletion()
+  await waitFor(() => expect(ui.UNSAFE_getAllByType('MockCleaningMediaImage' as any)).toHaveLength(2))
+  expect(ui.UNSAFE_getAllByType('MockCleaningMediaImage' as any).map((node) => node.props.remoteReference)).toEqual(['cleaning/drain-1.jpg', 'cleaning/drain-2.jpg'])
+  expect(ui.UNSAFE_getAllByType('MockCleaningMediaImage' as any).every((node) => node.props.localUri === null && node.props.token === 'test-token')).toBe(true)
+  api.getCompletionPhotos.mockRejectedValue(new Error('offline after successful read'))
+  await act(async () => focus.current?.())
+  await waitFor(() => expect(ui.UNSAFE_queryAllByType('MockCleaningMediaImage' as any)).toHaveLength(0))
+  expect(ui.getAllByText('本机照片缺失，暂不能预览；请重拍或重试保存已有上传记录。')).toHaveLength(2)
+  ui.unmount()
+  api.getCompletionPhotos.mockResolvedValue({ items: [] })
+})
+
+test.each(['failed-read', 'wrong-task', 'wrong-area'])('unconfirmed draft never borrows remote authority from %s', async (mode) => {
+  const api = require('../../lib/api')
+  const draft = require('../../lib/cleaningConsumablesDraft')
+  draft.getCleaningConsumablesDraft.mockResolvedValue(pendingDrainDraft())
+  if (mode === 'failed-read') api.getCompletionPhotos.mockRejectedValue(new Error('offline'))
+  else api.getCompletionPhotos.mockResolvedValue({ items: [1, 2].map((n) => ({ task_id: mode === 'wrong-task' ? 'other-task' : 'cleaning-1', area: mode === 'wrong-area' ? 'living' : 'shower_drain', url: `cleaning/drain-${n}.jpg` })) })
+  const { ui } = renderPendingCompletion()
+  await waitFor(() => expect(ui.UNSAFE_getAllByType('MockCleaningMediaImage' as any)).toHaveLength(2))
+  expect(ui.UNSAFE_getAllByType('MockCleaningMediaImage' as any).map((node) => node.props.remoteReference)).toEqual(['file:///drain-1.jpg', 'file:///drain-2.jpg'])
+  ui.unmount()
+  api.getCompletionPhotos.mockResolvedValue({ items: [] })
+})
+
+
+test('acknowledged business save retains authenticated remote references when current GET fails', async () => {
+  const api = require('../../lib/api')
+  const draft = require('../../lib/cleaningConsumablesDraft')
+  draft.getCleaningConsumablesDraft.mockResolvedValue({ ...pendingDrainDraft(), completion_business_saved: true })
+  api.getCompletionPhotos.mockRejectedValue(new Error('offline after acknowledged save'))
+  mockLocalPhotoExists = false
+  const { ui } = renderPendingCompletion()
+  await waitFor(() => expect(ui.UNSAFE_getAllByType('MockCleaningMediaImage' as any)).toHaveLength(2))
+  expect(ui.UNSAFE_getAllByType('MockCleaningMediaImage' as any).map((node) => node.props.remoteReference)).toEqual(['cleaning/drain-1.jpg', 'cleaning/drain-2.jpg'])
+  expect(ui.UNSAFE_getAllByType('MockCleaningMediaImage' as any).every((node) => node.props.localUri === null && node.props.token === 'test-token')).toBe(true)
+  ui.unmount()
+  api.getCompletionPhotos.mockResolvedValue({ items: [] })
 })

@@ -5,6 +5,11 @@ import { I18nProvider } from '../../lib/i18n'
 import { setContactsSnapshot } from '../../lib/contactsStore'
 import ContactsScreen from './ContactsScreen'
 
+jest.mock('../../lib/api', () => ({
+  listUsers: jest.fn(async () => [{ id: 'u1', username: 'tester', display_name: 'tester', role: 'staff', phone_au: '0412 345 678' }]),
+  getMyProfile: jest.fn(async () => ({ id: 'u1', display_name: 'tester', avatar_url: null })),
+}))
+
 jest.mock('../../lib/auth', () => {
   return {
     useAuth: () => ({ token: 't1', user: { id: 'u1', username: 'tester', role: 'staff' } }),

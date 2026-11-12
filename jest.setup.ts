@@ -1,3 +1,11 @@
+const testNetworkGuard = require('./scripts/jest-network-guard.cjs')
+beforeEach(() => {
+  testNetworkGuard.assertNoAttempts()
+  testNetworkGuard.resetFetch()
+})
+afterEach(() => testNetworkGuard.assertNoAttempts())
+afterAll(() => testNetworkGuard.assertNoAttempts())
+
 jest.mock('react-native-reanimated', () => require('react-native-reanimated/mock'))
 
 jest.mock('@react-native-async-storage/async-storage', () => {
