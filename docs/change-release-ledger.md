@@ -113,6 +113,29 @@
 
 - Content receipt: committed cleanly with the independently reviewed non-ledger fingerprint. Not pushed; PR not created; not merged; not deployed; OTA not published; device/production verification not run.
 
+#### RA-20261112-MZ112-113-114-MOBILE-PUSH
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261110-001`
+- Selected CRL identities: `mobile/CRL-20261110-001`
+- Intended action: `push`
+- Branch: `codex/mz-112-113-114-20261112`
+- Base: `origin/Dev@c5b87b5b38e602e5d852971a6455a828c90ad170`; fetched at `2026-11-12T02:49:24Z` (unchanged from initial fetch)
+- Candidate patch SHA-256: `31e321d61c6f1054e03a9d517d3575f65b5784be441b15fcb150698a9439c4f7`
+- Commit SHA: `01fd8873bf6ebb6af2a1624160ca9a9f01cad638`; reviewed candidate content commit
+- Dependencies: `root/CRL-20261110-004@7e074ceb5bc8d65b87b8bce369dfed0bb0f0893d`
+- Cross-repository candidate pairing: exact content SHAs are now bound above; both final full gates and static contract match the reviewed content. Independent paired committed-range review follows before any push.
+- Required validation: PASS; final isolated check:ci exit 0 without Mobile Node preload: 57 ledger tests, TypeScript, lint 0 errors / 133 existing warnings, buttons, fast 8 suites / 156 tests, full 88 suites / 908 tests. TasksScreen/guard focused 2 suites / 101 tests PASS. Paired Root full and static contract passed.
+- Shared-hunk review: PASS; exact source manifests, exclusive files and additive shared-file union inspected; no unselected candidate changes.
+- Generated-file review: PASS; no environment files, credentials, production records, dist, node_modules, build cache or test logs staged.
+- Technical state: committed
+- User authorization: approved-for-push; latest explicit user request “112/113/114 先提交推送创建PR吧” covers these selected CRLs and this single temporary branch per repository, including ledger-only receipts. No merge/deployment/OTA/production writes.
+- Independent review: GO; independent paired technical push/PR review directly verified Root base cb0425fdeae33baa790b7d9d381e8153719770fa/content 7e074ceb5bc8d65b87b8bce369dfed0bb0f0893d/head 55096067675dc5080bdc8ca8be64865d865024b3 and Mobile base c5b87b5b38e602e5d852971a6455a828c90ad170/content 01fd8873bf6ebb6af2a1624160ca9a9f01cad638/head f192e7d71984d1c7ac0f269f50f1426bfe278055, both exact fingerprints, ancestry, CRL scope and clean state; no unresolved P0/P1/P2.
+- Action conclusion: GO; blockers: none for ordinary branch push and Draft PR targeting Dev. Pure ledger receipts are re-audited; content fingerprint must stay unchanged.
+
+- Cross-repository dependency verification: PASS by direct independent inspection of both exact repositories and their matching complete local regression/static-contract evidence. Both single-repository tools return NOT VERIFIED only because they cannot inspect the counterpart; no local blocker or other missing evidence. This separate paired GO does not relabel those tool results.
+- Publication order: Mobile matching branch first, then Root branch/PR, so Root CI cannot silently select baseline Mobile Dev. Remote exact-ref Phase 4 run will be tracked separately; no merge/deploy/OTA authorized.
+
 ### Risks / Release Notes
 
 - Local file existence is not proof of image decodability. Native runtime, lifecycle interruption and real private-media access remain unverified. Missing local previews retain media references to avoid destroying acknowledged uploads.
