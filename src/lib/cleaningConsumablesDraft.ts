@@ -1,8 +1,9 @@
+import { getMediaCaptureUserId } from './mediaCaptureIdentity'
 import { Directory, File, Paths } from 'expo-file-system'
 import { compressImageForLocalStorage, isCompressibleImageMimeType } from './imageCompression'
 import { draftMimeTypeFrom } from './localMediaDrafts'
 import { isLocalMediaLocked } from './localMediaLocks'
-import { getJson, remove, setJson } from './storage'
+import { getOwnedMediaJson as getJson, removeOwnedMediaJson as remove, setOwnedMediaJson as setJson } from './mediaCaptureIdentity'
 import {
   CURRENT_KITCHEN_PHOTO_TEMPLATE_VERSION,
   LEGACY_KITCHEN_PHOTO_TEMPLATE_VERSION,
@@ -33,6 +34,7 @@ export type CleaningConsumablesDraftItem = {
 }
 
 export type CleaningConsumablesPhotoMetaMap = Record<string, {
+  captured_by_user_id?: string
   name?: string
   mime_type?: string
   captured_at?: string
@@ -40,6 +42,7 @@ export type CleaningConsumablesPhotoMetaMap = Record<string, {
 }>
 
 export type CleaningConsumablesMedia = {
+  captured_by_user_id?: string
   media_id: string
   slot: string
   media_kind?: 'consumable' | 'completion_photo'
@@ -55,6 +58,7 @@ export type CleaningConsumablesMedia = {
 }
 
 export type CleaningConsumablesDraft = {
+  captured_by_user_id?: string
   task_id: string
   draft_id: string
   queue_item_id: string
@@ -174,6 +178,7 @@ function normalizePhotoMeta(raw: any): CleaningConsumablesPhotoMetaMap {
       name: cleanText((meta as any)?.name) || undefined,
       mime_type: cleanText((meta as any)?.mime_type) || undefined,
       captured_at: cleanText((meta as any)?.captured_at) || undefined,
+      captured_by_user_id: cleanText((meta as any)?.captured_by_user_id),
       watermark_text: cleanText((meta as any)?.watermark_text) || undefined,
     }
   }
@@ -223,6 +228,7 @@ function normalizeMedia(raw: any): CleaningConsumablesMedia[] {
         name: cleanText(entry?.name) || null,
         mime_type: cleanText(entry?.mime_type) || null,
         captured_at: cleanText(entry?.captured_at) || null,
+        captured_by_user_id: cleanText(entry?.captured_by_user_id),
         watermark_text: cleanText(entry?.watermark_text) || null,
       } satisfies CleaningConsumablesMedia
     })
@@ -280,6 +286,7 @@ function mediaFromLegacy(raw: any): CleaningConsumablesMedia[] {
     name: entry.meta?.name || null,
     mime_type: entry.meta?.mime_type || null,
     captured_at: entry.meta?.captured_at || null,
+    captured_by_user_id: entry.meta?.captured_by_user_id,
     watermark_text: entry.meta?.watermark_text || null,
   }))
 }
@@ -352,7 +359,8 @@ function mergeMediaWithLegacy(currentMedia: CleaningConsumablesMedia[], raw: any
       name: entry.meta?.name || null,
       mime_type: entry.meta?.mime_type || null,
       captured_at: entry.meta?.captured_at || null,
-      watermark_text: entry.meta?.watermark_text || null,
+      captured_by_user_id: entry.meta?.captured_by_user_id,
+    watermark_text: entry.meta?.watermark_text || null,
     } satisfies CleaningConsumablesMedia
   })
   return [
@@ -367,6 +375,7 @@ function normalizeDraft(taskId: string, raw: any): CleaningConsumablesDraft | nu
   const submitStatus = normalizeSubmitStatus(raw.submit_status, pendingSubmit)
   const items = normalizeItems(raw.items)
   const base: CleaningConsumablesDraft = {
+    captured_by_user_id: cleanText(raw.captured_by_user_id),
     task_id: cleanText(raw.task_id) || cleanText(taskId),
     draft_id: cleanText(raw.draft_id) || makeStableId('draft'),
     queue_item_id: cleanText(raw.queue_item_id) || makeStableId('queue'),
@@ -446,6 +455,7 @@ function buildDraft(taskId: string, patch: CleaningConsumablesDraftPatch, curren
   const next: CleaningConsumablesDraft = {
     ...(current || normalizedPatch),
     ...normalizedPatch,
+    captured_by_user_id: current?.captured_by_user_id || patch.captured_by_user_id || getMediaCaptureUserId(),
     items: hasItemsPatch ? normalizedPatch.items : current?.items || normalizedPatch.items,
     photo_meta: hasPhotoMetaPatch ? normalizedPatch.photo_meta : current?.photo_meta || normalizedPatch.photo_meta,
     extra_photo_urls: hasExtraPhotoPatch ? normalizedPatch.extra_photo_urls : current?.extra_photo_urls || normalizedPatch.extra_photo_urls,

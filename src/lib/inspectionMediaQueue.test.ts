@@ -1,3 +1,4 @@
+function fixtureToken(token: string) { require('./mediaCaptureIdentity').setMediaCaptureSession('cleaner-1', token); return token }
 const mockFileSet = new Set<string>(['file:///camera/lock-1.mov'])
 
 jest.mock('expo-file-system', () => {
@@ -87,6 +88,7 @@ beforeEach(async () => {
   mockFileSet.clear()
   mockFileSet.add('file:///camera/lock-1.mov')
   await getAsyncStorage().clear()
+  require('./mediaCaptureIdentity').setMediaCaptureSession('cleaner-1', 'token-1')
 })
 
 test('retries lockbox business save without re-uploading the local video', async () => {
@@ -109,7 +111,7 @@ test('retries lockbox business save without re-uploading the local video', async
     mime_type: 'video/quicktime',
   })
 
-  const first = await queueMod.processInspectionMediaQueue('token-1')
+  const first = await queueMod.processInspectionMediaQueue(fixtureToken('token-1'))
 
   expect(first).toEqual({ processed: 1, remaining: 1 })
   expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
@@ -118,7 +120,7 @@ test('retries lockbox business save without re-uploading the local video', async
     task_id: 'cleaning-task-1',
     media_id: item.id,
     purpose: 'lockbox_video',
-    captured_at: item.captured_at,
+    captured_by_user_id: 'cleaner-1', captured_at: item.captured_at,
   })
   expect(api.uploadLockboxVideo).toHaveBeenLastCalledWith('token-1', 'cleaning-task-1', {
     media_url: 'https://cdn.example.com/lock-1.mov',
@@ -132,7 +134,7 @@ test('retries lockbox business save without re-uploading the local video', async
     local_file_deleted_at: null,
   })
 
-  const second = await queueMod.processInspectionMediaQueue('token-1')
+  const second = await queueMod.processInspectionMediaQueue(fixtureToken('token-1'))
 
   expect(second).toEqual({ processed: 1, remaining: 0 })
   expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
@@ -163,11 +165,11 @@ test('uses the self-complete business route while retaining the same local-first
     source_uri: 'file:///camera/lock-1.mov',
     name: 'self-complete-lock.mov',
     mime_type: 'video/quicktime',
-    captured_at: capturedAt,
+    captured_by_user_id: 'cleaner-1', captured_at: capturedAt,
     meta: { lockbox_submission_mode: 'self_complete' },
   })
 
-  await queueMod.processInspectionMediaQueue('token-self-complete')
+  await queueMod.processInspectionMediaQueue(fixtureToken('token-self-complete'))
 
   expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
   expect(api.uploadSelfLockboxVideo).toHaveBeenCalledWith('token-self-complete', 'self-complete-task', {
@@ -202,7 +204,7 @@ test('retries an interrupted uploading lockbox video after recovery', async () =
     last_error: null,
   })
 
-  const result = await queueMod.processInspectionMediaQueue('token-1')
+  const result = await queueMod.processInspectionMediaQueue(fixtureToken('token-1'))
 
   expect(result).toEqual({ processed: 1, remaining: 0 })
   expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
@@ -211,7 +213,7 @@ test('retries an interrupted uploading lockbox video after recovery', async () =
     task_id: 'cleaning-task-2',
     media_id: item.id,
     purpose: 'lockbox_video',
-    captured_at: item.captured_at,
+    captured_by_user_id: 'cleaner-1', captured_at: item.captured_at,
   })
   expect(api.uploadLockboxVideo).toHaveBeenCalledWith('token-1', 'cleaning-task-2', {
     media_url: 'https://cdn.example.com/lock-recovered.mov',
@@ -232,7 +234,7 @@ test('reuses the persisted media and operation ids after an app restart', async 
     const persistedId = 'lockbox_video_persisted_operation'
     const capturedAt = '2026-10-09T01:02:03.000Z'
     mockFileSet.add('file:///camera/lock-1.mov')
-    await getAsyncStorage().setItem('mzstay.inspection_media_queue.v1', JSON.stringify([{
+    await getAsyncStorage().setItem(require('./mediaCaptureIdentity').mediaCaptureStorageKey('mzstay.inspection_media_queue.v1'), JSON.stringify([{
       id: persistedId,
       task_id: 'cleaning-task-restart',
       kind: 'lockbox_video',
@@ -240,7 +242,7 @@ test('reuses the persisted media and operation ids after an app restart', async 
       name: 'lock-1.mov',
       mime_type: 'video/quicktime',
       created_at: capturedAt,
-      captured_at: capturedAt,
+      captured_by_user_id: 'cleaner-1', captured_at: capturedAt,
       uploaded_url: null,
       upload_status: 'uploading',
       business_saved: false,
@@ -257,12 +259,12 @@ test('reuses the persisted media and operation ids after an app restart', async 
     api.uploadLockboxVideo.mockResolvedValue({ ok: true })
     const queueMod = require('./inspectionMediaQueue') as typeof import('./inspectionMediaQueue')
 
-    await expect(queueMod.processInspectionMediaQueue('token-restart')).resolves.toEqual({ processed: 1, remaining: 0 })
+    await expect(queueMod.processInspectionMediaQueue(fixtureToken('token-restart'))).resolves.toEqual({ processed: 1, remaining: 0 })
     expect(api.uploadCleaningVideo).toHaveBeenCalledWith('token-restart', expect.any(Object), {
       task_id: 'cleaning-task-restart',
       media_id: persistedId,
       purpose: 'lockbox_video',
-      captured_at: capturedAt,
+      captured_by_user_id: 'cleaner-1', captured_at: capturedAt,
     })
     expect(api.uploadLockboxVideo).toHaveBeenCalledWith('token-restart', 'cleaning-task-restart', {
       media_url: 'https://cdn.example.com/restart.mov',
@@ -295,8 +297,8 @@ test('keeps one upload owner after waiter timeouts and persists the late success
     mime_type: 'video/quicktime',
   })
 
-  const firstProcessing = queueMod.processInspectionMediaQueue('token-timeout')
-  const secondProcessing = queueMod.processInspectionMediaQueue('token-timeout')
+  const firstProcessing = queueMod.processInspectionMediaQueue(fixtureToken('token-timeout'))
+  const secondProcessing = queueMod.processInspectionMediaQueue(fixtureToken('token-timeout'))
   await jest.advanceTimersByTimeAsync(0)
   expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
 
@@ -317,7 +319,7 @@ test('keeps one upload owner after waiter timeouts and persists the late success
   expect(queuedAfterTimeout[0].last_error).toContain('视频上传超时')
   expect(queuedAfterTimeout[0].last_attempt_at).toBeTruthy()
 
-  const resumedProcessing = queueMod.processInspectionMediaQueue('token-timeout')
+  const resumedProcessing = queueMod.processInspectionMediaQueue(fixtureToken('token-timeout'))
   upload.resolve({ url: 'https://cdn.example.com/late-lock.mov' })
   await expect(resumedProcessing).resolves.toEqual({ processed: 1, remaining: 0 })
 
@@ -365,7 +367,7 @@ test('keeps the late upload continuation when persisting the timeout status hits
       mime_type: 'video/quicktime',
     })
 
-    const processing = queueMod.processInspectionMediaQueue('token-timeout-storage-full')
+    const processing = queueMod.processInspectionMediaQueue(fixtureToken('token-timeout-storage-full'))
     await jest.advanceTimersByTimeAsync(75_100)
     await expect(processing).resolves.toEqual({ processed: 0, remaining: 1 })
     expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
@@ -410,7 +412,7 @@ test('keeps one business-save owner after timeout and accepts its late success',
     mime_type: 'video/quicktime',
   })
 
-  const firstProcessing = queueMod.processInspectionMediaQueue('token-save-timeout')
+  const firstProcessing = queueMod.processInspectionMediaQueue(fixtureToken('token-save-timeout'))
   await jest.advanceTimersByTimeAsync(0)
   expect(api.uploadCleaningVideo).toHaveBeenCalledTimes(1)
   expect(api.uploadLockboxVideo).toHaveBeenCalledTimes(1)
@@ -426,7 +428,7 @@ test('keeps one business-save owner after timeout and accepts its late success',
   })
   expect(queuedAfterTimeout[0].last_error).toContain('保存任务超时')
 
-  const resumedProcessing = queueMod.processInspectionMediaQueue('token-save-timeout')
+  const resumedProcessing = queueMod.processInspectionMediaQueue(fixtureToken('token-save-timeout'))
   businessSave.resolve({ ok: true })
   await expect(resumedProcessing).resolves.toEqual({ processed: 0, remaining: 0 })
 
@@ -461,7 +463,7 @@ test('maps an external local-media lock collision to a retryable user-safe state
   const holdingLock = localLocks.withLocalMediaLock(item.local_uri, () => releaseLock.promise)
   await Promise.resolve()
 
-  await expect(queueMod.processInspectionMediaQueue('token-external-lock')).resolves.toEqual({ processed: 0, remaining: 1 })
+  await expect(queueMod.processInspectionMediaQueue(fixtureToken('token-external-lock'))).resolves.toEqual({ processed: 0, remaining: 1 })
   expect(api.uploadCleaningVideo).not.toHaveBeenCalled()
   const [queued] = await queueMod.listInspectionMediaQueueItemsForTask('cleaning-task-external-lock', ['lockbox_video'])
   expect(queued).toMatchObject({
@@ -474,4 +476,28 @@ test('maps an external local-media lock collision to a retryable user-safe state
 
   releaseLock.resolve()
   await holdingLock
+})
+
+
+test('late timed-out upload after account switch does not finalize or delete original video', async () => {
+  jest.useFakeTimers()
+  try {
+    const identity = require('./mediaCaptureIdentity')
+    const queue = require('./inspectionMediaQueue')
+    const api = require('./api')
+    const pendingUpload = deferred<any>()
+    api.uploadCleaningVideo.mockReturnValue(pendingUpload.promise)
+    const item = await queue.enqueueInspectionMediaItem({ task_id: 'late-switch', kind: 'lockbox_video', source_uri: 'file:///camera/lock-1.mov', name: 'lock-1.mov', mime_type: 'video/quicktime' })
+    const processing = queue.processInspectionMediaQueue('token-1')
+    await jest.advanceTimersByTimeAsync(75100)
+    await processing
+    identity.setMediaCaptureSession('B', 'tokenB')
+    pendingUpload.resolve({ url: 'https://example.com/late.mov' })
+    await jest.advanceTimersByTimeAsync(0)
+    expect(api.uploadLockboxVideo).not.toHaveBeenCalled()
+    expect(mockFileSet.has(item.local_uri)).toBe(true)
+    expect(await queue.listInspectionMediaQueueItems()).toEqual([])
+    identity.setMediaCaptureSession('cleaner-1', 'token-1')
+    expect(await queue.listInspectionMediaQueueItems()).toEqual(expect.arrayContaining([expect.objectContaining({ id: item.id, business_saved: false })]))
+  } finally { jest.useRealTimers() }
 })

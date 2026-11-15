@@ -1,3 +1,4 @@
+import { buildMediaWatermark, mediaOperatorName } from '../../lib/mediaWatermark'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
@@ -320,6 +321,7 @@ export default function SuppliesFormScreen(props: Props) {
         name: meta.name,
         mime_type: meta.mimeType,
         captured_at: meta.capturedAt,
+        captured_by_user_id: String(user?.id || ''),
         watermark_text: meta.watermarkText,
       },
     }))
@@ -364,11 +366,7 @@ export default function SuppliesFormScreen(props: Props) {
   }
 
   function buildWatermarkText(capturedAt: string) {
-    const d = new Date(capturedAt)
-    const pad2 = (n: number) => String(n).padStart(2, '0')
-    const stamp = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
-    const username = String((user as any)?.username || (user as any)?.email || '').trim() || '未知用户'
-    return `${propertyCode || '未知房号'}  ${username}\n${stamp}`
+    return buildMediaWatermark(propertyCode, mediaOperatorName(user), capturedAt)
   }
 
   useEffect(() => {

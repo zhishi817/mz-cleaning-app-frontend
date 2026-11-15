@@ -18,7 +18,10 @@ jest.mock('react-native-safe-area-context', () => ({
 }))
 
 jest.mock('../../lib/auth', () => ({
-  useAuth: () => mockAuthState,
+  useAuth: () => {
+    require('../../lib/mediaCaptureIdentity').setMediaCaptureSession(mockAuthState.user?.id || '', mockAuthState.token || '')
+    return mockAuthState
+  },
 }))
 
 jest.mock('../../lib/api', () => ({
@@ -146,6 +149,7 @@ test('new day-end photos keep the durable local preview until the handover recor
   })
   queue.persistDayEndDraftPhoto.mockResolvedValue({
     id: 'key-local-1',
+    captured_by_user_id: 'cleaner-1',
     uri: 'file:///private/day-end-key.jpg',
     captured_at: '2026-08-12T01:00:00.000Z',
     uploaded_url: null,

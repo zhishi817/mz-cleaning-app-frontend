@@ -1,3 +1,4 @@
+import { buildMediaWatermark, mediaOperatorName } from '../../lib/mediaWatermark'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
@@ -151,17 +152,8 @@ function toAbsoluteUrl(rawUrl: any) {
   return s0
 }
 
-function fmtTime(iso: string) {
-  const d = new Date(String(iso || ''))
-  if (Number.isNaN(d.getTime())) return String(iso || '')
-  const pad2 = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
-}
-
 function buildWatermarkText(propertyCode: string, username: string, iso: string) {
-  const line1 = `${propertyCode || '未知房号'}${username ? `  ${username}` : ''}`.trim()
-  const line2 = fmtTime(iso)
-  return `${line1}\n${line2}`.trim()
+  return buildMediaWatermark(propertyCode, username, iso)
 }
 
 function sectionTitle(no: string, title: string, icon: any) {
@@ -924,7 +916,6 @@ export default function CleaningSelfCompleteScreen(props: Props) {
   }
 
   function openViewer(urls: string[], index = 0) {
-    const username = String((user as any)?.username || (user as any)?.email || '').trim()
     const nextItems = urls
       .map((url) => {
         const rawUrl = String(url || '').trim()
@@ -933,7 +924,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
           reference: toAbsoluteUrl(rawUrl),
           // 远端文件由上传接口写入真实水印；本地草稿先显示相同文字，避免拍完预览时看起来无水印。
           watermarkText: rawUrl.startsWith('file://')
-            ? completionWatermarks[rawUrl] || buildWatermarkText(propertyCode, username, new Date().toISOString())
+            ? completionWatermarks[rawUrl] || buildMediaWatermark(propertyCode, '', null)
             : null,
         }
       })
@@ -964,7 +955,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     const name = String(a.fileName || uri.split('/').pop() || `completion-${area}-${Date.now()}.jpg`)
     const mimeType = String(a.mimeType || 'image/jpeg')
     const capturedAt = new Date().toISOString()
-    const username = String((user as any)?.username || (user as any)?.email || '').trim()
+    const username = mediaOperatorName(user)
     const watermarkText = buildWatermarkText(propertyCode, username, capturedAt)
     const persisted = await persistCompressedCleaningConsumablesPhoto(uri, name, mimeType, `completion-${area}`)
     return {
@@ -972,6 +963,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
       name: persisted.name,
       mimeType: persisted.mimeType,
       capturedAt,
+      captured_by_user_id: String(user?.id || ''),
       watermarkText,
     }
   }
@@ -984,13 +976,14 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     setSupplies(prev => prev.map((x, i) => (i === idx ? { ...x, ...patch } : x)))
   }
 
-  function rememberDraftPhoto(uri: string, meta: { name: string; mimeType: string; capturedAt: string; watermarkText: string }) {
+  function rememberDraftPhoto(uri: string, meta: { name: string; mimeType: string; capturedAt: string; watermarkText: string; captured_by_user_id?: string }) {
     setDraftPhotoMeta((prev) => ({
       ...prev,
       [uri]: {
         name: meta.name,
         mime_type: meta.mimeType,
         captured_at: meta.capturedAt,
+        captured_by_user_id: meta.captured_by_user_id || String(user?.id || ''),
         watermark_text: meta.watermarkText,
       },
     }))
@@ -1024,8 +1017,8 @@ export default function CleaningSelfCompleteScreen(props: Props) {
     const mimeType = String(asset.mimeType || 'image/jpeg')
     const capturedAt = new Date().toISOString()
     const persisted = await persistCompressedCleaningConsumablesPhoto(sourceUri, name, mimeType, prefix)
-    const username = String((user as any)?.username || (user as any)?.email || '').trim()
-    rememberDraftPhoto(persisted.localUri, { name: persisted.name, mimeType: persisted.mimeType, capturedAt, watermarkText: buildWatermarkText(propertyCode, username, capturedAt) })
+    const username = mediaOperatorName(user)
+    rememberDraftPhoto(persisted.localUri, { name: persisted.name, mimeType: persisted.mimeType, capturedAt, captured_by_user_id: String(user?.id || ''), watermarkText: buildWatermarkText(propertyCode, username, capturedAt) })
     return persisted.localUri
   }
 
@@ -1092,7 +1085,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
 
   async function queueCompletionSnapshot(
     next: Record<PhotoArea, string[]>,
-    captured?: { url: string; area: PhotoArea; name: string; mimeType: string; capturedAt: string; watermarkText: string },
+    captured?: { url: string; area: PhotoArea; name: string; mimeType: string; capturedAt: string; watermarkText: string; captured_by_user_id?: string },
   ) {
     const current = await getCleaningConsumablesDraft(cleaningTaskId)
     const currentCompletionMedia = (current?.media || []).filter((media) => media.media_kind === 'completion_photo')
@@ -1119,7 +1112,8 @@ export default function CleaningSelfCompleteScreen(props: Props) {
           upload_error_code: null,
           name: capturedMeta?.name || null,
           mime_type: capturedMeta?.mimeType || 'image/jpeg',
-          captured_at: capturedMeta?.capturedAt || new Date().toISOString(),
+          captured_at: capturedMeta?.capturedAt || '',
+          captured_by_user_id: capturedMeta?.captured_by_user_id || '',
           watermark_text: capturedMeta?.watermarkText || null,
         })
       }
@@ -1274,6 +1268,7 @@ export default function CleaningSelfCompleteScreen(props: Props) {
         await removeInspectionMediaItem(lockboxItem.id)
       }
       const queued = await enqueueInspectionMediaItem({
+        captured_by_user_id: user?.id || '',
         task_id: cleaningTaskId,
         kind: 'lockbox_video',
         source_uri: uri,

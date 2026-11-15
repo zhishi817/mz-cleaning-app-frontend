@@ -881,6 +881,10 @@ export type WorkTask = {
   completion_photo_urls?: string[] | null
   completion_note?: string | null
   completion_reason?: string | null
+  deep_cleaning_workflow?: {
+    status: string
+    available_actions: string[]
+  } | null
   maintenance_workflow?: {
     domain: 'internal' | 'external'
     status: 'pending_assignment' | 'assigned' | 'in_progress' | 'pending_review' | 'closed' | 'cancelled' | string
@@ -2071,6 +2075,7 @@ export async function completePropertyFeedbackProject(
   feedbackId: string,
   projectId: string,
   params: {
+    assignee_id?: string
     note?: string
     detail?: string
     source_task_id?: string
@@ -4143,6 +4148,86 @@ export async function markWorkTask(
   const res = lastRes as Response
   if (!res.ok) throw new Error(await parseErrorMessage(res))
   return (await parseJsonOrThrow(res)) as any
+}
+
+export async function listDeepCleaningExecutors(token: string): Promise<Array<{ id: string; name: string }>> {
+  const urls = buildUrlCandidates('deep-cleaning/executors')
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let response: Response | null = null
+  for (const url of urls) {
+    response = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (response.status !== 404) break
+  }
+  if (!response?.ok) throw new Error(await parseErrorMessage(response as Response))
+  const rows = await parseJsonOrThrow(response)
+  if (!Array.isArray(rows)) throw new Error('清洁人员名单暂不可用')
+  return rows.map((row: any) => ({ id: String(row.id || ''), name: String(row.name || row.id || '') })).filter((row) => row.id)
+}
+
+export async function getDeepCleaningRecoveryContext(token: string, recordId: string, sourceTaskId: string) {
+  const urls = buildUrlCandidates(`deep-cleaning/records/${encodeURIComponent(recordId)}/recovery-context?source_task_id=${encodeURIComponent(sourceTaskId)}`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let response: Response | null = null
+  for (const url of urls) {
+    response = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } }, 15000)
+    if (response.status !== 404) break
+  }
+  if (!response?.ok) throw await toApiErrorFromResponse(response as Response)
+  return await parseJsonOrThrow(response) as { record_id: string; source_task_id: string; owner_user_id: string; workflow_status: string; can_resume: boolean; completion_photo_urls: string[] }
+}
+
+export async function recordDeepCleaningCompletion(token: string, params: {
+  recordId: string; operationId: string; assigneeId: string; propertyId: string; areas: string[]; detail: string
+  beforePhotos: string[]; afterPhotos: string[]; note?: string | null
+  sourceTaskId?: string | null; clientItemId?: string | null; existingRecord?: boolean; startedAt?: string | null; endedAt?: string | null
+}) {
+  const urls = buildUrlCandidates(`deep-cleaning/records/${encodeURIComponent(params.recordId)}/workflow/record_complete`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let response: Response | null = null
+  for (const url of urls) {
+    response = await fetchWithTimeout(url, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operation_id: params.operationId, assignee_id: params.assigneeId,
+        completion_photo_urls: params.afterPhotos, completion_note: params.note || null,
+        ...(params.startedAt ? { started_at: params.startedAt } : {}), ...(params.endedAt ? { ended_at: params.endedAt } : {}),
+        ...(!params.existingRecord ? { initial_report: { property_id: params.propertyId, areas: params.areas, detail: params.detail, photo_urls: params.beforePhotos,
+          ...(params.sourceTaskId ? { source_task_id: params.sourceTaskId } : {}), ...(params.clientItemId ? { client_item_id: params.clientItemId } : {}) } } : {}) }),
+    }, 30000)
+    if (response.status !== 404) break
+  }
+  if (!response?.ok) throw await toApiErrorFromResponse(response as Response)
+  return await parseJsonOrThrow(response) as { ok: true; id: string; status: string; workflow_status: string; repair_photo_urls: string[] }
+}
+
+export async function submitDeepCleaningCompletion(
+  token: string,
+  params: { recordId: string; completionPhotoUrls: string[]; beforePhotoUrls?: string[]; completionNote?: string | null; operationId: string },
+) {
+  const recordId = String(params.recordId || '').trim()
+  if (!recordId) throw new Error('缺少深清记录ID')
+  const urls = buildUrlCandidates(`deep-cleaning/records/${encodeURIComponent(recordId)}/workflow/complete`)
+  if (!urls.length) throw new Error('后端地址未配置（EXPO_PUBLIC_API_BASE_URL）')
+  let lastRes: Response | null = null
+  for (const url of urls) {
+    lastRes = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        completion_photo_urls: params.completionPhotoUrls,
+        ...(params.beforePhotoUrls ? { before_photo_urls: params.beforePhotoUrls } : {}),
+        completion_note: params.completionNote ?? null,
+        operation_id: params.operationId,
+      }),
+    }, 15000)
+    if (lastRes.status !== 404) break
+  }
+  if (!lastRes?.ok) throw new Error(await parseErrorMessage(lastRes as Response))
+  return await parseJsonOrThrow(lastRes) as {
+    ok: true; status: string; workflow_status: string; available_actions: string[]
+    photo_urls?: string[]; repair_photo_urls?: string[]; completion_photo_urls?: string[]; completed_at?: string | null
+    work_record_visible?: boolean; work_record_state?: string | null; work_record_date?: string | null
+    work_record_read_only?: boolean; counts_as_active_task?: boolean
+  }
 }
 
 export type MaintenanceExecutorWorkflowAction = 'executor_complete' | 'executor_unfinished'

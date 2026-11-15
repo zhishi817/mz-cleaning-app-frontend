@@ -17845,3 +17845,1352 @@
 
 - The notification button assertion is unchanged and synchronous; a future mismatch between fixture and business date fails directly rather than being masked by a timeout.
 - This is test-only CI stabilization and must not be represented as an app behavior change or Mobile release.
+## CRL-20261112-001 — MZ-115 深清执行提交待审核与前后照片
+- **Repository:** `mobile`
+- **Status:** candidate; selected for integrated commit/push; final CI and independent review pending
+- **Updated:** 2026-11-12 UTC
+- **Request:** 用户确认真实人员派工、价格执行时可空、整单或分项由 admin 审核确认；移动端正常显示清洁前后照片；本期不接人员结算。
+- **Outcome:** 深清任务使用专用完成接口提交待审核，不乐观标为完成；前后照片分开，执行权限使用服务端领域动作，完成草稿保留到业务关联确认。
+
+### Implementation
+
+- 2026-11-14 preview follow-up: Black circle was the existing after-draft remove control; native white close icon was lost by the external HTML snapshot renderer. Corrected external preview icon color/glyph and single-line TextInput alignment, not business deletion logic. Only deep-cleaning markNote now explicitly sets textAlignVertical center / paddingVertical 0; unrelated task input stays unchanged. Same screen/test/ledger scope; mounted note-style regression added. No auth, draft, API or data change. Validation PASS: focused 87/87, check:ci 88 suites/979 tests, ledger 23/23, mounted preview export and Chrome visual check of white close glyph / centered note. Native device/camera verification not run; previous release review is not renewed by this styling change.
+
+- 2026-11-14 UI follow-up: Only the MZ-115 deep before-photo camera/gallery controls now reuse existing completion-photo compactActionBtn/Text and icons instead of outline AppButton. Disabled state and handlers unchanged; no upload, payload, authorization, non-deep task, production or release changes. Added mounted style parity regression in TaskDetailScreen.test.tsx. Scope: the two screen files and this ledger; rollback only these new button/test hunks. Validation PASS: focused TaskDetailScreen Jest 87/87; npm run check:ci (88 suites / 979 tests, TypeScript/lint/button contracts/ledger gates); standalone ledger audit 23/23 paths; synthetic mounted preview re-export PASS and Chrome visual check shows matching blue before/after controls. iOS/Android native/simulator/device and real camera/network not run. Existing uncommitted candidate preserved; no staging/commit/push; no sensitive material or dependencies added. Paired dependency remains root/CRL-20261112-001.
+
+- Previous behavior: 深清走 generic mark done，使用客户端 done 投影；没有原始照片独立区域，工时被当作深清完工必填。
+- New behavior: 深清领域 DTO / 专用 complete action / 权威 pending_review 回执；缓存与只读投影清除执行动作；前后照片使用相同受权任务上下文；可选时间保留历史显示。没有移动审价或结算入口。
+- Reuse existing task-and-owner-keyed maintenanceCompletionPhotoDraft without changing its storage or cleanup implementation; deep-cleaning uses its own exact work-task identity. Local evidence stays until canonical association; unassociated media never substitutes a private remote preview when its local copy is unavailable.
+- Scope: Phase 3 domain-specific change. No shared renderer, proxy, upload queue, schema, dependency, native config or authentication rewrite. Feedback project completion compatibility requires paired backend verification; existing entries are not removed.
+
+### Files / Areas
+
+- `src/lib/taskVisualTheme.ts` — deep-cleaning pending_review domain maps to 待审核 without synthesizing work-record visibility or changing other sources.
+- `src/lib/taskVisualTheme.test.ts` — visibility-independent review label, stale assigned projection and unrelated-source regression.
+
+- `src/lib/api.ts` — deep workflow DTO and dedicated no-price completion request.
+- `src/lib/api.test.ts` — endpoint, payload and authoritative receipt contract.
+- `src/lib/dailyTaskExecutionVisibility.ts` — deep workflow status participates in execution visibility.
+- `src/lib/dailyTaskExecutionVisibility.test.ts` — pending-review stale-status regression.
+- `src/lib/workTasksStore.ts` — deep workflow patches invalidate stale visibility and readonly records lose actions.
+- `src/lib/workTasksStore.test.ts` — domain patch/cache regression.
+- `src/lib/maintenanceCompletionPhotoDraft.test.ts` — reused storage source/owner isolation regression.
+- `src/screens/tasks/TaskDetailScreen.tsx` — before/after display, durable draft, dedicated submission and server action gate.
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — before/after context, submission, retry, pending/terminal and missing-capability checks.
+- `src/screens/tasks/FeedbackFormScreen.tsx` — fixed-price completion does not require time; optional inputs remain.
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — actual-person selection, no-time complete report, source-error and atomic retry coverage.
+- `src/lib/deepCleaningCompletion.ts` — persisted business UUID and stable record-complete operation identity, not credentials.
+- `src/lib/inspectionPanelFeedbackDraft.ts` — persist selected executor and report UUID through local inspection feedback drafts.
+- `src/lib/inspectionPanelSubmitQueue.ts` — atomically complete selected-person deep feedback, never pre-create another report; retain existing source checkpoint and retry identity.
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — actual-person and UUID/operation retention, strict owner/source recovery, acknowledgment-lost reconciliation and account-switch regression.
+- `src/lib/auth.tsx` — pass authenticated user ID to existing queue processing; no authentication or role logic changes.
+- `src/screens/tasks/InspectionPanelScreen.tsx` — snapshot owner and explicit per-item legacy deep-cleaning person supplement with confirmation.
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — manual selection/confirmation/resume and existing inspection-entry regressions.
+- `docs/feature-regression-registry.md` — deep workflow invariant and mapped evidence.
+- `docs/mz115-deep-cleaning-mobile.md` — diagnosis, media contract and validation boundaries.
+- `docs/change-release-ledger.md` — this independent change unit.
+
+### Impact / Dependencies
+
+- API: requires paired `root/CRL-20261112-001` DTO and dedicated `/deep-cleaning/records/:id/workflow/complete`; no client role-derived grant.
+- Database / migration / production: none performed. No production API calls, data repair, backfill or storage mutation.
+- Config / dependencies: none; local ignored node_modules symlink reuses existing dependencies without installation.
+- Base: `origin/Dev@1ec20d490097fd13798767d74c40851b5da9c85f`, freshly fetched by coordinating worker 2026-11-12 UTC. Detached isolated worktree; original frozen worktree untouched. ID scanned against accessible worktrees and local refs before allocation.
+- Related units: MZ-113 is earlier root photo/body/filter work, not this workflow; no personnel settlement coupling.
+
+### Validation
+
+- Final photo-access paired source review PASS, not release GO: Mobile non-ledger patch `29937723ff2a444538434493e7aaa079e5ac479f2cab6872cc9ff524aaa875b3` (22 paths), Root `6a1940b690f7d5d2438018d2464f5f6d60b58708cf23d4af7c0aef02ba46b273` (28 paths). Supersedes every earlier snapshot below. Reviewer confirmed deep-only after identity protection and real-local big preview, unchanged maintenance branch, exact media binding and retention of existing legitimate source permissions. Root complete backend and paired fast gates both exited 0 with Web 64 files / 374 tests and Mobile typecheck; Mobile full CI is 88 suites / 979 tests. Actual deployed media, full PostgreSQL media chain and native device/camera/weak-network remain not run.
+- Photo-access audit follow-up: first reproduced two local big-preview failures and after-task-switch cleanup failure (3 failing fixtures; owner-switch fixture initially passed). Deep after now uses identity-bound loaded state separately from unchanged maintenance legacy state, fail-closed hydration, guarded late capture/load/save and canonical persisted-bucket cleanup. Deep-only local preview visibility accepts localUri without fabricating a remote reference and hides on identity switch. Added actual component taps, admin/staff readonly R2 task-context and late owner transition cases; targeted 84 assertions passed before final extra read-failure case. Final guarded full gate passed (exit 0): 88 suites / 979 assertions, TypeScript, lint, button contract and ledger audit. Missing local files now distinguish unuploaded loss from retained remote references. Live object authorization/native tests remain not run.
+
+- Final execution-before paired source review PASS, not release GO: Mobile non-ledger patch SHA-256 `e36f5b6e1ff965e42b6d29e7532497f4e07dc8d9bd78f049a445fa04e11ea1a1` (22 paths), Root `d0ba0cfe049f0467a1ecbdbcab0b4f91316d4eb9c4666095c1a16300cc7dccde` (28 paths). Supersedes prior snapshots below. Review confirmed the loaded-identity cleanup repair and deep-only scope; paired backend media tests now verify exact existing source/work-task/property and current executor or actual admin, with unauthorized/unassociated/wrong-context refusal. No broad role grant or other-source permission rewrite.
+- Final paired Root complete backend and fast gates passed after the last media attachment compatibility fix, Web 64 files / 372 tests and Mobile typecheck passed; registry 44 FRs / 352 mappings. Mobile full CI is 88 suites / 967 tests as detailed below. Fresh fetches at 2026-11-12T11:33:41Z/44Z confirmed Root/Mobile recorded Dev bases unchanged. Actual-component active/pending static previews were regenerated and visually verified, including new before upload buttons and unchanged pending read-only behavior; native upload/camera and production media remain not run.
+- Authorized before-photo completion addendum: deep TaskDetail now always shows before evidence, with capture/gallery for the existing complete capability only. New before drafts use exact task+source+owner+before-phase identity; existing source photos stay readonly, local-only previews never request unassociated private media. Existing complete accepts optional before_photo_urls, atomically with required after evidence; canonical ACK controls independent cleanup, failures/unknown outcomes retain uploaded refs and local files. No separate save endpoint, action grant or other-task edit. Before-draft hydration must complete before capture or submission; read failure blocks safely without dropping evidence. Intermediate 964-assertion full gate passed; Hydration/deletion intermediate full gate passed 965 assertions. Independent review then identified a task/owner-switch cleanup race; before photos now carry loaded identity atomically, render/submit/cleanup require identity equality, and both receipt/reentry cleanup reread the persisted bucket and require every reference canonical. Delayed task/owner-switch negative tests passed; final identity-safe guarded full gate passed (exit 0): 88 suites / 967 assertions; TypeScript, lint, button and ledger gates passed. No native or live-service verification implied. Prior 954 gate predates this addendum.
+
+- Final deep-only scope source review PASS, not release GO: Mobile non-ledger patch SHA-256 `3f24f8e293963c08aaba25a8d005b965129211ff5ebb1a3e44cdec46898ee869` (22 paths), paired Root `58b624d2b9e9cecf6f70d153cf4e9cbd178e3cb01880614cd4d4f7638fefbb29` (25 paths). Independent reviewer matched exact current files, source-scoped refresh/cache rules, restored maintenance handler and ordinary turnover display. No new blocking findings. These supersede earlier review snapshots below. The assigned and pending-review static previews were rebuilt from matching candidate component source and visually checked without turnover labels, times or guide; they remain synthetic component exports, not native verification.
+- Final paired Root `check:fast` passed with this Mobile source: Mobile typecheck, Web 64 files / 368 tests and registry 44 FRs / 351 mappings. Fresh fetch at 2026-11-12T11:08:36Z confirmed Mobile origin/Dev still matches the recorded base; paired Root fetch at 11:08:33Z was likewise unchanged. No original-worktree edit, merge/rebase, commit or push occurred.
+- Scope correction after preview review: deep TaskDetail hides turnover suffix/time/timing tags and check-in guide locally, without altering shared title/time helpers. Deep fixtures are constructed from zero, with contaminated-field negatives. Completion-photo refresh dependency is deep-only; original maintenance single-shot handler and index-removal semantics restored. Deep workflow visibility/patch reconciliation now ignores foreign-source deep fields, preserving explicit hidden projections. Added ordinary cleaning/stayover/inspection/maintenance display and unsaved draft regressions. Updated guarded full gate passed (exit 0): 88 suites / 954 assertions, TypeScript, lint, button and ledger gates. Prior 942 gate is historical. A /tmp-only diagnostic against the pre-fix component reproduced lost notes for maintenance and offline sources (2 failing tests); the same assertions pass on the corrected component. Mixed inspection batches retain the already-authorized whole-batch safety pause when an unfinished deep item lacks identity; that is not a promise that every inspection path is unaffected.
+
+- Executor-label refinement after user clarified all non-customer-service users are eligible: mobile keeps server-returned executor options and capability-only completion; deep-only labels now say 实际执行人 rather than 清洁人员. Added finance and non-field role component regressions; no role grants, finance-data access, manager report-entry or other task rules changed. Updated guarded full check:ci passed (exit 0): 88 suites / 942 assertions; TypeScript, lint, button and ledger gates pass. No device or live backend verification claimed.
+- Prior executor-label independent source review PASS: then-current non-ledger patch SHA-256 ff21e8b500492ed45dde565d54fe90cdc1730a1b6ca6c4b69df95b3c5d7fcecf, paired root 26f69e8cb94feffb64462e014cfc7a8c14e5763bb484fb48a13ef90c5190c3ca. These historical snapshots are superseded by the final deep-only scope review above and are not release GO. Root full backend/fast and Web 64 files / 368 tests also passed after that follow-up.
+
+- Preview-discovered badge correction: submitted deep tasks without work_record_visible previously fell back to 待处理 despite correct readonly/pending content. Narrow domain label mapping and component assertion added; updated full gate passed (exit 0): 88 suites / 940 assertions, TypeScript, lint, button audit and ledger 23/23. Prior 936 gate predates this correction. Preview rendering is synthetic actual-component static state, not native device evidence.
+- Final post-preview independent source review PASS applies to patch SHA-256 `2924edce1480470e372e7a86606d44f9db64aef0ac7ce1293daf388e876188c2`, excluding ledger metadata. This supersedes the pre-preview Mobile snapshot below; paired root source remains `08b2a7cc69c3338e1f3e58b7626db362dbf9507d9947f06485d263408f8e9285`. Actual component HTML/screenshots were regenerated from the corrected source and show 待审核; there is no manual HTML masking. Runtime preview uses only synthetic data and no native App launch, production service, real upload or message transmission.
+
+- Guarded TypeScript passed. Focused task/store/visibility/draft tests passed 4 suites / 139 assertions; task/feedback/API focused tests passed 3 suites / 126 assertions.
+- Pre-addendum guarded `check:ci` passed: 88 suites / 918 assertions, TypeScript, lint, button contract and ledger coverage. This predates the user's actual-person-at-completed-report requirement and is not the final candidate gate.
+- Actual-person atomic report focused tests passed 3 suites / 95 assertions; subsequent selected-person negatives and final aggregate results are recorded below.
+- Each run used env -i, temporary HOME, absolute existing deny-only transport preload and synthetic test config. No production API/DB operation, dependency installation, or migration executed.
+- Pre-preview guarded `npm run check:ci` passed (exit 0): 88 suites / 936 assertions, TypeScript, lint, button contract (27 documented legacy exceptions) and ledger audit. Recovery+inspection focused 61 assertions and feedback suite 49 assertions passed. Paired root fast/backend cross-layer contracts passed; these synthetic checks are not device/backend live integration.
+- Pre-preview independent source review PASS: mobile patch SHA-256 `172061d5eca336d43eaf4f3a739e939349c09a2a31abb5fbdd4499153cd1689a`, paired root patch SHA-256 `08b2a7cc69c3338e1f3e58b7626db362dbf9507d9947f06485d263408f8e9285`, excluding ledger metadata. This historical snapshot is superseded above, not release GO or commit/push authorization. Fetch at 2026-11-12T07:42:04Z confirmed both recorded Dev bases unchanged.
+- Paired root backend/fast reruns after the Web read-compatibility correction passed. Root paired feature-registry audit passed 44 FRs / 351 mappings; pre-preview mobile ledger coverage was 21/21 and is now 23/23. Temporary cross-repository test symlink was removed; no mobile source changed after the final 940-test full gate.
+- iOS simulator, Android emulator, physical iOS/Android, real camera/gallery/weak network, EAS/native build, deployed API/production/object storage: not run.
+
+### Risks / Release Notes
+
+- New endpoint must be available before mobile delivery. Legacy clients using generic mark require backend deployment compatibility review. Feedback submit-as-completed bridge and permissions must be verified with paired backend; no inferred new self-assignment permission.
+- Rollback: revert this isolated unit with its paired backend plan; do not mutate historical records or remove unsynced local evidence.
+- Sensitive review: no credentials, environment contents, private media or real user data added; tests synthetic. Original worktree not edited.
+- Git: not committed, not pushed, PR not created, not merged, not deployed, OTA not published; device/production verification not run.
+
+### Authorized actual-person addendum
+
+- The user subsequently requested selecting the actual cleaner when submitting completed feedback; default self only when returned in the server eligibility list, allow change. No username-derived assignment. No new ordinary-role report-completion grant; server retains the original manager/acting-manager authority.
+- New completed reports use one `record_complete` transaction with stable persisted record UUID and operation ID. Original report photos, final photos, source-task/client-item identity and actual executor are submitted together. Existing partial feedback checkpoints use their existing source ID, not a new report. Optional supplied times are preserved; prices remain absent.
+- Inspection drafts and queue snapshots persist the actual executor and stable identity. Deep completed reports are excluded from generic create-feedback batch to avoid create-then-denied half success. Noncompleted feedback and maintenance paths retain their prior APIs.
+- Source search finds only the `openProjectAction` definition, no current callers. Its latent deep per-project completion branch explicitly blocks with instructions to submit the whole record in task details, without upload/API/state mutation. It must not convert project A into completion of unfinished project B. A two-project source-guard test protects this unreachable branch; no clickable UI execution is claimed. Add/edit and maintenance semantics remain unchanged. Old deployed client compatibility requires paired upgrade review.
+- Strict recovery was subsequently authorized: the deep-cleaning item alone can supplement a person after explicit confirmation while retaining photos, remote references, successful steps, source mappings and stable identities. New snapshots store owner_user_id. Old mapped records require a read-only server proof of exact owner/source; unknown-owner records without source mapping remain blocked for manual verification, never guessed, discarded or recreated.
+- Acknowledgment-lost recovery only marks the local completion receipt when the server proves terminal/review status and contains all expected completion photos; it does not submit again or alter the server's person. Same-owner new records can retry after an exact 404, but 403 never falls back. Cross-account unfinished owned deep batches are left untouched before any queue network work.
+- Recovery focused evidence: 2 suites / 58 assertions passed, then explicit confirmation UI suite 30 assertions passed. Intermediate recovery-version check:ci passed 88 suites / 935 assertions; the final strict ownerless-identity guard and latent-project-block version passed its full gate: 88 suites / 936 assertions. Existing 88 suites / 925 assertions gate predates this recovery and is not final evidence.
+- Shared queue freeze/discard semantics and other task types remain unchanged. No real user storage migration was run. Completely ownerless/unmapped historical batches require manual verification outside this automated recovery boundary.
+
+### Integration validation 2026-11-15
+
+- Selected by user as one integrated branch per repository. Original source worktrees remain untouched. No production API/data, dependency install, OTA or merge.
+- Integrated 115/116/118 shared TaskDetail and inspection queue hunks rather than overwriting entire source files; 117 remains documentation only.
+- Added combined regression for deep-before acknowledged upload preservation after local storage failure; token/account/task guards before upload and before applying late completion/defer receipts. Late original-owner acknowledgment cannot patch the new session or navigate it.
+- Session changes also reset busy and reload original-owner before/after drafts; preserved remote ACK is reused without duplicate upload.
+- Focused integrated TaskDetail and inspection queue: 2 suites / 135 tests PASS, including 7 additional integration boundary tests. Initial combined test fixture isolation and account-session setup failures were repaired without dropping existing protection assertions. Full final CI and paired native evidence pending.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** `none`
+- `docs/feature-regression-registry.md` — SHA-256: `bf5b9ea286966b720070cf9a621b24549a06927a923360eb5411d43e7d7023d3`
+- `docs/mz115-deep-cleaning-mobile.md` — SHA-256: `5fc4ca3793dd242b0af3d41de0d9c92f8f81506db0233e4ae2a93fc05aa0d12a`
+- `src/lib/api.test.ts` — SHA-256: `dc8bbb9389627ac3af8e8557de77af7ea10993d9ac5fb77d101c21ff2ed8daf1`
+- `src/lib/api.ts` — SHA-256: `6528a47389bd7bae9545ea473fa0f22d6f46dd30206345e5486d0dbfc963d02a`
+- `src/lib/api.ts` — SHA-256: `9e9da99446a43dac7ae6bf7ee3e6cf65757823a5a8c5fa42e628bc4f116c15fa`
+- `src/lib/api.ts` — SHA-256: `c87f03b8a6c39f2d77d05e2adef8820caf174a260acf4707d813e424fe618b51`
+- `src/lib/auth.tsx` — SHA-256: `0c2dab457774c0e2da5b010224486187b26d939d569ce4bd8c2aa7831bfcabc5`
+- `src/lib/auth.tsx` — SHA-256: `388ad37ffa604ec70b5556b39289f9967d1baf9f67dd61d6aed1d3d6bebf497a`
+- `src/lib/auth.tsx` — SHA-256: `3cd86683eba30be6b6a9fe1c50b69f4c33f71186ca17d48a17a9c4295748b30c`
+- `src/lib/auth.tsx` — SHA-256: `551e3e87d62862f34a1c54a9bc7c9b4c7ff1f9cf6d0882f6d6ef83c593be4d61`
+- `src/lib/auth.tsx` — SHA-256: `72fd216be01f0d895a2f09b1e18b4410b5b31cf21223a1aacbde7ea6102c2402`
+- `src/lib/auth.tsx` — SHA-256: `a2d4e7157459f38522f45f315deb93e850860d8ebffdbdc989408dae0ce9e8f3`
+- `src/lib/auth.tsx` — SHA-256: `abdfb8f88b8fec05e9e13d0cb0958db202a4e02f9d93bad52ba2761014e865df`
+- `src/lib/auth.tsx` — SHA-256: `c061ab25031b42445cd158c0cab754d5050d270b37d2c4b64f8f3a62971388c7`
+- `src/lib/auth.tsx` — SHA-256: `dceeb08dee12f3ee676e56b5f8999ed87729a04db3a21a555ffdbe7f6c5e63d6`
+- `src/lib/auth.tsx` — SHA-256: `eb872961038d38532161b8ea5cb3281af07216156f3f0e0187e70809cc5f9344`
+- `src/lib/auth.tsx` — SHA-256: `ee1ce65592abedc360943178681d6b87a865628162b698d4b7fe84f4c78c226b`
+- `src/lib/auth.tsx` — SHA-256: `f250a5f4df46d74de7c2d6855fab9f5082cd379cf6168923d1a9f160f92d2f0a`
+- `src/lib/dailyTaskExecutionVisibility.test.ts` — SHA-256: `29b43b020c359a7c749ac5729007506ff7cac68e4ffcd0fb14d1fb2efdce66a2`
+- `src/lib/dailyTaskExecutionVisibility.ts` — SHA-256: `2802c129e21aa13cca17748765a5ff58cb474d693f3d40a9cc48340b541e0be2`
+- `src/lib/dailyTaskExecutionVisibility.ts` — SHA-256: `45eb916b8f8bc1dd8c6b87c24efe6a74530aedd901f5733ecc203c259969ee5e`
+- `src/lib/deepCleaningCompletion.ts` — SHA-256: `8e4bebf24659d2d2851b10560e1aa6e578dec24993480f7dbcee8d8ca48c4d8f`
+- `src/lib/inspectionPanelFeedbackDraft.ts` — SHA-256: `243c9e9669cb370ebb47320d569630a56cd80f3d74950494d665c20e4e800113`
+- `src/lib/inspectionPanelFeedbackDraft.ts` — SHA-256: `35b410b786bdd0193ed608d3e7a0619aab3b68a7bbe3cb81f587a8b101989e6f`
+- `src/lib/inspectionPanelFeedbackDraft.ts` — SHA-256: `385e614afaefb4f2634ac576bf08a593698172d2ecafaa2edce731803b9a54b8`
+- `src/lib/inspectionPanelFeedbackDraft.ts` — SHA-256: `4bc8a8c52f6a7b5286a9a365b13d2b8f8115acde84fa0ff3c77481c4d5d5cbe4`
+- `src/lib/inspectionPanelFeedbackDraft.ts` — SHA-256: `c566d06dd0330cabf790289b1ea8639c4321987ce2a5742287f79d3417b98bf0`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `0336fb9bd10a6284a5dd686032d1ecb13aecd002cb0fa453ef8d3f123af33d1c`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `20a6f23b1661fcfab1139de96ab9cf64e3d3d88978ab3270381c82bdc7e033d0`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `2d179572946aa7605cd7da0a195921c582f77fc13560fe3b952f417c60eeed45`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `2d5af3f2f558bc791bb113fa65f8b00924404892f3ec785f9f365406118cebb9`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `39ee412236c35b14c04f1f436424793c34fd7c3f4323cdf9b78b9c074a78a7c3`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `5b03f6f18947a6dc262966fc32f9c31ec23c2216bdb99ab37f096c16d517b98c`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `6578270baec8e837e6ecd68ff1591069cff68af0cbfeb0ffcc69ce5157e1ca81`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `65c78d0e408aa63f0c900c8fa308295b748bc0878fc96cccee0082ae922bf8ba`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `7103dbf12ec0f7472d3f9fcfab6e286f543bfbc49e1de983cfee8570cd1aa029`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `7ca36db60c9f834cd629379b7b781117d23b358c4b7527c3ecc23c3690242829`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `818c2610802050afdccf42326b6790ea15d1306cf1b42e1054d99a3d8dcf325e`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `8e4504a90fa631f60b6637c6fa9ec87e5fc17a8d4841ae1bdd0d2dc6498d199c`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `92d8e9a9da0b2e43bf7423f5fc14c7937b2d7ee8bd188e7a776b26081855f015`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `97f7accf15dc2f6c564551bcbf397e9eb87477469b97261aaffe79971170c151`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `9c470128d78667cd5f4c22dbce39e3492a3f236ae5434a9fc5e0b88682254a78`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `a17078b8aeb64bb1a312fe1d2f9f1f47eda351da505f9293aa652355c6a0358a`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `a289d0f406bc916317f6a6cda196ca9086a6c844062ab4f18d73ac7c81add09b`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `a5ee79464fef918b3abd014b5cdc60a5a86aece1067d99587410d4a99d2e3923`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `b77bea3143904ca29320a0da0377f01e0aaef32c4781fbe1f2bbdf135dbc7650`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `c5e57c15b97fc048036795fadd163911ed96a3839aa24460a0b02f6ae98a2fd3`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `eb11460ed0971a4bf2af490ad83bf9fd42ec7762c855ea50301a5a5fa4c35b08`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `f389f4c645eb2e3a53c82557e44a5b01540e8cee7d44bb79138868049688200e`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `005df71f97da8cf68d7d00f24d49491c6d9b5c9d027c128534602c67e52922c3`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `0778400766849da3919b3560d66e684e5bfa7ea960532f81645fcabae660c372`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `0faede719cfbca8818ce697b71af28a51099b622d40e68b19c0572593c2882a2`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `1d673608c799c12a03dad3c356160d75995ee2e6ec01019acdbfdc7acb739d30`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `2bcf499568ff11182f89f6231e242c7f4b939fe4ebf999bc5ecd8af4f77ae87e`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `377a9840fac37e09f28189e921d2c9d41c5e5904dbb51f98b5bd932695bebab5`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `410930199dd531c1f6a3a707779f0e2765e7a57281fd5d46183f156e3f741e84`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `4598cf92370bbd6f8189e976c805f6a8571184737155385a365443437e26ee5c`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `4997f0d481bf4fc25bf8a288ca21afe497af6c9e12111a2af2e8d90556851106`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `4d76df8028af83177f7d8b3d390b82e477d4af23e69ede5ac00f96bbf7daf282`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `567c3711e623f7cc2540fe89ee7536cd340c8014d142890d2eb488a67fc9cc81`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `5fafa52f85feb61028bf6128ab0e49161dde41ad7e1b4d5ec83772803c5de617`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `683238925cef34659fa8cd7a2dcf41c15160d011ea1fc100e3baefc75e14f0a5`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `7573d2cefb35ec3531f78f79b9718d35731285ff0984c33c51bc1c05ef49bb46`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `81443fe6d1ef8a3ec42fd111037d91663907feed49caf638f61e8c1fab40d7bc`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `9829184622861cee1456ba2977c0e98cc4bc66a0807dc5df71c119da7886b6d7`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `9e50e96914b1bf21942c08a123423f49010fc88fa488c7b28d981be6ff2fd98b`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `bfe83cb8a446f88bd6c11f9e9458939859b02914504a2c9ad103cf47dc17abc7`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `c4acaccc0e831805388156cccd6089f51a7cd15aeb34696d0b45505a7396278f`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `c84861bb3bbdb13f22d7fad3ced4c33687be1a7a7f7412d864ce6cb58cba78d8`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `cab1a8091ddfc3af3081c79bd4a34c08df6eb6435cea92ca0b22e19baee93664`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `dade3c75761bc65676c81fac0538cc608325d1131797c2148d46ef901768115b`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `db34b4e3aab9216ef1f6951ae6a1e9fbece38da24b4327c3e62fac11e5ef699b`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `e343c7ee29b8d3ba213c804b6e621e408d93a5fe32e0952d6d7b58c682f6e9fd`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `ec6f20b461d1f20c021143c8e2c93b0f09adab801fd98ab7dd9db53a2b42e17b`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `ed9162eb663c24aa7b9e23ec3b15779b114ca50421666787193eb2e67d45e831`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `f90c147abd3435e3ddf59bff8cc7d373714a99c9d2b026e2073c04c175ca5fe5`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `f9287c587aa60690d7577ff8e3233ecbf82c72b1f9b5412f88ed5cb8d025411e`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `fc17684072a15bb4db7e3867d9365b69967c7e32bac49926ecc372e92f4cf6fe`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `fdc4ed9dd7f6c2bbd4eeb77405167e50a8b4905b64286daf92688b5d59bec520`
+- `src/lib/maintenanceCompletionPhotoDraft.test.ts` — SHA-256: `75f0ad7bd8435630cec0204b81efaf5113fdd84394bd905b4c4d7c65ee3b5fb7`
+- `src/lib/taskVisualTheme.test.ts` — SHA-256: `28af43766333f4334fea2f2a043c8c868f8373127851eca9fd9556c0f9509cf1`
+- `src/lib/taskVisualTheme.ts` — SHA-256: `aecb4adb077d1e5c766586edd2b524dd580357368e3a82c026060a169afcdc4c`
+- `src/lib/workTasksStore.test.ts` — SHA-256: `b78b969fa46a8785c3497395874adc411bf653f1d553fe9a14ea1f116f64691f`
+- `src/lib/workTasksStore.ts` — SHA-256: `277486f68e9914f5472becdbe51c64674c9ac52cbf489df79953da8e88e78c21`
+- `src/lib/workTasksStore.ts` — SHA-256: `66437fdd301d73f7ffc901d7d3aae47435c8b058cd8adcc27121684d8fabd9b4`
+- `src/lib/workTasksStore.ts` — SHA-256: `93fc499ab630518443a0b6b7c9589684b77c7b4e02792b92b7c0bb2b2551166c`
+- `src/lib/workTasksStore.ts` — SHA-256: `c702a4a7164323a4d252428d6485cfd051c0979ff104c9e28fda10ab5d1cba47`
+- `src/lib/workTasksStore.ts` — SHA-256: `c8466339c966b004302545981036f52b50653aca35307b0fd72e7dc58b88d5be`
+- `src/lib/workTasksStore.ts` — SHA-256: `dce818b2acbaeec867922fca8becd43dd46e1a68f77e6dbfe349fa5b49179e39`
+- `src/lib/workTasksStore.ts` — SHA-256: `dcfa6092a81cc46024d695a7d105e94e75f44928e36847f3b02226626396a4cc`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `043cba5ed5b14c7f5e6410e1748010b3d82bc2e8eb3e2513a4c29de2cde42bd7`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `044b9dc9baa455d5e4d62453b2c44806cff6d929ac8028f5c73a6298fc4aa467`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `0a498641cfd087c8064d7c6f6f8edf042667d84c62b54d3963d8448e6ac5536c`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `0bb2e301d6b5c78e748d1ec58957962431b4d294d0b519502232809910a6696e`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `184bb0b0acae55920b82f7e9e643d968ba537f0d7eb9a9ec76035436b7d923b3`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `1e6ffffcb3a87fad519c7277c82c60c0508bdef3bcd7f75eff1eaf03a9921efe`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `2079dc86c2ebf282f9fb4c8f9dec4c7d6d1447fe0a8b159a21190c8ec273a65b`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `211f77b4cc601a52031bdf5084ca6fbd45cae7e5efe1657fa5cd696ee0879bb1`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `3f902833cb1c23e7dcba5a55f9ac107f5a6cebb841298e6b7d62773074b8bfbe`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `41173154d81ff31d20b958bfc11063a72706320fcf5e141583f81a8ef8f9a91a`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `5589a8ef182e2af4c92183410da854969238f35a2eeebd1dff782aba1c1152e2`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `6ea007352c9b1522dfdd3d51ce3f54247e8a285bfb2885280d96bc083b10a5ae`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `6f89b2835af1fb8ec51ef5eeb71ed8b21f29dcfb5f8a8de11c39e8f126cc39d0`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `82e9c6dd2d248a99adf697a6ed07fe8d9417bc5a0f848d99cf6089db1a83cfa8`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `8f02c19146d63e9e31da07ffd26d5b5203b293a790e55bef654775fe2c3f3cbf`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `950ac03c82a306c6c018d7524ab47379f0b66a6f353286dc377cda17c455df41`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `96c1a412d0b7ed1e04436466a2d66863c9ed23dc5e3a405c0f6d5f421eab8210`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `aff0d0546a833394cb97820c8e35a729ea204c118e471e6ba1bf3a997486e95f`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `b2590b537dc830fb9be1cd2f54c0727fe92759fd890413cdfc4a6971ed57a3fd`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `bcfa96dd11036e3314af8a054e8d9ec6546da1bacb65bc282c1b5f097552d105`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `c5041e04e59f458633cd6831e89a1575925a77063a848ad3991b57b43c160035`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `cce9d061e3158f4fd0d2a0a9421f109bb5cf1836d6e30fc9870d740ac41f64cd`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `fc9b8d4e1f657061e454c222c71ec3814644f533036cadb31f47434a7f093ea4`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `fd504ad983d54ada171d2a82f501e3ad295ec331c7c3ec5c339d541928401ee1`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `07da8ce38f051ba99e4fd4dc1e1ae64c28032101e7548766ec6707a75171ace3`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `0f61373635b2af1cc485efef314172457e7eaf3d1494beb4210ce5fc2fa70f39`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `133a57742ce453229ada146b79520a4a7f0d06dee9543599bd81af1934778c03`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `14b49e395a29bbf5c1cdbd92e37ce43622ce7e6987da370f598d1837794af920`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `225b80c412078a058edaa01fad7e125e2fe0a1821c8bd8a7d1e64bfd8190414b`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `2db4f6dcd2cd9b6a7372fa4f5c935ebb4525a02770c644209e1856847b2a11fc`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `34655f51f5491b91e25cbb6f4c488852b99267b86a183ea810530805bac42f26`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `36b2f48c765d473e31e469fdf5e739e9e89d90994d9da8aa1267d88408dad571`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `3bb4f5a324715e765b9b954d7d7427affc3efc6639d44343578b076f93b28475`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `4f7ed8d769b74a3d474c80ba99936d7c9afc81592f5f029a377ec6a037b45043`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `5dc6ee7a463f96c3ef4b099929ccb28756b47367e28f777faa0f8d390fb38902`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `6752d59c4668e6d19737960510ba6987b7acc363fc0e6e7ea9a788f3aa4ee6a6`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `72233a4081839c6eb5194b29fe600d37fcb4176cefd38928bd9a18f443c1cfd3`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `75a5d7e1d81e375c3483adff3b06c67f5799884fbc5ee23bc0c9c76513140a27`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `7ba142c7c64a1daa811cf7985c286fa414cecc35f249f188bc3236eed2bae244`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `8f7986cf0f92d66bf100c5e165f836fa3862a24476397c3a3e9ef0cef87c6544`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `8fbc0d73c3ee87e083197e5d453a084c79da42c157e6bcb08883150c742d251f`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `913ded75fc5788963c6782ae6cd86c26bc10bc809389e6f5e4e89fa0b221a5fa`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `95c7abdd96525a0afad82d1d3d8c95988b4ee8144dedad6b44d962767e5217da`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `9db171d01947c52a96b78badee24fd6d3b1fff98324c2cd973ed0cc5ffa52548`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `a10205d19cd54f68544886b9423cfcc75d1315e86816ff9666835543b5a92e55`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `a96fc0cb2c1219430a1bb1730d24025aac8f4166c9b402636a94e6749de40559`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `b85969097b1dd007329e872864217238e4037bd7ad338e93ab4b6b3025c7990c`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `c0b8e007ff0dd972afb1ab6ef5fedeaddef475e2260461295566ee81ddb9c25a`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `c1e5b180d2ffe43f378e28a26a2ea194f1213cc49c080f99941988851545c7c1`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `c4e810cd40acd6d6058f68c1c9f4e7c5b8a78c831077852d3b1c44870a453552`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `d44775d955350139b126b8c2d54a077b47854d3da4aaae4a7c9e7ce628848b72`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `d6af02bb10482d4dcbd17380db1eb5d19c268a17cb18c8801e3d314c3f9f36cb`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `e092a67a8c8ccbf970093a93515504ec4f8d88998e630cb6bdf413404bba5345`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `e71366bbd7981fbfe4e625eb7752a046103df293deeacaa78bfdd60977ed9372`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `f5097976980fed4ce852bcb22a8aad911461dbd7bd2996bd49655d8dc628a140`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `fc13c8083e6e173758b0e117d1c515e631fb46a467645f83b3825dc0bd908193`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `fde0a3faa99bda53672bf94c510bd5b34f9e76957958bc02d35f9b612ce02c36`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `034af80e64fd2de0c77e847982b9f94c535d78b85b218d0e2a7045f9c9d39487`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `07bee05833dd1d5b6f9b9c260755b1a5aeff911c9dd67a0b92c473efebf9881a`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `0870dbd1ec3f785c2e01548e1da055846eca2dbb2d97ce37b331c2c46036ee33`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `114ff8e683c41a77b5230f4c3103db6efd4b7b3271e2bb001327c430c76254e1`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `16cd5e7cf6c13a6169482799d76daa13bd7c348a3f6d2cd4f48bc94d96dc064e`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `75a410f930694bf2c17151edf9c6b3abc75c4042fd37cbd331c251c75a835249`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `b95a2b65ff425c20d619f1ab5284d7931901c66ad3007e2eeeab7e5634a8197e`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `ffdd14b616d23fb5dd753f13ec8c3e98508daf9acd2f92955e89089fb43859d1`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `01e67f86ee32e1e9fae98abc4a74a58e92229f9252c53b1c3b78c3d986af78ff`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `1b2b4e5ad823d346648497290c2640dac62a98d8dce86cd4f47271a13539801a`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `1ebdc98658a007870cd006e751b9cbc304fce5ac5293daa6be4e82aedb1b6752`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `2b8ffba4e5759489fe6fe99dc88515248716afc5aa79e4374451cd2311736c6a`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `2f8a8d4a5fc96b34c1dd65da162f945778b77b6116f2e67b91019d5f6eaa244d`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `351f8fcd66c630c3a1787aea3ec7d10805a4ed3b2f4f31ba11c37c6df3082aef`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `36fdab890864f02bfc7288b979b0e4a44241e7632792c18f190c4c9789762669`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `3934b3b955f6a3b948d90d797e74e2c552f24fd5c286cf8af612c208fe5099d4`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `3e0d33d74229986bf47bd1b0a90273c7c16f4b485725404158cf51bdcb0c6697`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `4efa73ea24d651139591a653b10ecedd270150a179ad5842db14fad6c23d219e`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `5b8c2ac559203cb2bc4b2f25414d994ddba66696e5d7a28e6a5f90cd2945990b`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `70280ac2fd24280c1583324219c93d8753fbbd9cee691b4c5b8f47934b61cdb7`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `82786fd651272472f36f6c041738e67907f01342d342af6d07ff63790f8f1460`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `88634e3804063d0894e28b9e12cd123af2580bc4c0ae0e8e3b5a7f598805eec8`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `9c18e75bfb81bc834db55dd04803456813598469f8888226cae44b98a710979a`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `9c4a727155cc1217b026116c1f3ae49316ea158eca576059aa322cf40a4e7acf`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `a1444635f7847e9d237d0a1730405493dd2ba2b5b912bc3ed09906a69f17f6da`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `a43b336ac8fe71c12b997adb3101629a00d3395209072b868941f1aeaec9dbdf`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `bf6ce5ee9048eca29cfb295a99dde55f12b2a1c25ac65f13e678efdc3df2ba5e`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `c46db925bdc23430ba185ccb0847a43ac1fd914e2248982c7f307f0c97111a4a`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `cd9c2ad0e70ca14619e81cee14d541a684319ed7b0671e0c32919a83ac07587e`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `d13d0b09afdab59de9688d3ff4bea1a76d1e6c6e7447680ba5dff0e2adec5c81`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `e624c4457d1e15e4bc1138c3de966fda1d049af68360a30f4885d94cf3bfd617`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `f360defa4c60c2ea5d42c6d16ca6808afc4bceeca28abc9150222aa1151a2e74`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `f5a088532bbb2ecbfcd3b157d1fbd0f7f1a3c51ef61bcda3dfbcaa9aeb9cbe19`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `ffcdb6be3c8ea738ffe1aecaef85d57c8bad0a65cd53515e98ac1740b5aaa80c`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `0ea995f08893b866570d130a399e2f0bf3b9544530265ebdbd1b8f17b58d5c5c`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `1bfb0553e934ef95b1c81d89ad28dc386bf187ec10b6c00f7eddd0d11de119e2`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `358e7d90c842d1b080c6d3b461936fc9831ac275c8ff6b3bdd0de6917c4d9d0f`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `4ce1aa10452f4e24cec89be361fbda812feccb70a7c6fc486fbbaf6beabe6232`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `8cd2570a6a18310e6f3b3c1f2cfcf31409101711bd8d075f4e4d507cb0070000`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `8ecef8a27c0191edc59d8c774038e6b8a05c808a2ccfe7ea8f79a5908fb6d9a9`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `915a1a7a4665808b6ade1695caddc5e9e25cef1349b61a4e46f215ffcbee6551`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `df380d0b1ee1ad70d768ec71cc3277d637e591cb9608241a7345c8a18f5f7790`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `e38a522314d2754a2ca7871716630b4be96c539e99ba62cd4391a570f354ad38`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `ef8931af4494477bafb7b3f68b085a74a41756cc521b4715c463a04598ae28b8`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `f5d07ead5fbf769f3890ba963bafe38a3be1b22304a7b18923a5d9956c3495a0`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `02dcb749d637bbd445b60034ec995861fbcbc583dbbe89897a0c40e71d69d4ff`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `038ccaa9a3a88fdf91ba505c90d85e3ce7e1fa49948a1023f92aa1d70c506122`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `0503792daae72e25dd5baba53b665644d750c487dd789e62165f06a25179df73`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `09a12110124d65a70a30b60aa19c4ffe7a603b7a6ec1bbd676482384b08e6b3d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `09c1379cf5ad7b832eba42663c1a598bf389a81af887d375a9c7d62d73261c6f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `0c76f4ca9c81ff7fe6e59036b9460ea947c44636d5ca74a1efcca39fc0b9e29d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `0cc1aada8f7ec30f371a1e379ab8cacb371306aedaae8efa86848dfb514e8194`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `0f39c8adb551f442a734a1ffbdff5c55924756a1dc2db845615d05062e8312cb`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `1081744d9a0192f992123e1b164a59f6d7a719a063a892bf4935a81c82df9b27`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `139ae7c789f706e55a8c4da885a66e67a681b48a0c09fac7b76941a5e07dfdc4`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `13b3efa9d4977ebdfcbdb59165f2a7af91a80af7ce2400b8748abd64fd233502`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `192d90bca740fc50e487bfc69c889d948eccf5b7926009170418b1fb26ae9d9f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `1c26dbedf3eff8cc90110d498c086966a432f4a890d673f4a11bd7a57552be2c`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `1c7d3daffb8433276b6c9574a060bf3b1d6ed8d794416607ee4238d821c1d4dd`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `1df3158c1628e74750b401d4a865b4cce4021ddd4e34bc6598b86c47cd6a7745`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2034a04a5453d5a4302aa5e987a1cb227967f190e47fdbe8e652b4f3abe17cf2`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `255ba5731cd5485ffeca57ec638856d95f0dcba18c2d75866d29d167b6985b82`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `255ef22c53ff8038a7c7b04c334caa5dc92337108af154e689a93d09e8a5db81`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `26f3f325dc4daa85ac497a01094985235190c5fb9869ac18fd0ee213cc82c5b0`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2727ca7c81d62f2875048ff732ae487d7bb5443b7d4d3e2e22e1db207f0579e2`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2bea527ed789fb7fd2f5d07601146a3951ad3c8869c1ff073c9f288540290149`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2bf7e35e736570a76cdaa8804c497e7b3e7b1887d92954a0683493a2a914e9e1`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2c9fc93d483e8c9b95ab7d642f128f57df8aee24957bf5c828a44856aa257e1d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2d2eb35d2e873511b6cdb604d021a22b8083ef4f9d5299e0c131fb0ddbb51e95`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2d4c4d2b8215268807249fcbb6426d902dbc4b0fe2f943fc206dc43dc64f9b70`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `339fec1fb60a32c424ca9c98da83a178ff5ebf6255b061ba344afdd63d45d902`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `342b84a40e318f4f02fd95092518dc0fb39f6a2c09470893de8b51686214ef27`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3a753639d4c93be54b331376f6920476d5234f47c5c43ee7902d98dcde1806c6`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3c8d52587f19752b9d39bbd686bf88f71e5506158f669a680e3026208f15fd28`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3eb3131524a5f76844a60fabdde8f3fab33181ebc965ba0baf7c2d4616a98e1a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3f21290a4a0327545fb43b3eb87dc368d1e85262d1c44548b7cd2a39b8fe6a7f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3f938147198931410addf586ac702c570ce2541f3a87477593900558ae1193fe`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3f9d09f87f2951a3cc76689db3aab122477873c22dad718492c7eaf5118cd3d4`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `421b29d890c3463527ca29807c263220be590ac9452309ad784a3b8064960e0d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `44296ef137c9ce9ea7ba0aafc3b387178bf06ef296308c4001dccf354e0520e3`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `46311e3c8fc4d74b29f4f621265823f2ff25b64c8c0aa7148d1c20283a1bd7ff`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `4824d269e5c59cee9fa3d9850e8d363462556b643cf16060f67425e18d13f3c3`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `4ee4e05bf3b8dfc5de6263d2b4b15b148f980ed092a7b3fec83bec875f900d6a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `4f23eea5b3ba4b688505c081e401bc6b4f4997ad290d461b795def62927208c4`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `56fd72a9f75091464bfe55fc9e88bafb34ce0077c292b7611dc7edcd0912385a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `57c35a327c5d94cd9f3077ec9ccd58671eb98213a745cfc0bb4a61422905d057`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `59ba33a43ef061884f59f1addbfb562e90ce771d69ecde574d3418cf7d4df7cd`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `5b5bae006a041f8165ed41c070016c68edd92c364c6496dde07fed6918754506`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `5e758ba5c417a0ea33723ecc8b45a82ae851fa68dc6d74aea80e1b5512c88f50`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `5e9570e5ce99cfd30cfd5b005cbead89ca28b05d18ac487e311991b081ce0304`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `5fb3d10594efe9f77cd112c9b6197c4a1a9e7004151e536beb180891553790ea`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `60ca65b6651a00c1f312ba40ffb4d93972008b76676ccfb9262fd4736d0cfb1a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `626974ca9daf7ca4c86ff4db5c48dec3db261c6aa29941e46d7a4ad1ba6d2cf0`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `62db3c78922f37826222739156a34793b83bb8e748c98ff27002a625453c606c`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `62f68c2639f8ee5b05f7ff359f63fd3161f7b34eef1ba85421e52c8fbd8eedaf`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `6ad10f4125ec4df65ac03972b081c880901864fcb2a87054fa1d1d727638ad98`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `6b09ea0fa5b966ed6bf4aa7ecc907496615f64034d6623b09fabd5881b21f8af`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `6cfced8818a9b48816a15a21e67885caf6b31b7113342b57cc0d2f7435ed7a0e`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `6ee71697861d6a677bd91c88969d32326de250f0825cd8e40682d69ef50372ff`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7047fe0261931a3c45dc8b03a84ad46e0a0da20cdd9087469d67449de3619461`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `76115ced9f1bcfc1541996e47944087533bbee61b4ef70c847e9c8e1d0ae06e3`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `79a5b85b02b6ed8fffc342ff6dd52ba3eba05bececbfeca3d16cdbcc82cf573f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7b6dea0dcc406f784b245aac468a421a16fd06e23f31c7078578a610dae5559b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7d30e2f7c0e84fafc8916c25d19d6af6f46c23ffdc67002d80dcc59971ab94db`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7d73145050227931ff3c0ed09fc6893d7facb19c1b44388f6e0b22e007ffeae0`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7e25897cc9ac5f21ed7c6a03f25b755b89a23b0126f34ce31e7ac63bc7bb7b06`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `80bb4d3e6ae4dc24e9bc192f0c6f2f8d000bb5b72667b4d23e97a6fb121b23d5`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `8186476ceed848870c34dc3d6faa58930d3945494a7083bdaf8d01345c73859b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `844f3eb04ed946e6afa246d511fa7318f76fac4b2e15e118293c15a159889b80`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `8c9f485c47a88adc6bfb2d8bfb682e194a8cfc3cc48fc0e13066e9bea87745bc`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `907fc429f9167b93e824121a49b18164d5ae7ed50d36ed72f3bdc3a216d42598`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `9188cdcf6ad49c76e06f54b1abcf8fb985b7a9e0e582510ff9c80f7aedd9e360`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `952cd775139786c77ca94cb1424c78867fe918c50723cf339131fb54f3449afa`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `95b4354c1ca702486347c10e884f8e157fdef13ca32a117fe174bc8feb0e7ebd`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `9654b916863a4ffa7bb60774b70492fc29d20643671a14b5866c74fa40da0aa3`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `9ebf498cac4f787bdfc8a7c091b564efe267ca0aef85143e49a59854cbc7d078`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `9f232ab516fe40c0023e20f58f62759877b6a09ea3564ec99d2e55a5c4e004cf`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a2ee1541a183589d3a9ef33d9d1fbca95b78c2b021d7b6434de8bffff5d7158b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a315bd06d526605c7c233bf57f2eb0caa7df1c5999b18e249045a5802d50959f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a5cf8c5a53b5271946072f52054199bf4806a05d92f0b43e13fe59cc7a1cef93`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a8d6b8a8b9edf2fa5efa307e9e28477733be74b5d983b0762713015f4a552034`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a9a7f8ea7624ffee90eae793e0476063c39f33da398b162988fe16ac7cd30e69`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ac078b22ef34b29147e03f5cd62a4f34ce5633f83f7c68bc4e3507ab0719026d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `adeb578815f365d43b45c30725c878932e9adec0ce6eb3870b24256b0523d28c`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b01d97515622f17552af9780d2173d0d6a71ec3d6020224aaa482204b3b2b205`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b04c38d25b5a16bcc9e078510109af85cbd4b4194d8c1d04b4911264dad2ac7b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b11e4c7fa3c2845aae2cfcb00964f844d4708289f6352528f12357a91ad23e58`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b3208587ef796d7c95f3c6ead4194f3a62a8c482786f264bbdd4efe4e60da133`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b5577d5ee8c4296c83ea80ebd10d7b7ef04634e5e86f7b6458fce0ea0597fd6b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ba72c294394db37c79aed7435ca0ea5ae89d1dc60f6a86de937330ff87e122bf`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `bbe4943ecf64b4f45b9940f304eb9f32224238fbcff3e503b974f7029537c55f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `be793f9f43e4d8f882d96ee4f5728ca7ff33f6fe8fd06ec7e9f555c4bc9edb09`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `c410cebb2e99235001787da616dbe4cc88273ce21bd85a3c04a79056e72ce0ac`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `c455d3c132cd14441390a3073413fde61c83ee9d155822aeb3e838dca5b2bf24`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `c4e46814b918183af84e52c887f76555b4d5be23b345c9b8ccda27a1d487551d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `c5fbaca66397f038cd65d4e25eef08cb21c7a431e29572b87aa8331229f37f29`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ca2ef5ca56de355e5bbae48a9de6157dba8ebb202f553420e7fc36c1034cd054`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `cf38f6e4c641a2251290f28077a87820a5ebdf9958d4819777abe08831716e5a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `cf55223448e3e339d4d38052e5f0418857cd29cd30c51d0edbc5af6f1a309f0e`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `d04fe8f4fc1b2087355cf4f2fddbbe13860352bf4b2711f0e79f8c304ec79a15`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `e1adc2423932342c81a0ed82f7a10ec610af6c5aee8e782f4ea8c7e5dd0188d2`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `e2f199db8a6016e5a6cef9d7d59b995fda12a70149a52b6f02a52d3b82320f56`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `e2fcf9f8e9707908105030e8d8c2a742ee9c7ec0fc41db1c2199494d297bfe59`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `e5336d5830dfbbb1633fe4cce162d4e2a2f73eba2d16d4664d82a013d7a79c85`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ecedcef65ec1bf88593f79634a243d28ea65eefe3dd3f57fda5efa781d47feab`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `eea7594a9a632da313980b927efe5d7d648296f39d5ffec4e7b1162b2bc4e103`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ef6f4e1a4c08c898eee9c9810d52026391566cfee316f02b0b54c4cf1094a53b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f04c8677c9eb3763facc182d235616fac07a4d8d2c7b03a7844df94a46fff649`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f0614b3b318d59f4ad16570d415efc72c6162dff4b04a1c7a7ff746d66326172`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f0db420181d9e099633648f779f55e881db7e912eb4def03fbf74294e950e45c`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f50840f16b932b825400968479bcfbddc4261c4e4fc9880a7fdffad7470fbece`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f59719bec01991ed7b1381f0fe28bf608ed1ba146439947fab08d3efbe55ec7e`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f59a2e257e1c08b961542d47dca65fc4a779228afbc550038c84107f734a0f96`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f84b5c45a718e2d65d717621a1443e56413d2ab47d413506ebb1cf0d4596a26b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `fc3526e379c4ebd1fa15517a0cebe0fc29e1951164cb896cd31214553987c259`
+
+### Release Attempts
+
+#### RA-20261115-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261112-001`, `CRL-20261112-002`, `CRL-20261112-003`, `CRL-20261114-001`
+- Selected CRL identities: `mobile/CRL-20261112-001`, `mobile/CRL-20261112-002`, `mobile/CRL-20261112-003`, `mobile/CRL-20261114-001`
+- Intended action: `push`
+- Branch: `codex/mz115-118-integrated`
+- Base: `origin/Dev@1ec20d490097fd13798767d74c40851b5da9c85f`; fetched at `2026-11-15T00:06Z`
+- Candidate patch SHA-256: `cebc53707dd1237d9336170e3a7652597ceae3db1f80ad8d4f4a9352b926e4fe`
+- Commit SHA: `69f3a6718d1c3d2e8147fc07fdeed2fed4e3090e`
+- Dependencies: `root/CRL-20261112-001@d172429185d6e30fc26df333a98bde7d5dfc75d1`; `root/CRL-20261112-002@d172429185d6e30fc26df333a98bde7d5dfc75d1`
+- Required validation: `PASS`; final session-hydration snapshot check:ci exit0: 90 suites/1012 tests, fast166, TypeScript, strict button and ledger gates pass; lint0 errors/146 warnings. Root paired check:full and check:ci exit0, frontend379 and production build PASS, Phase4/5 source contracts and registry44FR/352 mappings PASS. Physical/deployed acceptance remains not run.
+- Shared-hunk review: `PASS`; 115/116/118 overlap reconciled and every selected hunk registered; final independent review pending.
+- Generated-file review: `PASS`; source/tests/documentation only; no secrets, dependencies, logs, native outputs or local fixture data staged.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; user on 2026-11-15 explicitly requested completing 115/116 and combining 115/116/117/118 into one branch per repository to commit and push; exact selected scope retained on codex/mz115-118-integrated. No merge, OTA or production writes. Current explicit instruction authorizes this tested content and ledger receipts.
+- Independent review: `GO`; independent read-only exact staged commit review on 2026-11-15; no remaining identified P0/P1/P2. Runtime fingerprint verified, full and paired gates independently checked.
+- Action conclusion: `GO`; blockers: none in verified repository content. Execute push only after exact paired machine-verification GO; raw single-repository report cannot validate cross-repository references by itself.
+- Unverified delivery scope: actual R2/login, full app/physical iOS/Android camera/gallery, video playback, production and OTA not run.
+- Cross-repository dependency verification: exact companion root content `d172429185d6e30fc26df333a98bde7d5dfc75d1`; both content fingerprints, actual paired full/source contracts, canonical CRL bindings and independent reviews are available. Read-only paired exact-range verifier must validate both committed heads before push; original raw reports retained without rewriting their NOT VERIFIED result.
+- Supplemental native verification: final mobile modules iOS simulator 13/13 PASS (116 identity/timezone/native AsyncStorage9 plus118 native downloader cache/account isolation4 against local HTTP fixture). Final118 real-PG native pair could not start due exhausted SysV shared-memory slots; mmap did not resolve. No unknown segments deleted or system settings changed. Previous25-case118 report is historical only and is not counted as this integration rerun. Actual R2/login, full app UI, physical/Android camera/gallery and video playback remain not run.
+## CRL-20261112-002 — MZ116 capture-account watermarks and isolated offline media
+- **Repository:** `mobile`
+- **Status:** candidate; selected for integrated commit/push; final CI and independent review pending
+- **Updated:** 2026-11-12 UTC
+- **Request:** User approved MZ116: operation-account photo watermarks, Melbourne capture time, original-account offline replay, safe unknown legacy drafts, no historical rewatermarking.
+- **Outcome:** Source candidate separates capture account from assignee, retains unknown metadata as 未记录, and pauses foreign/unowned media rather than adopting it. Not released.
+
+### Implementation
+- Previous behavior: inspection photos used task assignee; client free-text overrode server identity; global queues could replay under a later account; fallback timestamps could invent capture time.
+- New behavior: unified capture watermark; photo metadata carries captured_by_user_id; account-namespaced drafts/queues with session checks; legacy shared drafts stay preserved and paused with a visible notice. Local housekeeping must preserve every account namespace.
+- Imported gallery photos without reliable capture metadata use 未记录 for capture time; videos receive ownership checks only, no new burned-in watermark.
+- Existing roles, action authorization, completion gates, historical uploaded media and production data are not rewritten.
+
+### Files / Areas
+- `src/lib/auth.tsx` — MZ116 scoped implementation or regression coverage.
+- `src/lib/cleaningConsumablesDraft.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/dayEndHandoverQueue.test.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/dayEndHandoverQueue.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/inspectionMediaQueue.test.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/inspectionMediaQueue.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/inspectionPanelDraft.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/inspectionPanelFeedbackDraft.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/inspectionPanelSubmitQueue.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/keyUploadQueue.test.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/keyUploadQueue.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/localMediaHousekeeping.ts` — MZ116 scoped implementation or regression coverage.
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — MZ116 scoped implementation or regression coverage.
+- `src/screens/tasks/DayEndBackupKeysScreen.test.tsx` — MZ116 scoped implementation or regression coverage.
+- `src/screens/tasks/DayEndBackupKeysScreen.tsx` — MZ116 scoped implementation or regression coverage.
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — MZ116 scoped implementation or regression coverage.
+- `src/screens/tasks/FeedbackFormScreen.tsx` — MZ116 scoped implementation or regression coverage.
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — MZ116 scoped implementation or regression coverage.
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — MZ116 scoped implementation or regression coverage.
+- `src/screens/tasks/InspectionPanelScreen.tsx` — MZ116 scoped implementation or regression coverage.
+- `src/screens/tasks/SuppliesFormScreen.tsx` — MZ116 scoped implementation or regression coverage.
+- `src/screens/tasks/TaskDetailScreen.tsx` — MZ116 scoped implementation or regression coverage.
+- `src/lib/mediaCaptureIdentity.test.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/mediaCaptureIdentity.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/mediaWatermark.test.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/mediaWatermark.ts` — MZ116 scoped implementation or regression coverage.
+- `src/lib/inspectionPanelDraft.test.ts` — recovery write/clear across account switches.
+- `src/lib/localMediaHousekeeping.test.ts` — protects pending media for every account.
+
+### Impact / Dependencies
+- API: additive captured_by_user_id metadata; paired with `root/CRL-20261112-002` authenticated watermark/ownership validation.
+- Database / migration: none; no production write or production test authorized.
+- Config / environment: none; no dependency installation.
+- Related units: MZ115 excluded, independent worktree.
+- Base: freshly fetched origin/Dev@1ec20d490097fd13798767d74c40851b5da9c85f, 2026-11-12; detached development worktree, no release branch.
+
+### Validation
+- Watermark + inspection screen tests: 32/32 PASS.
+- Feedback screen tests: 46/46 PASS.
+- Initial other screen regression: 139/147 passed; identity fixtures updated without weakening production checks; later full CI passed 90 suites / 920 tests.
+- Targeted queue/identity/housekeeping suite: 70/70 PASS; incremental recovery, timed-out video response and legacy notice tests: 20/20 PASS.
+- TypeScript PASS. Independent source re-review confirms initial P1 findings closed, including cross-account recovery cleanup and late video responses. This is not release approval.
+- Intermediate final CI found one newly added feedback test inherited another test's user/task fixture. The fixture is now explicitly isolated; no production guard was relaxed.
+- Final source manifest SHA-256 (path NUL contents NUL, sorted, excluding ledger): `109b1d0bf83cffd2ae60c13284f8775f7c0956a9c294fef27abd739feabfa42c`, 31 files. `CI=true npm run check:ci` PASS on this final source snapshot: ledger regression 44 tests, coverage PASS, typecheck PASS, lint zero errors, strict button audit PASS (legacy exceptions remain), fast 156 tests, complete Jest 90 suites / 923 tests.
+- Supplemental localhost HTTP queue tests: 4/4 PASS (real socket disconnect/retry, business-save 503 without duplicate upload, delayed A response after switch to B, external destination blocked). Real queue implementation; filesystem and AsyncStorage remain Jest substitutes. Temporary harness outside repository; no production configuration loaded.
+- Supplemental iOS 26.3 / iPhone 17 Pro / existing Expo Go native harness: 9/9 PASS using copied current mediaWatermark/mediaCaptureIdentity/storage and supporting modules, actual Hermes and native AsyncStorage. Melbourne summer/winter, unknown capture time, operation username, A/B namespace isolation and paused old-session continuation validated. Fixture keys removed after test; localhost services stopped. Harness 64KB; no package install or native app build. Evidence: /tmp/mz116-native-result.json and /tmp/mz116-native-harness-pass.png.
+- Simulator coverage is helper/runtime scope only, NOT the complete MZ app. Device/native camera/gallery, Android, real device weak-network, login/DB persistence and complete paired app/backend end-to-end verification NOT RUN.
+- Paired backend supplemental HTTP upload/local immutable storage tests: 12/12 PASS; see root/CRL-20261112-002. Fixed fake authentication, no database/R2. These do not establish full Phase 4 end-to-end acceptance.
+
+### Risks / Release Notes
+- Legacy unknown-owner drafts are retained and paused, not automatically migrated; operator must arrange original-account verification. No supported automatic legacy recovery is claimed.
+- Cold upgrade and account switch need simulator/device validation. Existing old OTA clients remain compatible server-side but do not gain client queue isolation.
+- Rollback requires retaining the owned namespace and all pending media; do not delete or move their records.
+- Sensitive review: no credentials, environment values, real guest records, images or production logs added.
+- Git state: not committed; not pushed; PR not created; not merged; backend not deployed; OTA not published; device/production verification not run.
+
+### Integration validation 2026-11-15
+
+- Selected by user as one integrated branch per repository. Original source worktrees remain untouched. No production API/data, dependency install, OTA or merge.
+- Integrated 115/116/118 shared TaskDetail and inspection queue hunks rather than overwriting entire source files; 117 remains documentation only.
+- Added combined regression for deep-before acknowledged upload preservation after local storage failure; token/account/task guards before upload and before applying late completion/defer receipts. Late original-owner acknowledgment cannot patch the new session or navigate it.
+- Session changes also reset busy and reload original-owner before/after drafts; preserved remote ACK is reused without duplicate upload.
+- Focused integrated TaskDetail and inspection queue: 2 suites / 135 tests PASS, including 7 additional integration boundary tests. Initial combined test fixture isolation and account-session setup failures were repaired without dropping existing protection assertions. Full final CI and paired native evidence pending.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** `none`
+- `src/lib/auth.tsx` — SHA-256: `0c2dab457774c0e2da5b010224486187b26d939d569ce4bd8c2aa7831bfcabc5`
+- `src/lib/auth.tsx` — SHA-256: `388ad37ffa604ec70b5556b39289f9967d1baf9f67dd61d6aed1d3d6bebf497a`
+- `src/lib/auth.tsx` — SHA-256: `3cd86683eba30be6b6a9fe1c50b69f4c33f71186ca17d48a17a9c4295748b30c`
+- `src/lib/auth.tsx` — SHA-256: `551e3e87d62862f34a1c54a9bc7c9b4c7ff1f9cf6d0882f6d6ef83c593be4d61`
+- `src/lib/auth.tsx` — SHA-256: `72fd216be01f0d895a2f09b1e18b4410b5b31cf21223a1aacbde7ea6102c2402`
+- `src/lib/auth.tsx` — SHA-256: `a2d4e7157459f38522f45f315deb93e850860d8ebffdbdc989408dae0ce9e8f3`
+- `src/lib/auth.tsx` — SHA-256: `abdfb8f88b8fec05e9e13d0cb0958db202a4e02f9d93bad52ba2761014e865df`
+- `src/lib/auth.tsx` — SHA-256: `c061ab25031b42445cd158c0cab754d5050d270b37d2c4b64f8f3a62971388c7`
+- `src/lib/auth.tsx` — SHA-256: `dceeb08dee12f3ee676e56b5f8999ed87729a04db3a21a555ffdbe7f6c5e63d6`
+- `src/lib/auth.tsx` — SHA-256: `eb872961038d38532161b8ea5cb3281af07216156f3f0e0187e70809cc5f9344`
+- `src/lib/auth.tsx` — SHA-256: `ee1ce65592abedc360943178681d6b87a865628162b698d4b7fe84f4c78c226b`
+- `src/lib/auth.tsx` — SHA-256: `f250a5f4df46d74de7c2d6855fab9f5082cd379cf6168923d1a9f160f92d2f0a`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `14944d5e3b92c561284872acdb15427c726ddb7b9d012e848e2ce8d621506460`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `57842b222298b02884e757270b28b12e9b5add6bafe54250cb50209513584ea9`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `6044170d0da04bf4ae96be7e48bf26da7388e4048e5fd46d291fc90ec27e9077`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `7d0ccfdbf6f960dbb004c6296a6b8a4deb78d9704c0b1cae7285c06fd677f768`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `8859793c437c9badc9eb1e00ff22c749c78c9a7135fcd1847c84662f91fd7bc6`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `b67645d86ac9492d091d45deb7675f9a86907b6fc95c80bfec95ee6fe4506341`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `d0f35f29bc7e254eded95984c0edefbba33e38129c26f42b7e51fd8b0c2ede03`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `d16e9bfe3e1d1cb451b203351b5f1a800ba9c375debad65892a42ef879e29752`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `ef9a8aadbc4980514de6918e5ac2a3242080627fbc65cfa40e86d946c12251e6`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `f6e66c4e0effc07ecf3dbec7052648eabb8d5b84ad166607973cd9051d2b8fa2`
+- `src/lib/cleaningConsumablesDraft.ts` — SHA-256: `ffab91fe6aa9b41364f072de561d741b96417eadfcdae6cea8abc494f6f7be95`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `0c509cd53e75e0dd333001bd5f8700a71dc75b136c9fcb46acbce939e51f0f2d`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `0cf86fa46538bad83ba61226d641168426e6948b68bf6715f698cd67909f00a2`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `12529441f44caf20c98ea1835feea88872420726abdcaf17fdec418d48f06999`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `143adcd1dd814f4bad65263d030c25618c7e077aac75b9662147568108ca4e41`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `19872b847cfb592bbdf7ea16d30801a3e9cbe85f05868a9993ca04af037790cc`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `1a3e8796bdd90d48cdc681614a9a46e7a67bc16dcb1608fcfcdbc91494f0fd90`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `1b487993ef62752a3481c0f8a697ef896092a101c01793d0df76fe460b0e8f76`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `2bf0efff4e57da64d56097f1507e7aad1bd4df244ad85ffe06917e4a8d12d284`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `2fab8755ad476944cd587d552a9093993731e1aacb5bd6c6c534fd62170a3355`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `3e5f426b04203438cd0b8355a3ec781a83443d4832d96dcfa767bd2c2f0e6e5b`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `3faf1887434eb788434baa2f302fe9f6c484cc75dd26b6e4497b2163fb663d37`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `5587c036e1e7de615f7ce7a89c2e129628c0ed3437436496c08af13846ae66ac`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `5af026b0defbe123779e1c54b29273cb4ecaf9a520524f4278f184f9d957617b`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `615ca59068e2e7ee6f454196782852aa8c6d819924fa5e228b60a2e05e3f550e`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `63b68c2cc6356cb99781a8de7940b149948b78c108163343697a4a7ef959acc9`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `67b46f5e77e0abe6928a56c082bac84da7ad1dac13f41c9536e7c30baed3886c`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `6f57deb44818e8fd6376747219cd930782a6da6aeeb28830033e34ae0624a211`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `76eb2443f7d0b4cab393c8866ce6c4886f9cb8f869aef7f0083cbf6de3d4c59b`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `780627cbe217af2e306c61221bc93fbeb5875ac820f4337782f81dbda14b54f7`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `79d626001162a740ad2d666885acfe458aa555f95893524d4fb5023b114ef63c`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `8198be2b96f71dbe44cdbc87dc668f7f5221755e50d7c2973304f043dbdf7bc7`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `88e23dfe1132c609bc1a1d44fd6af3f1c65a66f05a4bd7ec62f1574e6390e793`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `8f532dd5ee568280b38f1ef2ee1193d21bead2c8c2769a37c0af1791650042fc`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `9177843ddd42ddce9cdcd33593ef9fb0b869d01f4e55f1975d23246b4490d69e`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `98094b819fa0d5a4a516ec6339ff7c3591f4ae0646558ea5f8a6af4cb80de79f`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `a099fa933f0f9971726a095da694047e0196f1a460b78268736857c5362a4d16`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `a214d68f4d8fd7986e61c1a368a78052ea87aabeaa8e4806707e178954bd1912`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `aac6b7f423054ed91d13e13fce1932085b3dea32a1c9596f9c5384fab580983b`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `b57a0b05209fa45d10e92b0634770b5fc96683acaa9455fb1519562eabf2f360`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `bae469ce97b4d73376c5a1df32a5fc77edd3ec8c1a25283dbecb6816ccbafba2`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `bf1d6454b5c96da8d3235a404a7a9070b0ece33987b9c29b554465dc1f8e4b04`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `d6b9437b24a04d4ec48037db680c524ac1d658e10a5baef48010e8b11029b523`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `dfb35b393466ff446a26ca0707da947d8f0c55fa7ea2a96bf79b54b36ab44996`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `eb93ce1d012ee47a2ba64614de31c88cc8d72b7a74420c88073e225b62b146e8`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `ef1bc3b221f7a0a2853c8acdebafc624085dffb6dd927a1efc33ffdc3223502f`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `f2b516ee350789ea3e7356e67c6a535416c44dee1bb4934c398dc79d9c803a41`
+- `src/lib/cleaningConsumablesSubmitQueue.test.ts` — SHA-256: `f7e6048de098065b7ec5b78bf2b9fb33764baa6ef1be9e43997259a22cd12669`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `016ffc426d54566f4de23533802e68a1b6d96f90af0e35930ebf4bcdc6bfab03`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `11e257e04f4dd416c02b373c75d53eee35be7b306a0a8f9645c126317ea46024`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `2087a4709ec0b62cd9f602ba2a6b2ef530f131290999b4a1b1c60af6365d2d99`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `5bf99425d4b3e19662aa0d6b0fb27024690091edf5b797a296ff3b41e9ac261a`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `827bee8e0eaaead01676f97cd41a6a426bc17550494d0737a657476aef72afa9`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `8d8bea02f322d077fcab05ecaee879a307aae2f91eba6c25a6f9ba886ebb9fc4`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `936b0c1072ece9f17fee74692f052330197b2dfe6e69f41d724e2c10bb652c27`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `9555baca0620846c5d53ec2fde2c34d3874e458875a31ab79f234161f92b625b`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `97ac9143e234dc333d10fd1af9fa7331a0c12705559be6dd403d39139b009b93`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `a3a9845775d2c04eaa282563ad0255e8b4027e4c8ab2a1d58e44dec597da9aa2`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `b464ac88108ad331d651d4fb1c384a96b6c6b131d7996c0b3209b53e104d662e`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `cbf4f333b88563541fd5a1faa47a01948e9fa093befbf6fdc0b05aa03a772cfd`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `ddfafe28e3991093676ca0072aa2ab93bb48697acfbfb2e40d5321711e899a6c`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `e2d16f98dc749103be2b6cad411e04358cfb8701687fce80c4af9841b4fa4026`
+- `src/lib/cleaningConsumablesSubmitQueue.ts` — SHA-256: `e571d117b00e8241d6ce3ad690067a60de6f7ed2825e7ba87382250cf2946d0f`
+- `src/lib/dayEndHandoverQueue.test.ts` — SHA-256: `0f212d245c26622c46fb9a8de59dfced5f2c4a99aab0c0f30316cdac52207bdc`
+- `src/lib/dayEndHandoverQueue.test.ts` — SHA-256: `3dbdbe95cb80309cf0318d18efea611c6ea62d264f27b5edc069c315f15dcdeb`
+- `src/lib/dayEndHandoverQueue.test.ts` — SHA-256: `3dd0f1c9c0beb24d4bb80bb3e85bf19a8cbac67e9c263dc6854a647779854b1e`
+- `src/lib/dayEndHandoverQueue.test.ts` — SHA-256: `540ee10266772bffe2c1bbfe1bcf85df407e21cd84d0551ae1818a83d3a1ad93`
+- `src/lib/dayEndHandoverQueue.test.ts` — SHA-256: `796c8846800c5a5f4914c9ed8915281cb5b6e76b34008edea0efd3a470da941f`
+- `src/lib/dayEndHandoverQueue.test.ts` — SHA-256: `f1f5bdf19ac8251300e4da8c31aab2294ea6aba02395951afd327b675787d73a`
+- `src/lib/dayEndHandoverQueue.ts` — SHA-256: `1233a6afa0b22e509c698e63d6d9f0bb9d2dfa1ba8e9f5f8c1e65f6a9d1df9db`
+- `src/lib/dayEndHandoverQueue.ts` — SHA-256: `4aee19e41d6c3f465408175c117d5cb43d04bd4bf6a278b58778804adaca5e5d`
+- `src/lib/dayEndHandoverQueue.ts` — SHA-256: `6aba9d3fd5be6482b7dbf8ecba6e5129b75cbb99b6bba3e0e4e7862c42a60d53`
+- `src/lib/dayEndHandoverQueue.ts` — SHA-256: `82c95cbe727d033bd3205e07d4923a38e20dbd0f7a5ba3934129c748b81362cb`
+- `src/lib/dayEndHandoverQueue.ts` — SHA-256: `85f8eb3278ab6f2aa6247663029b7afeb848f39370ad936a64e789501a1f7e57`
+- `src/lib/dayEndHandoverQueue.ts` — SHA-256: `ad751b620b2b3ae5bb6432f66eb7571e3f2a998982b118ca8f665cc17f02827b`
+- `src/lib/dayEndHandoverQueue.ts` — SHA-256: `b1cfb4fd766644b8de694ebff885c5cc3469508e82099f094ddb36e16720331d`
+- `src/lib/dayEndHandoverQueue.ts` — SHA-256: `c90ecfd6e83386ed8d1d34ae310f44bea24a787f99bc768cacee757f14d8d940`
+- `src/lib/dayEndHandoverQueue.ts` — SHA-256: `d46b08f8b5c79150c7a75ced74f5809c83946f0b12071bc0be35c8070dba2a15`
+- `src/lib/dayEndHandoverQueue.ts` — SHA-256: `d987392056cc7e691210c2453fe4bd2db530098d55eb8b88465cf56be45783ac`
+- `src/lib/dayEndHandoverQueue.ts` — SHA-256: `dd5022425eaf4362e18bd643faba552e84e341c9577b9369310e733014fac0c1`
+- `src/lib/dayEndHandoverQueue.ts` — SHA-256: `e18dde80ac385f10ad0334457b41db231f122a0b0fdcf0335dd2796e7920d3c7`
+- `src/lib/dayEndHandoverQueue.ts` — SHA-256: `e8447b0b4109081f46528d4157a41cc636266bf6d30978b342c2f89a4435ae91`
+- `src/lib/dayEndHandoverQueue.ts` — SHA-256: `f0c0fe4f57dc34d91d356e86f367e1aadf46ae594abbc8bd46d5073086dd1954`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `1ce3c049b3aa7db8b7ef07a4137274874e641d1a4c0af606d93fb98d5a41376b`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `4b38f7f6bb5b7500c2e5a1027c4b8fd672c1ae450d4aa74361b4903cdff91a92`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `514e574620add774df3f036bf78c573861e389b42aa75f9a264815c726c1bc7e`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `5df9181520b7add624ee1722b8d1a6b73dc10953538de18a6d8c42ddfe516aa0`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `66579f5f791af99a518c3f6d1c8c2bc04a032c15708cd29c856af3cd23047be3`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `827b57ef6dad90f1bb9777a04695d8dc8b6305cc50c65a8ecbce2c9d9da0cf29`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `88e5115ecc2cbca56b0aeb07cc0048be3387220bc38e91a4748ed28666ddb921`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `9d6cebd4a8e55678758879420c1bef981e4590b21f855cb110a08a783343a1f0`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `9fc11fab26c658b7cea032d1f897e287fbf6b9f6c71ba48ca51d9f67c27284f7`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `a255f20d646cefc0a290ac0e7fb8654d9f6c050d641ece7e148a204b992c9a31`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `a364180462f9d0901d863b96a8779aa98358e1f0fc31f275e1551ea84c9bb981`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `afbfb3857801eef1e143efab28b51c999f3cb0c8fa4c8fa52475f1155dfd3702`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `c04e7ce793baeee08d5d280df767e1f11751c1f594ecd4fd6aed1878c7415e1f`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `d021ac8d58170950e7611f5fd2ee79ce676c4b91fef398479bfaaba607f14a3c`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `d36e7e27f7d3a8f1d8e9471329dcca06d9489884ac2e4d5b1fb3f2cb21800e26`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `d5266f2baf4b3396a96915190af168613640d36f73d6fbf356da0ddb474da5f5`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `e2dae977e79559072921f289faa475d751dbddeac3c2fd2c2baa2eac81cbad61`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `e3a8e8e81cd4c1e044e19da91e93036668c1f1d66de36b2370a41eb10677a977`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `ecd5cddd11c2f886daa67d2b709ac5f0ef60eebf702bc5a186b3b3cdcf444149`
+- `src/lib/inspectionMediaQueue.test.ts` — SHA-256: `f7d4f8df8f2c1b51188c96bc4fbd6316afd01553b5124445fcd2b8667c50563c`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `0465d94f06c7e8fce7a6c33d829330e4f09fedc94df42a2766d219a1256e6463`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `198a0954820dfc9db5da705b718087563e01c75637442a7a322f6243fdff7832`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `1dfa2c9e41231fd696235476ef1b76393a5951d9f789938531d013d0f2c9916d`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `25bb5c026f140fbfda7f88d700c938a485675674fb45c4396ee6da056b74249c`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `3c545497bade68241b0af746db003b69e49006006d6969e2bfacf3b6e47d82c2`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `3f915cf95951929940a4369b1b25ca88378cfc6d66fa0bf74480b56dd8024c8a`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `5031382b48fbf52fe2dfef73801dcee80152485f915463a361f593dd01c268c6`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `55dd09e5a69f9fd235f5d054f91290c92acc97536ab13192ade83287e56c9604`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `5a7aa4c03c29577d28cf52300dad054a95cd478eaf3b1531cf7188e468b4f728`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `68faf37c9679a399822201eb304bcfdcc3a69a33697e7c2daaeb88d0e8e42950`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `7e9f3f4611397e420e7391d98dbadfe17e3e87757fffb79910dc6b9ba3975553`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `80a8be416335cb08636c3f229036a89e3b21a903c5f10ac24b3b7b4cd177a727`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `872cd6a82e7ce391d19f20dff4431219851b5d31435d465fa25f3c4305242a4e`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `884217870caf993dce40137a83b2500c9c233b5bc27228f9e1fb03afc35a265f`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `8d57b961c1ac811b94b247d93abf4a0596cf6938d51079ba6214760284d180a1`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `9343b3c0b5e78dc5df27bff43ce454078e10fb73816bf2ec8cd6a69c7b0d4ceb`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `97254d6b066cfefafc2b030b447320ac243e829b9df80cf5a084a17cf4d21782`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `9e98f865d6e09d74f63e33705add1260e0cdabc4e6a42f2c83f7132d183b24e7`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `a76ab70940fdc3c1b0f5c210c901e5c75ace81b2699f4099f2e5cf0d03ea06fb`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `aa1161be87e29b8239c0d92bdf338e967b73df4fce8a10a7bd192222642f478c`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `ab75f91be1f94dce099565b77105e68398df7510298de2e4f8b06240ce24aaa7`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `b455e4e4e14387b4476538426b73cc11cd26120c5a8f3dee34ec68ae2ce91f5a`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `c06a9ed91a82f9296d384be5558f383b8aa4ecd71cf31cb981d10e57344de18d`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `c26614c14a8eae0242001695896b5381144158a597ab8fa924808a67d813026b`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `d84704c9ba0c2fa767ef739c2d72637d07465634e8c30ab2269a904d5d038bb7`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `e35a86f44c3d7a21c9a6d21eeb783f52f0478304d726dc26f2783a6653eefa2a`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `e48b3d5dcd27ebbdbb81a44201062b9a28eb1b79ebba932fedf9c1c14c50c693`
+- `src/lib/inspectionMediaQueue.ts` — SHA-256: `e775713d9a4e2e49a1ccb4574433a6011817a8259e5c9e9f78fb6922f6309956`
+- `src/lib/inspectionPanelDraft.test.ts` — SHA-256: `65634f2b59c630e752ff9b9de1a695474dce8aeb25de1a67c90f7b23c96ea89f`
+- `src/lib/inspectionPanelDraft.test.ts` — SHA-256: `87ce26a8913bd83eae5e7d2649400b53c3389425f365f460d3fc34de5faeb6b1`
+- `src/lib/inspectionPanelDraft.test.ts` — SHA-256: `9456537c7a4dd1611fd66328c4ee6b4f6c4e9fc2d44592b52e0e8c46049b40d1`
+- `src/lib/inspectionPanelDraft.test.ts` — SHA-256: `b7c1ce67ca95a36ea4ff282abbc36d57fd57c064cfb797278fae14541637d79b`
+- `src/lib/inspectionPanelDraft.test.ts` — SHA-256: `c41a0e9c872b613ce9ae2ce377cad2ea3a5db7248768e5b39b79c68727f0abd9`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `04dab43be7e26d00039b647ef4422e2c4d58b95e0a44ad65d326c3370ec24066`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `27f2dd999d748cef0bfa1d48cb180624e353b4dc095a92c38ecb4fcda122e2fb`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `28b647bf5d312fdf4fc111616f66b16467e1ee8e9cc6130b9c3854be681781bb`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `447a885011bd81186315e51928f6f07cea44cafddafe00de78d829c6c4b38025`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `6cbc51f126922a3a6db00526b4555f7f992a9b99864a2bb12a5b2927181f80fd`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `7164951b4860a970d16365a6b9d4b388625cdfc92e383302ffea200e260b5fb0`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `7633f1121660f848b9bdfb12aa47613b6726a01aacdf46fe7abdab86de03e2cc`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `832714ecb837d1bae208c230efe21dea5b09a2543e5b40dce24143f7429af3c9`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `95df617c51214f08871a819200fcc043d598fba4133ddeb661070d0a400abdfb`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `ab8899174abc436f6fa868c25f15bd661df4964fb4f43c8c97266a2a3f70e0b5`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `b0af917410295677a495dba47874edb9bc2f04fca4c374200b0952dac0137a9b`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `be690d888d8a990d33de374b878c29674b5bfe56f3e6cacca49768eb3d170ca5`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `e0897126bfdff1406a88286ab92d1672cee259e0bc67417c96d1c66fac62545a`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `e2255d868ab28f748c809dc6d34e3d8284afe55fa749fb04fe14b486dc0d3ab1`
+- `src/lib/inspectionPanelDraft.ts` — SHA-256: `e9a9891f102aa5e443a30d2557a7d756d2a35cd0411606c660a36844414cb7b3`
+- `src/lib/inspectionPanelFeedbackDraft.ts` — SHA-256: `243c9e9669cb370ebb47320d569630a56cd80f3d74950494d665c20e4e800113`
+- `src/lib/inspectionPanelFeedbackDraft.ts` — SHA-256: `35b410b786bdd0193ed608d3e7a0619aab3b68a7bbe3cb81f587a8b101989e6f`
+- `src/lib/inspectionPanelFeedbackDraft.ts` — SHA-256: `385e614afaefb4f2634ac576bf08a593698172d2ecafaa2edce731803b9a54b8`
+- `src/lib/inspectionPanelFeedbackDraft.ts` — SHA-256: `4bc8a8c52f6a7b5286a9a365b13d2b8f8115acde84fa0ff3c77481c4d5d5cbe4`
+- `src/lib/inspectionPanelFeedbackDraft.ts` — SHA-256: `c566d06dd0330cabf790289b1ea8639c4321987ce2a5742287f79d3417b98bf0`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `0336fb9bd10a6284a5dd686032d1ecb13aecd002cb0fa453ef8d3f123af33d1c`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `20a6f23b1661fcfab1139de96ab9cf64e3d3d88978ab3270381c82bdc7e033d0`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `2d179572946aa7605cd7da0a195921c582f77fc13560fe3b952f417c60eeed45`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `2d5af3f2f558bc791bb113fa65f8b00924404892f3ec785f9f365406118cebb9`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `39ee412236c35b14c04f1f436424793c34fd7c3f4323cdf9b78b9c074a78a7c3`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `5b03f6f18947a6dc262966fc32f9c31ec23c2216bdb99ab37f096c16d517b98c`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `6578270baec8e837e6ecd68ff1591069cff68af0cbfeb0ffcc69ce5157e1ca81`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `65c78d0e408aa63f0c900c8fa308295b748bc0878fc96cccee0082ae922bf8ba`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `7103dbf12ec0f7472d3f9fcfab6e286f543bfbc49e1de983cfee8570cd1aa029`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `7ca36db60c9f834cd629379b7b781117d23b358c4b7527c3ecc23c3690242829`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `818c2610802050afdccf42326b6790ea15d1306cf1b42e1054d99a3d8dcf325e`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `8e4504a90fa631f60b6637c6fa9ec87e5fc17a8d4841ae1bdd0d2dc6498d199c`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `92d8e9a9da0b2e43bf7423f5fc14c7937b2d7ee8bd188e7a776b26081855f015`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `97f7accf15dc2f6c564551bcbf397e9eb87477469b97261aaffe79971170c151`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `9c470128d78667cd5f4c22dbce39e3492a3f236ae5434a9fc5e0b88682254a78`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `a17078b8aeb64bb1a312fe1d2f9f1f47eda351da505f9293aa652355c6a0358a`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `a289d0f406bc916317f6a6cda196ca9086a6c844062ab4f18d73ac7c81add09b`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `a5ee79464fef918b3abd014b5cdc60a5a86aece1067d99587410d4a99d2e3923`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `b77bea3143904ca29320a0da0377f01e0aaef32c4781fbe1f2bbdf135dbc7650`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `c5e57c15b97fc048036795fadd163911ed96a3839aa24460a0b02f6ae98a2fd3`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `eb11460ed0971a4bf2af490ad83bf9fd42ec7762c855ea50301a5a5fa4c35b08`
+- `src/lib/inspectionPanelSubmitQueue.test.ts` — SHA-256: `f389f4c645eb2e3a53c82557e44a5b01540e8cee7d44bb79138868049688200e`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `005df71f97da8cf68d7d00f24d49491c6d9b5c9d027c128534602c67e52922c3`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `0778400766849da3919b3560d66e684e5bfa7ea960532f81645fcabae660c372`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `0faede719cfbca8818ce697b71af28a51099b622d40e68b19c0572593c2882a2`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `1d673608c799c12a03dad3c356160d75995ee2e6ec01019acdbfdc7acb739d30`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `2bcf499568ff11182f89f6231e242c7f4b939fe4ebf999bc5ecd8af4f77ae87e`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `377a9840fac37e09f28189e921d2c9d41c5e5904dbb51f98b5bd932695bebab5`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `410930199dd531c1f6a3a707779f0e2765e7a57281fd5d46183f156e3f741e84`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `4598cf92370bbd6f8189e976c805f6a8571184737155385a365443437e26ee5c`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `4997f0d481bf4fc25bf8a288ca21afe497af6c9e12111a2af2e8d90556851106`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `4d76df8028af83177f7d8b3d390b82e477d4af23e69ede5ac00f96bbf7daf282`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `567c3711e623f7cc2540fe89ee7536cd340c8014d142890d2eb488a67fc9cc81`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `5fafa52f85feb61028bf6128ab0e49161dde41ad7e1b4d5ec83772803c5de617`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `683238925cef34659fa8cd7a2dcf41c15160d011ea1fc100e3baefc75e14f0a5`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `7573d2cefb35ec3531f78f79b9718d35731285ff0984c33c51bc1c05ef49bb46`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `81443fe6d1ef8a3ec42fd111037d91663907feed49caf638f61e8c1fab40d7bc`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `9829184622861cee1456ba2977c0e98cc4bc66a0807dc5df71c119da7886b6d7`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `9e50e96914b1bf21942c08a123423f49010fc88fa488c7b28d981be6ff2fd98b`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `bfe83cb8a446f88bd6c11f9e9458939859b02914504a2c9ad103cf47dc17abc7`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `c4acaccc0e831805388156cccd6089f51a7cd15aeb34696d0b45505a7396278f`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `c84861bb3bbdb13f22d7fad3ced4c33687be1a7a7f7412d864ce6cb58cba78d8`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `cab1a8091ddfc3af3081c79bd4a34c08df6eb6435cea92ca0b22e19baee93664`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `dade3c75761bc65676c81fac0538cc608325d1131797c2148d46ef901768115b`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `db34b4e3aab9216ef1f6951ae6a1e9fbece38da24b4327c3e62fac11e5ef699b`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `e343c7ee29b8d3ba213c804b6e621e408d93a5fe32e0952d6d7b58c682f6e9fd`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `ec6f20b461d1f20c021143c8e2c93b0f09adab801fd98ab7dd9db53a2b42e17b`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `ed9162eb663c24aa7b9e23ec3b15779b114ca50421666787193eb2e67d45e831`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `f90c147abd3435e3ddf59bff8cc7d373714a99c9d2b026e2073c04c175ca5fe5`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `f9287c587aa60690d7577ff8e3233ecbf82c72b1f9b5412f88ed5cb8d025411e`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `fc17684072a15bb4db7e3867d9365b69967c7e32bac49926ecc372e92f4cf6fe`
+- `src/lib/inspectionPanelSubmitQueue.ts` — SHA-256: `fdc4ed9dd7f6c2bbd4eeb77405167e50a8b4905b64286daf92688b5d59bec520`
+- `src/lib/keyUploadQueue.test.ts` — SHA-256: `001d026560eb8d856d2c2954fa7fd4961e94948a20307b7e4f0871a7fa2f1d26`
+- `src/lib/keyUploadQueue.test.ts` — SHA-256: `337a7e998eb8a2e690570f69e2b572a4cb2f3f897fc229f182b543d8a400aadd`
+- `src/lib/keyUploadQueue.test.ts` — SHA-256: `5bf3ef53d86d57581be58e176bce45e50bdf38143c015abf0de81327f6539d4f`
+- `src/lib/keyUploadQueue.test.ts` — SHA-256: `74fbfb4681eb4b65c6336c0d4954bbcd8093d2179f236cc5f0c95d2ba024aea1`
+- `src/lib/keyUploadQueue.test.ts` — SHA-256: `76c6f27c6ef52654dcd35cae6ee85419c18cd2c6fcf437b91d1c313eb2c36305`
+- `src/lib/keyUploadQueue.test.ts` — SHA-256: `c0cb84209414da6d30990f013bd65c36239dcb29edbd5fc66181260d9d8797ed`
+- `src/lib/keyUploadQueue.ts` — SHA-256: `12c269cbf3b283921be181f6ff9d2c3687b41ff03b7d7fb8087d13bf4d70b704`
+- `src/lib/keyUploadQueue.ts` — SHA-256: `1ab3df7c518bfc4f2f2ee371c376bc2ad53b0af76e153242bd28a518e331aed9`
+- `src/lib/keyUploadQueue.ts` — SHA-256: `21205642dc54630e71e7920a13921067b6b73c8676478a53d4a775406806d30f`
+- `src/lib/keyUploadQueue.ts` — SHA-256: `29addf2ec81baf6a35609e4c5e5d49cbfad5b18c5e626f620585e30d864670fd`
+- `src/lib/keyUploadQueue.ts` — SHA-256: `3401fef503d099710dbd1c9ccccfca22f8adf43526d968fc43edb4400f0d054f`
+- `src/lib/keyUploadQueue.ts` — SHA-256: `63e7377e87747b7a0048d3f5f91a47750eb6f13941a0471c2f669ed9e750181f`
+- `src/lib/keyUploadQueue.ts` — SHA-256: `8650c02a16d8f2d9115a1c3e8013725a42269bb5c0c012402b094cc68ea98c04`
+- `src/lib/keyUploadQueue.ts` — SHA-256: `8a3d48e425e69b63f129b48455a0426c19f45f0ca1378a15fd1e878920044ba0`
+- `src/lib/keyUploadQueue.ts` — SHA-256: `9a318a68ec79c8a13eb1147763d28e3708265cdbbd0d31ae7f2b1e82d78c7eb3`
+- `src/lib/keyUploadQueue.ts` — SHA-256: `9c10878ae24ec48cc0951c3824ec04e5dac0892b46b2f8ce85ed186aeccad354`
+- `src/lib/keyUploadQueue.ts` — SHA-256: `c47a2c46836304d966d65b94256ffe83a4cd3d987593cae09b6eec0c352de44a`
+- `src/lib/keyUploadQueue.ts` — SHA-256: `c95e9d0080d390f3231bbad1a41ab3815c2f8757fa189fa580070559d181489a`
+- `src/lib/keyUploadQueue.ts` — SHA-256: `ce6476e5d1ccf316575e115beabb612c80884c068909fa67df4220a7bc5527e1`
+- `src/lib/localMediaHousekeeping.test.ts` — SHA-256: `c9d03b86ec616490f88e069b02daae1d0abf74455e4153a8b5a5e7a7ee645a3c`
+- `src/lib/localMediaHousekeeping.ts` — SHA-256: `1505310d7b0ae6c2f8eb69bd273c5400f442fac4c99782cfd68dd9b4049fc000`
+- `src/lib/mediaCaptureIdentity.test.ts` — SHA-256: `1c155940144d330c1f6f6c03cd3b5be4571e1aa3f9132e2fe3318c883506fcf3`
+- `src/lib/mediaCaptureIdentity.ts` — SHA-256: `74d3974186441809e0c56b244da82ef153377a587acc98c04c74585edbeb00c0`
+- `src/lib/mediaWatermark.test.ts` — SHA-256: `6d619ce18a6c33fcef3f6ff81883a3237c1f5b796269b7a3fbf918e123e21928`
+- `src/lib/mediaWatermark.ts` — SHA-256: `46241121b2885d1810492855851065ba619f51efe842097f06302a947b347fd0`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `037cc68405cb4a2a05ca86daed9ad7a3ccabb2d3b11b7350fb248684fc216fa9`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `0a1cb0a9c27d0492a1c7e2de48a97fd7d9108c2712f17a5c2b46ea3b26a4c8aa`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `303a50e713e8ee1cafa47aa44ff52a8aff7a00c16dc314e492f576cfc3384f6a`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `346e86040c90761b7fa7b0240b88eecc082eb25ae8b4a33b1b2c01353c39be5a`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `400ac33ba594b258f45c8d91a98017a15025357fd6d90bccb15b9264f366515d`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `4903a6cd35855c01182d2e98dbe608f8aef573436cae57648b295ae3afbe8f1e`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `7c39587529c60f0481c923db3f7f71d15946019637e96fa814a41ad70705d34c`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `a96bc220ef8499a0018dfde8557357fd1a5384c7d154dc9a50428cb3673aa553`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `ae9377686e15dea91d4a3e81cc9ba698c3d20095d8ce2e025079e1516a38fc8f`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `b09e3f93212578e54d5d4f1e0bcf2ac6b9a0c29453707589292e6d50d0053d9b`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `ba3d143eee4e9fd08eb00d67c015e293d8b6775ca89451d45186a568c585217b`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `e99cc3ae4bd65a4d166c7a9121a8dd16a92f0ce765bf944a9aadb444847da5e1`
+- `src/screens/tasks/CleaningSelfCompleteScreen.tsx` — SHA-256: `f3ff2f96de49bf6c831da965a687b8fbba1dacb14a8428cc75b4a8cd20b49c50`
+- `src/screens/tasks/DayEndBackupKeysScreen.test.tsx` — SHA-256: `251371a520c42c5855e428b30733b665651df2a108c3fb9cb1e75df253d021b7`
+- `src/screens/tasks/DayEndBackupKeysScreen.test.tsx` — SHA-256: `ce29f1e06d2510ac1fe9bfd436310933d18fad70378ad692929e6b9d11a41acd`
+- `src/screens/tasks/DayEndBackupKeysScreen.tsx` — SHA-256: `2483a8ada38b91b85b0081be81af904f33f0b3168b09eb19612093ef6718bafd`
+- `src/screens/tasks/DayEndBackupKeysScreen.tsx` — SHA-256: `2fe13c8d87f6e7ccea692651eae04a3f2019b6fe18f2fd5e22f9b60aa5a9e574`
+- `src/screens/tasks/DayEndBackupKeysScreen.tsx` — SHA-256: `9000cd1d9554e969093ae5629851f9fb38a2327e72284a668522219bda04e77b`
+- `src/screens/tasks/DayEndBackupKeysScreen.tsx` — SHA-256: `992d3411e6c1103a1b1e52fff6f39f37a5c959ae6a6c9d21af0c84fa88eac096`
+- `src/screens/tasks/DayEndBackupKeysScreen.tsx` — SHA-256: `a5281eddfc3bfc7e37100ae5a9edf53d523fdc248b28cac42117ae6172bdc791`
+- `src/screens/tasks/DayEndBackupKeysScreen.tsx` — SHA-256: `b6a0610ab65ff3e1716418fd2f6209b0b66b3beeec45a5f0ef1126de9f21a584`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `043cba5ed5b14c7f5e6410e1748010b3d82bc2e8eb3e2513a4c29de2cde42bd7`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `044b9dc9baa455d5e4d62453b2c44806cff6d929ac8028f5c73a6298fc4aa467`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `0a498641cfd087c8064d7c6f6f8edf042667d84c62b54d3963d8448e6ac5536c`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `0bb2e301d6b5c78e748d1ec58957962431b4d294d0b519502232809910a6696e`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `184bb0b0acae55920b82f7e9e643d968ba537f0d7eb9a9ec76035436b7d923b3`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `1e6ffffcb3a87fad519c7277c82c60c0508bdef3bcd7f75eff1eaf03a9921efe`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `2079dc86c2ebf282f9fb4c8f9dec4c7d6d1447fe0a8b159a21190c8ec273a65b`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `211f77b4cc601a52031bdf5084ca6fbd45cae7e5efe1657fa5cd696ee0879bb1`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `3f902833cb1c23e7dcba5a55f9ac107f5a6cebb841298e6b7d62773074b8bfbe`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `41173154d81ff31d20b958bfc11063a72706320fcf5e141583f81a8ef8f9a91a`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `5589a8ef182e2af4c92183410da854969238f35a2eeebd1dff782aba1c1152e2`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `6ea007352c9b1522dfdd3d51ce3f54247e8a285bfb2885280d96bc083b10a5ae`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `6f89b2835af1fb8ec51ef5eeb71ed8b21f29dcfb5f8a8de11c39e8f126cc39d0`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `82e9c6dd2d248a99adf697a6ed07fe8d9417bc5a0f848d99cf6089db1a83cfa8`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `8f02c19146d63e9e31da07ffd26d5b5203b293a790e55bef654775fe2c3f3cbf`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `950ac03c82a306c6c018d7524ab47379f0b66a6f353286dc377cda17c455df41`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `96c1a412d0b7ed1e04436466a2d66863c9ed23dc5e3a405c0f6d5f421eab8210`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `aff0d0546a833394cb97820c8e35a729ea204c118e471e6ba1bf3a997486e95f`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `b2590b537dc830fb9be1cd2f54c0727fe92759fd890413cdfc4a6971ed57a3fd`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `bcfa96dd11036e3314af8a054e8d9ec6546da1bacb65bc282c1b5f097552d105`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `c5041e04e59f458633cd6831e89a1575925a77063a848ad3991b57b43c160035`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `cce9d061e3158f4fd0d2a0a9421f109bb5cf1836d6e30fc9870d740ac41f64cd`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `fc9b8d4e1f657061e454c222c71ec3814644f533036cadb31f47434a7f093ea4`
+- `src/screens/tasks/FeedbackFormScreen.test.tsx` — SHA-256: `fd504ad983d54ada171d2a82f501e3ad295ec331c7c3ec5c339d541928401ee1`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `07da8ce38f051ba99e4fd4dc1e1ae64c28032101e7548766ec6707a75171ace3`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `0f61373635b2af1cc485efef314172457e7eaf3d1494beb4210ce5fc2fa70f39`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `133a57742ce453229ada146b79520a4a7f0d06dee9543599bd81af1934778c03`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `14b49e395a29bbf5c1cdbd92e37ce43622ce7e6987da370f598d1837794af920`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `225b80c412078a058edaa01fad7e125e2fe0a1821c8bd8a7d1e64bfd8190414b`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `2db4f6dcd2cd9b6a7372fa4f5c935ebb4525a02770c644209e1856847b2a11fc`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `34655f51f5491b91e25cbb6f4c488852b99267b86a183ea810530805bac42f26`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `36b2f48c765d473e31e469fdf5e739e9e89d90994d9da8aa1267d88408dad571`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `3bb4f5a324715e765b9b954d7d7427affc3efc6639d44343578b076f93b28475`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `4f7ed8d769b74a3d474c80ba99936d7c9afc81592f5f029a377ec6a037b45043`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `5dc6ee7a463f96c3ef4b099929ccb28756b47367e28f777faa0f8d390fb38902`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `6752d59c4668e6d19737960510ba6987b7acc363fc0e6e7ea9a788f3aa4ee6a6`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `72233a4081839c6eb5194b29fe600d37fcb4176cefd38928bd9a18f443c1cfd3`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `75a5d7e1d81e375c3483adff3b06c67f5799884fbc5ee23bc0c9c76513140a27`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `7ba142c7c64a1daa811cf7985c286fa414cecc35f249f188bc3236eed2bae244`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `8f7986cf0f92d66bf100c5e165f836fa3862a24476397c3a3e9ef0cef87c6544`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `8fbc0d73c3ee87e083197e5d453a084c79da42c157e6bcb08883150c742d251f`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `913ded75fc5788963c6782ae6cd86c26bc10bc809389e6f5e4e89fa0b221a5fa`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `95c7abdd96525a0afad82d1d3d8c95988b4ee8144dedad6b44d962767e5217da`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `9db171d01947c52a96b78badee24fd6d3b1fff98324c2cd973ed0cc5ffa52548`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `a10205d19cd54f68544886b9423cfcc75d1315e86816ff9666835543b5a92e55`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `a96fc0cb2c1219430a1bb1730d24025aac8f4166c9b402636a94e6749de40559`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `b85969097b1dd007329e872864217238e4037bd7ad338e93ab4b6b3025c7990c`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `c0b8e007ff0dd972afb1ab6ef5fedeaddef475e2260461295566ee81ddb9c25a`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `c1e5b180d2ffe43f378e28a26a2ea194f1213cc49c080f99941988851545c7c1`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `c4e810cd40acd6d6058f68c1c9f4e7c5b8a78c831077852d3b1c44870a453552`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `d44775d955350139b126b8c2d54a077b47854d3da4aaae4a7c9e7ce628848b72`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `d6af02bb10482d4dcbd17380db1eb5d19c268a17cb18c8801e3d314c3f9f36cb`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `e092a67a8c8ccbf970093a93515504ec4f8d88998e630cb6bdf413404bba5345`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `e71366bbd7981fbfe4e625eb7752a046103df293deeacaa78bfdd60977ed9372`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `f5097976980fed4ce852bcb22a8aad911461dbd7bd2996bd49655d8dc628a140`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `fc13c8083e6e173758b0e117d1c515e631fb46a467645f83b3825dc0bd908193`
+- `src/screens/tasks/FeedbackFormScreen.tsx` — SHA-256: `fde0a3faa99bda53672bf94c510bd5b34f9e76957958bc02d35f9b612ce02c36`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `9dfc9a952da94300c0a08599d68723de236482be959e0a2ef0487d1bcd2d7d76`
+- `src/screens/tasks/InspectionCompleteScreen.tsx` — SHA-256: `a506f576147fc7150f6bb6ec5f3f30072430b71a0245fed99b28304a27157795`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `034af80e64fd2de0c77e847982b9f94c535d78b85b218d0e2a7045f9c9d39487`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `07bee05833dd1d5b6f9b9c260755b1a5aeff911c9dd67a0b92c473efebf9881a`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `0870dbd1ec3f785c2e01548e1da055846eca2dbb2d97ce37b331c2c46036ee33`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `114ff8e683c41a77b5230f4c3103db6efd4b7b3271e2bb001327c430c76254e1`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `16cd5e7cf6c13a6169482799d76daa13bd7c348a3f6d2cd4f48bc94d96dc064e`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `75a410f930694bf2c17151edf9c6b3abc75c4042fd37cbd331c251c75a835249`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `b95a2b65ff425c20d619f1ab5284d7931901c66ad3007e2eeeab7e5634a8197e`
+- `src/screens/tasks/InspectionPanelScreen.test.tsx` — SHA-256: `ffdd14b616d23fb5dd753f13ec8c3e98508daf9acd2f92955e89089fb43859d1`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `01e67f86ee32e1e9fae98abc4a74a58e92229f9252c53b1c3b78c3d986af78ff`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `1b2b4e5ad823d346648497290c2640dac62a98d8dce86cd4f47271a13539801a`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `1ebdc98658a007870cd006e751b9cbc304fce5ac5293daa6be4e82aedb1b6752`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `2b8ffba4e5759489fe6fe99dc88515248716afc5aa79e4374451cd2311736c6a`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `2f8a8d4a5fc96b34c1dd65da162f945778b77b6116f2e67b91019d5f6eaa244d`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `351f8fcd66c630c3a1787aea3ec7d10805a4ed3b2f4f31ba11c37c6df3082aef`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `36fdab890864f02bfc7288b979b0e4a44241e7632792c18f190c4c9789762669`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `3934b3b955f6a3b948d90d797e74e2c552f24fd5c286cf8af612c208fe5099d4`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `3e0d33d74229986bf47bd1b0a90273c7c16f4b485725404158cf51bdcb0c6697`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `4efa73ea24d651139591a653b10ecedd270150a179ad5842db14fad6c23d219e`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `5b8c2ac559203cb2bc4b2f25414d994ddba66696e5d7a28e6a5f90cd2945990b`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `70280ac2fd24280c1583324219c93d8753fbbd9cee691b4c5b8f47934b61cdb7`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `82786fd651272472f36f6c041738e67907f01342d342af6d07ff63790f8f1460`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `88634e3804063d0894e28b9e12cd123af2580bc4c0ae0e8e3b5a7f598805eec8`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `9c18e75bfb81bc834db55dd04803456813598469f8888226cae44b98a710979a`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `9c4a727155cc1217b026116c1f3ae49316ea158eca576059aa322cf40a4e7acf`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `a1444635f7847e9d237d0a1730405493dd2ba2b5b912bc3ed09906a69f17f6da`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `a43b336ac8fe71c12b997adb3101629a00d3395209072b868941f1aeaec9dbdf`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `bf6ce5ee9048eca29cfb295a99dde55f12b2a1c25ac65f13e678efdc3df2ba5e`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `c46db925bdc23430ba185ccb0847a43ac1fd914e2248982c7f307f0c97111a4a`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `cd9c2ad0e70ca14619e81cee14d541a684319ed7b0671e0c32919a83ac07587e`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `d13d0b09afdab59de9688d3ff4bea1a76d1e6c6e7447680ba5dff0e2adec5c81`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `e624c4457d1e15e4bc1138c3de966fda1d049af68360a30f4885d94cf3bfd617`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `f360defa4c60c2ea5d42c6d16ca6808afc4bceeca28abc9150222aa1151a2e74`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `f5a088532bbb2ecbfcd3b157d1fbd0f7f1a3c51ef61bcda3dfbcaa9aeb9cbe19`
+- `src/screens/tasks/InspectionPanelScreen.tsx` — SHA-256: `ffcdb6be3c8ea738ffe1aecaef85d57c8bad0a65cd53515e98ac1740b5aaa80c`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `ab7a603e826f8afe1dfb9fa60fa2f266c523cc1ae4b21da1cd99733b259c1637`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `e850210d4c334fb0281360ba956dbf9fac9891bf3f6d7faa1aee046c371fdc84`
+- `src/screens/tasks/SuppliesFormScreen.tsx` — SHA-256: `f6a2b76e4d098cebdc07832a3e85c73987fb7a7f0339bed996bef916f8afd4f1`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `02dcb749d637bbd445b60034ec995861fbcbc583dbbe89897a0c40e71d69d4ff`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `038ccaa9a3a88fdf91ba505c90d85e3ce7e1fa49948a1023f92aa1d70c506122`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `0503792daae72e25dd5baba53b665644d750c487dd789e62165f06a25179df73`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `09a12110124d65a70a30b60aa19c4ffe7a603b7a6ec1bbd676482384b08e6b3d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `09c1379cf5ad7b832eba42663c1a598bf389a81af887d375a9c7d62d73261c6f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `0c76f4ca9c81ff7fe6e59036b9460ea947c44636d5ca74a1efcca39fc0b9e29d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `0cc1aada8f7ec30f371a1e379ab8cacb371306aedaae8efa86848dfb514e8194`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `0f39c8adb551f442a734a1ffbdff5c55924756a1dc2db845615d05062e8312cb`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `1081744d9a0192f992123e1b164a59f6d7a719a063a892bf4935a81c82df9b27`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `139ae7c789f706e55a8c4da885a66e67a681b48a0c09fac7b76941a5e07dfdc4`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `13b3efa9d4977ebdfcbdb59165f2a7af91a80af7ce2400b8748abd64fd233502`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `192d90bca740fc50e487bfc69c889d948eccf5b7926009170418b1fb26ae9d9f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `1c26dbedf3eff8cc90110d498c086966a432f4a890d673f4a11bd7a57552be2c`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `1c7d3daffb8433276b6c9574a060bf3b1d6ed8d794416607ee4238d821c1d4dd`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `1df3158c1628e74750b401d4a865b4cce4021ddd4e34bc6598b86c47cd6a7745`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2034a04a5453d5a4302aa5e987a1cb227967f190e47fdbe8e652b4f3abe17cf2`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `255ba5731cd5485ffeca57ec638856d95f0dcba18c2d75866d29d167b6985b82`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `255ef22c53ff8038a7c7b04c334caa5dc92337108af154e689a93d09e8a5db81`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `26f3f325dc4daa85ac497a01094985235190c5fb9869ac18fd0ee213cc82c5b0`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2727ca7c81d62f2875048ff732ae487d7bb5443b7d4d3e2e22e1db207f0579e2`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2bea527ed789fb7fd2f5d07601146a3951ad3c8869c1ff073c9f288540290149`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2bf7e35e736570a76cdaa8804c497e7b3e7b1887d92954a0683493a2a914e9e1`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2c9fc93d483e8c9b95ab7d642f128f57df8aee24957bf5c828a44856aa257e1d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2d2eb35d2e873511b6cdb604d021a22b8083ef4f9d5299e0c131fb0ddbb51e95`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2d4c4d2b8215268807249fcbb6426d902dbc4b0fe2f943fc206dc43dc64f9b70`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `339fec1fb60a32c424ca9c98da83a178ff5ebf6255b061ba344afdd63d45d902`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `342b84a40e318f4f02fd95092518dc0fb39f6a2c09470893de8b51686214ef27`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3a753639d4c93be54b331376f6920476d5234f47c5c43ee7902d98dcde1806c6`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3c8d52587f19752b9d39bbd686bf88f71e5506158f669a680e3026208f15fd28`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3eb3131524a5f76844a60fabdde8f3fab33181ebc965ba0baf7c2d4616a98e1a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3f21290a4a0327545fb43b3eb87dc368d1e85262d1c44548b7cd2a39b8fe6a7f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3f938147198931410addf586ac702c570ce2541f3a87477593900558ae1193fe`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3f9d09f87f2951a3cc76689db3aab122477873c22dad718492c7eaf5118cd3d4`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `421b29d890c3463527ca29807c263220be590ac9452309ad784a3b8064960e0d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `44296ef137c9ce9ea7ba0aafc3b387178bf06ef296308c4001dccf354e0520e3`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `46311e3c8fc4d74b29f4f621265823f2ff25b64c8c0aa7148d1c20283a1bd7ff`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `4824d269e5c59cee9fa3d9850e8d363462556b643cf16060f67425e18d13f3c3`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `4ee4e05bf3b8dfc5de6263d2b4b15b148f980ed092a7b3fec83bec875f900d6a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `4f23eea5b3ba4b688505c081e401bc6b4f4997ad290d461b795def62927208c4`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `56fd72a9f75091464bfe55fc9e88bafb34ce0077c292b7611dc7edcd0912385a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `57c35a327c5d94cd9f3077ec9ccd58671eb98213a745cfc0bb4a61422905d057`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `59ba33a43ef061884f59f1addbfb562e90ce771d69ecde574d3418cf7d4df7cd`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `5b5bae006a041f8165ed41c070016c68edd92c364c6496dde07fed6918754506`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `5e758ba5c417a0ea33723ecc8b45a82ae851fa68dc6d74aea80e1b5512c88f50`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `5e9570e5ce99cfd30cfd5b005cbead89ca28b05d18ac487e311991b081ce0304`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `5fb3d10594efe9f77cd112c9b6197c4a1a9e7004151e536beb180891553790ea`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `60ca65b6651a00c1f312ba40ffb4d93972008b76676ccfb9262fd4736d0cfb1a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `626974ca9daf7ca4c86ff4db5c48dec3db261c6aa29941e46d7a4ad1ba6d2cf0`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `62db3c78922f37826222739156a34793b83bb8e748c98ff27002a625453c606c`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `62f68c2639f8ee5b05f7ff359f63fd3161f7b34eef1ba85421e52c8fbd8eedaf`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `6ad10f4125ec4df65ac03972b081c880901864fcb2a87054fa1d1d727638ad98`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `6b09ea0fa5b966ed6bf4aa7ecc907496615f64034d6623b09fabd5881b21f8af`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `6cfced8818a9b48816a15a21e67885caf6b31b7113342b57cc0d2f7435ed7a0e`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `6ee71697861d6a677bd91c88969d32326de250f0825cd8e40682d69ef50372ff`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7047fe0261931a3c45dc8b03a84ad46e0a0da20cdd9087469d67449de3619461`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `76115ced9f1bcfc1541996e47944087533bbee61b4ef70c847e9c8e1d0ae06e3`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `79a5b85b02b6ed8fffc342ff6dd52ba3eba05bececbfeca3d16cdbcc82cf573f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7b6dea0dcc406f784b245aac468a421a16fd06e23f31c7078578a610dae5559b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7d30e2f7c0e84fafc8916c25d19d6af6f46c23ffdc67002d80dcc59971ab94db`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7d73145050227931ff3c0ed09fc6893d7facb19c1b44388f6e0b22e007ffeae0`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7e25897cc9ac5f21ed7c6a03f25b755b89a23b0126f34ce31e7ac63bc7bb7b06`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `80bb4d3e6ae4dc24e9bc192f0c6f2f8d000bb5b72667b4d23e97a6fb121b23d5`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `8186476ceed848870c34dc3d6faa58930d3945494a7083bdaf8d01345c73859b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `844f3eb04ed946e6afa246d511fa7318f76fac4b2e15e118293c15a159889b80`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `8c9f485c47a88adc6bfb2d8bfb682e194a8cfc3cc48fc0e13066e9bea87745bc`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `907fc429f9167b93e824121a49b18164d5ae7ed50d36ed72f3bdc3a216d42598`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `9188cdcf6ad49c76e06f54b1abcf8fb985b7a9e0e582510ff9c80f7aedd9e360`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `952cd775139786c77ca94cb1424c78867fe918c50723cf339131fb54f3449afa`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `95b4354c1ca702486347c10e884f8e157fdef13ca32a117fe174bc8feb0e7ebd`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `9654b916863a4ffa7bb60774b70492fc29d20643671a14b5866c74fa40da0aa3`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `9ebf498cac4f787bdfc8a7c091b564efe267ca0aef85143e49a59854cbc7d078`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `9f232ab516fe40c0023e20f58f62759877b6a09ea3564ec99d2e55a5c4e004cf`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a2ee1541a183589d3a9ef33d9d1fbca95b78c2b021d7b6434de8bffff5d7158b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a315bd06d526605c7c233bf57f2eb0caa7df1c5999b18e249045a5802d50959f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a5cf8c5a53b5271946072f52054199bf4806a05d92f0b43e13fe59cc7a1cef93`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a8d6b8a8b9edf2fa5efa307e9e28477733be74b5d983b0762713015f4a552034`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a9a7f8ea7624ffee90eae793e0476063c39f33da398b162988fe16ac7cd30e69`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ac078b22ef34b29147e03f5cd62a4f34ce5633f83f7c68bc4e3507ab0719026d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `adeb578815f365d43b45c30725c878932e9adec0ce6eb3870b24256b0523d28c`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b01d97515622f17552af9780d2173d0d6a71ec3d6020224aaa482204b3b2b205`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b04c38d25b5a16bcc9e078510109af85cbd4b4194d8c1d04b4911264dad2ac7b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b11e4c7fa3c2845aae2cfcb00964f844d4708289f6352528f12357a91ad23e58`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b3208587ef796d7c95f3c6ead4194f3a62a8c482786f264bbdd4efe4e60da133`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b5577d5ee8c4296c83ea80ebd10d7b7ef04634e5e86f7b6458fce0ea0597fd6b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ba72c294394db37c79aed7435ca0ea5ae89d1dc60f6a86de937330ff87e122bf`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `bbe4943ecf64b4f45b9940f304eb9f32224238fbcff3e503b974f7029537c55f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `be793f9f43e4d8f882d96ee4f5728ca7ff33f6fe8fd06ec7e9f555c4bc9edb09`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `c410cebb2e99235001787da616dbe4cc88273ce21bd85a3c04a79056e72ce0ac`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `c455d3c132cd14441390a3073413fde61c83ee9d155822aeb3e838dca5b2bf24`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `c4e46814b918183af84e52c887f76555b4d5be23b345c9b8ccda27a1d487551d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `c5fbaca66397f038cd65d4e25eef08cb21c7a431e29572b87aa8331229f37f29`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ca2ef5ca56de355e5bbae48a9de6157dba8ebb202f553420e7fc36c1034cd054`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `cf38f6e4c641a2251290f28077a87820a5ebdf9958d4819777abe08831716e5a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `cf55223448e3e339d4d38052e5f0418857cd29cd30c51d0edbc5af6f1a309f0e`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `d04fe8f4fc1b2087355cf4f2fddbbe13860352bf4b2711f0e79f8c304ec79a15`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `e1adc2423932342c81a0ed82f7a10ec610af6c5aee8e782f4ea8c7e5dd0188d2`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `e2f199db8a6016e5a6cef9d7d59b995fda12a70149a52b6f02a52d3b82320f56`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `e2fcf9f8e9707908105030e8d8c2a742ee9c7ec0fc41db1c2199494d297bfe59`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `e5336d5830dfbbb1633fe4cce162d4e2a2f73eba2d16d4664d82a013d7a79c85`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ecedcef65ec1bf88593f79634a243d28ea65eefe3dd3f57fda5efa781d47feab`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `eea7594a9a632da313980b927efe5d7d648296f39d5ffec4e7b1162b2bc4e103`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ef6f4e1a4c08c898eee9c9810d52026391566cfee316f02b0b54c4cf1094a53b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f04c8677c9eb3763facc182d235616fac07a4d8d2c7b03a7844df94a46fff649`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f0614b3b318d59f4ad16570d415efc72c6162dff4b04a1c7a7ff746d66326172`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f0db420181d9e099633648f779f55e881db7e912eb4def03fbf74294e950e45c`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f50840f16b932b825400968479bcfbddc4261c4e4fc9880a7fdffad7470fbece`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f59719bec01991ed7b1381f0fe28bf608ed1ba146439947fab08d3efbe55ec7e`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f59a2e257e1c08b961542d47dca65fc4a779228afbc550038c84107f734a0f96`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f84b5c45a718e2d65d717621a1443e56413d2ab47d413506ebb1cf0d4596a26b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `fc3526e379c4ebd1fa15517a0cebe0fc29e1951164cb896cd31214553987c259`
+
+### Release Attempts
+
+#### RA-20261115-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261112-001`, `CRL-20261112-002`, `CRL-20261112-003`, `CRL-20261114-001`
+- Selected CRL identities: `mobile/CRL-20261112-001`, `mobile/CRL-20261112-002`, `mobile/CRL-20261112-003`, `mobile/CRL-20261114-001`
+- Intended action: `push`
+- Branch: `codex/mz115-118-integrated`
+- Base: `origin/Dev@1ec20d490097fd13798767d74c40851b5da9c85f`; fetched at `2026-11-15T00:06Z`
+- Candidate patch SHA-256: `cebc53707dd1237d9336170e3a7652597ceae3db1f80ad8d4f4a9352b926e4fe`
+- Commit SHA: `69f3a6718d1c3d2e8147fc07fdeed2fed4e3090e`
+- Dependencies: `root/CRL-20261112-001@d172429185d6e30fc26df333a98bde7d5dfc75d1`; `root/CRL-20261112-002@d172429185d6e30fc26df333a98bde7d5dfc75d1`
+- Required validation: `PASS`; final session-hydration snapshot check:ci exit0: 90 suites/1012 tests, fast166, TypeScript, strict button and ledger gates pass; lint0 errors/146 warnings. Root paired check:full and check:ci exit0, frontend379 and production build PASS, Phase4/5 source contracts and registry44FR/352 mappings PASS. Physical/deployed acceptance remains not run.
+- Shared-hunk review: `PASS`; 115/116/118 overlap reconciled and every selected hunk registered; final independent review pending.
+- Generated-file review: `PASS`; source/tests/documentation only; no secrets, dependencies, logs, native outputs or local fixture data staged.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; user on 2026-11-15 explicitly requested completing 115/116 and combining 115/116/117/118 into one branch per repository to commit and push; exact selected scope retained on codex/mz115-118-integrated. No merge, OTA or production writes. Current explicit instruction authorizes this tested content and ledger receipts.
+- Independent review: `GO`; independent read-only exact staged commit review on 2026-11-15; no remaining identified P0/P1/P2. Runtime fingerprint verified, full and paired gates independently checked.
+- Action conclusion: `GO`; blockers: none in verified repository content. Execute push only after exact paired machine-verification GO; raw single-repository report cannot validate cross-repository references by itself.
+- Unverified delivery scope: actual R2/login, full app/physical iOS/Android camera/gallery, video playback, production and OTA not run.
+- Cross-repository dependency verification: exact companion root content `d172429185d6e30fc26df333a98bde7d5dfc75d1`; both content fingerprints, actual paired full/source contracts, canonical CRL bindings and independent reviews are available. Read-only paired exact-range verifier must validate both committed heads before push; original raw reports retained without rewriting their NOT VERIFIED result.
+- Supplemental native verification: final mobile modules iOS simulator 13/13 PASS (116 identity/timezone/native AsyncStorage9 plus118 native downloader cache/account isolation4 against local HTTP fixture). Final118 real-PG native pair could not start due exhausted SysV shared-memory slots; mmap did not resolve. No unknown segments deleted or system settings changed. Previous25-case118 report is historical only and is not counted as this integration rerun. Actual R2/login, full app UI, physical/Android camera/gallery and video playback remain not run.
+
+## CRL-20261112-003 — Development workspace lifecycle and recoverable cache cleanup rules
+
+- **Repository:** `mobile`
+- **Status:** candidate; selected for integrated commit/push; final CI and independent review pending
+- **Updated:** 2026-11-12 UTC
+- **Request:** 用户要求实际调整未来工作方式，避免每次修复重复依赖和编译文件，并先告知旧文件可清理量。
+- **Outcome:** Project entry instructions now require scoped worktree reuse, dependency/build isolation and authorized recoverable cleanup; no automatic deletion or business runtime change.
+
+### Implementation
+
+- Previous behavior: existing release worktree isolation was required but dependency duplication and cache retention lifecycle lacked a dedicated procedure.
+- New behavior: AGENTS.md directs each feature/fix/test/release task to the lifecycle guide; preserve exact release and confirmation gates.
+
+### Files / Areas
+
+- `AGENTS.md` — added development workspace lifecycle entry point.
+- `docs/workspace-lifecycle.md` — new storage-efficient source worktree, dependency sharing, build isolation and cleanup procedure.
+- `docs/change-release-ledger.md` — this independently tracked documentation unit.
+
+### Impact / Dependencies
+
+- Runtime/API/database/migration/roles/UI/dependency versions/CI execution/system settings: unchanged.
+- No dependency installation, production API, deployment, OTA or automatic cleanup.
+- Paired documentation scope: root/CRL-20261112-003; neither repository proves delivery of the other.
+- Existing 115/116 workspaces, business files and dependency chains are not modified.
+- Locally observed root/CRL-20261112-001 and -002 and mobile equivalents belong to active 115/116 and are reserved; this is the next independent local ID.
+
+### Validation
+
+- PASS: `git diff --check`; `python3 scripts/audit_change_release_ledger.py` (3 changed / 3 recorded paths); original AGENTS content preserved byte-for-byte as prefix, guide link resolves, safety clauses present, no dependency directory copied. Fresh origin/Dev fetched 2026-11-12; candidate base unchanged.
+- Independent read-only review: GO for local documentation candidate only; P0/P1/P2 = 0. Reviewer independently reran diff and ledger checks (3/3 each) and confirmed HEAD equals current origin/Dev.
+- No application regression claimed because no application code or executable gate is changed.
+
+### Risks / Release Notes
+
+- Instructions affect only checkouts containing this change; local candidate is not universal adoption.
+- Recovery backups retain disk space; actual savings must subtract them. No automatic permanent deletion is authorized.
+- Rollback: remove only this new AGENTS section and guide through a reviewed change; preserve all pre-existing rules and ledger entries.
+- Sensitive-data review: no credentials, environment contents, personal paths, logs or secrets included.
+- Git/delivery: not committed, not pushed, no PR, not merged, no deployment/OTA; user authorized local implementation, not release.
+
+### Integration validation 2026-11-15
+
+- Selected by user as one integrated branch per repository. Original source worktrees remain untouched. No production API/data, dependency install, OTA or merge.
+- Integrated 115/116/118 shared TaskDetail and inspection queue hunks rather than overwriting entire source files; 117 remains documentation only.
+- Added combined regression for deep-before acknowledged upload preservation after local storage failure; token/account/task guards before upload and before applying late completion/defer receipts. Late original-owner acknowledgment cannot patch the new session or navigate it.
+- Session changes also reset busy and reload original-owner before/after drafts; preserved remote ACK is reused without duplicate upload.
+- Focused integrated TaskDetail and inspection queue: 2 suites / 135 tests PASS, including 7 additional integration boundary tests. Initial combined test fixture isolation and account-session setup failures were repaired without dropping existing protection assertions. Full final CI and paired native evidence pending.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** `none`
+- `AGENTS.md` — SHA-256: `5f9c2093a8d68b3431f937628694c123383b88aba2d617af89d5f791233fa28d`
+- `docs/workspace-lifecycle.md` — SHA-256: `9f557a3e3f919647d8b5e92a9e983b4320c138d65bd788ccb2fcb1b4210c326d`
+
+### Release Attempts
+
+#### RA-20261115-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261112-001`, `CRL-20261112-002`, `CRL-20261112-003`, `CRL-20261114-001`
+- Selected CRL identities: `mobile/CRL-20261112-001`, `mobile/CRL-20261112-002`, `mobile/CRL-20261112-003`, `mobile/CRL-20261114-001`
+- Intended action: `push`
+- Branch: `codex/mz115-118-integrated`
+- Base: `origin/Dev@1ec20d490097fd13798767d74c40851b5da9c85f`; fetched at `2026-11-15T00:06Z`
+- Candidate patch SHA-256: `cebc53707dd1237d9336170e3a7652597ceae3db1f80ad8d4f4a9352b926e4fe`
+- Commit SHA: `69f3a6718d1c3d2e8147fc07fdeed2fed4e3090e`
+- Dependencies: `root/CRL-20261112-001@d172429185d6e30fc26df333a98bde7d5dfc75d1`; `root/CRL-20261112-002@d172429185d6e30fc26df333a98bde7d5dfc75d1`
+- Required validation: `PASS`; final session-hydration snapshot check:ci exit0: 90 suites/1012 tests, fast166, TypeScript, strict button and ledger gates pass; lint0 errors/146 warnings. Root paired check:full and check:ci exit0, frontend379 and production build PASS, Phase4/5 source contracts and registry44FR/352 mappings PASS. Physical/deployed acceptance remains not run.
+- Shared-hunk review: `PASS`; 115/116/118 overlap reconciled and every selected hunk registered; final independent review pending.
+- Generated-file review: `PASS`; source/tests/documentation only; no secrets, dependencies, logs, native outputs or local fixture data staged.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; user on 2026-11-15 explicitly requested completing 115/116 and combining 115/116/117/118 into one branch per repository to commit and push; exact selected scope retained on codex/mz115-118-integrated. No merge, OTA or production writes. Current explicit instruction authorizes this tested content and ledger receipts.
+- Independent review: `GO`; independent read-only exact staged commit review on 2026-11-15; no remaining identified P0/P1/P2. Runtime fingerprint verified, full and paired gates independently checked.
+- Action conclusion: `GO`; blockers: none in verified repository content. Execute push only after exact paired machine-verification GO; raw single-repository report cannot validate cross-repository references by itself.
+- Unverified delivery scope: actual R2/login, full app/physical iOS/Android camera/gallery, video playback, production and OTA not run.
+- Cross-repository dependency verification: exact companion root content `d172429185d6e30fc26df333a98bde7d5dfc75d1`; both content fingerprints, actual paired full/source contracts, canonical CRL bindings and independent reviews are available. Read-only paired exact-range verifier must validate both committed heads before push; original raw reports retained without rewriting their NOT VERIFIED result.
+- Supplemental native verification: final mobile modules iOS simulator 13/13 PASS (116 identity/timezone/native AsyncStorage9 plus118 native downloader cache/account isolation4 against local HTTP fixture). Final118 real-PG native pair could not start due exhausted SysV shared-memory slots; mmap did not resolve. No unknown segments deleted or system settings changed. Previous25-case118 report is historical only and is not counted as this integration rerun. Actual R2/login, full app UI, physical/Android camera/gallery and video playback remain not run.
+
+## CRL-20261114-001 — MZ-118 ordinary offline completion photo drafts
+- **Repository:** `mobile`
+- **Status:** candidate; selected for integrated commit/push; final CI and independent review pending
+- **Request:** User approved MZ-118 local preview before submit, authorized media after save, cross-page audit and owner/reentry regression. No production writes, permission expansion, history edits or release.
+- **Scope contract:** Ordinary offline TaskDetail completion evidence; existing authorized task handlers and append actors only. Preserve maintenance/deep-cleaning business workflows, cleaning/inspection screens, available_actions, payloads, roles, navigation and weak-network retries. No backend/API/schema/security-policy changes.
+
+### Implementation
+- Reuse owner + task scoped durable completion drafts for cleaning_offline_tasks. Compress/persist before upload; retain local preview and acknowledged object reference separately until business association. Canonical associated photos continue through the authenticated media component and existing work_task_id.
+- Uploaded but unassociated offline photos never fall back to private remote reads if local preview is missing; a specific local-preview message replaces a misleading permission error.
+- Complete/defer still use markWorkTask; completed append still uses appendWorkTaskCompletionPhotos and its durable retry references. Upload failures retain local files; business-save failures retain acknowledged references without reupload. Keep camera continuation for legacy offline deep-cleaning tasks.
+- Async draft operations are scoped to captured task/account/session, and stale continuations cannot publish another session's draft or append it under a new session.
+- Other-page read-only audit: Supplies, InspectionPanel, FeedbackForm, DayEndBackupKeys, Manager luggage, cleaning completion already retain local previews. Task description photo path waits for business save. No speculative cross-page permission changes.
+- Saved-photo 403 remains separately diagnosable by association, work_task_id and actor authorization. No claim that every reported 403 shares this cause.
+
+### Files / Areas
+- `src/screens/tasks/TaskDetailScreen.tsx` — scoped durable ordinary completion preview and existing submission integration.
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — synthetic offline upload/save/reentry/account regression and existing maintenance/append contracts.
+- `src/lib/cleaningMedia.ts` — force native HTTP revalidation for private image/video sources while preserving account-scoped app file caching.
+- `src/lib/cleaningMedia.test.ts` — private headers and unauthenticated source cache safety.
+- `src/components/CleaningMediaPreview.test.tsx` — updated exact private download header contract.
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — unchanged exact-actor history video scope with new private cache headers.
+- `src/lib/cleaningMediaCache.test.ts` — native downloader header propagation and same-account file cache reuse.
+- `docs/change-release-ledger.md` — scope, verification and workspace receipt.
+
+### Validation
+- Baseline: `1ec20d490097fd13798767d74c40851b5da9c85f` from existing origin/Dev.
+- Workspace: active/mz118-media-preview/mobile, source-only shared Git worktree. Existing MZ-115/MZ-116 files untouched. Package and lock byte-identical to Nov12 integration; existing Nov10 MZ114 node_modules linked, no install/copy/build output. Node v26.8.1 arm64 on same Mac.
+- All Jest runs use clean env, temporary HOME and preload scripts/jest-network-guard.cjs; synthetic mocked API only, no production writes.
+- Focused synthetic screen verification: 57/57 PASS, including 10 MZ-118 cases; final isolated `npm run check:ci` PASS (exit 0): ledger-range tests 57, ledger coverage 3/3, TypeScript PASS, lint 0 errors / 133 existing warnings, strict button audit PASS, fast 8 suites / 156 tests, complete 88 suites / 918 tests in 49.534 s. Earlier changing-candidate totals are superseded. No unexpected network guard attempt; React act warnings are not native verification.
+- Independent review: no remaining P0/P1/P2 after fixing local-only fullscreen gating, mixed-card deletion identity and interrupted completed-append retry entry. Completed tasks may discard only failed unuploaded local drafts, not saved business photos.
+
+### Additional environment check (2026-11-14 UTC)
+- Existing booted iPhone 17 Pro / iOS 26.3 simulator confirmed using read-only simctl. Initial sandbox-only CoreSimulator connection error disappeared under approved read-only host query; it is not an application crash finding.
+- Existing fixed Preview database enrollment and production-vs-development identity check passed; explicit read-only connection confirmed schema registry. No data writes or application launch performed.
+- Fixed Preview private-media configuration is absent by design (sanitization removes external object-storage credentials). Current private mzapp media retrieval requires object storage; this environment cannot establish the complete upload/association/authorized-read result as configured. No production bucket was used.
+- Preview mobile is a mixed dirty checkout, not this isolated candidate. No files were copied over it. Simulator application inventory parsing was inconclusive; no app was opened.
+- The fixed Preview path was blocked as configured; the subsequent explicitly bounded local storage/backend/PG harness below supplies partial isolated integration acceptance, not production R2/login or full screen interaction acceptance. Jest alone is not represented as simulator/RBAC E2E.
+
+### Isolated integration extension and native cache finding
+- Scope extension approved by parent after report: mobile private-media source headers only, no backend permission or production change. The native test exposed an independent HTTP-cache boundary: an old authorized 200 for the same URL was reused for an unrelated account, even after app cache-session switching. Real backend SQL denied that account. A fresh URL or no-cache request returned 403.
+- Corrective source headers: Cache-Control no-cache, no-store; Pragma no-cache, with existing Authorization unchanged. This forces existing native HTTP cache entries to revalidate; app-managed account-isolated local image files still avoid repeated downloads. No role/assignment policy changes.
+- Actual iOS 26.3 / Expo Go SDK54 Hermes prototype: prime old HTTP cache with authorized 200, switch to unrelated actor, invoke actual native File.downloadFileAsync via loadCleaningMediaImage. Before: gotLocal=true; after candidate headers: gotLocal=false, failure.status=403; raw native fetch likewise 403. This is synthetic private media on a local server, not a production incident claim.
+- Real local Express multipart/upload/mark/media routes + identity-verified temporary PostgreSQL + actual association/authorization SQL and Sharp passed cleaner/staff/offline_manager/admin upload-to-read matrices, outsider/wrong-task denial and manual participant reads. Only object storage is a local memory adapter and identities are test-only injected actors. No authentication/session middleware or real R2 acceptance claim.
+- Native full-chain rerun PASS 25/25: cleaner/staff real native compression, durable local files, AsyncStorage reentry/account isolation, RN multipart upload, pre-save 403, real mark, separate PG read, native private image downloader, acknowledged draft cleanup, saved-media reentry, manager/admin authorized reads and outsider 403. Generated one-pixel fixture only. No actual camera/gallery interaction or login flow claim.
+- Final widened `npm run check:ci` PASS (exit 0): ledger tests 57, working-tree ledger 8/8, TypeScript PASS, lint 0 errors / 133 warnings, strict buttons PASS, fast 8 suites / 156 tests, full 88 suites / 919 tests in 50.883 s. All Jest used clean env/temporary HOME/preloaded network guard. This supersedes earlier 918 totals. First widened CI exposed only three existing exact-header assertions; updated them to require new cache headers while preserving exact Authorization and task-scope assertions.
+- Final independent source review: no remaining identified P0/P1/P2. Native private video header forwarding is source/Jest-audited, not playback tested; Web video custom-fetch and legacy bare-URL video do not use this unified path and are not claimed repaired.
+- Local HTTP test servers, Metro and results collector stopped; all temporary PostgreSQL clusters stopped. No software installation. Reproducible synthetic PG data dirs retained (~120 MB total), harness source ~48 KB, dependencies symlinked, not copied.
+
+### Impact / Dependencies
+- Mobile-only candidate; uses unchanged backend association and authorization contracts. No database migration. After an independently approved integration/release, a mobile delivery (OTA if compatible) is needed; backend-only deployment cannot apply this client fix.
+- MZ-115 and MZ-116 also touch TaskDetailScreen; do not copy the whole file over their candidates. Reconcile selected hunks in the future release workspace and rerun combined regression. No prerequisite new backend changes identified.
+- Rollback: omit/revert only this candidate's TaskDetailScreen/test changes. Existing private media stays private; no data backfill or destructive cleanup is required.
+- Sensitive-data review: only source and synthetic fixtures changed. No real customer images, tokens, environment files, device logs or production records read or written. Test output contains synthetic mocks only.
+- Exact runtime/test file SHA-256: `1b696fa2e7c65824b05dbaa35f48af7f1564114f8f02f865c011f6e2ba155c8e` / `505b468486ef006cb19e6ac6951d521875cc1ce73bc7f99ccb82e06dafb368b4`.
+- Git state: detached source-only candidate based on the SHA above, exactly these eight modified tracked paths, no staged content or commit. Shared dependency link is ignored test infrastructure.
+- Physical iOS/Android, Android emulator, actual camera/gallery interaction, real login/session middleware, real R2 and hardware weak-network tests: not run. Supplemental iOS simulator native-API evidence is recorded below; do not report production acceptance or deployment.
+- No commit, push, PR, deployment, OTA, production data or migration performed.
+
+### Integration validation 2026-11-15
+
+- Selected by user as one integrated branch per repository. Original source worktrees remain untouched. No production API/data, dependency install, OTA or merge.
+- Integrated 115/116/118 shared TaskDetail and inspection queue hunks rather than overwriting entire source files; 117 remains documentation only.
+- Added combined regression for deep-before acknowledged upload preservation after local storage failure; token/account/task guards before upload and before applying late completion/defer receipts. Late original-owner acknowledgment cannot patch the new session or navigate it.
+- Session changes also reset busy and reload original-owner before/after drafts; preserved remote ACK is reused without duplicate upload.
+- Focused integrated TaskDetail and inspection queue: 2 suites / 135 tests PASS, including 7 additional integration boundary tests. Initial combined test fixture isolation and account-session setup failures were repaired without dropping existing protection assertions. Full final CI and paired native evidence pending.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** `prepared`
+- **Untracked review:** `none`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `617696415400ce90b896dd85565ea41a2c11d00d9c3e819bceb2224374ed1ff5`
+- `src/components/CleaningMediaPreview.test.tsx` — SHA-256: `77ce7db617d3d88911e010937427a30002088fb8da30d7032621f4938cab45e3`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `00c15f7edba3f55e9c58e57b2df2ab8d35551b0ed62fb62e8828efa3d2fa5678`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `2be9b113fb394c22eb1f76e9991e7e9320ed6d5ede949ecc912754292231020b`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `34679617edb33f4cd38e79c64eb679ba306dac087b8b5647ea9d7139f27191ba`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `54005dd4c2b02c3b53f56c3942ad5f563c8c7bb4631977a6682551a299a0087f`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `5e0843fa463f76ca81d019a542982d8490279e3e55556918413cb9d64760bb9b`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `5e40505b210882f7b39533e596ed024b9d6998f7efbf6b581b4fa98a3826e3cc`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `5ed67073f4a2747e219529bf139a3321d36eccb0e3b6b13ca605581af0a4de99`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `6a335d1131c50f3b2659ab777263daa0f242e1b624c5f43cb59f0c226a0ef489`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `83b54dc47177068cb396d7e0c691e79f90ffb9ece06fde5d5b2322cf0d84234e`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `8c01e8fc8fb26ea00d8a0a051e18d0a2cc7cd8db31a2a7dbf59ec8997140f7b1`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `9fe5f52fa3ea65f789d839b0ee8135a63cfd5e6f20d69dcb9836dedb81e3f73f`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `a32afb5a620896f376090e8efc884d06f73a9b0b43f760abf49679a9a466b823`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `a4f8445aff57181a61b491b9fd71e87124fdcdef9bed5111cbe8fe8e679732d4`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `b5ef25c22580c6d20bfe0dd0b6458eb02b09995e50deaeb04a27bf323d04f9bc`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `bb87dd69174d03f51ef252c2ec62d1db3ef6e136f5f1e726cd89baa618348a48`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `bcf6e0ec87985bd293c69bcff448a19bc270e1135aeb84847d2c027ae1957091`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `cad430c18e5544df1b9086b2b8e514e14abd4f7719ebda5468f49f2c9fc90b7e`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `cbecff26400231fcda1daffc67a31da120ec82cc7af76ebc6b9073d712a541b4`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `d5324321dd355bc08a36ee7e6069e4eebee398deeb6820032c377f5c5f8bc099`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `dc16e68d193c3c6a4466713dcd9cc1f50e3f46f208fc22d1282c8129d8706d02`
+- `src/lib/cleaningMedia.test.ts` — SHA-256: `e4e7d349220b076d8af9fb78c6192f31e1992395a9c3e28fbc4d1adc2b5b9e31`
+- `src/lib/cleaningMedia.ts` — SHA-256: `98c2c5121921abf80520ef32b6ea41a8af3a69702b84f76bc82bf8736583c675`
+- `src/lib/cleaningMedia.ts` — SHA-256: `dfebac5ec797c2d157c77f7bf39556180d0e718f9ffcfe6e1ed446d8e3a70c51`
+- `src/lib/cleaningMedia.ts` — SHA-256: `e5a13139d77b84f6e5f204f42dc8c2f65b4ab0a2454ff16463177e4c44e2a90f`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `389367c0e2fbef1a20827e724141ee2eacbd1ca1d02480581c4fde30657dcd7a`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `457aeb764b3d5a432e8b65b6ecf00e18deeef4108bc9e8266512faa72874e3a8`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `7ad3942ca0b65d84864417a4864613dae62cd14f46e552ed12c2af38b875c72d`
+- `src/lib/cleaningMediaCache.test.ts` — SHA-256: `aad3a0e6870a8700305bbbdc87ebe27b6a560d93af4f39fe5cad4d6607150da3`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `46ce5ff0f32b515fad4865d22f43c079a85323ef03839ba15b6a9b93a536fcea`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `0ea995f08893b866570d130a399e2f0bf3b9544530265ebdbd1b8f17b58d5c5c`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `1bfb0553e934ef95b1c81d89ad28dc386bf187ec10b6c00f7eddd0d11de119e2`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `358e7d90c842d1b080c6d3b461936fc9831ac275c8ff6b3bdd0de6917c4d9d0f`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `4ce1aa10452f4e24cec89be361fbda812feccb70a7c6fc486fbbaf6beabe6232`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `8cd2570a6a18310e6f3b3c1f2cfcf31409101711bd8d075f4e4d507cb0070000`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `8ecef8a27c0191edc59d8c774038e6b8a05c808a2ccfe7ea8f79a5908fb6d9a9`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `915a1a7a4665808b6ade1695caddc5e9e25cef1349b61a4e46f215ffcbee6551`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `df380d0b1ee1ad70d768ec71cc3277d637e591cb9608241a7345c8a18f5f7790`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `e38a522314d2754a2ca7871716630b4be96c539e99ba62cd4391a570f354ad38`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `ef8931af4494477bafb7b3f68b085a74a41756cc521b4715c463a04598ae28b8`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `f5d07ead5fbf769f3890ba963bafe38a3be1b22304a7b18923a5d9956c3495a0`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `02dcb749d637bbd445b60034ec995861fbcbc583dbbe89897a0c40e71d69d4ff`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `038ccaa9a3a88fdf91ba505c90d85e3ce7e1fa49948a1023f92aa1d70c506122`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `0503792daae72e25dd5baba53b665644d750c487dd789e62165f06a25179df73`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `09a12110124d65a70a30b60aa19c4ffe7a603b7a6ec1bbd676482384b08e6b3d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `09c1379cf5ad7b832eba42663c1a598bf389a81af887d375a9c7d62d73261c6f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `0c76f4ca9c81ff7fe6e59036b9460ea947c44636d5ca74a1efcca39fc0b9e29d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `0cc1aada8f7ec30f371a1e379ab8cacb371306aedaae8efa86848dfb514e8194`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `0f39c8adb551f442a734a1ffbdff5c55924756a1dc2db845615d05062e8312cb`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `1081744d9a0192f992123e1b164a59f6d7a719a063a892bf4935a81c82df9b27`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `139ae7c789f706e55a8c4da885a66e67a681b48a0c09fac7b76941a5e07dfdc4`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `13b3efa9d4977ebdfcbdb59165f2a7af91a80af7ce2400b8748abd64fd233502`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `192d90bca740fc50e487bfc69c889d948eccf5b7926009170418b1fb26ae9d9f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `1c26dbedf3eff8cc90110d498c086966a432f4a890d673f4a11bd7a57552be2c`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `1c7d3daffb8433276b6c9574a060bf3b1d6ed8d794416607ee4238d821c1d4dd`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `1df3158c1628e74750b401d4a865b4cce4021ddd4e34bc6598b86c47cd6a7745`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2034a04a5453d5a4302aa5e987a1cb227967f190e47fdbe8e652b4f3abe17cf2`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `255ba5731cd5485ffeca57ec638856d95f0dcba18c2d75866d29d167b6985b82`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `255ef22c53ff8038a7c7b04c334caa5dc92337108af154e689a93d09e8a5db81`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `26f3f325dc4daa85ac497a01094985235190c5fb9869ac18fd0ee213cc82c5b0`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2727ca7c81d62f2875048ff732ae487d7bb5443b7d4d3e2e22e1db207f0579e2`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2bea527ed789fb7fd2f5d07601146a3951ad3c8869c1ff073c9f288540290149`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2bf7e35e736570a76cdaa8804c497e7b3e7b1887d92954a0683493a2a914e9e1`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2c9fc93d483e8c9b95ab7d642f128f57df8aee24957bf5c828a44856aa257e1d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2d2eb35d2e873511b6cdb604d021a22b8083ef4f9d5299e0c131fb0ddbb51e95`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `2d4c4d2b8215268807249fcbb6426d902dbc4b0fe2f943fc206dc43dc64f9b70`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `339fec1fb60a32c424ca9c98da83a178ff5ebf6255b061ba344afdd63d45d902`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `342b84a40e318f4f02fd95092518dc0fb39f6a2c09470893de8b51686214ef27`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3a753639d4c93be54b331376f6920476d5234f47c5c43ee7902d98dcde1806c6`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3c8d52587f19752b9d39bbd686bf88f71e5506158f669a680e3026208f15fd28`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3eb3131524a5f76844a60fabdde8f3fab33181ebc965ba0baf7c2d4616a98e1a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3f21290a4a0327545fb43b3eb87dc368d1e85262d1c44548b7cd2a39b8fe6a7f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3f938147198931410addf586ac702c570ce2541f3a87477593900558ae1193fe`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `3f9d09f87f2951a3cc76689db3aab122477873c22dad718492c7eaf5118cd3d4`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `421b29d890c3463527ca29807c263220be590ac9452309ad784a3b8064960e0d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `44296ef137c9ce9ea7ba0aafc3b387178bf06ef296308c4001dccf354e0520e3`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `46311e3c8fc4d74b29f4f621265823f2ff25b64c8c0aa7148d1c20283a1bd7ff`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `4824d269e5c59cee9fa3d9850e8d363462556b643cf16060f67425e18d13f3c3`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `4ee4e05bf3b8dfc5de6263d2b4b15b148f980ed092a7b3fec83bec875f900d6a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `4f23eea5b3ba4b688505c081e401bc6b4f4997ad290d461b795def62927208c4`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `56fd72a9f75091464bfe55fc9e88bafb34ce0077c292b7611dc7edcd0912385a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `57c35a327c5d94cd9f3077ec9ccd58671eb98213a745cfc0bb4a61422905d057`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `59ba33a43ef061884f59f1addbfb562e90ce771d69ecde574d3418cf7d4df7cd`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `5b5bae006a041f8165ed41c070016c68edd92c364c6496dde07fed6918754506`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `5e758ba5c417a0ea33723ecc8b45a82ae851fa68dc6d74aea80e1b5512c88f50`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `5e9570e5ce99cfd30cfd5b005cbead89ca28b05d18ac487e311991b081ce0304`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `5fb3d10594efe9f77cd112c9b6197c4a1a9e7004151e536beb180891553790ea`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `60ca65b6651a00c1f312ba40ffb4d93972008b76676ccfb9262fd4736d0cfb1a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `626974ca9daf7ca4c86ff4db5c48dec3db261c6aa29941e46d7a4ad1ba6d2cf0`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `62db3c78922f37826222739156a34793b83bb8e748c98ff27002a625453c606c`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `62f68c2639f8ee5b05f7ff359f63fd3161f7b34eef1ba85421e52c8fbd8eedaf`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `6ad10f4125ec4df65ac03972b081c880901864fcb2a87054fa1d1d727638ad98`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `6b09ea0fa5b966ed6bf4aa7ecc907496615f64034d6623b09fabd5881b21f8af`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `6cfced8818a9b48816a15a21e67885caf6b31b7113342b57cc0d2f7435ed7a0e`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `6ee71697861d6a677bd91c88969d32326de250f0825cd8e40682d69ef50372ff`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7047fe0261931a3c45dc8b03a84ad46e0a0da20cdd9087469d67449de3619461`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `76115ced9f1bcfc1541996e47944087533bbee61b4ef70c847e9c8e1d0ae06e3`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `79a5b85b02b6ed8fffc342ff6dd52ba3eba05bececbfeca3d16cdbcc82cf573f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7b6dea0dcc406f784b245aac468a421a16fd06e23f31c7078578a610dae5559b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7d30e2f7c0e84fafc8916c25d19d6af6f46c23ffdc67002d80dcc59971ab94db`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7d73145050227931ff3c0ed09fc6893d7facb19c1b44388f6e0b22e007ffeae0`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `7e25897cc9ac5f21ed7c6a03f25b755b89a23b0126f34ce31e7ac63bc7bb7b06`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `80bb4d3e6ae4dc24e9bc192f0c6f2f8d000bb5b72667b4d23e97a6fb121b23d5`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `8186476ceed848870c34dc3d6faa58930d3945494a7083bdaf8d01345c73859b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `844f3eb04ed946e6afa246d511fa7318f76fac4b2e15e118293c15a159889b80`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `8c9f485c47a88adc6bfb2d8bfb682e194a8cfc3cc48fc0e13066e9bea87745bc`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `907fc429f9167b93e824121a49b18164d5ae7ed50d36ed72f3bdc3a216d42598`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `9188cdcf6ad49c76e06f54b1abcf8fb985b7a9e0e582510ff9c80f7aedd9e360`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `952cd775139786c77ca94cb1424c78867fe918c50723cf339131fb54f3449afa`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `95b4354c1ca702486347c10e884f8e157fdef13ca32a117fe174bc8feb0e7ebd`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `9654b916863a4ffa7bb60774b70492fc29d20643671a14b5866c74fa40da0aa3`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `9ebf498cac4f787bdfc8a7c091b564efe267ca0aef85143e49a59854cbc7d078`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `9f232ab516fe40c0023e20f58f62759877b6a09ea3564ec99d2e55a5c4e004cf`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a2ee1541a183589d3a9ef33d9d1fbca95b78c2b021d7b6434de8bffff5d7158b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a315bd06d526605c7c233bf57f2eb0caa7df1c5999b18e249045a5802d50959f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a5cf8c5a53b5271946072f52054199bf4806a05d92f0b43e13fe59cc7a1cef93`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a8d6b8a8b9edf2fa5efa307e9e28477733be74b5d983b0762713015f4a552034`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `a9a7f8ea7624ffee90eae793e0476063c39f33da398b162988fe16ac7cd30e69`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ac078b22ef34b29147e03f5cd62a4f34ce5633f83f7c68bc4e3507ab0719026d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `adeb578815f365d43b45c30725c878932e9adec0ce6eb3870b24256b0523d28c`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b01d97515622f17552af9780d2173d0d6a71ec3d6020224aaa482204b3b2b205`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b04c38d25b5a16bcc9e078510109af85cbd4b4194d8c1d04b4911264dad2ac7b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b11e4c7fa3c2845aae2cfcb00964f844d4708289f6352528f12357a91ad23e58`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b3208587ef796d7c95f3c6ead4194f3a62a8c482786f264bbdd4efe4e60da133`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `b5577d5ee8c4296c83ea80ebd10d7b7ef04634e5e86f7b6458fce0ea0597fd6b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ba72c294394db37c79aed7435ca0ea5ae89d1dc60f6a86de937330ff87e122bf`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `bbe4943ecf64b4f45b9940f304eb9f32224238fbcff3e503b974f7029537c55f`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `be793f9f43e4d8f882d96ee4f5728ca7ff33f6fe8fd06ec7e9f555c4bc9edb09`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `c410cebb2e99235001787da616dbe4cc88273ce21bd85a3c04a79056e72ce0ac`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `c455d3c132cd14441390a3073413fde61c83ee9d155822aeb3e838dca5b2bf24`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `c4e46814b918183af84e52c887f76555b4d5be23b345c9b8ccda27a1d487551d`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `c5fbaca66397f038cd65d4e25eef08cb21c7a431e29572b87aa8331229f37f29`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ca2ef5ca56de355e5bbae48a9de6157dba8ebb202f553420e7fc36c1034cd054`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `cf38f6e4c641a2251290f28077a87820a5ebdf9958d4819777abe08831716e5a`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `cf55223448e3e339d4d38052e5f0418857cd29cd30c51d0edbc5af6f1a309f0e`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `d04fe8f4fc1b2087355cf4f2fddbbe13860352bf4b2711f0e79f8c304ec79a15`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `e1adc2423932342c81a0ed82f7a10ec610af6c5aee8e782f4ea8c7e5dd0188d2`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `e2f199db8a6016e5a6cef9d7d59b995fda12a70149a52b6f02a52d3b82320f56`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `e2fcf9f8e9707908105030e8d8c2a742ee9c7ec0fc41db1c2199494d297bfe59`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `e5336d5830dfbbb1633fe4cce162d4e2a2f73eba2d16d4664d82a013d7a79c85`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ecedcef65ec1bf88593f79634a243d28ea65eefe3dd3f57fda5efa781d47feab`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `eea7594a9a632da313980b927efe5d7d648296f39d5ffec4e7b1162b2bc4e103`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `ef6f4e1a4c08c898eee9c9810d52026391566cfee316f02b0b54c4cf1094a53b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f04c8677c9eb3763facc182d235616fac07a4d8d2c7b03a7844df94a46fff649`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f0614b3b318d59f4ad16570d415efc72c6162dff4b04a1c7a7ff746d66326172`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f0db420181d9e099633648f779f55e881db7e912eb4def03fbf74294e950e45c`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f50840f16b932b825400968479bcfbddc4261c4e4fc9880a7fdffad7470fbece`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f59719bec01991ed7b1381f0fe28bf608ed1ba146439947fab08d3efbe55ec7e`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f59a2e257e1c08b961542d47dca65fc4a779228afbc550038c84107f734a0f96`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `f84b5c45a718e2d65d717621a1443e56413d2ab47d413506ebb1cf0d4596a26b`
+- `src/screens/tasks/TaskDetailScreen.tsx` — SHA-256: `fc3526e379c4ebd1fa15517a0cebe0fc29e1951164cb896cd31214553987c259`
+
+### Release Attempts
+
+#### RA-20261115-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261112-001`, `CRL-20261112-002`, `CRL-20261112-003`, `CRL-20261114-001`
+- Selected CRL identities: `mobile/CRL-20261112-001`, `mobile/CRL-20261112-002`, `mobile/CRL-20261112-003`, `mobile/CRL-20261114-001`
+- Intended action: `push`
+- Branch: `codex/mz115-118-integrated`
+- Base: `origin/Dev@1ec20d490097fd13798767d74c40851b5da9c85f`; fetched at `2026-11-15T00:06Z`
+- Candidate patch SHA-256: `cebc53707dd1237d9336170e3a7652597ceae3db1f80ad8d4f4a9352b926e4fe`
+- Commit SHA: `69f3a6718d1c3d2e8147fc07fdeed2fed4e3090e`
+- Dependencies: `root/CRL-20261112-001@d172429185d6e30fc26df333a98bde7d5dfc75d1`; `root/CRL-20261112-002@d172429185d6e30fc26df333a98bde7d5dfc75d1`
+- Required validation: `PASS`; final session-hydration snapshot check:ci exit0: 90 suites/1012 tests, fast166, TypeScript, strict button and ledger gates pass; lint0 errors/146 warnings. Root paired check:full and check:ci exit0, frontend379 and production build PASS, Phase4/5 source contracts and registry44FR/352 mappings PASS. Physical/deployed acceptance remains not run.
+- Shared-hunk review: `PASS`; 115/116/118 overlap reconciled and every selected hunk registered; final independent review pending.
+- Generated-file review: `PASS`; source/tests/documentation only; no secrets, dependencies, logs, native outputs or local fixture data staged.
+- Technical state: `committed`
+- User authorization: `approved-for-push`; user on 2026-11-15 explicitly requested completing 115/116 and combining 115/116/117/118 into one branch per repository to commit and push; exact selected scope retained on codex/mz115-118-integrated. No merge, OTA or production writes. Current explicit instruction authorizes this tested content and ledger receipts.
+- Independent review: `GO`; independent read-only exact staged commit review on 2026-11-15; no remaining identified P0/P1/P2. Runtime fingerprint verified, full and paired gates independently checked.
+- Action conclusion: `GO`; blockers: none in verified repository content. Execute push only after exact paired machine-verification GO; raw single-repository report cannot validate cross-repository references by itself.
+- Unverified delivery scope: actual R2/login, full app/physical iOS/Android camera/gallery, video playback, production and OTA not run.
+- Cross-repository dependency verification: exact companion root content `d172429185d6e30fc26df333a98bde7d5dfc75d1`; both content fingerprints, actual paired full/source contracts, canonical CRL bindings and independent reviews are available. Read-only paired exact-range verifier must validate both committed heads before push; original raw reports retained without rewriting their NOT VERIFIED result.
+- Supplemental native verification: final mobile modules iOS simulator 13/13 PASS (116 identity/timezone/native AsyncStorage9 plus118 native downloader cache/account isolation4 against local HTTP fixture). Final118 real-PG native pair could not start due exhausted SysV shared-memory slots; mmap did not resolve. No unknown segments deleted or system settings changed. Previous25-case118 report is historical only and is not counted as this integration rerun. Actual R2/login, full app UI, physical/Android camera/gallery and video playback remain not run.

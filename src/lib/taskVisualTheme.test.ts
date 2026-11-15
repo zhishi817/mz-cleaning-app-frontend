@@ -415,3 +415,17 @@ test('completed record state remains a fallback for an unknown source status', (
 
   expect(getTaskStatusMeta(task, ['offline_manager'], 'manager-1')).toEqual({ text: '已完成', tone: 'success' })
 })
+
+test.each([undefined, false, true])('deep pending review badge does not depend on work-record visibility=%s', (visible) => {
+  const task = makeTask({ source_type: 'property_deep_cleaning', task_kind: 'deep_cleaning', status: 'pending_review', assignee_id: 'executor-1', work_record_visible: visible, deep_cleaning_workflow: { status: 'pending_review', available_actions: [] } })
+  expect(getTaskStatusMeta(task, ['staff'], 'executor-1')).toEqual({ text: '待审核', tone: 'pending' })
+  expect(getTaskStatusMeta(task, ['admin'], 'admin-1')).toEqual({ text: '待审核', tone: 'pending' })
+  expect(task.work_record_visible).toBe(visible)
+})
+
+test('deep domain review badge overrides stale assigned status but does not change other sources', () => {
+  const task = makeTask({ source_type: 'property_deep_cleaning', status: 'assigned', deep_cleaning_workflow: { status: 'pending_review', available_actions: [] } })
+  expect(getTaskStatusMeta(task, [])).toEqual({ text: '待审核', tone: 'pending' })
+  expect(getTaskStatusMeta({ ...task, source_type: 'unrelated_fixture' }, [])).toEqual({ text: '已分配', tone: 'normal' })
+  expect(getTaskStatusMeta({ ...task, status: 'completed', deep_cleaning_workflow: { status: 'completed', available_actions: [] } }, [])).toEqual({ text: '已完成', tone: 'success' })
+})

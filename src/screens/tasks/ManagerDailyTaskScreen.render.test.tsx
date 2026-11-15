@@ -438,7 +438,7 @@ test('customer-service reassigned history uses exact actor-bound media and keeps
     const historicalVideo = videos.find((video) => String(video.props?.source?.uri || '').includes('cleaning%2Fformer.mp4'))
     expect(historicalVideo?.props?.source).toEqual({
       uri: expect.stringContaining('variant=source&source_task_id=checkout-source&source_ids=checkout-source&media_scope=manager'),
-      headers: { Authorization: 'Bearer local-preview-token' },
+      headers: { Authorization: 'Bearer local-preview-token', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
     })
     expect(rendered).not.toContain('cleaning/replacement.jpg')
     expect(rendered).not.toContain('cleaning/unrelated.jpg')

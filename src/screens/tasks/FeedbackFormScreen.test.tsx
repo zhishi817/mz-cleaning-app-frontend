@@ -22,7 +22,10 @@ jest.mock('expo-image-picker', () => ({
   launchCameraAsync: jest.fn(async () => ({ canceled: true, assets: [] })),
   launchImageLibraryAsync: jest.fn(async () => ({ canceled: true, assets: [] })),
 }))
-jest.mock('../../lib/auth', () => ({ useAuth: () => ({ token: 'test-token', user: mockUser }) }))
+jest.mock('../../lib/auth', () => ({ useAuth: () => {
+  require('../../lib/mediaCaptureIdentity').setMediaCaptureSession(mockUser.id, 'test-token')
+  return { token: 'test-token', user: mockUser }
+} }))
 jest.mock('../../lib/workTasksStore', () => ({
   getWorkTasksSnapshot: () => ({ items: mockWorkTask ? [mockWorkTask] : [] }),
 }))
@@ -51,6 +54,8 @@ jest.mock('../../lib/cleaningMediaCache', () => ({
 }))
 jest.mock('../../lib/api', () => ({
   completePropertyFeedbackProject: jest.fn(async () => ({})),
+  listDeepCleaningExecutors: jest.fn(async () => [{ id: 'inspector-1', name: 'Inspector' }, { id: 'cleaner-2', name: 'Cleaner Two' }]),
+  recordDeepCleaningCompletion: jest.fn(async () => ({ ok: true, id: 'fixture-deep', status: 'pending_review', workflow_status: 'pending_review' })),
   correctPropertyMaintenanceCompletion: jest.fn(async () => ({})),
   createPropertyFeedback: jest.fn(async () => ({})),
   createPropertyFeedbackBatch: jest.fn(async () => ({})),
@@ -169,7 +174,7 @@ test('照片上传后草稿落盘失败会停止业务保存并保留本地上�
     owner_user_id: 'inspector-1', owner_property_identity: 'property-1', source_task_id: 'cleaning-1',
     source_binding_status: 'confirmed', source_binding_reason: 'exact', kind: 'deep_cleaning', maintenanceDrafts: [],
     deepCleaningDrafts: [{ clientId: 'deep-checkpoint-fail', area: '浴室', detail: '落盘失败验证', media: ['file:///checkpoint-before.jpg'], submitAsCompleted: false, completionNote: '', completionAfterPhotos: [], completionStartedAt: null, completionEndedAt: null }],
-    dailyDrafts: [], localPreviewByReference: {}, localPhotoMetaByUri: {}, updated_at: Date.now(),
+    dailyDrafts: [], localPreviewByReference: {}, localPhotoMetaByUri: { 'file:///checkpoint-before.jpg': { name: 'checkpoint-before.jpg', mimeType: 'image/jpeg', mediaId: 'checkpoint-before.jpg', capturedAt: '2026-11-12T04:32:00Z', captured_by_user_id: 'inspector-1', watermarkText: 'TEST-1 inspector' } }, updated_at: Date.now(),
   } })
   let failResolvedReferenceWrites = true
   storage.setJson.mockReset().mockImplementation(async (_key: string, value: any) => {
@@ -1045,6 +1050,7 @@ test('深清四张前图三张后图在来源失效后完整保留，重试不�
   const localMedia = require('../../lib/localMediaDrafts') as { persistCompressedDraftMedia: jest.Mock; deleteDraftMedia: jest.Mock }
   const storage = require('../../lib/storage') as { getJson: jest.Mock; setJson: jest.Mock }
   const api = require('../../lib/api') as {
+    recordDeepCleaningCompletion: jest.Mock
     completePropertyFeedbackProject: jest.Mock
     createPropertyFeedback: jest.Mock
     createPropertyFeedbackProject: jest.Mock
@@ -1054,10 +1060,11 @@ test('深清四张前图三张后图在来源失效后完整保留，重试不�
   storage.getJson.mockReset().mockResolvedValue(null)
   storage.setJson.mockClear()
   api.listPropertyFeedbacks.mockReset().mockResolvedValue([])
-  api.createPropertyFeedback
+  api.createPropertyFeedback.mockClear()
+  api.recordDeepCleaningCompletion
     .mockReset()
     .mockRejectedValueOnce(Object.assign(new Error('source missing'), { status: 404, code: 'property_feedback_source_task_not_found' }))
-    .mockResolvedValueOnce({ id: 'deep-feedback-1' })
+    .mockResolvedValueOnce({ id: 'deep-feedback-1', workflow_status: 'pending_review' })
   api.createPropertyFeedbackProject.mockReset().mockResolvedValue({ item: { id: 'deep-project-1' } })
   api.completePropertyFeedbackProject.mockReset().mockResolvedValue({ ok: true })
   api.uploadCleaningMedia.mockReset().mockImplementation(async (_token: string, file: { uri: string }) => ({
@@ -1101,15 +1108,18 @@ test('深清四张前图三张后图在来源失效后完整保留，重试不�
   fireEvent.press(ui.getAllByRole('button', { name: '相册选择' })[1])
   await waitFor(() => expect(localMedia.persistCompressedDraftMedia).toHaveBeenCalledTimes(7))
 
+  await waitFor(() => expect(ui.getByTestId('deep-executor-inspector-1')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('deep-executor-inspector-1'))
+  await waitFor(() => expect(ui.getByTestId('feedback-draft-storage-saved-banner')).toBeTruthy())
   const submitButton = ui.getByText('提交记录')
   fireEvent.press(submitButton)
   fireEvent.press(submitButton)
-  await waitFor(() => expect(api.createPropertyFeedback).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect(api.recordDeepCleaningCompletion).toHaveBeenCalledTimes(1))
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(7)
-  expect(api.createPropertyFeedback).toHaveBeenCalledWith('test-token', expect.objectContaining({
-    kind: 'deep_cleaning',
-    source_task_id: 'cleaning-1',
-    media_urls: expect.arrayContaining(localUris.slice(0, 4).map((uri) => `cleaning/${uri.split('/').pop()}`)),
+  expect(api.recordDeepCleaningCompletion).toHaveBeenCalledWith('test-token', expect.objectContaining({
+    sourceTaskId: 'cleaning-1',
+    assigneeId: 'inspector-1',
+    beforePhotos: expect.arrayContaining(localUris.slice(0, 4).map((uri) => `cleaning/${uri.split('/').pop()}`)),
   }))
   expect(localMedia.deleteDraftMedia).not.toHaveBeenCalled()
   expect(ui.UNSAFE_getAllByType(Image).map((node) => node.props.source)).toEqual(expect.arrayContaining(localUris.map((uri) => ({ uri }))))
@@ -1126,16 +1136,11 @@ test('深清四张前图三张后图在来源失效后完整保留，重试不�
   }))
 
   fireEvent.press(ui.getByText('提交记录'))
-  await waitFor(() => expect(api.completePropertyFeedbackProject).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect(api.recordDeepCleaningCompletion).toHaveBeenCalledTimes(2))
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(7)
-  expect(api.createPropertyFeedback).toHaveBeenCalledTimes(2)
-  expect(api.completePropertyFeedbackProject).toHaveBeenCalledWith(
-    'test-token',
-    'deep_cleaning',
-    'deep-feedback-1',
-    'deep-project-1',
-    expect.objectContaining({ source_task_id: 'cleaning-1', before_photos: expect.any(Array), after_photos: expect.any(Array) }),
-  )
+  expect(api.createPropertyFeedback).not.toHaveBeenCalled()
+  expect(api.recordDeepCleaningCompletion.mock.calls[0][1].recordId).toBe(api.recordDeepCleaningCompletion.mock.calls[1][1].recordId)
+  expect(api.recordDeepCleaningCompletion.mock.calls[0][1].operationId).toBe(api.recordDeepCleaningCompletion.mock.calls[1][1].operationId)
   await waitFor(() => expect(localMedia.deleteDraftMedia).toHaveBeenCalledTimes(7))
 })
 
@@ -1170,7 +1175,7 @@ test('照片上传返回 401 时提示重新登录并保留本地深清草稿', 
     }],
     dailyDrafts: [],
     localPreviewByReference: {},
-    localPhotoMetaByUri: {},
+    localPhotoMetaByUri: { 'file:///deep-upload-401.jpg': { name: 'deep-upload-401.jpg', mimeType: 'image/jpeg', mediaId: 'deep-upload-401.jpg', capturedAt: '2026-11-12T04:32:00Z', captured_by_user_id: 'inspector-1', watermarkText: 'TEST-1 inspector' } },
     updated_at: Date.now(),
   } })
   api.listPropertyFeedbacks.mockReset().mockResolvedValue([])
@@ -1199,11 +1204,79 @@ test('照片上传返回 401 时提示重新登录并保留本地深清草稿', 
   storage.readJsonState.mockReset().mockResolvedValue({ status: 'missing', value: null })
 })
 
-test('完工项目创建返回 403 时给出权限提示并保留已上传照片引用', async () => {
+test('MZ116 未知原账号旧照片暂停上传并保留草稿', async () => {
+  const originalUser = mockUser
+  const originalTask = mockWorkTask
+  mockUser = { id: 'inspector-1', username: 'inspector', role: 'cleaning_inspector', roles: ['cleaning_inspector'] }
+  mockWorkTask = { id: 'w-feedback', business_identity: 'turnover:test-1', task_kind: 'inspection', source_type: 'cleaning_tasks', source_id: 'cleaning-1', title: '测试房源反馈', property: { id: 'property-1', code: 'TEST-1', address: '测试地址' } }
   const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
   const storage = require('../../lib/storage') as { readJsonState: jest.Mock }
   const localMedia = require('../../lib/localMediaDrafts') as { deleteDraftMedia: jest.Mock }
   const api = require('../../lib/api') as {
+    createPropertyFeedback: jest.Mock
+    listPropertyFeedbacks: jest.Mock
+    uploadCleaningMedia: jest.Mock
+  }
+  storage.readJsonState.mockReset().mockResolvedValue({ status: 'valid', value: {
+    version: 2,
+    owner_user_id: 'inspector-1',
+    owner_property_identity: 'property-1',
+    source_task_id: 'cleaning-1',
+    source_binding_status: 'confirmed',
+    source_binding_reason: 'exact',
+    kind: 'deep_cleaning',
+    maintenanceDrafts: [],
+    deepCleaningDrafts: [{
+      clientId: 'deep-upload-401',
+      area: '浴室',
+      detail: '上传登录失效',
+      media: ['file:///deep-upload-401.jpg'],
+      submitAsCompleted: false,
+      completionNote: '',
+      completionAfterPhotos: [],
+      completionStartedAt: null,
+      completionEndedAt: null,
+    }],
+    dailyDrafts: [],
+    localPreviewByReference: {},
+    localPhotoMetaByUri: { 'file:///deep-upload-401.jpg': { name: 'deep-upload-401.jpg', mimeType: 'image/jpeg', mediaId: 'deep-upload-401.jpg', capturedAt: '2026-11-12T04:32:00Z', watermarkText: 'TEST-1 inspector' } },
+    updated_at: Date.now(),
+  } })
+  api.listPropertyFeedbacks.mockReset().mockResolvedValue([])
+  api.uploadCleaningMedia.mockReset().mockRejectedValue(Object.assign(new Error('expired'), { status: 401, code: 'UNAUTHORIZED' }))
+  api.createPropertyFeedback.mockClear()
+  localMedia.deleteDraftMedia.mockClear()
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+  const ui = render(
+    <I18nProvider>
+      <FeedbackFormScreen navigation={{ navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }} route={{ key: 'deep-upload-401', name: 'FeedbackForm', params: { taskId: 'w-feedback', sourceTaskId: 'cleaning-1' } }} />
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(ui.getByDisplayValue('上传登录失效')).toBeTruthy())
+  fireEvent.press(ui.getByText('提交记录'))
+  await waitFor(() => expect(alert).toHaveBeenCalledWith(
+    expect.any(String),
+    '照片原操作账号未核实或已切换，已保留并暂停上传；请使用原账号核对，未记录的信息不会自动补写。',
+  ))
+  expect(api.uploadCleaningMedia).not.toHaveBeenCalled()
+  expect(api.createPropertyFeedback).not.toHaveBeenCalled()
+  expect(localMedia.deleteDraftMedia).not.toHaveBeenCalled()
+  expect(ui.getByDisplayValue('上传登录失效')).toBeTruthy()
+
+  ui.unmount()
+  mockUser = originalUser
+  mockWorkTask = originalTask
+  alert.mockRestore()
+  storage.readJsonState.mockReset().mockResolvedValue({ status: 'missing', value: null })
+})
+
+test('原子深清完工返回 403 时给出权限提示并保留已上传照片引用', async () => {
+  const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
+  const storage = require('../../lib/storage') as { readJsonState: jest.Mock }
+  const localMedia = require('../../lib/localMediaDrafts') as { deleteDraftMedia: jest.Mock }
+  const api = require('../../lib/api') as {
+    recordDeepCleaningCompletion: jest.Mock
     createPropertyFeedback: jest.Mock
     createPropertyFeedbackProject: jest.Mock
     listPropertyFeedbacks: jest.Mock
@@ -1240,7 +1313,7 @@ test('完工项目创建返回 403 时给出权限提示并保留已上传照片
   api.listPropertyFeedbacks.mockReset().mockResolvedValue([])
   api.uploadCleaningMedia.mockClear()
   api.createPropertyFeedback.mockReset().mockResolvedValue({ id: 'feedback-project-403' })
-  api.createPropertyFeedbackProject.mockReset().mockRejectedValue(Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' }))
+  api.recordDeepCleaningCompletion.mockReset().mockRejectedValue(Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' }))
   localMedia.deleteDraftMedia.mockClear()
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {})
   const ui = render(
@@ -1250,13 +1323,15 @@ test('完工项目创建返回 403 时给出权限提示并保留已上传照片
   )
 
   await waitFor(() => expect(ui.getByDisplayValue('项目权限失效')).toBeTruthy())
+  await waitFor(() => expect(ui.getByTestId('deep-executor-inspector-1')).toBeTruthy())
   fireEvent.press(ui.getByText('提交记录'))
-  await waitFor(() => expect(api.createPropertyFeedbackProject).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect(api.recordDeepCleaningCompletion).toHaveBeenCalledTimes(1))
   await waitFor(() => expect(alert.mock.calls.some((call) => String(call[1] || '').includes('当前账号没有提交这条任务的权限'))).toBe(true))
   expect(api.uploadCleaningMedia).not.toHaveBeenCalled()
   expect(localMedia.deleteDraftMedia).not.toHaveBeenCalled()
   expect(ui.getByDisplayValue('项目权限失效')).toBeTruthy()
 
+  api.recordDeepCleaningCompletion.mockReset().mockResolvedValue({ ok: true, id: 'fixture-deep', workflow_status: 'pending_review' })
   ui.unmount()
   alert.mockRestore()
   storage.readJsonState.mockReset().mockResolvedValue({ status: 'missing', value: null })
@@ -1414,6 +1489,7 @@ test('应用重开后恢复七张深清照片的本地预览并复用已上传�
   const FeedbackFormScreen = require('./FeedbackFormScreen').default as React.ComponentType<any>
   const storage = require('../../lib/storage') as { readJsonState: jest.Mock }
   const api = require('../../lib/api') as {
+    recordDeepCleaningCompletion: jest.Mock
     completePropertyFeedbackProject: jest.Mock
     createPropertyFeedback: jest.Mock
     createPropertyFeedbackProject: jest.Mock
@@ -1440,14 +1516,15 @@ test('应用重开后恢复七张深清照片的本地预览并复用已上传�
           submitAsCompleted: true,
           completionNote: '已完成',
           completionAfterPhotos: remoteAfter,
-          completionStartedAt: '2026-11-02T09:00:00.000Z',
-          completionEndedAt: '2026-11-02T10:00:00.000Z',
+          completionStartedAt: null,
+          completionEndedAt: null,
         }],
         dailyDrafts: [],
         localPreviewByReference,
         localPhotoMetaByUri: {},
         updated_at: Date.now(),
       } })
+  api.recordDeepCleaningCompletion.mockClear()
   api.listPropertyFeedbacks.mockReset().mockResolvedValue([])
   api.createPropertyFeedback.mockReset().mockResolvedValue({ id: 'deep-restart-feedback' })
   api.createPropertyFeedbackProject.mockReset().mockResolvedValue({ item: { id: 'deep-restart-project' } })
@@ -1465,22 +1542,15 @@ test('应用重开后恢复七张深清照片的本地预览并复用已上传�
     Object.values(localPreviewByReference).map((uri) => ({ uri })),
   ))
   fireEvent.press(ui.getByText('提交记录'))
-  await waitFor(() => expect(api.completePropertyFeedbackProject).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect(api.recordDeepCleaningCompletion).toHaveBeenCalledTimes(1))
   expect(api.uploadCleaningMedia).not.toHaveBeenCalled()
-  expect(api.createPropertyFeedback).toHaveBeenCalledWith('test-token', expect.objectContaining({
-    submit_id: 'feedback-submit:deep-restart-1',
-    step_key: 'deep_cleaning:create',
-    client_item_id: 'deep-restart-1',
-  }))
-  expect(api.createPropertyFeedbackProject).toHaveBeenCalledWith('test-token', 'deep_cleaning', 'deep-restart-feedback', expect.objectContaining({
-    submit_id: 'feedback-submit:deep-restart-1',
-    step_key: 'deep_cleaning:project',
-    client_item_id: 'deep-restart-1:project',
-  }))
-  expect(api.completePropertyFeedbackProject).toHaveBeenCalledWith('test-token', 'deep_cleaning', 'deep-restart-feedback', 'deep-restart-project', expect.objectContaining({
-    submit_id: 'feedback-submit:deep-restart-1',
-    step_key: 'deep_cleaning:complete',
-    client_item_id: 'deep-restart-1:complete',
+  expect(api.createPropertyFeedback).not.toHaveBeenCalled()
+  expect(api.createPropertyFeedbackProject).not.toHaveBeenCalled()
+  expect(api.completePropertyFeedbackProject).not.toHaveBeenCalled()
+  expect(api.recordDeepCleaningCompletion).toHaveBeenCalledWith('test-token', expect.objectContaining({
+    assigneeId: 'inspector-1', clientItemId: 'deep-restart-1', sourceTaskId: 'cleaning-1',
+    beforePhotos: remoteBefore, afterPhotos: remoteAfter, startedAt: null, endedAt: null,
+    recordId: expect.stringMatching(/^[a-f0-9-]{36}$/), operationId: expect.stringMatching(/^deep-report-/),
   }))
 
   ui.unmount()
@@ -2104,4 +2174,61 @@ test('MZ-084 changed authorization clears visible history and detail on denied r
   mockUser = originalUser
   mockWorkTask = originalTask
   listPropertyFeedbacks.mockResolvedValue([])
+})
+
+
+test.each([true, false])('deep completed feedback defaults self only when eligible=%s and allows actual-person override', async (eligibleSelf) => {
+  const oldUser = mockUser
+  mockUser = { id: 'inspector-1', username: 'inspector', role: 'cleaning_inspector', roles: ['cleaning_inspector'] }
+  const storage = require('../../lib/storage')
+  const api = require('../../lib/api')
+  api.listPropertyFeedbacks.mockReset().mockResolvedValue([])
+  api.listDeepCleaningExecutors.mockReset().mockResolvedValue([...(eligibleSelf ? [{ id: 'inspector-1', name: 'Inspector' }] : []), { id: 'cleaner-2', name: 'Actual Cleaner' }])
+  api.recordDeepCleaningCompletion.mockReset().mockResolvedValue({ ok: true, id: 'fixture-id', workflow_status: 'pending_review' })
+  api.createPropertyFeedback.mockClear()
+  storage.readJsonState.mockReset().mockResolvedValue({ status: 'valid', value: {
+    version: 2, owner_user_id: 'inspector-1', owner_property_identity: 'property-1', source_task_id: 'cleaning-1', source_binding_status: 'confirmed', source_binding_reason: 'exact', kind: 'deep_cleaning',
+    deepCleaningDrafts: [{ clientId: 'actual-person-selection', area: '浴室', detail: '选择实际人', media: ['cleaning/before.jpg'], submitAsCompleted: true, completionAfterPhotos: ['cleaning/after.jpg'], completionNote: '', completionStartedAt: null, completionEndedAt: null }],
+  } })
+  const Screen = require('./FeedbackFormScreen').default
+  const ui = render(<I18nProvider><Screen navigation={{ navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn() }} route={{ key: 'actual-person', name: 'FeedbackForm', params: { taskId: 'w-feedback', sourceTaskId: 'cleaning-1' } }} /></I18nProvider>)
+  try {
+    await waitFor(() => expect(ui.getByTestId('deep-executor-cleaner-2')).toBeTruthy())
+    if (eligibleSelf) expect(ui.getByTestId('deep-executor-inspector-1').props.accessibilityState.selected).toBe(true)
+    else {
+      expect(ui.queryByTestId('deep-executor-inspector-1')).toBeNull()
+      fireEvent.press(ui.getByText('提交记录'))
+      expect(api.recordDeepCleaningCompletion).not.toHaveBeenCalled()
+      expect(api.createPropertyFeedback).not.toHaveBeenCalled()
+    }
+    fireEvent.press(ui.getByTestId('deep-executor-cleaner-2'))
+    await waitFor(() => expect(ui.getByTestId('feedback-draft-storage-saved-banner')).toBeTruthy())
+    fireEvent.press(ui.getByText('提交记录'))
+    await waitFor(() => expect(api.recordDeepCleaningCompletion).toHaveBeenCalledWith('test-token', expect.objectContaining({ assigneeId: 'cleaner-2' })))
+    expect(api.createPropertyFeedback).not.toHaveBeenCalled()
+  } finally {
+    ui.unmount()
+    mockUser = oldUser
+    storage.readJsonState.mockReset().mockResolvedValue({ status: 'missing', value: null })
+    api.listDeepCleaningExecutors.mockReset().mockResolvedValue([{ id: 'inspector-1', name: 'Inspector' }, { id: 'cleaner-2', name: 'Cleaner Two' }])
+  }
+})
+
+test('latent two-project deep completion branch blocks whole-record submission without changing either project', () => {
+  // No caller exists for openProjectAction. Execute the exact source guard rather than inventing a UI entry.
+  const source = require('fs').readFileSync(require('path').join(process.cwd(), 'src/screens/tasks/FeedbackFormScreen.tsx'), 'utf8') as string
+  const start = source.indexOf("if (actionFeedback.kind === 'deep_cleaning') {", source.indexOf('async function saveProjectAction'))
+  const end = source.indexOf('        if (!projectForm.after_photos.length)', start)
+  const block = source.slice(start, end)
+  expect(block).not.toContain('recordDeepCleaningCompletion')
+  expect(block).not.toContain('resolveTransientFeedbackReferences')
+  const feedback = { kind: 'deep_cleaning', status: 'assigned', projects: [{ id: 'A', status: 'todo' }, { id: 'B', status: 'todo' }] }
+  const before = JSON.stringify(feedback)
+  const alert = jest.fn()
+  const invokeGuard = new Function('actionFeedback', 'actionProject', 'Alert', 't', block)
+  feedback.projects.forEach((project) => invokeGuard(feedback, project, { alert }, (key: string) => key))
+  expect(alert).toHaveBeenCalledTimes(2)
+  expect(alert.mock.calls[0][1]).toContain('任务详情提交整单完成')
+  expect(JSON.stringify(feedback)).toBe(before)
+  expect((source.match(/openProjectAction\(/g) || []).length).toBe(1)
 })

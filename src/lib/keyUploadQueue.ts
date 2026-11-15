@@ -1,8 +1,9 @@
-import { startCleaningTask, uploadCleaningMedia } from './api'
+import { getMediaCaptureUserId, assertMediaCaptureSession, guardMediaRequest } from './mediaCaptureIdentity'
+import { startCleaningTask as api_startCleaningTask,uploadCleaningMedia as api_uploadCleaningMedia } from './api'
 import { cleaningMediaReference } from './cleaningMedia'
 import { deleteDraftMedia, draftMimeTypeFrom, persistCompressedDraftMedia } from './localMediaDrafts'
 import { withLocalMediaLock } from './localMediaLocks'
-import { getJson, setJson } from './storage'
+import { getOwnedMediaJson as rawGetJson, setOwnedMediaJson as rawSetJson } from './mediaCaptureIdentity'
 
 export type KeyUploadStepStatus = 'pending' | 'syncing' | 'succeeded' | 'failed'
 
@@ -15,6 +16,7 @@ export type KeyUploadStepState = {
 }
 
 export type KeyUploadQueueItem = {
+  captured_by_user_id?: string
   id: string
   cleaning_task_id: string
   local_uri: string
@@ -86,6 +88,7 @@ function normalizeItem(raw: any): KeyUploadQueueItem | null {
   const status = cleanText(raw.status)
   return {
     id,
+    captured_by_user_id: cleanText(raw.captured_by_user_id),
     cleaning_task_id: cleaningTaskId,
     local_uri: localUri,
     name: cleanText(raw.name) || 'key.jpg',
@@ -178,6 +181,7 @@ export async function getKeyUploadQueueItem(cleaningTaskId: string) {
 
 export async function enqueueKeyUpload(params: {
   cleaning_task_id: string
+  captured_by_user_id?: string
   source_uri: string
   property_code?: string
   captured_at?: string
@@ -200,6 +204,7 @@ export async function enqueueKeyUpload(params: {
   })
   const next = await updateQueueItem(cleaningTaskId, (current) => ({
     id: current?.id || makeId('key_upload'),
+    captured_by_user_id: params.captured_by_user_id || getMediaCaptureUserId(),
     cleaning_task_id: cleaningTaskId,
     local_uri: persisted.localUri,
     name: persisted.name,
@@ -236,7 +241,9 @@ export function selectKeyPhotoEffectiveState(params: { key_photo_url?: string | 
 }
 
 export function processKeyUploadQueue(token: string): Promise<KeyUploadQueueProcessResult> {
+  assertMediaCaptureSession(token)
   if (processingPromise) return processingPromise
+  queueSessionToken = token
   const run = (async () => {
     const queue = await loadQueue()
     let processed = 0
@@ -248,6 +255,7 @@ export function processKeyUploadQueue(token: string): Promise<KeyUploadQueueProc
             token,
             { uri: item.local_uri, name: item.name, mimeType: item.mime_type },
             {
+              captured_by_user_id: item.captured_by_user_id || '',
               purpose: 'key_photo',
               task_id: item.cleaning_task_id,
               media_id: item.id,
@@ -308,6 +316,7 @@ export function processKeyUploadQueue(token: string): Promise<KeyUploadQueueProc
         }
         processed += 1
       } catch (e: any) {
+          assertMediaCaptureSession(token)
         const msg = cleanText(e?.message) || '钥匙照片同步失败'
         await updateQueueItem(item.cleaning_task_id, (current) => current ? {
           ...current,
@@ -332,11 +341,28 @@ export function processKeyUploadQueue(token: string): Promise<KeyUploadQueueProc
   processingPromise = run
   void run.then(
     () => {
-      if (processingPromise === run) processingPromise = null
+      if (processingPromise === run) { processingPromise = null; queueSessionToken = null }
     },
     () => {
-      if (processingPromise === run) processingPromise = null
+      if (processingPromise === run) { processingPromise = null; queueSessionToken = null }
     },
   )
   return run
+}
+
+const startCleaningTask = guardMediaRequest(api_startCleaningTask)
+const uploadCleaningMedia = guardMediaRequest(api_uploadCleaningMedia, true)
+
+
+let queueSessionToken: string | null = null
+function checkQueueSession() { if (queueSessionToken) assertMediaCaptureSession(queueSessionToken) }
+async function getJson<T>(key: string): Promise<T | null> {
+  checkQueueSession()
+  const result = await rawGetJson<T>(key)
+  checkQueueSession()
+  return result
+}
+async function setJson<T>(key: string, value: T) {
+  checkQueueSession()
+  return rawSetJson(key, value)
 }

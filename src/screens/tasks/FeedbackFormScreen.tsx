@@ -1,3 +1,5 @@
+import { assertMediaCaptureSession } from '../../lib/mediaCaptureIdentity'
+import { buildMediaWatermark, mediaOperatorName } from '../../lib/mediaWatermark'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, Alert, Dimensions, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
@@ -27,6 +29,8 @@ import {
   createPropertyFeedbackProject,
   deletePropertyFeedback,
   listDailyNecessityOptions,
+  listDeepCleaningExecutors,
+  recordDeepCleaningCompletion,
   listPropertyFeedbacks,
   movePropertyFeedback,
   updatePropertyFeedback,
@@ -37,6 +41,7 @@ import {
   type PropertyFeedbackProject,
 } from '../../lib/api'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
+import { createDeepCleaningRecordId, deepCleaningRecordOperationId } from '../../lib/deepCleaningCompletion'
 import { API_BASE_URL } from '../../config/env'
 import { cleaningMediaReference } from '../../lib/cleaningMedia'
 import {
@@ -116,6 +121,7 @@ type LocalFeedbackPhotoMeta = {
   name: string
   mimeType: string
   capturedAt: string
+  captured_by_user_id?: string
   watermarkText: string
   mediaId: string
 }
@@ -139,6 +145,8 @@ type DeepCleaningDraft = {
   submitAsCompleted: boolean
   completionNote: string
   completionAfterPhotos: string[]
+  completionAssigneeId?: string | null
+  completionRecordId?: string | null
   completionStartedAt: string | null
   completionEndedAt: string | null
   submission?: FeedbackSubmissionState
@@ -523,6 +531,8 @@ function buildDeepCleaningDraft(): DeepCleaningDraft {
     submitAsCompleted: false,
     completionNote: '',
     completionAfterPhotos: [],
+    completionAssigneeId: null,
+    completionRecordId: createDeepCleaningRecordId(),
     completionStartedAt: null,
     completionEndedAt: null,
   }
@@ -571,6 +581,8 @@ function normalizeDeepCleaningDraft(raw: any): DeepCleaningDraft {
     submitAsCompleted: !!raw?.submitAsCompleted,
     completionNote: String(raw?.completionNote || ''),
     completionAfterPhotos: normalizeUrls(raw?.completionAfterPhotos),
+    completionAssigneeId: String(raw?.completionAssigneeId || '').trim() || null,
+    completionRecordId: String(raw?.completionRecordId || '').trim() || createDeepCleaningRecordId(),
     completionStartedAt: String(raw?.completionStartedAt || '').trim() || null,
     completionEndedAt: String(raw?.completionEndedAt || '').trim() || null,
     submission: raw?.submission && typeof raw.submission === 'object'
@@ -697,6 +709,27 @@ export default function FeedbackFormScreen(props: Props) {
   const feedbackSourceTaskId = feedbackSourceContext.sourceTaskId
   const feedbackReadOnly = props.route.params.readOnly === true
   const isInspectionPanelBatchMode = props.route.params.source === 'inspection_panel_batch'
+  const [deepExecutors, setDeepExecutors] = useState<Array<{ id: string; name: string }>>([])
+  const [deepExecutorError, setDeepExecutorError] = useState('')
+  const [deepExecutorsLoading, setDeepExecutorsLoading] = useState(false)
+  const [deepExecutorReload, setDeepExecutorReload] = useState(0)
+  const needsDeepExecutors = !feedbackReadOnly && ((kind === 'deep_cleaning' && deepCleaningDrafts.some((draft) => draft.submitAsCompleted)))
+  useEffect(() => {
+    let cancelled = false
+    setDeepExecutors([])
+    setDeepExecutorError('')
+    setDeepExecutorsLoading(!!token && needsDeepExecutors)
+    if (!token || !needsDeepExecutors) return () => { cancelled = true }
+    void listDeepCleaningExecutors(token).then((rows) => {
+      if (cancelled) return
+      setDeepExecutors(rows)
+      const selfId = String(user?.id || '')
+      if (rows.some((row) => row.id === selfId)) {
+        setDeepCleaningDrafts((drafts) => drafts.map((draft) => draft.submitAsCompleted && !draft.completionAssigneeId ? { ...draft, completionAssigneeId: selfId } : draft))
+      }
+    }).catch(() => { if (!cancelled) setDeepExecutorError('无法加载可分配执行人员，请重试或联系管理员；尚未创建完工记录。') }).finally(() => { if (!cancelled) setDeepExecutorsLoading(false) })
+    return () => { cancelled = true }
+  }, [token, user?.id, needsDeepExecutors, deepExecutorReload])
   const userKey = String((user as any)?.id || (user as any)?.username || (user as any)?.email || '').trim()
   const draftOwnerPropertyIdentity = propertyId || propertyCode
   const draftCacheKey = useMemo(() => feedbackDraftScopeKey({
@@ -1093,11 +1126,12 @@ export default function FeedbackFormScreen(props: Props) {
               if (!safeLocalUri || !draftFileExists(safeLocalUri) || !value || typeof value !== 'object') return next
               const capturedAt = String(value.capturedAt || '').trim()
               const mediaId = String(value.mediaId || '').trim()
-              if (!capturedAt || !mediaId) return next
+              if (!mediaId) return next
               next[safeLocalUri] = {
                 name: String(value.name || '').trim() || `feedback-${mediaId}.jpg`,
                 mimeType: String(value.mimeType || '').trim() || 'image/jpeg',
                 capturedAt,
+                captured_by_user_id: String(value.captured_by_user_id || ''),
                 watermarkText: String(value.watermarkText || '').trim(),
                 mediaId,
               }
@@ -1479,10 +1513,7 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   function buildWatermarkText(iso: string) {
-    const username = String((user as any)?.username || (user as any)?.email || '').trim()
-    const line1 = `${propertyCode || '未知房号'}${username ? `  ${username}` : ''}`.trim()
-    const line2 = fmtTime(iso)
-    return `${line1}\n${line2}`.trim()
+    return buildMediaWatermark(propertyCode, mediaOperatorName(user), iso)
   }
 
   async function uploadPhotoUrls(source: 'camera' | 'library', options: PhotoUploadOptions = {}): Promise<string[]> {
@@ -1506,7 +1537,7 @@ export default function FeedbackFormScreen(props: Props) {
         for (const asset of res.assets as any[]) {
           const uri = String(asset?.uri || '').trim()
           if (!uri) continue
-          const capturedAt = new Date().toISOString()
+          const capturedAt = source === 'camera' ? new Date().toISOString() : ''
           if (isInspectionPanelBatchMode) {
             const fallbackName = String(asset?.fileName || uri.split('/').pop() || `feedback-${Date.now()}`)
             const resolvedMimeType = draftMimeTypeFrom(fallbackName, String(asset?.mimeType || ''), uri)
@@ -1530,6 +1561,7 @@ export default function FeedbackFormScreen(props: Props) {
                 name: persisted.name,
                 mime_type: persisted.mimeType,
                 captured_at: capturedAt,
+                captured_by_user_id: String(user?.id || ''),
                 watermark_text: buildWatermarkText(capturedAt),
               },
             }))
@@ -1557,6 +1589,7 @@ export default function FeedbackFormScreen(props: Props) {
               name: persisted.name,
               mimeType: persisted.mimeType,
               capturedAt,
+              captured_by_user_id: String(user?.id || ''),
               watermarkText: buildWatermarkText(capturedAt),
               mediaId,
             },
@@ -1573,14 +1606,15 @@ export default function FeedbackFormScreen(props: Props) {
   }
 
   function fallbackLocalFeedbackPhotoMeta(localUri: string): LocalFeedbackPhotoMeta {
-    const capturedAt = new Date().toISOString()
+    const capturedAt = ''
     const mediaId = `feedback-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
     const name = String(localUri.split('/').pop() || `feedback-${mediaId}.jpg`).trim()
     return {
       name,
       mimeType: draftMimeTypeFrom(name, '', localUri),
       capturedAt,
-      watermarkText: buildWatermarkText(capturedAt),
+      watermarkText: buildMediaWatermark(propertyCode, '', ''),
+      captured_by_user_id: '',
       mediaId,
     }
   }
@@ -1641,6 +1675,7 @@ export default function FeedbackFormScreen(props: Props) {
         const photoMeta = existingPhotoMeta || fallbackLocalFeedbackPhotoMeta(localUri)
         nextLocalPhotoMeta[localUri] = photoMeta
         if (!existingPhotoMeta) await persistResolvedState()
+        assertMediaCaptureSession(token, photoMeta.captured_by_user_id || '')
         const uploaded = await uploadCleaningMedia(
           token,
           { uri: localUri, name: photoMeta.name, mimeType: photoMeta.mimeType },
@@ -1651,6 +1686,7 @@ export default function FeedbackFormScreen(props: Props) {
             task_id: feedbackSourceTaskId,
             media_id: photoMeta.mediaId,
             captured_at: photoMeta.capturedAt,
+            captured_by_user_id: photoMeta.captured_by_user_id || '',
             watermark_text: photoMeta.watermarkText,
           },
           { skipImageCompression: true },
@@ -1739,6 +1775,7 @@ export default function FeedbackFormScreen(props: Props) {
       if (!draftFileExists(localUri)) throw new Error('本地照片已丢失，请重新拍摄')
       const photoMeta = nextLocalPhotoMeta[localUri] || fallbackLocalFeedbackPhotoMeta(localUri)
       nextLocalPhotoMeta[localUri] = photoMeta
+      assertMediaCaptureSession(token, photoMeta.captured_by_user_id || '')
       const uploaded = await uploadCleaningMedia(
         token,
         { uri: localUri, name: photoMeta.name, mimeType: photoMeta.mimeType },
@@ -1749,6 +1786,7 @@ export default function FeedbackFormScreen(props: Props) {
           task_id: feedbackSourceTaskId,
           media_id: photoMeta.mediaId,
           captured_at: photoMeta.capturedAt,
+          captured_by_user_id: photoMeta.captured_by_user_id || '',
           watermark_text: photoMeta.watermarkText,
         },
         { skipImageCompression: true },
@@ -1844,6 +1882,7 @@ export default function FeedbackFormScreen(props: Props) {
     const sourceFailure = feedbackSourceFailureMessage(error)
     if (sourceFailure) return sourceFailure
     const raw = String((error as any)?.message || error || '').toLowerCase()
+    if (raw.includes('media_capture_owner') || raw.includes('media_capture_session')) return '照片原操作账号未核实或已切换，已保留并暂停上传；请使用原账号核对，未记录的信息不会自动补写。'
     if (raw.includes('source_task')) return '任务来源不匹配，请返回任务列表刷新后重新打开；本页文字和照片已保留。'
     if (raw.includes('after_photo')) return '请补充处理后照片'
     if (!Number((error as any)?.status) && /(network|timeout|timed out|fetch|abort|offline|断网|超时)/i.test(raw)) {
@@ -1910,6 +1949,10 @@ export default function FeedbackFormScreen(props: Props) {
         return
       }
     }
+    if (kind === 'deep_cleaning' && deepCleaningDrafts.some((draft) => draft.submitAsCompleted && (!draft.completionAssigneeId || !deepExecutors.some((person) => person.id === draft.completionAssigneeId)))) {
+      Alert.alert(t('common_error'), '请选择实际执行人；名单不可用时请先重试加载。')
+      return
+    }
     const runId = ++submissionRunCounterRef.current
     activeSubmissionRef.current = { id: runId, scopeToken: draftStorageScopeToken }
     submissionInFlightRef.current = true
@@ -1933,7 +1976,6 @@ export default function FeedbackFormScreen(props: Props) {
             if (!draft.area || !draft.detail.trim() || !draft.media.length) return true
             if (draft.submitAsCompleted) {
               if (!draft.completionAfterPhotos.length) return true
-              if (!String(draft.completionStartedAt || '').trim() || !String(draft.completionEndedAt || '').trim()) return true
             }
             return false
           })
@@ -1990,7 +2032,6 @@ export default function FeedbackFormScreen(props: Props) {
           if (!draft.area || !draft.detail.trim()) return true
           if (targetKind === 'deep_cleaning' && !draft.media.length) return true
           if (draft.submitAsCompleted && !draft.completionAfterPhotos.length) return true
-          if (targetKind === 'deep_cleaning' && draft.submitAsCompleted && (!String(draft.completionStartedAt || '').trim() || !String(draft.completionEndedAt || '').trim())) return true
           return false
         })
         if (invalidIndex >= 0) {
@@ -2030,6 +2071,30 @@ export default function FeedbackFormScreen(props: Props) {
             failedLabels.push(`${targetKind === 'maintenance' ? '维修' : '深清'}记录${idx + 1}（${message}）`)
           }
           const submitId = feedbackSubmitId(draft.clientId)
+          if (targetKind === 'deep_cleaning' && draft.submitAsCompleted) {
+            const recordId = String(draft.submission?.feedbackId || draft.completionRecordId || '')
+            if (!recordId || !await persistDrafts()) {
+              await reportFailure('complete', new Error('实际执行人和提交编号尚未安全保存，请重试'))
+              continue
+            }
+            try {
+              updateSubmitProgress(runId, { phase: 'saving_completion', title: `提交深清待审核 ${idx + 1}/${nextDrafts.length}`, detail: '原始反馈、实际人员和完工照片一起保存。', uploaded: resolvedMedia.uploadedPhotos, total: resolvedMedia.totalPhotos, businessSaved: false })
+              const receipt = await recordDeepCleaningCompletion(submissionToken, {
+                recordId, operationId: deepCleaningRecordOperationId(String(draft.completionRecordId || recordId)), assigneeId: draft.completionAssigneeId,
+                existingRecord: !!draft.submission?.feedbackId, sourceTaskId: feedbackSourceTaskId, clientItemId: draft.clientId,
+                startedAt: draft.completionStartedAt, endedAt: draft.completionEndedAt,
+                propertyId, areas: [draft.area], detail: draft.detail.trim(), beforePhotos: draft.media,
+                afterPhotos: draft.completionAfterPhotos, note: draft.completionNote.trim(),
+              })
+              assertSubmissionRunCurrent(runId)
+              if (receipt.workflow_status !== 'pending_review') throw new Error('完工回执状态不完整，请保留草稿重试')
+              successCount += 1
+            } catch (error) {
+              if (error instanceof FeedbackSubmissionSupersededError) throw error
+              await reportFailure('complete', error, draft.submission?.feedbackId)
+            }
+            continue
+          }
           let feedbackId = String(draft.submission?.feedbackId || '').trim()
           if (!feedbackId) {
             updateSubmitProgress(runId, { phase: 'saving_feedback', title: `保存反馈 ${idx + 1}/${nextDrafts.length}`, detail: '使用固定提交编号保存；网络重试不会新建重复记录。', uploaded: resolvedMedia.uploadedPhotos, total: resolvedMedia.totalPhotos, businessSaved: false })
@@ -2101,7 +2166,7 @@ export default function FeedbackFormScreen(props: Props) {
               note: draft.completionNote.trim() || undefined,
               detail: draft.detail.trim(),
               source_task_id: feedbackSourceTaskId || undefined,
-              ...(targetKind === 'deep_cleaning' ? { started_at: draft.completionStartedAt || undefined, ended_at: draft.completionEndedAt || undefined } : {}),
+              ...(targetKind === 'deep_cleaning' ? { assignee_id: draft.completionAssigneeId, started_at: draft.completionStartedAt || undefined, ended_at: draft.completionEndedAt || undefined } : {}),
               before_photos: draft.media,
               after_photos: draft.completionAfterPhotos,
               submit_id: submitId,
@@ -2518,19 +2583,13 @@ export default function FeedbackFormScreen(props: Props) {
         })
         setDetailItem((resp.row as any) || null)
       } else if (actionMode === 'complete' && actionProject) {
+        if (actionFeedback.kind === 'deep_cleaning') {
+          Alert.alert(t('common_error'), '深清项目不能单独标记整单完成，请到任务详情提交整单完成并等待审核。')
+          return
+        }
         if (!projectForm.after_photos.length) {
           Alert.alert(t('common_error'), '请上传处理后照片')
           return
-        }
-        if (actionFeedback.kind === 'deep_cleaning') {
-          if (!String(projectForm.started_at || '').trim() || !String(projectForm.ended_at || '').trim()) {
-            Alert.alert(t('common_error'), '请填写开始时间和结束时间')
-            return
-          }
-          if (!projectForm.before_photos.length) {
-            Alert.alert(t('common_error'), '请上传处理前照片')
-            return
-          }
         }
         const beforePhotos = await resolveTransientFeedbackReferences(projectForm.before_photos)
         const afterPhotos = await resolveTransientFeedbackReferences(projectForm.after_photos)
@@ -2927,19 +2986,24 @@ export default function FeedbackFormScreen(props: Props) {
                               <Text style={[styles.choiceTitle, !draft.submitAsCompleted ? styles.choiceTitleActive : null]}>未完成</Text>
                               <Text style={[styles.choiceDesc, !draft.submitAsCompleted ? styles.choiceDescActive : null]}>先提交反馈</Text>
                             </Pressable>
-                            <Pressable disabled={submitting} onPress={() => updateDeepCleaningDraft(draft.clientId, (item) => ({ ...item, submitAsCompleted: true }))} style={({ pressed }) => [styles.choiceCard, draft.submitAsCompleted ? styles.choiceCardActive : null, submitting ? styles.submitDisabled : null, pressed ? styles.pressed : null]}>
+                            <Pressable disabled={submitting} onPress={() => updateDeepCleaningDraft(draft.clientId, (item) => ({ ...item, submitAsCompleted: true, completionAssigneeId: item.completionAssigneeId || (deepExecutors.some((person) => person.id === String(user?.id || '')) ? String(user?.id || '') : null) }))} style={({ pressed }) => [styles.choiceCard, draft.submitAsCompleted ? styles.choiceCardActive : null, submitting ? styles.submitDisabled : null, pressed ? styles.pressed : null]}>
                               <Text style={[styles.choiceTitle, draft.submitAsCompleted ? styles.choiceTitleActive : null]}>已完成</Text>
                               <Text style={[styles.choiceDesc, draft.submitAsCompleted ? styles.choiceDescActive : null]}>一起提交完工信息</Text>
                             </Pressable>
                           </View>
                           {draft.submitAsCompleted ? (
                             <View style={styles.completionBlock}>
-                              <Text style={styles.label}>开始时间</Text>
+                              <Text style={styles.helperText}>默认合格的当前人员，可改选实际执行人；提交后等待 admin 审核。</Text>
+                              {deepExecutorError ? <><Text style={styles.helperText}>{deepExecutorError}</Text><Pressable disabled={submitting} onPress={() => setDeepExecutorReload((value) => value + 1)} style={styles.headerActionBtn}><Text style={styles.headerActionText}>重试加载人员</Text></Pressable></> : null}
+                              {!deepExecutors.length && !deepExecutorError ? <Text style={styles.helperText}>{deepExecutorsLoading ? '正在加载可分配人员…' : '暂无可分配人员，请联系管理员。'}</Text> : null}
+                              <Text style={styles.label}>实际执行人（必选）</Text>
+                              <View style={styles.choiceGrid}>{deepExecutors.map((person) => <Pressable key={person.id} testID={`deep-executor-${person.id}`} accessibilityState={{ selected: draft.completionAssigneeId === person.id, disabled: submitting }} disabled={submitting} onPress={() => updateDeepCleaningDraft(draft.clientId, (item) => ({ ...item, completionAssigneeId: person.id }))} style={[styles.choiceCard, draft.completionAssigneeId === person.id ? styles.choiceCardActive : null]}><Text style={styles.choiceTitle}>{person.name}</Text></Pressable>)}</View>
+                              <Text style={styles.label}>开始时间（可选）</Text>
                               <Pressable disabled={submitting} onPress={() => openDraftTimePicker(draft.clientId, 'draft_started_at')} style={({ pressed }) => [styles.timeField, submitting ? styles.submitDisabled : null, pressed ? styles.pressed : null]}>
                                 <Text style={String(draft.completionStartedAt || '').trim() ? styles.timeFieldText : styles.timeFieldPlaceholder}>{fmtTimeOnly(draft.completionStartedAt)}</Text>
                                 <Ionicons name="time-outline" size={18} color="#2563EB" />
                               </Pressable>
-                              <Text style={styles.label}>结束时间</Text>
+                              <Text style={styles.label}>结束时间（可选）</Text>
                               <Pressable disabled={submitting} onPress={() => openDraftTimePicker(draft.clientId, 'draft_ended_at')} style={({ pressed }) => [styles.timeField, submitting ? styles.submitDisabled : null, pressed ? styles.pressed : null]}>
                                 <Text style={String(draft.completionEndedAt || '').trim() ? styles.timeFieldText : styles.timeFieldPlaceholder}>{fmtTimeOnly(draft.completionEndedAt)}</Text>
                                 <Ionicons name="time-outline" size={18} color="#2563EB" />
@@ -3418,12 +3482,13 @@ export default function FeedbackFormScreen(props: Props) {
                   <TextInput value={String(projectForm.note || '')} onChangeText={(v) => setProjectForm((prev) => ({ ...prev, note: v }))} style={[styles.input, styles.textarea]} placeholder="处理说明" placeholderTextColor="#9CA3AF" multiline />
                   {actionMode === 'complete' && actionFeedback?.kind === 'deep_cleaning' ? (
                     <>
-                      <Text style={styles.label}>开始时间</Text>
+                      {deepExecutorError ? <Text style={styles.helperText}>{deepExecutorError}</Text> : null}
+                      <Text style={styles.label}>开始时间（可选）</Text>
                       <Pressable onPress={() => openTimePicker('project_started_at')} style={({ pressed }) => [styles.timeField, pressed ? styles.pressed : null]}>
                         <Text style={String(projectForm.started_at || '').trim() ? styles.timeFieldText : styles.timeFieldPlaceholder}>{fmtTimeOnly(projectForm.started_at)}</Text>
                         <Ionicons name="time-outline" size={18} color="#2563EB" />
                       </Pressable>
-                      <Text style={styles.label}>结束时间</Text>
+                      <Text style={styles.label}>结束时间（可选）</Text>
                       <Pressable onPress={() => openTimePicker('project_ended_at')} style={({ pressed }) => [styles.timeField, pressed ? styles.pressed : null]}>
                         <Text style={String(projectForm.ended_at || '').trim() ? styles.timeFieldText : styles.timeFieldPlaceholder}>{fmtTimeOnly(projectForm.ended_at)}</Text>
                         <Ionicons name="time-outline" size={18} color="#2563EB" />

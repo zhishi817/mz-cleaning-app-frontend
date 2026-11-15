@@ -1,11 +1,13 @@
+import { getMediaCaptureUserId, assertMediaCaptureSession, guardMediaRequest } from './mediaCaptureIdentity'
 import { Directory, File, Paths } from 'expo-file-system'
-import { getJson, setJson } from './storage'
+import { getOwnedMediaJson as rawGetJson, setOwnedMediaJson as rawSetJson } from './mediaCaptureIdentity'
 import { compressImageForLocalStorage } from './imageCompression'
-import { isRetryableApiError, uploadCleaningMedia, uploadDayEndHandover } from './api'
+import {  isRetryableApiError,uploadCleaningMedia as api_uploadCleaningMedia,uploadDayEndHandover as api_uploadDayEndHandover } from './api'
 import { cleaningMediaReference } from './cleaningMedia'
 import { isLocalMediaLocked, withLocalMediaLock } from './localMediaLocks'
 
 export type DayEndDraftPhoto = {
+  captured_by_user_id?: string
   id: string
   uri: string
   captured_at: string
@@ -145,6 +147,7 @@ export async function persistDayEndDraftPhoto(params: {
   captured_at: string
   watermark_text?: string
 }) {
+  if (!params.user_id || params.user_id !== getMediaCaptureUserId()) throw new Error('MEDIA_CAPTURE_OWNER_MISMATCH')
   const existing = (await getDayEndHandoverDraft(params.user_id, params.date)) || {
     user_id: String(params.user_id),
     date: String(params.date).slice(0, 10),
@@ -159,6 +162,7 @@ export async function persistDayEndDraftPhoto(params: {
   const localUri = await ensurePersistedUri(params.source_uri, params.bucket)
   const item: DayEndDraftPhoto = {
     id: `${params.bucket}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    captured_by_user_id: params.user_id,
     uri: localUri,
     captured_at: params.captured_at,
     uploaded_url: null,
@@ -179,7 +183,9 @@ export async function persistDayEndDraftPhoto(params: {
 }
 
 export function processDayEndHandoverQueue(token: string): Promise<DayEndHandoverQueueProcessResult> {
+  assertMediaCaptureSession(token)
   if (processingPromise) return processingPromise
+  queueSessionToken = token
   const run = (async () => {
     const drafts = await loadAllDrafts()
     const entries = Object.entries(drafts)
@@ -207,6 +213,7 @@ export function processDayEndHandoverQueue(token: string): Promise<DayEndHandove
               task_id: identity.task_id,
               media_id: identity.media_id,
               captured_at: item.captured_at,
+              captured_by_user_id: item.captured_by_user_id || draft.user_id,
               watermark: item.watermark_text ? '1' : '',
               watermark_text: item.watermark_text || '',
             },
@@ -214,6 +221,7 @@ export function processDayEndHandoverQueue(token: string): Promise<DayEndHandove
           ))
           out.push({ ...item, uploaded_url: cleaningMediaReference(up) })
         } catch (e: any) {
+          assertMediaCaptureSession(token)
           if (isNetworkishError(e)) throw e
           out.push(item)
         }
@@ -284,6 +292,7 @@ export function processDayEndHandoverQueue(token: string): Promise<DayEndHandove
         }
 
       } catch (e: any) {
+          assertMediaCaptureSession(token)
         if (isNetworkishError(e)) break
       }
     }
@@ -294,11 +303,28 @@ export function processDayEndHandoverQueue(token: string): Promise<DayEndHandove
   processingPromise = run
   void run.then(
     () => {
-      if (processingPromise === run) processingPromise = null
+      if (processingPromise === run) { processingPromise = null; queueSessionToken = null }
     },
     () => {
-      if (processingPromise === run) processingPromise = null
+      if (processingPromise === run) { processingPromise = null; queueSessionToken = null }
     },
   )
   return run
+}
+
+const uploadCleaningMedia = guardMediaRequest(api_uploadCleaningMedia, true)
+const uploadDayEndHandover = guardMediaRequest(api_uploadDayEndHandover)
+
+
+let queueSessionToken: string | null = null
+function checkQueueSession() { if (queueSessionToken) assertMediaCaptureSession(queueSessionToken) }
+async function getJson<T>(key: string): Promise<T | null> {
+  checkQueueSession()
+  const result = await rawGetJson<T>(key)
+  checkQueueSession()
+  return result
+}
+async function setJson<T>(key: string, value: T) {
+  checkQueueSession()
+  return rawSetJson(key, value)
 }

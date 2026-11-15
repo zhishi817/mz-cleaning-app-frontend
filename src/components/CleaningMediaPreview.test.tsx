@@ -50,11 +50,11 @@ test('remote proxy URLs are used only by the downloader; native Images receive f
   expect(ui.getByTestId('photo-preview').props.source).toEqual({ uri: 'file:///cache/preview.jpg' })
   expect(mockedLoadCleaningMediaImage).toHaveBeenCalledWith(expect.objectContaining({
     uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fcurrent-public-base.r2.dev%2Fhistorical%2Foffline-task-photo.jpg&variant=thumbnail&work_task_id=cleaning_offline_tasks%3Atask-1',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   }))
   expect(mockedLoadCleaningMediaImage).toHaveBeenCalledWith(expect.objectContaining({
     uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fcurrent-public-base.r2.dev%2Fhistorical%2Foffline-task-photo.jpg&variant=preview&work_task_id=cleaning_offline_tasks%3Atask-1',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   }))
 })
 

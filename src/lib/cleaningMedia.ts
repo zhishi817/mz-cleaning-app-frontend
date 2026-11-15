@@ -114,6 +114,17 @@ export function isAuthenticatedCleaningMediaReference(value: any) {
   )
 }
 
+// Keep reusable image files in our account-scoped cache, not in the native HTTP
+// cache: that cache may reuse an old 200 for the same URL after Authorization
+// changes. no-cache also forces validation of responses cached before this fix.
+function privateMediaRequestHeaders(token: string | null | undefined) {
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    'Cache-Control': 'no-cache, no-store',
+    Pragma: 'no-cache',
+  }
+}
+
 export function buildCleaningMediaImageSource(
   token: string | null | undefined,
   rawReference: any,
@@ -126,7 +137,7 @@ export function buildCleaningMediaImageSource(
   if (isAuthenticatedCleaningMediaReference(reference)) {
     return {
       uri: cleaningMediaProxyUrl(key || reference, variant, options),
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      headers: privateMediaRequestHeaders(token),
     }
   }
   if (reference.startsWith('file:')) return { uri: reference }
@@ -150,7 +161,7 @@ export function buildCleaningMediaVideoSource(
     // The video endpoint authorizes the exact source relation. Unlike image
     // reads, variant=source explicitly rejects a display/work-record ID.
     uri: cleaningMediaProxyUrl(key || reference, 'source', { ...options, accessWorkTaskId: null }),
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    headers: privateMediaRequestHeaders(token),
   }
 }
 

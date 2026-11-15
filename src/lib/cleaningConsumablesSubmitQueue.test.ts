@@ -1,3 +1,4 @@
+function fixtureToken(token: string) { require('./mediaCaptureIdentity').setMediaCaptureSession('cleaner-1', token); return token }
 jest.mock('./api', () => ({
   getCleaningConsumables: jest.fn(async () => ({ items: [] })),
   isRetryableApiError: jest.fn(),
@@ -17,6 +18,21 @@ function getAsyncStorage() {
 beforeEach(async () => {
   jest.resetModules()
   await getAsyncStorage().clear()
+  require('./mediaCaptureIdentity').setMediaCaptureSession('cleaner-1', 'token-1')
+  // These regression fixtures represent photos captured by the signed-in cleaner.
+  // Legacy unowned data is covered separately by mediaCaptureIdentity tests.
+  const drafts = require('./cleaningConsumablesDraft')
+  const save = drafts.setCleaningConsumablesDraft
+  jest.spyOn(drafts, 'setCleaningConsumablesDraft').mockImplementation((...args: unknown[]) => {
+    const [task, patch] = args as [string, any]
+    const photo_meta = { ...(patch.photo_meta || {}) }
+    const visit = (value: any) => {
+      if (typeof value === 'string' && value.startsWith('file://')) photo_meta[value] = { ...(photo_meta[value] || {}), captured_by_user_id: 'cleaner-1' }
+      else if (value && typeof value === 'object') Object.values(value).forEach(visit)
+    }
+    visit(patch)
+    return save(task, { ...patch, photo_meta, ...(patch.media ? { media: patch.media.map((m: any) => ({ ...m, captured_by_user_id: 'cleaner-1' })) } : {}) })
+  })
 })
 
 test('persists the scene photo template discriminator through unrelated draft writes', async () => {
@@ -71,7 +87,7 @@ test('submits MZ048 scene photos with their new keys instead of relabeling appli
     items: [],
   })
   await queueMod.enqueueCleaningConsumablesSubmit('task-mz048-keys')
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   expect(api.submitCleaningConsumables).toHaveBeenCalledWith('token', 'task-mz048-keys', {
     items: [
@@ -111,7 +127,7 @@ test('preserves remote-only legacy photo rows before the replace-all consumables
     items: [],
   })
   await queueMod.enqueueCleaningConsumablesSubmit('task-mz048-remote-legacy')
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   expect(api.getCleaningConsumables).toHaveBeenCalledWith('token', 'task-mz048-remote-legacy')
   expect(api.submitCleaningConsumables).toHaveBeenCalledWith('token', 'task-mz048-remote-legacy', {
@@ -162,7 +178,7 @@ test('preserves only MZ048 kitchen compatibility rows at the replace-all boundar
     items: [],
   })
   await queueMod.enqueueCleaningConsumablesSubmit('task-mz048-scoped-preservation')
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   expect(api.submitCleaningConsumables).toHaveBeenCalledWith('token', 'task-mz048-scoped-preservation', {
     items: [
@@ -198,7 +214,7 @@ test('does not submit when the preservation read succeeds with a malformed recor
     items: [],
   })
   await queueMod.enqueueCleaningConsumablesSubmit('task-mz048-malformed-remote')
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   expect(api.submitCleaningConsumables).not.toHaveBeenCalled()
   expect(await draftMod.getCleaningConsumablesDraft('task-mz048-malformed-remote')).toMatchObject({
@@ -232,7 +248,7 @@ test('does not cross the replace-all submit boundary when the remote preservatio
     items: [],
   })
   await queueMod.enqueueCleaningConsumablesSubmit('task-mz048-remote-unknown')
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   expect(api.submitCleaningConsumables).not.toHaveBeenCalled()
   expect(await draftMod.getCleaningConsumablesDraft('task-mz048-remote-unknown')).toMatchObject({
@@ -285,25 +301,25 @@ test('queues consumables draft and flushes it after network recovery', async () 
       'file:///tmp/living-room.jpg': {
         name: 'living-room.jpg',
         mime_type: 'image/jpeg',
-        captured_at: '2026-06-23T01:02:03.000Z',
+        captured_by_user_id: 'cleaner-1', captured_at: '2026-06-23T01:02:03.000Z',
         watermark_text: 'A1201 cleaner\n2026-06-23 01:02',
       },
       'file:///tmp/remote-tv.jpg': {
         name: 'remote-tv.jpg',
         mime_type: 'image/jpeg',
-        captured_at: '2026-06-23T01:02:04.000Z',
+        captured_by_user_id: 'cleaner-1', captured_at: '2026-06-23T01:02:04.000Z',
         watermark_text: 'A1201 cleaner\n2026-06-23 01:02',
       },
       'file:///tmp/shower-1.jpg': {
         name: 'shower-1.jpg',
         mime_type: 'image/jpeg',
-        captured_at: '2026-06-23T01:02:05.000Z',
+        captured_by_user_id: 'cleaner-1', captured_at: '2026-06-23T01:02:05.000Z',
         watermark_text: 'A1201 cleaner\n2026-06-23 01:02',
       },
       'file:///tmp/stock-1.jpg': {
         name: 'stock-1.jpg',
         mime_type: 'image/jpeg',
-        captured_at: '2026-06-23T01:02:06.000Z',
+        captured_by_user_id: 'cleaner-1', captured_at: '2026-06-23T01:02:06.000Z',
         watermark_text: 'A1201 cleaner\n2026-06-23 01:02',
       },
     },
@@ -312,7 +328,7 @@ test('queues consumables draft and flushes it after network recovery', async () 
 
   expect(await queueMod.isCleaningConsumablesSubmitQueued('task-1')).toBe(true)
 
-  const result = await queueMod.processCleaningConsumablesSubmitQueue('token-1', 'cleaner')
+  const result = await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token-1'), 'cleaner')
 
   expect(result).toEqual({ processed: 1, remaining: 0, succeeded_task_ids: ['task-1'] })
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(4)
@@ -363,7 +379,7 @@ test('omits an optional living-room photo field when the self-complete draft has
   })
   await queueMod.enqueueCleaningConsumablesSubmit('task-without-living-photo')
 
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   const payload = api.submitCleaningConsumables.mock.calls[0][2]
   expect(payload).toMatchObject({
@@ -414,12 +430,12 @@ test('writes self-complete restock proof only after its photo has a remote refer
       },
     ],
     photo_meta: {
-      'file:///tmp/restock-proof.jpg': { name: 'restock-proof.jpg', mime_type: 'image/jpeg', captured_at: '2026-07-28T01:02:03.000Z' },
+      'file:///tmp/restock-proof.jpg': { name: 'restock-proof.jpg', mime_type: 'image/jpeg', captured_by_user_id: 'cleaner-1', captured_at: '2026-07-28T01:02:03.000Z' },
     },
   })
   await queueMod.enqueueCleaningConsumablesSubmit('task-restock')
 
-  const result = await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  const result = await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   expect(result.succeeded_task_ids).toEqual(['task-restock'])
   expect(api.saveRestockProof).toHaveBeenCalledWith('token', 'task-restock', {
@@ -479,7 +495,7 @@ test('keeps staged completion photos local while a separate consumables submit s
   })
   await queueMod.enqueueCleaningConsumablesSubmit('task-staged-completion')
 
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   expect(api.uploadCleaningMedia).not.toHaveBeenCalled()
   expect(api.saveCompletionPhotos).not.toHaveBeenCalled()
@@ -525,12 +541,12 @@ test.each(['网络中断', '浴室下水口照片数量校验失败'])('keeps up
       upload_status: 'local',
       name: 'completion-living.jpg',
       mime_type: 'image/jpeg',
-      captured_at: '2026-07-26T01:02:03.000Z',
+      captured_by_user_id: 'cleaner-1', captured_at: '2026-07-26T01:02:03.000Z',
     }],
   })
   await queueMod.enqueueCleaningConsumablesSubmit('completion-task-1')
 
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
   expect(api.saveCompletionPhotos).toHaveBeenCalledWith('token', 'completion-task-1', expect.objectContaining({
     submit_id: expect.any(String),
@@ -545,12 +561,12 @@ test.each(['网络中断', '浴室下水口照片数量校验失败'])('keeps up
 
   // Permanent validation failures wait for an explicit user retry, never background retry.
   if (failure !== '网络中断') {
-    await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+    await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
     expect(api.saveCompletionPhotos).toHaveBeenCalledTimes(1)
     await draftMod.updateCleaningConsumablesDraft('completion-task-1', (current) => ({ ...current, submit_status: 'ready_to_submit', pending_submit: true }))
   }
   await queueMod.enqueueCleaningConsumablesSubmit('completion-task-1')
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
   expect(api.saveCompletionPhotos).toHaveBeenCalledTimes(2)
   expect(await draftMod.getCleaningConsumablesDraft('completion-task-1')).toBeNull()
@@ -598,7 +614,7 @@ test('does not clear an unsubmitted consumables draft when completion photos syn
     ],
   })
   await queueMod.enqueueCleaningConsumablesSubmit('completion-task-2')
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
   expect(api.submitCleaningConsumables).not.toHaveBeenCalled()
@@ -637,13 +653,13 @@ test('keeps queued draft when retryable submit still fails', async () => {
       'file:///tmp/living-room-2.jpg': {
         name: 'living-room-2.jpg',
         mime_type: 'image/jpeg',
-        captured_at: '2026-06-23T02:03:04.000Z',
+        captured_by_user_id: 'cleaner-1', captured_at: '2026-06-23T02:03:04.000Z',
       },
     },
   })
   await queueMod.enqueueCleaningConsumablesSubmit('task-2')
 
-  const result = await queueMod.processCleaningConsumablesSubmitQueue('token-2', 'cleaner')
+  const result = await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token-2'), 'cleaner')
 
   expect(result).toEqual({ processed: 0, remaining: 1, succeeded_task_ids: [] })
   expect(await queueMod.isCleaningConsumablesSubmitQueued('task-2')).toBe(true)
@@ -683,18 +699,18 @@ test('persists partially uploaded remote urls when retryable upload fails mid-qu
       'file:///tmp/living-room-3.jpg': {
         name: 'living-room-3.jpg',
         mime_type: 'image/jpeg',
-        captured_at: '2026-06-24T01:02:03.000Z',
+        captured_by_user_id: 'cleaner-1', captured_at: '2026-06-24T01:02:03.000Z',
       },
       'file:///tmp/remote-tv-3.jpg': {
         name: 'remote-tv-3.jpg',
         mime_type: 'image/jpeg',
-        captured_at: '2026-06-24T01:02:04.000Z',
+        captured_by_user_id: 'cleaner-1', captured_at: '2026-06-24T01:02:04.000Z',
       },
     },
   })
   await queueMod.enqueueCleaningConsumablesSubmit('task-3')
 
-  const result = await queueMod.processCleaningConsumablesSubmitQueue('token-3', 'cleaner')
+  const result = await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token-3'), 'cleaner')
 
   expect(result).toEqual({ processed: 0, remaining: 1, succeeded_task_ids: [] })
   expect(await draftMod.getCleaningConsumablesDraft('task-3')).toMatchObject({
@@ -728,7 +744,7 @@ test('checkpoints each photo and retries only the failed photo', async () => {
     photo_meta: {},
   })
   await queueMod.enqueueCleaningConsumablesSubmit('task-partial')
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   const partial = await draftMod.getCleaningConsumablesDraft('task-partial')
   expect(partial?.items[0]?.photo_urls).toEqual(['https://cdn.example.com/photo-1.jpg', 'file:///tmp/photo-2.jpg'])
@@ -738,7 +754,7 @@ test('checkpoints each photo and retries only the failed photo', async () => {
 
   await queueMod.enqueueCleaningConsumablesSubmit('task-partial')
   api.uploadCleaningMedia.mockResolvedValueOnce({ url: 'https://cdn.example.com/photo-2.jpg' })
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(3)
   expect(api.submitCleaningConsumables).toHaveBeenCalledTimes(1)
 })
@@ -766,9 +782,9 @@ test('does not reupload photos after a business submit timeout', async () => {
     photo_meta: {},
   })
   await queueMod.enqueueCleaningConsumablesSubmit('task-timeout')
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
   await queueMod.enqueueCleaningConsumablesSubmit('task-timeout')
-  const result = await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  const result = await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   expect(result.succeeded_task_ids).toEqual(['task-timeout'])
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
@@ -794,8 +810,8 @@ test('deduplicates repeated enqueue and prevents concurrent workers', async () =
   await queueMod.enqueueCleaningConsumablesSubmit('task-double-tap')
   const secondDraft = await draftMod.getCleaningConsumablesDraft('task-double-tap')
   const results = await Promise.all([
-    queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner'),
-    queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner'),
+    queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner'),
+    queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner'),
   ])
 
   expect(secondDraft).toMatchObject({
@@ -822,14 +838,14 @@ test('blocks terminal 400 errors instead of retrying forever', async () => {
   const queueMod = require('./cleaningConsumablesSubmitQueue') as typeof import('./cleaningConsumablesSubmitQueue')
   await draftMod.setCleaningConsumablesDraft('task-blocked', { pending_submit: true, items: [], photo_meta: {} })
   await queueMod.enqueueCleaningConsumablesSubmit('task-blocked')
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   expect(await draftMod.getCleaningConsumablesDraft('task-blocked')).toMatchObject({
     submit_status: 'blocked',
     last_error_code: 'HTTP_400',
     last_error_message: '补品记录参数错误',
   })
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
   expect(api.submitCleaningConsumables).toHaveBeenCalledTimes(1)
 })
 
@@ -852,7 +868,7 @@ test('marks a missing local file and identifies the affected photo', async () =>
     photo_meta: {},
   })
   await queueMod.enqueueCleaningConsumablesSubmit('task-missing')
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   expect(await draftMod.getCleaningConsumablesDraft('task-missing')).toMatchObject({
     submit_status: 'blocked',
@@ -878,8 +894,8 @@ test.each([400, 401, 403, 409])('blocks HTTP %s without automatic retry', async 
   const taskId = `task-http-${status}`
   await draftMod.setCleaningConsumablesDraft(taskId, { pending_submit: true, items: [], photo_meta: {} })
   await queueMod.enqueueCleaningConsumablesSubmit(taskId)
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   expect(await draftMod.getCleaningConsumablesDraft(taskId)).toMatchObject({ submit_status: 'blocked', last_error_code: `HTTP_${status}` })
   expect(api.submitCleaningConsumables).toHaveBeenCalledTimes(1)
@@ -900,7 +916,7 @@ test('backs off 5xx failures and keeps the draft for a later retry', async () =>
   const queueMod = require('./cleaningConsumablesSubmitQueue') as typeof import('./cleaningConsumablesSubmitQueue')
   await draftMod.setCleaningConsumablesDraft('task-503', { pending_submit: true, items: [], photo_meta: {} })
   await queueMod.enqueueCleaningConsumablesSubmit('task-503')
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
 
   expect(await draftMod.getCleaningConsumablesDraft('task-503')).toMatchObject({
     submit_status: 'waiting_sync',
@@ -908,7 +924,7 @@ test('backs off 5xx failures and keeps the draft for a later retry', async () =>
     retry_count: 1,
   })
   expect(new Date((await draftMod.getCleaningConsumablesDraft('task-503'))?.next_retry_at || 0).getTime()).toBeGreaterThan(Date.now())
-  await queueMod.processCleaningConsumablesSubmitQueue('token', 'cleaner')
+  await queueMod.processCleaningConsumablesSubmitQueue(fixtureToken('token'), 'cleaner')
   expect(api.submitCleaningConsumables).toHaveBeenCalledTimes(1)
 })
 

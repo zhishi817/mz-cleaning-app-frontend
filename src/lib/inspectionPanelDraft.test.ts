@@ -18,6 +18,7 @@ jest.mock('./inspectionPanelDraftRecovery', () => ({
 }))
 jest.mock('./cleaningMedia', () => ({ normalizeCleaningObjectKey: (value: any) => String(value || '').trim() }))
 
+import { mediaCaptureStorageKey, setMediaCaptureSession } from './mediaCaptureIdentity'
 import { getInspectionPanelDraft, setInspectionPanelDraft } from './inspectionPanelDraft'
 
 function draft(updatedAt = '2026-10-15T00:00:00.000Z', localUri = 'file:///documents/photo.jpg') {
@@ -38,6 +39,7 @@ function draft(updatedAt = '2026-10-15T00:00:00.000Z', localUri = 'file:///docum
 
 beforeEach(() => {
   jest.clearAllMocks()
+  setMediaCaptureSession('cleaner-1', 'token-1')
   mockGetJson.mockResolvedValue(null)
   mockSetJson.mockResolvedValue(undefined)
   mockRemove.mockResolvedValue(undefined)
@@ -53,7 +55,7 @@ test('writes a recovery snapshot and reports protected recovery when AsyncStorag
   await expect(setInspectionPanelDraft('task-1', draft() as any)).rejects.toMatchObject({
     code: 'INSPECTION_DRAFT_RECOVERED',
   })
-  expect(mockWriteRecovery).toHaveBeenCalledWith('task-1', expect.objectContaining({
+  expect(mockWriteRecovery).toHaveBeenCalledWith(mediaCaptureStorageKey('task-1'), expect.objectContaining({
     task_id: 'task-1',
     room_photos: expect.objectContaining({ living: [expect.objectContaining({ local_uri: 'file:///documents/photo.jpg' })] }),
   }))
@@ -73,7 +75,7 @@ test('loads a newer recovery snapshot and clears it only after a later database 
   expect(recovered?.room_photos.living[0]?.local_uri).toBe('file:///documents/recovered.jpg')
 
   await setInspectionPanelDraft('task-1', recovered as any)
-  expect(mockClearRecovery).toHaveBeenCalledWith('task-1')
+  expect(mockClearRecovery).toHaveBeenCalledWith(mediaCaptureStorageKey('task-1'))
 })
 
 test('keeps the original persistence error visible when both database and recovery storage fail', async () => {
@@ -83,4 +85,18 @@ test('keeps the original persistence error visible when both database and recove
   await expect(setInspectionPanelDraft('task-1', draft() as any)).rejects.toMatchObject({
     code: 'INSPECTION_DRAFT_RECOVERY_FAILED',
   })
+})
+
+
+test('account switch during failed persistence cannot write A snapshot into B recovery', async () => {
+  setMediaCaptureSession('A', 'tokenA')
+  let reject!: (error: Error) => void
+  mockSetJson.mockImplementationOnce(() => new Promise((_resolve, r) => { reject = r }))
+  const pending = setInspectionPanelDraft('task-1', draft())
+  while (!reject) await Promise.resolve()
+  setMediaCaptureSession('B', 'tokenB')
+  reject(new Error('SQLITE_FULL'))
+  await expect(pending).rejects.toThrow('SQLITE_FULL')
+  expect(mockWriteRecovery).not.toHaveBeenCalled()
+  expect(mockClearRecovery).not.toHaveBeenCalled()
 })

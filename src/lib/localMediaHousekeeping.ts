@@ -46,7 +46,9 @@ function isLocalFileUri(value: any) {
 
 export function isLocalMediaReferenceStorageKey(key: string) {
   const value = cleanText(key)
-  return REFERENCE_STORAGE_KEYS.includes(value)
+  // All accounts, including paused/quarantined media, remain retention roots.
+  return value.startsWith('mzstay.media_owner.v1:')
+    || REFERENCE_STORAGE_KEYS.includes(value)
     || REFERENCE_STORAGE_KEY_PREFIXES.some((prefix) => value.startsWith(prefix))
 }
 

@@ -1,4 +1,5 @@
-import { getJson, remove, setJson } from './storage'
+import { mediaCaptureStorageKey, getMediaCaptureUserId } from './mediaCaptureIdentity'
+import { getOwnedMediaJson as getJson, removeOwnedMediaJson as remove, setOwnedMediaJson as setJson } from './mediaCaptureIdentity'
 import { normalizeCleaningObjectKey } from './cleaningMedia'
 import {
   clearInspectionPanelDraftRecovery,
@@ -15,6 +16,7 @@ import type {
 export type InspectionPanelDraftRestockItem = InspectionPanelBatchRestockItem
 
 export type InspectionPanelDraft = {
+  captured_by_user_id?: string
   task_id: string
   updated_at: string
   property_code?: string | null
@@ -52,13 +54,14 @@ function normalizeMedia(item: any): InspectionPanelBatchMedia | null {
   if (!id || (!localUri && !thumbnailUri && !uploadedKey && !uploadedUrl)) return null
   return {
     id,
+    captured_by_user_id: cleanText(item?.captured_by_user_id),
     local_uri: localUri || null,
     thumbnail_uri: thumbnailUri || null,
     uploaded_key: uploadedKey || null,
     uploaded_url: uploadedUrl || null,
     name: cleanText(item?.name) || `${id}.jpg`,
     mime_type: cleanText(item?.mime_type) || 'image/jpeg',
-    captured_at: cleanText(item?.captured_at) || nowIso(),
+    captured_at: cleanText(item?.captured_at),
     watermark_text: cleanText(item?.watermark_text) || null,
     note: cleanText(item?.note) || null,
   }
@@ -94,6 +97,7 @@ function normalizeDraft(taskId: string, raw: any): InspectionPanelDraft | null {
       ? roomPhotoRequirement0
       : 'required'
   return {
+    captured_by_user_id: cleanText(raw.captured_by_user_id),
     task_id: cleanText(raw.task_id) || cleanText(taskId),
     updated_at: cleanText(raw.updated_at) || nowIso(),
     property_code: cleanText(raw.property_code) || null,
@@ -108,6 +112,8 @@ function normalizeDraft(taskId: string, raw: any): InspectionPanelDraft | null {
 export async function getInspectionPanelDraft(taskId: string) {
   const key = cleanText(taskId)
   if (!key) return null
+  const owner = getMediaCaptureUserId()
+  const recoveryKey = mediaCaptureStorageKey(key)
   let stored: InspectionPanelDraft | null = null
   let storedError: unknown = null
   try {
@@ -117,11 +123,12 @@ export async function getInspectionPanelDraft(taskId: string) {
   }
   let recovered: InspectionPanelDraft | null = null
   try {
-    const snapshot = await readInspectionPanelDraftRecovery<InspectionPanelDraft>(key)
+    const snapshot = await readInspectionPanelDraftRecovery<InspectionPanelDraft>(recoveryKey)
     recovered = normalizeDraft(key, snapshot?.draft)
   } catch (error) {
     if (!stored) throw storedError || error
   }
+  if (owner !== getMediaCaptureUserId()) throw new Error('MEDIA_CAPTURE_SESSION_CHANGED')
   if (!stored && !recovered && storedError) throw storedError
   if (!stored) return recovered
   if (!recovered) return stored
@@ -133,19 +140,24 @@ export async function getInspectionPanelDraft(taskId: string) {
 export async function setInspectionPanelDraft(taskId: string, draft: Omit<InspectionPanelDraft, 'task_id' | 'updated_at'>) {
   const key = cleanText(taskId)
   if (!key) return
+  const owner = getMediaCaptureUserId()
+  const recoveryKey = mediaCaptureStorageKey(key)
   const payload = normalizeDraft(key, {
     ...draft,
+    captured_by_user_id: draft.captured_by_user_id || getMediaCaptureUserId(),
     task_id: key,
     updated_at: nowIso(),
   })
   if (!payload) return
   try {
     await setJson(draftKey(key), payload)
-    await clearInspectionPanelDraftRecovery(key)
+    if (owner !== getMediaCaptureUserId()) throw new Error('MEDIA_CAPTURE_SESSION_CHANGED')
+    await clearInspectionPanelDraftRecovery(recoveryKey)
   } catch (storageError) {
+    if (owner !== getMediaCaptureUserId() || /MEDIA_CAPTURE_(OWNER|SESSION)/.test(String((storageError as any)?.message || ''))) throw storageError
     let recoverySaved = false
     try {
-      await writeInspectionPanelDraftRecovery(key, payload)
+      await writeInspectionPanelDraftRecovery(recoveryKey, payload)
       recoverySaved = true
     } catch {}
     const error = new Error(recoverySaved
@@ -160,6 +172,9 @@ export async function setInspectionPanelDraft(taskId: string, draft: Omit<Inspec
 export async function clearInspectionPanelDraft(taskId: string) {
   const key = cleanText(taskId)
   if (!key) return
+  const owner = getMediaCaptureUserId()
+  const recoveryKey = mediaCaptureStorageKey(key)
   await remove(draftKey(key))
-  await clearInspectionPanelDraftRecovery(key)
+  if (owner !== getMediaCaptureUserId()) throw new Error('MEDIA_CAPTURE_SESSION_CHANGED')
+  await clearInspectionPanelDraftRecovery(recoveryKey)
 }

@@ -22,25 +22,25 @@ test('prefers the stable cleaning object key returned by upload', () => {
 test('builds an authenticated proxy image source for a cleaning object key', () => {
   expect(buildCleaningMediaImageSource('token-1', 'cleaning/photo-1.jpg')).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fphoto-1.jpg',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
 })
 
 test('adds a separate server-side image variant for thumbnails and previews', () => {
   expect(buildCleaningMediaImageSource('token-1', 'cleaning/photo-1.jpg', 'thumbnail')).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fphoto-1.jpg&variant=thumbnail',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
   expect(buildCleaningMediaImageSource('token-1', 'cleaning/photo-1.jpg', 'preview')).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fphoto-1.jpg&variant=preview',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
 })
 
 test('binds feedback-media reads to the current task source', () => {
   expect(buildCleaningMediaImageSource('token-1', 'cleaning/photo-1.jpg', 'thumbnail', { accessTaskId: 'cleaning-task-1' })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fphoto-1.jpg&variant=thumbnail&source_task_id=cleaning-task-1',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
 })
 
@@ -50,7 +50,7 @@ test('binds a read-only key photo to exact source ids and viewer scope', () => {
     mediaScope: 'inspector',
   })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fkey.jpg&variant=thumbnail&source_ids=checkout-task%2Ccheckin-task&media_scope=inspector',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
 })
 
@@ -62,7 +62,7 @@ test('builds an authenticated exact-source video stream and rejects an unbound s
     mediaScope: 'manager',
   })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Flockbox.mp4&variant=source&source_task_id=checkout-task&source_ids=checkout-task%2Ccheckin-task&media_scope=manager',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
   expect(buildCleaningMediaVideoSource('token-1', 'cleaning/lockbox.mp4', {
     accessTaskId: 'unrelated-task',
@@ -74,7 +74,7 @@ test('builds an authenticated exact-source video stream and rejects an unbound s
 test('binds maintenance feedback-media reads to the current work task', () => {
   expect(buildCleaningMediaImageSource('token-1', 'mzapp/photo-1.jpg', 'thumbnail', { accessWorkTaskId: 'property_maintenance:record-1' })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?key=mzapp%2Fphoto-1.jpg&variant=thumbnail&work_task_id=property_maintenance%3Arecord-1',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
 })
 
@@ -84,7 +84,7 @@ test('binds day-end media reads to the recorded handover owner and date', () => 
     dayEndDate: '2026-08-12',
   })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?key=cleaning%2Fday-end-photo.jpg&variant=thumbnail&day_end_user_id=cleaner-1&day_end_date=2026-08-12',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
 })
 
@@ -92,11 +92,11 @@ test('binds temporary-notice thumbnails and previews to the saved notice record'
   const noticeId = '4a0dbea0-cbaf-4eef-87ec-2f4bb038703e'
   expect(buildCleaningMediaImageSource('token-1', 'mzapp/notice-photo-1.jpg', 'thumbnail', { guestLuggageId: noticeId })).toEqual({
     uri: `https://api.example.com/api/cleaning-app/media/image?key=mzapp%2Fnotice-photo-1.jpg&variant=thumbnail&guest_luggage_id=${noticeId}`,
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
   expect(buildCleaningMediaImageSource('token-1', 'mzapp/notice-photo-1.jpg', 'preview', { guestLuggageId: noticeId })).toEqual({
     uri: `https://api.example.com/api/cleaning-app/media/image?key=mzapp%2Fnotice-photo-1.jpg&variant=preview&guest_luggage_id=${noticeId}`,
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
 })
 
@@ -117,7 +117,7 @@ test('routes a server-owned offline task reference through the authenticated pro
   const reference = 'r2://bucket-0123456789abcdef/mzapp/offline-task-photo.jpg'
   expect(buildCleaningMediaImageSource('token-1', reference, 'thumbnail', { accessWorkTaskId: 'cleaning_offline_tasks:task-1' })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?url=r2%3A%2F%2Fbucket-0123456789abcdef%2Fmzapp%2Foffline-task-photo.jpg&variant=thumbnail&work_task_id=cleaning_offline_tasks%3Atask-1',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
 })
 
@@ -128,13 +128,13 @@ test('routes a historical offline task URL through the authenticated proxy witho
     offlineWorkTaskMedia: true,
   })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fcurrent-public-base.r2.dev%2Fhistorical%2Foffline-task-photo.jpg&variant=thumbnail&work_task_id=cleaning_offline_tasks%3Atask-1',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
   expect(buildCleaningMediaImageSource('token-1', reference, 'thumbnail', {
     accessWorkTaskId: 'cleaning_offline_tasks:task-1',
   })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fcurrent-public-base.r2.dev%2Fhistorical%2Foffline-task-photo.jpg&variant=thumbnail&work_task_id=cleaning_offline_tasks%3Atask-1',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
 })
 
@@ -142,44 +142,44 @@ test('routes legacy mzapp feedback media through the authenticated feedback prox
   const url = 'https://media.r2.dev/mzapp/photo-1.jpg'
   expect(buildCleaningMediaImageSource('token-1', url, 'preview', { accessTaskId: 'cleaning-task-1' })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fmedia.r2.dev%2Fmzapp%2Fphoto-1.jpg&variant=preview&source_task_id=cleaning-task-1',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
   expect(buildCleaningMediaImageSource('token-1', 'mzapp/photo-1.jpg', 'thumbnail', { accessTaskId: 'cleaning-task-1' })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?key=mzapp%2Fphoto-1.jpg&variant=thumbnail&source_task_id=cleaning-task-1',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
 })
 
 test('routes web-maintenance feedback media through the authenticated feedback proxy', () => {
   expect(buildCleaningMediaImageSource('token-1', 'maintenance/before-photo.jpg', 'thumbnail')).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?key=maintenance%2Fbefore-photo.jpg&variant=thumbnail',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
   expect(buildCleaningMediaImageSource('token-1', 'https://media.r2.dev/maintenance/after-photo.jpg', 'preview')).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fmedia.r2.dev%2Fmaintenance%2Fafter-photo.jpg&variant=preview',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
 })
 
 test('routes historical deep-cleaning feedback media through the authenticated feedback proxy', () => {
   expect(buildCleaningMediaImageSource('token-1', 'deep-cleaning/before-photo.jpg', 'thumbnail', { accessTaskId: 'cleaning-task-1' })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?key=deep-cleaning%2Fbefore-photo.jpg&variant=thumbnail&source_task_id=cleaning-task-1',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
   expect(buildCleaningMediaImageSource('token-1', 'https://media.r2.dev/deep-cleaning-upload/after-photo.jpg', 'preview', { accessTaskId: 'cleaning-task-1' })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fmedia.r2.dev%2Fdeep-cleaning-upload%2Fafter-photo.jpg&variant=preview&source_task_id=cleaning-task-1',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
 })
 
 test('routes daily-replacement inventory media through the authenticated feedback proxy', () => {
   expect(buildCleaningMediaImageSource('token-1', 'inventory/daily-before.jpg', 'thumbnail', { accessTaskId: 'cleaning-task-1' })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?key=inventory%2Fdaily-before.jpg&variant=thumbnail&source_task_id=cleaning-task-1',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
   expect(buildCleaningMediaImageSource('token-1', 'https://media.r2.dev/inventory/daily-after.jpg', 'preview', { accessTaskId: 'cleaning-task-1' })).toEqual({
     uri: 'https://api.example.com/api/cleaning-app/media/image?url=https%3A%2F%2Fmedia.r2.dev%2Finventory%2Fdaily-after.jpg&variant=preview&source_task_id=cleaning-task-1',
-    headers: { Authorization: 'Bearer token-1' },
+    headers: { Authorization: 'Bearer token-1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
   })
 })
 
