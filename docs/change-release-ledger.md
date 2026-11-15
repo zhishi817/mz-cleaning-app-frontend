@@ -18272,17 +18272,18 @@
 - Base: `origin/Dev@1ec20d490097fd13798767d74c40851b5da9c85f`; fetched at `2026-11-15T00:06Z`
 - Candidate patch SHA-256: `cebc53707dd1237d9336170e3a7652597ceae3db1f80ad8d4f4a9352b926e4fe`
 - Commit SHA: `69f3a6718d1c3d2e8147fc07fdeed2fed4e3090e`
-- Dependencies: `root/CRL-20261112-001@8091dab0d8d43e87f4e2a085a2ad99a8befb60ed`; `root/CRL-20261112-002@8091dab0d8d43e87f4e2a085a2ad99a8befb60ed`
+- Dependencies: `root/CRL-20261112-001@d172429185d6e30fc26df333a98bde7d5dfc75d1`; `root/CRL-20261112-002@d172429185d6e30fc26df333a98bde7d5dfc75d1`
 - Required validation: `PASS`; final session-hydration snapshot check:ci exit0: 90 suites/1012 tests, fast166, TypeScript, strict button and ledger gates pass; lint0 errors/146 warnings. Root paired check:full and check:ci exit0, frontend379 and production build PASS, Phase4/5 source contracts and registry44FR/352 mappings PASS. Physical/deployed acceptance remains not run.
 - Shared-hunk review: `PASS`; 115/116/118 overlap reconciled and every selected hunk registered; final independent review pending.
 - Generated-file review: `PASS`; source/tests/documentation only; no secrets, dependencies, logs, native outputs or local fixture data staged.
 - Technical state: `committed`
-- User authorization: `approved-for-push`; user explicitly requested 115/116 completion and 115/116/117/118 integrated commit and push to each repository on 2026-11-15; exact selected scope retained, branch `codex/mz115-118-integrated`, no merge/OTA/production writes. This current explicit instruction authorizes the resulting exact tested content commit above and its ledger-only receipt.
+- User authorization: `approved-for-push`; user on 2026-11-15 explicitly requested completing 115/116 and combining 115/116/117/118 into one branch per repository to commit and push; exact selected scope retained on codex/mz115-118-integrated. No merge, OTA or production writes. Current explicit instruction authorizes this tested content and ledger receipts.
 - Independent review: `GO`; independent read-only exact staged commit review on 2026-11-15; no remaining identified P0/P1/P2. Runtime fingerprint verified, full and paired gates independently checked.
-- Action conclusion: `NOT VERIFIED`; content committed and authorized for push; exact paired cross-repository range audit pending. No push yet.
+- Action conclusion: `GO`; blockers: none in verified repository content. Execute push only after exact paired machine-verification GO; raw single-repository report cannot validate cross-repository references by itself.
 - Unverified delivery scope: actual R2/login, full app/physical iOS/Android camera/gallery, video playback, production and OTA not run.
+- Cross-repository dependency verification: exact companion root content `d172429185d6e30fc26df333a98bde7d5dfc75d1`; both content fingerprints, actual paired full/source contracts, canonical CRL bindings and independent reviews are available. Read-only paired exact-range verifier must validate both committed heads before push; original raw reports retained without rewriting their NOT VERIFIED result.
+- Supplemental native verification: final mobile modules iOS simulator 13/13 PASS (116 identity/timezone/native AsyncStorage9 plus118 native downloader cache/account isolation4 against local HTTP fixture). Final118 real-PG native pair could not start due exhausted SysV shared-memory slots; mmap did not resolve. No unknown segments deleted or system settings changed. Previous25-case118 report is historical only and is not counted as this integration rerun. Actual R2/login, full app UI, physical/Android camera/gallery and video playback remain not run.
 
-- Cross-repository dependency verification: both repositories committed and independently reviewed; exact companion `root` content `8091dab0d8d43e87f4e2a085a2ad99a8befb60ed`. Paired check:full PASS; machine-verifiable paired range audit pending.
 ## CRL-20261112-002 — MZ116 capture-account watermarks and isolated offline media
 - **Repository:** `mobile`
 - **Status:** candidate; selected for integrated commit/push; final CI and independent review pending
@@ -18854,17 +18855,18 @@
 - Base: `origin/Dev@1ec20d490097fd13798767d74c40851b5da9c85f`; fetched at `2026-11-15T00:06Z`
 - Candidate patch SHA-256: `cebc53707dd1237d9336170e3a7652597ceae3db1f80ad8d4f4a9352b926e4fe`
 - Commit SHA: `69f3a6718d1c3d2e8147fc07fdeed2fed4e3090e`
-- Dependencies: `root/CRL-20261112-001@8091dab0d8d43e87f4e2a085a2ad99a8befb60ed`; `root/CRL-20261112-002@8091dab0d8d43e87f4e2a085a2ad99a8befb60ed`
+- Dependencies: `root/CRL-20261112-001@d172429185d6e30fc26df333a98bde7d5dfc75d1`; `root/CRL-20261112-002@d172429185d6e30fc26df333a98bde7d5dfc75d1`
 - Required validation: `PASS`; final session-hydration snapshot check:ci exit0: 90 suites/1012 tests, fast166, TypeScript, strict button and ledger gates pass; lint0 errors/146 warnings. Root paired check:full and check:ci exit0, frontend379 and production build PASS, Phase4/5 source contracts and registry44FR/352 mappings PASS. Physical/deployed acceptance remains not run.
 - Shared-hunk review: `PASS`; 115/116/118 overlap reconciled and every selected hunk registered; final independent review pending.
 - Generated-file review: `PASS`; source/tests/documentation only; no secrets, dependencies, logs, native outputs or local fixture data staged.
 - Technical state: `committed`
-- User authorization: `approved-for-push`; user explicitly requested 115/116 completion and 115/116/117/118 integrated commit and push to each repository on 2026-11-15; exact selected scope retained, branch `codex/mz115-118-integrated`, no merge/OTA/production writes. This current explicit instruction authorizes the resulting exact tested content commit above and its ledger-only receipt.
+- User authorization: `approved-for-push`; user on 2026-11-15 explicitly requested completing 115/116 and combining 115/116/117/118 into one branch per repository to commit and push; exact selected scope retained on codex/mz115-118-integrated. No merge, OTA or production writes. Current explicit instruction authorizes this tested content and ledger receipts.
 - Independent review: `GO`; independent read-only exact staged commit review on 2026-11-15; no remaining identified P0/P1/P2. Runtime fingerprint verified, full and paired gates independently checked.
-- Action conclusion: `NOT VERIFIED`; content committed and authorized for push; exact paired cross-repository range audit pending. No push yet.
+- Action conclusion: `GO`; blockers: none in verified repository content. Execute push only after exact paired machine-verification GO; raw single-repository report cannot validate cross-repository references by itself.
 - Unverified delivery scope: actual R2/login, full app/physical iOS/Android camera/gallery, video playback, production and OTA not run.
+- Cross-repository dependency verification: exact companion root content `d172429185d6e30fc26df333a98bde7d5dfc75d1`; both content fingerprints, actual paired full/source contracts, canonical CRL bindings and independent reviews are available. Read-only paired exact-range verifier must validate both committed heads before push; original raw reports retained without rewriting their NOT VERIFIED result.
+- Supplemental native verification: final mobile modules iOS simulator 13/13 PASS (116 identity/timezone/native AsyncStorage9 plus118 native downloader cache/account isolation4 against local HTTP fixture). Final118 real-PG native pair could not start due exhausted SysV shared-memory slots; mmap did not resolve. No unknown segments deleted or system settings changed. Previous25-case118 report is historical only and is not counted as this integration rerun. Actual R2/login, full app UI, physical/Android camera/gallery and video playback remain not run.
 
-- Cross-repository dependency verification: both repositories committed and independently reviewed; exact companion `root` content `8091dab0d8d43e87f4e2a085a2ad99a8befb60ed`. Paired check:full PASS; machine-verifiable paired range audit pending.
 ## CRL-20261112-003 — Development workspace lifecycle and recoverable cache cleanup rules
 
 - **Repository:** `mobile`
@@ -18934,17 +18936,18 @@
 - Base: `origin/Dev@1ec20d490097fd13798767d74c40851b5da9c85f`; fetched at `2026-11-15T00:06Z`
 - Candidate patch SHA-256: `cebc53707dd1237d9336170e3a7652597ceae3db1f80ad8d4f4a9352b926e4fe`
 - Commit SHA: `69f3a6718d1c3d2e8147fc07fdeed2fed4e3090e`
-- Dependencies: `root/CRL-20261112-001@8091dab0d8d43e87f4e2a085a2ad99a8befb60ed`; `root/CRL-20261112-002@8091dab0d8d43e87f4e2a085a2ad99a8befb60ed`
+- Dependencies: `root/CRL-20261112-001@d172429185d6e30fc26df333a98bde7d5dfc75d1`; `root/CRL-20261112-002@d172429185d6e30fc26df333a98bde7d5dfc75d1`
 - Required validation: `PASS`; final session-hydration snapshot check:ci exit0: 90 suites/1012 tests, fast166, TypeScript, strict button and ledger gates pass; lint0 errors/146 warnings. Root paired check:full and check:ci exit0, frontend379 and production build PASS, Phase4/5 source contracts and registry44FR/352 mappings PASS. Physical/deployed acceptance remains not run.
 - Shared-hunk review: `PASS`; 115/116/118 overlap reconciled and every selected hunk registered; final independent review pending.
 - Generated-file review: `PASS`; source/tests/documentation only; no secrets, dependencies, logs, native outputs or local fixture data staged.
 - Technical state: `committed`
-- User authorization: `approved-for-push`; user explicitly requested 115/116 completion and 115/116/117/118 integrated commit and push to each repository on 2026-11-15; exact selected scope retained, branch `codex/mz115-118-integrated`, no merge/OTA/production writes. This current explicit instruction authorizes the resulting exact tested content commit above and its ledger-only receipt.
+- User authorization: `approved-for-push`; user on 2026-11-15 explicitly requested completing 115/116 and combining 115/116/117/118 into one branch per repository to commit and push; exact selected scope retained on codex/mz115-118-integrated. No merge, OTA or production writes. Current explicit instruction authorizes this tested content and ledger receipts.
 - Independent review: `GO`; independent read-only exact staged commit review on 2026-11-15; no remaining identified P0/P1/P2. Runtime fingerprint verified, full and paired gates independently checked.
-- Action conclusion: `NOT VERIFIED`; content committed and authorized for push; exact paired cross-repository range audit pending. No push yet.
+- Action conclusion: `GO`; blockers: none in verified repository content. Execute push only after exact paired machine-verification GO; raw single-repository report cannot validate cross-repository references by itself.
 - Unverified delivery scope: actual R2/login, full app/physical iOS/Android camera/gallery, video playback, production and OTA not run.
+- Cross-repository dependency verification: exact companion root content `d172429185d6e30fc26df333a98bde7d5dfc75d1`; both content fingerprints, actual paired full/source contracts, canonical CRL bindings and independent reviews are available. Read-only paired exact-range verifier must validate both committed heads before push; original raw reports retained without rewriting their NOT VERIFIED result.
+- Supplemental native verification: final mobile modules iOS simulator 13/13 PASS (116 identity/timezone/native AsyncStorage9 plus118 native downloader cache/account isolation4 against local HTTP fixture). Final118 real-PG native pair could not start due exhausted SysV shared-memory slots; mmap did not resolve. No unknown segments deleted or system settings changed. Previous25-case118 report is historical only and is not counted as this integration rerun. Actual R2/login, full app UI, physical/Android camera/gallery and video playback remain not run.
 
-- Cross-repository dependency verification: both repositories committed and independently reviewed; exact companion `root` content `8091dab0d8d43e87f4e2a085a2ad99a8befb60ed`. Paired check:full PASS; machine-verifiable paired range audit pending.
 ## CRL-20261114-001 — MZ-118 ordinary offline completion photo drafts
 - **Repository:** `mobile`
 - **Status:** candidate; selected for integrated commit/push; final CI and independent review pending
@@ -19181,13 +19184,15 @@
 - Base: `origin/Dev@1ec20d490097fd13798767d74c40851b5da9c85f`; fetched at `2026-11-15T00:06Z`
 - Candidate patch SHA-256: `cebc53707dd1237d9336170e3a7652597ceae3db1f80ad8d4f4a9352b926e4fe`
 - Commit SHA: `69f3a6718d1c3d2e8147fc07fdeed2fed4e3090e`
-- Dependencies: `root/CRL-20261112-001@8091dab0d8d43e87f4e2a085a2ad99a8befb60ed`; `root/CRL-20261112-002@8091dab0d8d43e87f4e2a085a2ad99a8befb60ed`
+- Dependencies: `root/CRL-20261112-001@d172429185d6e30fc26df333a98bde7d5dfc75d1`; `root/CRL-20261112-002@d172429185d6e30fc26df333a98bde7d5dfc75d1`
 - Required validation: `PASS`; final session-hydration snapshot check:ci exit0: 90 suites/1012 tests, fast166, TypeScript, strict button and ledger gates pass; lint0 errors/146 warnings. Root paired check:full and check:ci exit0, frontend379 and production build PASS, Phase4/5 source contracts and registry44FR/352 mappings PASS. Physical/deployed acceptance remains not run.
 - Shared-hunk review: `PASS`; 115/116/118 overlap reconciled and every selected hunk registered; final independent review pending.
 - Generated-file review: `PASS`; source/tests/documentation only; no secrets, dependencies, logs, native outputs or local fixture data staged.
 - Technical state: `committed`
-- User authorization: `approved-for-push`; user explicitly requested 115/116 completion and 115/116/117/118 integrated commit and push to each repository on 2026-11-15; exact selected scope retained, branch `codex/mz115-118-integrated`, no merge/OTA/production writes. This current explicit instruction authorizes the resulting exact tested content commit above and its ledger-only receipt.
+- User authorization: `approved-for-push`; user on 2026-11-15 explicitly requested completing 115/116 and combining 115/116/117/118 into one branch per repository to commit and push; exact selected scope retained on codex/mz115-118-integrated. No merge, OTA or production writes. Current explicit instruction authorizes this tested content and ledger receipts.
 - Independent review: `GO`; independent read-only exact staged commit review on 2026-11-15; no remaining identified P0/P1/P2. Runtime fingerprint verified, full and paired gates independently checked.
-- Action conclusion: `NOT VERIFIED`; content committed and authorized for push; exact paired cross-repository range audit pending. No push yet.
+- Action conclusion: `GO`; blockers: none in verified repository content. Execute push only after exact paired machine-verification GO; raw single-repository report cannot validate cross-repository references by itself.
 - Unverified delivery scope: actual R2/login, full app/physical iOS/Android camera/gallery, video playback, production and OTA not run.
-- Cross-repository dependency verification: both repositories committed and independently reviewed; exact companion `root` content `8091dab0d8d43e87f4e2a085a2ad99a8befb60ed`. Paired check:full PASS; machine-verifiable paired range audit pending.
+- Cross-repository dependency verification: exact companion root content `d172429185d6e30fc26df333a98bde7d5dfc75d1`; both content fingerprints, actual paired full/source contracts, canonical CRL bindings and independent reviews are available. Read-only paired exact-range verifier must validate both committed heads before push; original raw reports retained without rewriting their NOT VERIFIED result.
+- Supplemental native verification: final mobile modules iOS simulator 13/13 PASS (116 identity/timezone/native AsyncStorage9 plus118 native downloader cache/account isolation4 against local HTTP fixture). Final118 real-PG native pair could not start due exhausted SysV shared-memory slots; mmap did not resolve. No unknown segments deleted or system settings changed. Previous25-case118 report is historical only and is not counted as this integration rerun. Actual R2/login, full app UI, physical/Android camera/gallery and video playback remain not run.
+
