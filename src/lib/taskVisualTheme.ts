@@ -256,6 +256,12 @@ export function getTaskStatusMeta(
   const kind = String(task.task_kind || '').trim().toLowerCase()
   const isCheckinSiteExecution = isCheckinSiteExecutionTask(task as any)
 
+  // Deep-cleaning review state is a domain label, not a work-record access grant.
+  if (source === 'property_deep_cleaning'
+    && String(task.deep_cleaning_workflow?.status || s).trim().toLowerCase() === 'pending_review') {
+    return { text: '待审核', tone: 'pending' as const }
+  }
+
   if (isMaintenancePendingReview(task, s, source)) {
     const assigneeId = String(task.assignee_id || '').trim()
     const viewerId = String(viewerUserId || '').trim()

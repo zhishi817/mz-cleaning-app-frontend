@@ -490,3 +490,33 @@ test('MZ-084 property history access context is explicitly sent for list, edit a
     expect(call[0]).toContain('history_scope=property')
   }
 })
+
+
+test('deep-cleaning completion uses dedicated no-price workflow and preserves the server receipt', async () => {
+  const receipt = { ok: true, status: 'pending_review', workflow_status: 'pending_review', available_actions: [] }
+  const fetchMock = jest.fn(async () => response(200, receipt))
+  globalThis.fetch = fetchMock as any
+  const api = require('./api') as typeof import('./api')
+  await expect(api.submitDeepCleaningCompletion('fixture-token', { recordId: 'fixture-deep-id', completionPhotoUrls: ['mzapp/fixture-after.jpg'], completionNote: 'fixture', operationId: 'fixture-operation' })).resolves.toEqual(receipt)
+  const [url, init] = (fetchMock as jest.Mock).mock.calls[0]
+  expect(url).toContain('/deep-cleaning/records/fixture-deep-id/workflow/complete')
+  expect(JSON.parse(init.body)).toEqual({ completion_photo_urls: ['mzapp/fixture-after.jpg'], completion_note: 'fixture', operation_id: 'fixture-operation' })
+})
+
+
+test('deep completed-report submission is atomic and identifies actual executor and source', async () => {
+  const fetchMock = jest.fn(async () => response(200, { ok: true, workflow_status: 'pending_review' }))
+  globalThis.fetch = fetchMock as any
+  const api = require('./api') as typeof import('./api')
+  await api.recordDeepCleaningCompletion('fixture-token', { recordId: 'fixture-record', operationId: 'fixture-operation', assigneeId: 'actual-person', propertyId: 'fixture-property', areas: ['kitchen'], detail: 'fixture', beforePhotos: ['mzapp/before.jpg'], afterPhotos: ['mzapp/after.jpg'], sourceTaskId: 'source-task', clientItemId: 'client-item' })
+  const [url, init] = (fetchMock as jest.Mock).mock.calls[0]
+  expect(url).toContain('/deep-cleaning/records/fixture-record/workflow/record_complete')
+  expect(JSON.parse(init.body)).toEqual({ operation_id: 'fixture-operation', assignee_id: 'actual-person', completion_photo_urls: ['mzapp/after.jpg'], completion_note: null, initial_report: { property_id: 'fixture-property', areas: ['kitchen'], detail: 'fixture', photo_urls: ['mzapp/before.jpg'], source_task_id: 'source-task', client_item_id: 'client-item' } })
+})
+
+test('deep completion sends optional before evidence separately from required after evidence', async () => {
+  const fetchMock = jest.fn(async () => response(200, { ok: true, status: 'pending_review', photo_urls: ['fixture/before.jpg'], repair_photo_urls: ['fixture/after.jpg'] }))
+  globalThis.fetch = fetchMock as any
+  await require('./api').submitDeepCleaningCompletion('fixture-token', { recordId: 'deep', operationId: 'op', beforePhotoUrls: ['fixture/before.jpg'], completionPhotoUrls: ['fixture/after.jpg'] })
+  expect(JSON.parse((fetchMock as jest.Mock).mock.calls[0][1].body)).toMatchObject({ before_photo_urls: ['fixture/before.jpg'], completion_photo_urls: ['fixture/after.jpg'] })
+})

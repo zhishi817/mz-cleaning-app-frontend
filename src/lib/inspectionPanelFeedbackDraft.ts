@@ -1,8 +1,9 @@
-import { getJson, remove, setJson } from './storage'
+import { getOwnedMediaJson as getJson, removeOwnedMediaJson as remove, setOwnedMediaJson as setJson } from './mediaCaptureIdentity'
 
 export type InspectionPanelFeedbackKind = 'maintenance' | 'deep_cleaning' | 'daily_necessities'
 
 export type InspectionPanelFeedbackPhotoMetaMap = Record<string, {
+  captured_by_user_id?: string
   name?: string
   mime_type?: string
   captured_at?: string
@@ -29,6 +30,9 @@ export type InspectionPanelDeepCleaningDraft = {
   submitAsCompleted: boolean
   completionNote: string
   completionAfterPhotos: string[]
+  completionOwnerId?: string | null
+  completionAssigneeId?: string | null
+  completionRecordId?: string | null
   completionStartedAt: string | null
   completionEndedAt: string | null
 }
@@ -71,6 +75,7 @@ function normalizePhotoMeta(raw: any): InspectionPanelFeedbackPhotoMetaMap {
     const key = cleanText(uri)
     if (!key) continue
     next[key] = {
+      captured_by_user_id: cleanText((meta as any)?.captured_by_user_id),
       name: cleanText((meta as any)?.name) || undefined,
       mime_type: cleanText((meta as any)?.mime_type) || undefined,
       captured_at: cleanText((meta as any)?.captured_at) || undefined,
@@ -109,6 +114,9 @@ function normalizeDeepCleaningDraft(item: any): InspectionPanelDeepCleaningDraft
     submitAsCompleted: !!item?.submitAsCompleted,
     completionNote: cleanText(item?.completionNote),
     completionAfterPhotos: Array.isArray(item?.completionAfterPhotos) ? item.completionAfterPhotos.map((x: any) => cleanText(x)).filter(Boolean) : [],
+    completionOwnerId: cleanText(item?.completionOwnerId) || null,
+    completionAssigneeId: cleanText(item?.completionAssigneeId) || null,
+    completionRecordId: cleanText(item?.completionRecordId) || null,
     completionStartedAt: cleanText(item?.completionStartedAt) || null,
     completionEndedAt: cleanText(item?.completionEndedAt) || null,
   }

@@ -1,3 +1,4 @@
+function fixtureToken(token: string) { require('./mediaCaptureIdentity').setMediaCaptureSession('cleaner-1', token); return token }
 jest.mock('./api', () => ({
   isRetryableApiError: jest.fn((error: any) => !!error?.retryable),
   uploadCleaningMedia: jest.fn(),
@@ -33,6 +34,7 @@ beforeEach(async () => {
   jest.resetModules()
   mockDeletedUris.splice(0, mockDeletedUris.length)
   await getAsyncStorage().clear()
+  require('./mediaCaptureIdentity').setMediaCaptureSession('cleaner-1', 'token-1')
 })
 
 test('keeps the local day-end photo after object upload when the handover save is retryable', async () => {
@@ -56,7 +58,7 @@ test('keeps the local day-end photo after object upload when the handover save i
     updated_at: '2026-08-12T01:00:00.000Z',
   })
 
-  const result = await queueMod.processDayEndHandoverQueue('token-1')
+  const result = await queueMod.processDayEndHandoverQueue(fixtureToken('token-1'))
 
   expect(result).toEqual({ processed: 0, remaining: 1 })
   expect(api.uploadCleaningMedia).toHaveBeenCalledWith(
@@ -94,7 +96,7 @@ test('keeps day-end draft when submit fails with retryable timeout', async () =>
     updated_at: '2026-06-29T01:00:00.000Z',
   })
 
-  const result = await queueMod.processDayEndHandoverQueue('token-1')
+  const result = await queueMod.processDayEndHandoverQueue(fixtureToken('token-1'))
 
   expect(result).toEqual({ processed: 0, remaining: 1 })
   expect(api.uploadDayEndHandover).toHaveBeenCalledWith('token-1', expect.objectContaining({ section: 'key' }))
@@ -117,7 +119,7 @@ test('shares one in-flight day-end submission across concurrent maintenance call
   const queueMod = require('./dayEndHandoverQueue') as typeof import('./dayEndHandoverQueue')
 
   await queueMod.saveDayEndHandoverDraft({
-    user_id: 'cleaner-shared',
+    user_id: 'cleaner-1',
     date: '2026-06-30',
     pending_submit: false,
     key_items: [{ id: 'key-shared', uri: 'file:///local/key-shared.jpg', captured_at: '2026-06-30T01:00:00.000Z', uploaded_url: 'https://cdn.example.com/key-shared.jpg' }],
@@ -128,8 +130,8 @@ test('shares one in-flight day-end submission across concurrent maintenance call
     updated_at: '2026-06-30T01:00:00.000Z',
   })
 
-  const first = queueMod.processDayEndHandoverQueue('token-1')
-  const second = queueMod.processDayEndHandoverQueue('token-1')
+  const first = queueMod.processDayEndHandoverQueue(fixtureToken('token-1'))
+  const second = queueMod.processDayEndHandoverQueue(fixtureToken('token-1'))
 
   expect(second).toBe(first)
   await submitStarted

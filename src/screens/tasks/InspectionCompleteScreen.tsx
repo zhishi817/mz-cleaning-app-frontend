@@ -80,7 +80,7 @@ export default function InspectionCompleteScreen(props: Props) {
     message: '检查完成资料或钥匙视频尚未提交',
   })
   const { t } = useI18n()
-  const { token } = useAuth()
+  const { token, user } = useAuth()
   const insets = useSafeAreaInsets()
   const { width } = useWindowDimensions()
   const isCompactLayout = isCompactWidth(width)
@@ -311,6 +311,7 @@ export default function InspectionCompleteScreen(props: Props) {
       const name = String(a.fileName || uri.split('/').pop() || `lockbox-${Date.now()}.mov`)
       const mimeType = String(a.mimeType || 'video/quicktime')
       const queued = await enqueueInspectionMediaItem({
+        captured_by_user_id: user?.id || '',
         task_id: cleaningTaskId,
         kind: 'lockbox_video',
         source_uri: uri,

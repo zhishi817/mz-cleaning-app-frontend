@@ -1,11 +1,12 @@
+import { getMediaCaptureUserId, assertMediaCaptureSession, guardMediaRequest } from './mediaCaptureIdentity'
 import { Directory, File, Paths } from 'expo-file-system'
 import type { InspectionPhotoArea } from './api'
-import { ApiError, isRetryableApiError, uploadCleaningMedia, uploadCleaningVideo, uploadLockboxVideo, uploadSelfLockboxVideo } from './api'
+import {  ApiError, isRetryableApiError,uploadCleaningMedia as api_uploadCleaningMedia,uploadCleaningVideo as api_uploadCleaningVideo,uploadLockboxVideo as api_uploadLockboxVideo,uploadSelfLockboxVideo as api_uploadSelfLockboxVideo } from './api'
 import { cleaningMediaReference } from './cleaningMedia'
 import { compressImageForLocalStorage, isCompressibleImageMimeType } from './imageCompression'
 import { draftMimeTypeFrom } from './localMediaDrafts'
 import { isLocalMediaLocked, withLocalMediaLock } from './localMediaLocks'
-import { getJson, setJson } from './storage'
+import { getOwnedMediaJson as rawGetJson, setOwnedMediaJson as rawSetJson } from './mediaCaptureIdentity'
 
 export type InspectionQueueKind = 'inspection_photo' | 'restock_proof' | 'lockbox_video'
 export type UploadQueueStatus =
@@ -17,6 +18,7 @@ export type UploadQueueStatus =
   | 'expired_local_cleaned'
 
 export type InspectionMediaQueueItem = {
+  captured_by_user_id?: string
   id: string
   task_id: string
   kind: InspectionQueueKind
@@ -169,8 +171,11 @@ function withOperationTimeout<T>(promise: Promise<T>, timeoutMs: number, message
 }
 
 async function updateQueueItem(id: string, updater: (item: InspectionMediaQueueItem) => InspectionMediaQueueItem | null) {
+  const mutationOwner = getMediaCaptureUserId()
   await serializeQueueMutation(async () => {
+    if (!mutationOwner || mutationOwner !== getMediaCaptureUserId()) throw new Error('MEDIA_CAPTURE_SESSION_CHANGED')
     const items = await loadQueue()
+    if (mutationOwner !== getMediaCaptureUserId()) throw new Error('MEDIA_CAPTURE_SESSION_CHANGED')
     let changed = false
     const next = items.flatMap((item) => {
       if (item.id !== id) return [item]
@@ -202,6 +207,7 @@ export async function listInspectionMediaQueueItemsForTask(taskId: string, kinds
 export async function enqueueInspectionMediaItem(params: {
   task_id: string
   kind: InspectionQueueKind
+  captured_by_user_id?: string
   source_uri: string
   name: string
   mime_type: string
@@ -213,6 +219,7 @@ export async function enqueueInspectionMediaItem(params: {
   const privateCopy = await copyToPrivateDir(params.source_uri, params.name, params.mime_type, params.kind)
   const item: InspectionMediaQueueItem = {
     id: makeId(params.kind),
+    captured_by_user_id: params.captured_by_user_id || getMediaCaptureUserId(),
     task_id: String(params.task_id || '').trim(),
     kind: params.kind,
     local_uri: privateCopy.localUri,
@@ -228,8 +235,11 @@ export async function enqueueInspectionMediaItem(params: {
     last_error: null,
     meta: params.meta ? { ...params.meta } : undefined,
   }
+  const mutationOwner = getMediaCaptureUserId()
   await serializeQueueMutation(async () => {
+    if (!mutationOwner || mutationOwner !== getMediaCaptureUserId()) throw new Error('MEDIA_CAPTURE_SESSION_CHANGED')
     const items = await loadQueue()
+    if (mutationOwner !== getMediaCaptureUserId()) throw new Error('MEDIA_CAPTURE_SESSION_CHANGED')
     items.push(item)
     await saveQueue(items)
   })
@@ -251,8 +261,11 @@ export async function removeInspectionMediaItem(id: string, options?: { deleteLo
 export async function completeInspectionMediaItems(ids: string[]) {
   const idSet = new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean))
   if (!idSet.size) return
+  const mutationOwner = getMediaCaptureUserId()
   await serializeQueueMutation(async () => {
+    if (!mutationOwner || mutationOwner !== getMediaCaptureUserId()) throw new Error('MEDIA_CAPTURE_SESSION_CHANGED')
     const items = await loadQueue()
+    if (mutationOwner !== getMediaCaptureUserId()) throw new Error('MEDIA_CAPTURE_SESSION_CHANGED')
     const next = items.filter((item) => {
       if (!idSet.has(item.id)) return true
       if (!item.local_file_deleted_at) deleteLocalFile(item.local_uri)
@@ -289,7 +302,7 @@ function isMissingLocalFileError(error: unknown) {
 
 function uploadMeta(item: InspectionMediaQueueItem) {
   const meta = item.meta || {}
-  const identity = { task_id: item.task_id, media_id: item.id }
+  const identity = { captured_by_user_id: item.captured_by_user_id || '', task_id: item.task_id, media_id: item.id }
   if (item.kind === 'lockbox_video') return { ...identity, purpose: 'lockbox_video', captured_at: item.captured_at }
   if (item.kind === 'restock_proof') {
     return {
@@ -389,6 +402,7 @@ async function recordWaitTimeout(itemId: string, phase: 'upload' | 'business_sav
 }
 
 function startBusinessSaveAttempt(token: string, item: InspectionMediaQueueItem, uploadedUrl: string) {
+  assertMediaCaptureSession(token, item.captured_by_user_id || '')
   const existing = activeBusinessSaveAttempts.get(item.id)
   if (existing) return existing
 
@@ -408,8 +422,10 @@ function startBusinessSaveAttempt(token: string, item: InspectionMediaQueueItem,
           business_finalization_pending: result?.action_result?.finalization_pending === true,
         },
       }))
+      assertMediaCaptureSession(token, item.captured_by_user_id || '')
       deleteLocalFile(item.local_uri)
     } catch (error) {
+      assertMediaCaptureSession(token)
       await recordQueueFailure(item.id, error, 'business_save')
       throw error
     }
@@ -424,6 +440,7 @@ function startBusinessSaveAttempt(token: string, item: InspectionMediaQueueItem,
 }
 
 function startUploadAttempt(token: string, item: InspectionMediaQueueItem) {
+  assertMediaCaptureSession(token, item.captured_by_user_id || '')
   const existing = activeUploadAttempts.get(item.id)
   if (existing) return existing
 
@@ -449,6 +466,7 @@ function startUploadAttempt(token: string, item: InspectionMediaQueueItem) {
       }))
       return uploadedUrl
     } catch (error) {
+      assertMediaCaptureSession(token)
       await recordQueueFailure(item.id, error, 'upload')
       throw error
     } finally {
@@ -466,6 +484,7 @@ function startUploadAttempt(token: string, item: InspectionMediaQueueItem) {
 
 function continueLateLockboxUpload(token: string, item: InspectionMediaQueueItem, uploadAttempt: Promise<string>) {
   void uploadAttempt.then(async (uploadedUrl) => {
+    assertMediaCaptureSession(token, item.captured_by_user_id || '')
     const latest = (await loadQueue()).find((current) => current.id === item.id)
     if (!latest || latest.business_saved || latest.kind !== 'lockbox_video') return
     await startBusinessSaveAttempt(token, latest, uploadedUrl)
@@ -473,7 +492,9 @@ function continueLateLockboxUpload(token: string, item: InspectionMediaQueueItem
 }
 
 export async function processInspectionMediaQueue(token: string) {
+  assertMediaCaptureSession(token)
   await pruneExpiredInspectionMediaItems()
+  assertMediaCaptureSession(token)
   const items = await loadQueue()
   const ordered = [...items].sort((a, b) => {
     if (a.kind === b.kind) return a.created_at.localeCompare(b.created_at)
@@ -498,6 +519,7 @@ export async function processInspectionMediaQueue(token: string) {
         )
         processed++
       } catch (error) {
+      assertMediaCaptureSession(token)
         if (isOperationTimeout(error)) {
           if (item.kind === 'lockbox_video') continueLateLockboxUpload(token, item, uploadAttempt)
           try {
@@ -512,6 +534,7 @@ export async function processInspectionMediaQueue(token: string) {
       processed++
     }
 
+    assertMediaCaptureSession(token, item.captured_by_user_id || '')
     if (item.kind === 'lockbox_video' && uploadedUrl) {
       const latest = (await loadQueue()).find((current) => current.id === item.id)
       if (!latest || latest.business_saved) continue
@@ -522,6 +545,7 @@ export async function processInspectionMediaQueue(token: string) {
           '视频已上传但保存任务超时，系统会继续等待并自动重试',
         )
       } catch (error) {
+      assertMediaCaptureSession(token)
         if (isOperationTimeout(error)) {
           try {
             await recordWaitTimeout(item.id, 'business_save', String((error as Error).message))
@@ -533,4 +557,18 @@ export async function processInspectionMediaQueue(token: string) {
     }
   }
   return { processed, remaining: (await loadQueue()).filter((item) => !item.business_saved).length }
+}
+
+const uploadCleaningMedia = guardMediaRequest(api_uploadCleaningMedia, true)
+const uploadCleaningVideo = guardMediaRequest(api_uploadCleaningVideo, true)
+const uploadLockboxVideo = guardMediaRequest(api_uploadLockboxVideo)
+const uploadSelfLockboxVideo = guardMediaRequest(api_uploadSelfLockboxVideo)
+
+
+async function getJson<T>(key: string): Promise<T | null> {
+  const result = await rawGetJson<T>(key)
+  return result
+}
+async function setJson<T>(key: string, value: T) {
+  return rawSetJson(key, value)
 }

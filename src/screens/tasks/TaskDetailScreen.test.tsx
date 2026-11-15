@@ -1,8 +1,10 @@
 import React from 'react'
 import { Alert, Keyboard, Platform, StyleSheet } from 'react-native'
-import { fireEvent, render, waitFor } from '@testing-library/react-native'
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 
+let mockCompletionDrafts: Record<string, any[]> = {}
+let mockCompletionMediaSequence = 0
 let mockKeyQueueItem: any = null
 let mockPendingCompletionPhotoReferences: string[] = []
 const mockAuthState: any = { user: { id: 'u1', username: 'tester', role: 'staff' }, token: 't1' }
@@ -20,6 +22,7 @@ jest.mock('expo-image-picker', () => {
     MediaType: { IMAGE: 'images', VIDEO: 'videos' },
     requestCameraPermissionsAsync: jest.fn(async () => ({ granted: true })),
     requestMediaLibraryPermissionsAsync: jest.fn(async () => ({ granted: true })),
+    launchImageLibraryAsync: jest.fn(async () => ({ canceled: true })),
     launchCameraAsync: jest.fn(async () => ({
       canceled: false,
       assets: [{ uri: 'file:///tmp/k.jpg', fileName: 'k.jpg', mimeType: 'image/jpeg' }],
@@ -112,6 +115,7 @@ jest.mock('../../lib/api', () => {
     uploadCleaningMedia: jest.fn(async () => ({ url: 'http://example.com/k.jpg' })),
     getWorkTaskFormPhotos: jest.fn(async () => ({ items: [] })),
     markWorkTask: jest.fn(async () => ({ ok: true })),
+    submitDeepCleaningCompletion: jest.fn(async () => ({ ok: true, status: 'pending_review', workflow_status: 'pending_review', available_actions: [], repair_photo_urls: ['mzapp/deep-after.jpg'], work_record_state: 'pending_review', work_record_read_only: true, counts_as_active_task: false })),
     submitMaintenanceExecutorAction: jest.fn(async () => ({ status: 'pending_review', available_actions: [] })),
     appendWorkTaskCompletionPhotos: jest.fn(async () => ({ ok: true, completion_photo_urls: ['mzapp/completion-photo.jpg'] })),
     startCleaningTask: jest.fn(async () => ({ ok: true })),
@@ -136,12 +140,22 @@ jest.mock('../../lib/keyUploadQueue', () => ({
   subscribeKeyUploadQueue: jest.fn(() => () => {}),
 }))
 
+jest.mock('../../lib/localMediaDrafts', () => ({
+  draftFileExists: jest.fn(() => true),
+  persistCompressedDraftMedia: jest.fn(async (options: any) => ({ localUri: 'file:///persistent/completion.jpg', name: options.name, mimeType: options.mimeType })),
+}))
+
 jest.mock('../../lib/maintenanceCompletionPhotoDraft', () => ({
-  clearMaintenanceCompletionPhotoDraft: jest.fn(async () => {}),
-  createMaintenanceCompletionPhotoMediaId: jest.fn(() => 'media-1'),
-  getMaintenanceCompletionPhotoDraft: jest.fn(async () => []),
-  removeMaintenanceCompletionPhotoDraft: jest.fn(async () => {}),
-  setMaintenanceCompletionPhotoDraft: jest.fn(async (_taskId: string, _ownerId: string, photos: any[]) => photos),
+  clearMaintenanceCompletionPhotoDraft: jest.fn(async (taskId: string, ownerId: string) => { delete mockCompletionDrafts[`${taskId}:${ownerId}`] }),
+  createMaintenanceCompletionPhotoMediaId: jest.fn(() => `media-${++mockCompletionMediaSequence}`),
+  getMaintenanceCompletionPhotoDraft: jest.fn(async (taskId: string, ownerId: string) => mockCompletionDrafts[`${taskId}:${ownerId}`] || []),
+  removeMaintenanceCompletionPhotoDraft: jest.fn(async (taskId: string, ownerId: string, mediaId: string) => {
+    mockCompletionDrafts[`${taskId}:${ownerId}`] = (mockCompletionDrafts[`${taskId}:${ownerId}`] || []).filter((photo: any) => photo.media_id !== mediaId)
+  }),
+  setMaintenanceCompletionPhotoDraft: jest.fn(async (taskId: string, ownerId: string, photos: any[]) => {
+    mockCompletionDrafts[`${taskId}:${ownerId}`] = photos.map((photo) => ({ ...photo }))
+    return mockCompletionDrafts[`${taskId}:${ownerId}`]
+  }),
 }))
 
 jest.mock('../../lib/workTaskCompletionPhotoPending', () => ({
@@ -155,6 +169,20 @@ jest.mock('../../lib/workTaskCompletionPhotoPending', () => ({
 }))
 
 beforeEach(() => {
+  mockCompletionDrafts = {}
+  const local = require('../../lib/localMediaDrafts')
+  local.draftFileExists.mockReset().mockReturnValue(true)
+  local.persistCompressedDraftMedia.mockReset().mockImplementation(async (options: any) => ({ localUri: 'file:///persistent/completion.jpg', name: options.name, mimeType: options.mimeType }))
+  const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+  drafts.getMaintenanceCompletionPhotoDraft.mockReset().mockImplementation(async (taskId: string, ownerId: string) => mockCompletionDrafts[`${taskId}:${ownerId}`] || [])
+  drafts.setMaintenanceCompletionPhotoDraft.mockReset().mockImplementation(async (taskId: string, ownerId: string, photos: any[]) => {
+    mockCompletionDrafts[`${taskId}:${ownerId}`] = photos.map((photo: any) => ({ ...photo }))
+    return mockCompletionDrafts[`${taskId}:${ownerId}`]
+  })
+  mockCompletionMediaSequence = 0
+  require('expo-image-picker').launchCameraAsync.mockReset().mockResolvedValue({ canceled: false, assets: [{ uri: 'file:///tmp/k.jpg', fileName: 'k.jpg', mimeType: 'image/jpeg' }] })
+  require('expo-image-picker').launchImageLibraryAsync.mockReset().mockResolvedValue({ canceled: true })
+  require('../../lib/api').uploadMzappMedia.mockReset().mockResolvedValue({ url: 'mzapp/completion-photo.jpg' })
   mockKeyQueueItem = null
   mockPendingCompletionPhotoReferences = []
   require('../../lib/api').getWorkTaskFormPhotos.mockClear()
@@ -890,7 +918,7 @@ test('self-complete cleaner can replay only the exact-source historical lockbox 
     const video = ui.getByTestId('task-detail-lockbox-video').findByType(require('expo-av').Video)
     expect(video.props.source).toEqual({
       uri: expect.stringContaining('variant=source'),
-      headers: { Authorization: 'Bearer t1' },
+      headers: { Authorization: 'Bearer t1', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
     })
     expect(String(video.props.source.uri)).toContain('source_task_id=self-complete-source')
     expect(String(video.props.source.uri)).toContain('media_scope=cleaner')
@@ -1842,7 +1870,7 @@ test('completed non-maintenance task saves supplemental completion photos only t
     fireEvent.press(ui.getByTestId('offline-task-mark-camera'))
 
     await waitFor(() => {
-      expect(api.uploadMzappMedia).toHaveBeenCalledWith('t1', expect.objectContaining({ uri: 'file:///tmp/k.jpg' }))
+      expect(api.uploadMzappMedia).toHaveBeenCalledWith('t1', expect.objectContaining({ uri: 'file:///persistent/completion.jpg' }), undefined, { skipImageCompression: true })
       expect(api.appendWorkTaskCompletionPhotos).toHaveBeenCalledWith('t1', 'w1', { photo_urls: ['mzapp/completion-photo.jpg'] })
       expect(store.patchWorkTaskItem).toHaveBeenCalledWith('w1', { completion_photo_urls: ['mzapp/completion-photo.jpg'] })
     })
@@ -1999,8 +2027,7 @@ test('completed supplemental-photo append failure persists an uploaded reference
     await waitFor(() => {
       expect(api.appendWorkTaskCompletionPhotos).toHaveBeenCalledWith('t1', 'w1', { photo_urls: ['mzapp/completion-photo.jpg'] })
       expect(store.patchWorkTaskItem).not.toHaveBeenCalled()
-      expect(ui.queryByTestId('maintenance-action-photo-0')).toBeNull()
-      expect(ui.queryByLabelText('删除标记照片')).toBeNull()
+      expect(ui.getByTestId('maintenance-action-photo-0').props.localUri).toBe('file:///persistent/completion.jpg')
       expect(pendingStore.setPendingWorkTaskCompletionPhotoReferences).toHaveBeenCalledWith('w1', 'u1', ['mzapp/completion-photo.jpg'])
       expect(ui.getByText('已有 1 张照片已上传，等待保存到完成记录')).toBeTruthy()
       expect(ui.getByTestId('offline-task-completion-photo-retry-save')).toBeTruthy()
@@ -2192,4 +2219,772 @@ test('customer service can edit an offline task and save its executor', async ()
   dismissKeyboard.mockRestore()
   snapshot.items[0] = previousTask
   mockAuthState.user = previousUser
+})
+
+
+describe('deep-cleaning assigned workflow', () => {
+  const after = 'mzapp/deep-after.jpg'
+  let previousTask: any
+  let snapshot: any
+  beforeEach(() => {
+    snapshot = require('../../lib/workTasksStore').getWorkTasksSnapshot()
+    previousTask = snapshot.items[0]
+    snapshot.items[0] = {
+      id: 'property_deep_cleaning:d1', source_id: 'd1', title: '深度清洁',
+      property: { id: 'deep-property', code: 'DEEP-115', address: '合成深清房源' },
+      scheduled_date: '2026-01-01', date: '2026-01-01', urgency: 'medium',
+      source_type: 'property_deep_cleaning', task_kind: 'deep_cleaning', status: 'assigned',
+      assignee_id: 'u1', work_record_read_only: false,
+      photo_urls: ['mzapp/deep-before.jpg'], completion_photo_urls: [],
+      summary: '原始反馈 photo: mzapp/not-an-after-photo.jpg', available_actions: [],
+      deep_cleaning_workflow: { status: 'assigned', available_actions: ['complete'] },
+    }
+    const api = require('../../lib/api')
+    api.markWorkTask.mockClear()
+    api.submitDeepCleaningCompletion.mockClear()
+    const draft = require('../../lib/maintenanceCompletionPhotoDraft')
+    draft.getMaintenanceCompletionPhotoDraft.mockReset().mockResolvedValue([])
+    draft.clearMaintenanceCompletionPhotoDraft.mockClear()
+    jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+  })
+  afterEach(() => { snapshot.items[0] = previousTask })
+  function renderDeep() {
+    const navigation = { goBack: jest.fn(), setParams: jest.fn() }
+    const Screen = require('./TaskDetailScreen').default
+    return { navigation, ui: render(<I18nProvider><Screen navigation={navigation} route={{ key: 'deep-d1', name: 'TaskDetail', params: { id: 'property_deep_cleaning:d1' } }} /></I18nProvider>) }
+  }
+  function seedDraft() {
+    require('../../lib/maintenanceCompletionPhotoDraft').getMaintenanceCompletionPhotoDraft.mockResolvedValueOnce([{
+      media_id: 'deep-media', local_uri: 'file:///documents/deep-after.jpg', remote_reference: after,
+      name: 'deep.jpg', mime_type: 'image/jpeg', captured_at: '', upload_state: 'remote_stored', error_code: null,
+    }])
+  }
+  test('combined before upload keeps acknowledged remote after temporary draft storage failure', async () => {
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string, owner: string) => mockCompletionDrafts[`${key}:${owner}`] || [])
+    let failOnce = true
+    drafts.setMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string, owner: string, photos: any[]) => {
+      if (failOnce && photos.some((photo) => photo.remote_reference)) { failOnce = false; throw new Error('temporary storage failure') }
+      mockCompletionDrafts[`${key}:${owner}`] = photos
+      return photos
+    })
+    const picker = require('expo-image-picker')
+    picker.launchImageLibraryAsync.mockResolvedValueOnce({ canceled: false, assets: [{ uri: 'file:///before.jpg', fileName: 'before.jpg', mimeType: 'image/jpeg' }] })
+    const api = require('../../lib/api')
+    api.uploadMzappMedia.mockReset().mockResolvedValue({ remoteReference: 'mzapp/ack-before.jpg' })
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByTestId('deep-before-library').props.accessibilityState.disabled).toBe(false))
+    fireEvent.press(ui.getByTestId('deep-before-library'))
+    const key = require('../../lib/deepCleaningCompletion').deepCleaningBeforeDraftKey('property_deep_cleaning:d1', 'd1')
+    await waitFor(() => expect(mockCompletionDrafts[`${key}:u1`]?.[0]?.remote_reference).toBe('mzapp/ack-before.jpg'))
+    expect(api.uploadMzappMedia).toHaveBeenCalledTimes(1)
+    expect(ui.queryByText('重试前图上传')).toBeNull()
+  })
+
+  test('combined before upload ignores same-owner stale token receipt UI but retains old draft acknowledgment', async () => {
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string, owner: string) => mockCompletionDrafts[`${key}:${owner}`] || [])
+    const api = require('../../lib/api')
+    let finish: (value: any) => void = () => {}
+    api.uploadMzappMedia.mockReset().mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    require('expo-image-picker').launchImageLibraryAsync.mockResolvedValueOnce({ canceled: false, assets: [{ uri: 'file:///before.jpg', fileName: 'before.jpg', mimeType: 'image/jpeg' }] })
+    const { ui, navigation } = renderDeep()
+    await waitFor(() => expect(ui.getByTestId('deep-before-library').props.accessibilityState.disabled).toBe(false))
+    fireEvent.press(ui.getByTestId('deep-before-library'))
+    await waitFor(() => expect(api.uploadMzappMedia).toHaveBeenCalledTimes(1))
+    mockAuthState.token = 'new-token'
+    const Screen = require('./TaskDetailScreen').default
+    ui.rerender(<I18nProvider><Screen navigation={navigation} route={{ params: { id: 'property_deep_cleaning:d1' } }} /></I18nProvider>)
+    await act(async () => { finish({ remoteReference: 'mzapp/old-token-before.jpg' }) })
+    const key = require('../../lib/deepCleaningCompletion').deepCleaningBeforeDraftKey('property_deep_cleaning:d1', 'd1')
+    expect(mockCompletionDrafts[`${key}:u1`]?.[0]?.remote_reference).toBe('mzapp/old-token-before.jpg')
+    expect(api.submitDeepCleaningCompletion).not.toHaveBeenCalled()
+    expect(navigation.goBack).not.toHaveBeenCalled()
+    await waitFor(() => expect(ui.getByTestId('deep-before-library').props.accessibilityState.disabled).toBe(false))
+    fireEvent.press(ui.getByText('重试前图上传'))
+    await waitFor(() => expect(ui.queryByText('重试前图上传')).toBeNull())
+    expect(api.uploadMzappMedia).toHaveBeenCalledTimes(1)
+    mockAuthState.token = 't1'
+  })
+
+  test.each(['account', 'token', 'task'])('combined deep completion ignores delayed receipt after %s change', async (change) => {
+    seedDraft()
+    const api = require('../../lib/api')
+    let finish: (value: any) => void = () => {}
+    api.submitDeepCleaningCompletion.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const { ui, navigation } = renderDeep()
+    await waitFor(() => expect(ui.getByTestId('maintenance-action-photo-0')).toBeTruthy())
+    fireEvent.press(ui.getByTestId('deep-cleaning-task-complete'))
+    await waitFor(() => expect(api.submitDeepCleaningCompletion).toHaveBeenCalledTimes(1))
+    const previousUser = mockAuthState.user
+    if (change === 'account') mockAuthState.user = { ...previousUser, id: 'u2' }
+    if (change !== 'task') mockAuthState.token = 't2'
+    const nextId = change === 'task' ? 'property_deep_cleaning:d2' : 'property_deep_cleaning:d1'
+    if (change === 'task') snapshot.items[0] = { ...snapshot.items[0], id: nextId, source_id: 'd2' }
+    const Screen = require('./TaskDetailScreen').default
+    ui.rerender(<I18nProvider><Screen navigation={navigation} route={{ params: { id: nextId } }} /></I18nProvider>)
+    await act(async () => { finish({ status: 'pending_review', workflow_status: 'pending_review', completion_photo_urls: [after] }) })
+    expect(snapshot.items[0].status).toBe('assigned')
+    expect(navigation.goBack).not.toHaveBeenCalled()
+    await waitFor(() => expect(ui.getByTestId('deep-before-library').props.accessibilityState.disabled).toBe(false))
+    expect(require('../../lib/maintenanceCompletionPhotoDraft').clearMaintenanceCompletionPhotoDraft).not.toHaveBeenCalled()
+    mockAuthState.user = previousUser
+    mockAuthState.token = 't1'
+  })
+
+  test('deep task never adopts turnover title, times, tags or guide even with contaminated fields', async () => {
+    snapshot.items[0] = { ...snapshot.items[0], start_time: '10am', end_time: '8pm', checkout_time: '10am', checkin_time: '8pm', property: { ...snapshot.items[0].property, access_guide_link: 'https://fixture.invalid/guide' } }
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByText('清洁前照片')).toBeTruthy())
+    expect(ui.getByText('DEEP-115')).toBeTruthy()
+    expect(ui.queryByText(/退房|入住|晚退|早入住|晚入住/)).toBeNull()
+  })
+  test('pure deep task has no empty check-in guide prompt', async () => {
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByText('清洁前照片')).toBeTruthy())
+    expect(ui.queryByText(/退房|入住/)).toBeNull()
+  })
+  test('empty before-photo section offers capture only for server-authorized deep task', async () => {
+    snapshot.items[0].photo_urls = []
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByTestId('deep-before-camera')).toBeTruthy())
+    expect(ui.getByText('清洁前照片')).toBeTruthy()
+    expect(ui.getByTestId('deep-before-library')).toBeTruthy()
+    expect(StyleSheet.flatten(ui.getByPlaceholderText('备注').props.style)).toMatchObject({ textAlignVertical: 'center', paddingVertical: 0 })
+    for (const [before, after] of [['deep-before-camera', 'offline-task-mark-camera'], ['deep-before-library', 'offline-task-mark-library']]) {
+      expect(StyleSheet.flatten(ui.getByTestId(before).props.style)).toEqual(StyleSheet.flatten(ui.getByTestId(after).props.style))
+    }
+  })
+
+  test('before and after evidence submit atomically, retain both on failure and clear only canonical receipt', async () => {
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    const beforeKey = require('../../lib/deepCleaningCompletion').deepCleaningBeforeDraftKey('property_deep_cleaning:d1', 'd1')
+    const before = { media_id: 'before-1', local_uri: 'file:///before.jpg', remote_reference: 'mzapp/new-before.jpg', name: 'before.jpg', mime_type: 'image/jpeg', upload_state: 'remote_stored' }
+    const afterDraft = { ...before, media_id: 'after-1', remote_reference: after }
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string) => key === beforeKey ? [before] : [afterDraft])
+    const api = require('../../lib/api')
+    api.submitDeepCleaningCompletion.mockRejectedValueOnce(new Error('unknown receipt')).mockResolvedValueOnce({ status: 'pending_review', workflow_status: 'pending_review', available_actions: [], photo_urls: ['mzapp/deep-before.jpg', before.remote_reference], repair_photo_urls: [after], work_record_read_only: true, counts_as_active_task: false })
+    const { ui, navigation } = renderDeep()
+    await waitFor(() => expect(ui.getByTestId('deep-before-draft-before-1')).toBeTruthy())
+    expect(ui.getByTestId('deep-before-draft-before-1').props.remoteReference).toBeUndefined()
+    const uploads = api.uploadMzappMedia.mock.calls.length
+    fireEvent.press(ui.getByTestId('deep-cleaning-task-complete'))
+    await waitFor(() => expect(api.submitDeepCleaningCompletion).toHaveBeenCalledTimes(1))
+    expect(drafts.clearMaintenanceCompletionPhotoDraft).not.toHaveBeenCalled()
+    await waitFor(() => expect(ui.getByTestId('deep-cleaning-task-complete').props.accessibilityState?.disabled).not.toBe(true))
+    fireEvent.press(ui.getByTestId('deep-cleaning-task-complete'))
+    await waitFor(() => expect(navigation.goBack).toHaveBeenCalled())
+    const first = api.submitDeepCleaningCompletion.mock.calls[0][1]
+    expect(first).toMatchObject({ beforePhotoUrls: [before.remote_reference], completionPhotoUrls: [after] })
+    expect(api.submitDeepCleaningCompletion.mock.calls[1][1]).toEqual(first)
+    expect(api.uploadMzappMedia.mock.calls.length).toBe(uploads)
+    expect(drafts.clearMaintenanceCompletionPhotoDraft).toHaveBeenCalledWith(beforeKey, 'u1', { deleteLocalFiles: true })
+    expect(snapshot.items[0].photo_urls).toEqual(['mzapp/deep-before.jpg', before.remote_reference])
+    expect(ui.queryByTestId('deep-before-camera')).toBeNull()
+  })
+
+  test('missing local before draft never renders an unassociated private remote reference', async () => {
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string) => key.startsWith('deep-cleaning-before:') ? [{ media_id: 'lost-before', local_uri: null, remote_reference: 'mzapp/private-before.jpg', upload_state: 'remote_stored' }] : [])
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByTestId('deep-before-local-missing')).toBeTruthy())
+    expect(ui.queryByLabelText('mzapp/private-before.jpg|property_deep_cleaning:d1')).toBeNull()
+  })
+
+  test('new before capture persists phase-isolated evidence and never mutates source before completion', async () => {
+    const local = require('../../lib/localMediaDrafts')
+    const persist = jest.spyOn(local, 'persistCompressedDraftMedia').mockResolvedValue({ localUri: 'file:///durable-before.jpg', name: 'before.jpg', mimeType: 'image/jpeg' })
+    const exists = jest.spyOn(local, 'draftFileExists').mockReturnValue(true)
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    const cache = new Map<string, any[]>()
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string) => cache.get(key) || [])
+    drafts.setMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string, _owner: string, photos: any[]) => { cache.set(key, photos); return photos })
+    const picker = require('expo-image-picker')
+    picker.launchCameraAsync.mockResolvedValueOnce({ canceled: false, assets: [{ uri: 'file:///new-before.jpg', fileName: 'before.jpg', mimeType: 'image/jpeg' }] }).mockResolvedValueOnce({ canceled: true })
+    const api = require('../../lib/api')
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByTestId('deep-before-camera').props.accessibilityState?.disabled).not.toBe(true))
+    fireEvent.press(ui.getByTestId('deep-before-camera'))
+    await waitFor(() => expect(ui.getByTestId('deep-before-draft-media-1')).toBeTruthy())
+    await waitFor(() => expect(Array.from(cache.values()).some((photos) => photos.some((photo) => photo.remote_reference))).toBe(true))
+    expect(Array.from(cache.keys())).toEqual([require('../../lib/deepCleaningCompletion').deepCleaningBeforeDraftKey('property_deep_cleaning:d1', 'd1')])
+    expect(api.submitDeepCleaningCompletion).not.toHaveBeenCalled()
+    expect(snapshot.items[0].photo_urls).toEqual(['mzapp/deep-before.jpg'])
+    expect(picker.launchCameraAsync.mock.calls.at(-1)[0].allowsEditing).toBe(false)
+    drafts.removeMaintenanceCompletionPhotoDraft.mockResolvedValueOnce([])
+    await waitFor(() => expect(ui.getByTestId('deep-before-remove-media-1').props.accessibilityState?.disabled).not.toBe(true))
+    fireEvent.press(ui.getByTestId('deep-before-remove-media-1'))
+    await waitFor(() => expect(ui.queryByTestId('deep-before-draft-media-1')).toBeNull())
+    expect(drafts.removeMaintenanceCompletionPhotoDraft).toHaveBeenCalledWith(require('../../lib/deepCleaningCompletion').deepCleaningBeforeDraftKey('property_deep_cleaning:d1', 'd1'), 'u1', 'media-1')
+    expect(snapshot.items[0].photo_urls).toEqual(['mzapp/deep-before.jpg'])
+    drafts.setMaintenanceCompletionPhotoDraft.mockImplementation(async (_key: string, _owner: string, photos: any[]) => photos)
+    persist.mockRestore()
+    exists.mockRestore()
+  })
+
+  test.each([false, true])('before cleanup on readonly reentry requires canonical association=%s', async (associated) => {
+    const key = require('../../lib/deepCleaningCompletion').deepCleaningBeforeDraftKey('property_deep_cleaning:d1', 'd1')
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (id: string) => id === key ? [{ media_id: 'before-reentry', local_uri: 'file:///before.jpg', remote_reference: 'mzapp/new-before.jpg', upload_state: 'remote_stored' }] : [])
+    snapshot.items[0] = { ...snapshot.items[0], status: 'pending_review', work_record_read_only: true, deep_cleaning_workflow: { status: 'pending_review', available_actions: [] }, photo_urls: associated ? ['mzapp/new-before.jpg'] : [] }
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByText('清洁前照片')).toBeTruthy())
+    expect(ui.queryByTestId('deep-before-camera')).toBeNull()
+    if (associated) await waitFor(() => expect(drafts.clearMaintenanceCompletionPhotoDraft).toHaveBeenCalledWith(key, 'u1', { deleteLocalFiles: true }))
+    else expect(drafts.clearMaintenanceCompletionPhotoDraft).not.toHaveBeenCalledWith(key, 'u1', expect.anything())
+  })
+
+  test('before evidence alone never satisfies required after evidence', async () => {
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (id: string) => id.startsWith('deep-cleaning-before:') ? [{ media_id: 'before-only', local_uri: 'file:///before.jpg', remote_reference: 'mzapp/before-only.jpg', upload_state: 'remote_stored' }] : [])
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByTestId('deep-before-draft-before-only')).toBeTruthy())
+    fireEvent.press(ui.getByTestId('deep-cleaning-task-complete'))
+    expect(require('../../lib/api').submitDeepCleaningCompletion).not.toHaveBeenCalled()
+    expect(Alert.alert).toHaveBeenCalledWith('出错了', '请先拍照上传')
+  })
+
+  test('unread before drafts block completion rather than silently omitting evidence', async () => {
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string) => {
+      if (key.startsWith('deep-cleaning-before:')) throw new Error('fixture read unavailable')
+      return [{ media_id: 'after-ready', local_uri: 'file:///after.jpg', remote_reference: after, upload_state: 'remote_stored' }]
+    })
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByText('前图草稿读取失败，请重新打开任务重试；原资料未删除。')).toBeTruthy())
+    expect(ui.getByTestId('deep-cleaning-task-complete').props.accessibilityState.disabled).toBe(true)
+    expect(ui.getByTestId('deep-before-camera').props.accessibilityState.disabled).toBe(true)
+    expect(require('../../lib/api').submitDeepCleaningCompletion).not.toHaveBeenCalled()
+    expect(drafts.clearMaintenanceCompletionPhotoDraft).not.toHaveBeenCalled()
+  })
+
+  test.each(['task', 'owner'])('before cleanup never uses old photos to clear a new %s bucket during delayed hydration', async (change) => {
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    const keyFor = require('../../lib/deepCleaningCompletion').deepCleaningBeforeDraftKey
+    const oldUser = mockAuthState.user
+    const nextId = change === 'task' ? 'property_deep_cleaning:d2' : 'property_deep_cleaning:d1'
+    const nextSource = change === 'task' ? 'd2' : 'd1'
+    const nextOwner = change === 'owner' ? 'u2' : 'u1'
+    const nextKey = keyFor(nextId, nextSource)
+    let release: ((photos: any[]) => void) | undefined
+    let switched = false
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string, owner: string) => {
+      if (switched && key === nextKey && owner === nextOwner) return await new Promise((resolve) => { release = resolve })
+      return key.startsWith('deep-cleaning-before:') ? [{ media_id: 'old-before', local_uri: 'file:///old-before.jpg', remote_reference: 'mzapp/old-before.jpg', upload_state: 'remote_stored' }] : []
+    })
+    const { ui } = renderDeep()
+    try {
+      await waitFor(() => expect(ui.getByTestId('deep-before-draft-old-before')).toBeTruthy())
+      switched = true
+      mockAuthState.user = { ...oldUser, id: nextOwner }
+      snapshot.items[0] = { ...snapshot.items[0], id: nextId, source_id: nextSource, status: 'pending_review', work_record_read_only: true, photo_urls: ['mzapp/old-before.jpg'], deep_cleaning_workflow: { status: 'pending_review', available_actions: [] } }
+      const Screen = require('./TaskDetailScreen').default
+      ui.rerender(<I18nProvider><Screen navigation={{ goBack: jest.fn(), setParams: jest.fn() }} route={{ params: { id: nextId } }} /></I18nProvider>)
+      await waitFor(() => expect(release).toBeDefined())
+      expect(drafts.clearMaintenanceCompletionPhotoDraft).not.toHaveBeenCalledWith(nextKey, nextOwner, expect.anything())
+      await require('@testing-library/react-native').act(async () => { release!([{ media_id: 'new-unsynced', local_uri: 'file:///new-unsynced.jpg', remote_reference: null, upload_state: 'local_persisted' }]) })
+      expect(drafts.clearMaintenanceCompletionPhotoDraft).not.toHaveBeenCalledWith(nextKey, nextOwner, expect.anything())
+      expect(ui.queryByTestId('deep-before-draft-old-before')).toBeNull()
+      expect(require('../../lib/api').submitDeepCleaningCompletion).not.toHaveBeenCalled()
+    } finally { mockAuthState.user = oldUser; ui.unmount() }
+  })
+
+  test.each(['before', 'after'])('local draft big preview opens without private remote for %s phase', async (phase) => {
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    const localUri = `file:///${phase}-preview.jpg`
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string) => (key.startsWith('deep-cleaning-before:') === (phase === 'before')) ? [{ media_id: 'local-preview', local_uri: localUri, remote_reference: `mzapp/unassociated-${phase}.jpg`, upload_state: 'remote_stored' }] : [])
+    const { ui } = renderDeep()
+    const id = phase === 'before' ? 'deep-before-draft-local-preview' : 'maintenance-action-photo-0'
+    await waitFor(() => expect(ui.getByTestId(id)).toBeTruthy())
+    fireEvent.press(ui.getByTestId(id))
+    expect(ui.getByTestId('cleaning-media-preview')).toHaveProp('localUri', localUri)
+    expect(ui.getByTestId('cleaning-media-preview')).toHaveProp('reference', '')
+    expect(ui.getByTestId('cleaning-media-preview')).toHaveProp('accessWorkTaskId', 'property_deep_cleaning:d1')
+    const oldUser = mockAuthState.user
+    try {
+      mockAuthState.user = { ...oldUser, id: 'other-viewer' }
+      const Screen = require('./TaskDetailScreen').default
+      ui.rerender(<I18nProvider><Screen navigation={{ goBack: jest.fn(), setParams: jest.fn() }} route={{ params: { id: 'property_deep_cleaning:d1' } }} /></I18nProvider>)
+      expect(ui.queryByTestId('cleaning-media-preview')).toBeNull()
+    } finally { mockAuthState.user = oldUser; ui.unmount() }
+  })
+
+  test.each(['task', 'owner'])('after cleanup does not clear an unread new %s bucket using old photos', async (change) => {
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    const oldUser = mockAuthState.user
+    const nextId = change === 'task' ? 'property_deep_cleaning:d2' : 'property_deep_cleaning:d1'
+    const nextOwner = change === 'owner' ? 'u2' : 'u1'
+    let switched = false
+    let release: ((photos: any[]) => void) | undefined
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string, owner: string) => {
+      if (key.startsWith('deep-cleaning-before:')) return []
+      if (switched && key === nextId && owner === nextOwner) return await new Promise((resolve) => { release = resolve })
+      return [{ media_id: 'old-after', local_uri: 'file:///old-after.jpg', remote_reference: 'mzapp/old-after.jpg', upload_state: 'remote_stored' }]
+    })
+    const { ui } = renderDeep()
+    try {
+      await waitFor(() => expect(ui.getByTestId('maintenance-action-photo-0')).toHaveProp('localUri', 'file:///old-after.jpg'))
+      switched = true
+      mockAuthState.user = { ...oldUser, id: nextOwner }
+      snapshot.items[0] = { ...snapshot.items[0], id: nextId, source_id: change === 'task' ? 'd2' : 'd1', status: 'pending_review', work_record_read_only: true, completion_photo_urls: ['mzapp/old-after.jpg'], deep_cleaning_workflow: { status: 'pending_review', available_actions: [] } }
+      const Screen = require('./TaskDetailScreen').default
+      ui.rerender(<I18nProvider><Screen navigation={{ goBack: jest.fn(), setParams: jest.fn() }} route={{ params: { id: nextId } }} /></I18nProvider>)
+      await waitFor(() => expect(release).toBeDefined())
+      expect(drafts.clearMaintenanceCompletionPhotoDraft).not.toHaveBeenCalledWith(nextId, nextOwner, expect.anything())
+      await require('@testing-library/react-native').act(async () => { release!([{ media_id: 'new-unsynced-after', local_uri: 'file:///unsynced-after.jpg', remote_reference: null, upload_state: 'local_persisted' }]) })
+      expect(drafts.clearMaintenanceCompletionPhotoDraft).not.toHaveBeenCalledWith(nextId, nextOwner, expect.anything())
+    } finally { mockAuthState.user = oldUser; ui.unmount() }
+  })
+
+  test.each(['admin', 'staff'])('associated r2 before/after previews preserve server work-task context for %s pending record', async (role) => {
+    const previousUser = mockAuthState.user
+    mockAuthState.user = { id: 'u1', username: 'fixture', role }
+    const before = 'r2://fixture-bucket/mzapp/before.jpg'
+    const completed = 'r2://fixture-bucket/mzapp/after.jpg'
+    snapshot.items[0] = { ...snapshot.items[0], status: 'pending_review', work_record_read_only: true, media_access_work_task_id: 'work_task:media-owner', photo_urls: [before], completion_photo_urls: [completed], deep_cleaning_workflow: { status: 'pending_review', available_actions: [] } }
+    const { ui } = renderDeep()
+    try {
+      fireEvent.press(ui.getByTestId('deep-cleaning-before-photo-0'))
+      expect(ui.getByTestId('cleaning-media-preview')).toHaveProp('reference', before)
+      expect(ui.getByTestId('cleaning-media-preview')).toHaveProp('accessWorkTaskId', 'work_task:media-owner')
+      fireEvent.press(ui.getByText('关闭'))
+      fireEvent.press(ui.getByTestId('maintenance-action-photo-0'))
+      expect(ui.getByTestId('cleaning-media-preview')).toHaveProp('reference', completed)
+      expect(ui.getByTestId('cleaning-media-preview')).toHaveProp('accessWorkTaskId', 'work_task:media-owner')
+      expect(ui.queryByTestId('deep-cleaning-task-complete')).toBeNull()
+      expect(ui.queryByTestId('deep-before-camera')).toBeNull()
+    } finally { mockAuthState.user = previousUser; ui.unmount() }
+  })
+
+  test('late after draft load cannot replace the new owner photos', async () => {
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    const previousUser = mockAuthState.user
+    let release: ((photos: any[]) => void) | undefined
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string, owner: string) => {
+      if (key.startsWith('deep-cleaning-before:')) return []
+      if (owner === 'u1') return await new Promise((resolve) => { release = resolve })
+      return [{ media_id: 'new-owner', local_uri: 'file:///new-owner.jpg', remote_reference: 'mzapp/new-owner.jpg', upload_state: 'remote_stored' }]
+    })
+    const { ui } = renderDeep()
+    try {
+      await waitFor(() => expect(release).toBeDefined())
+      mockAuthState.user = { ...previousUser, id: 'u2' }
+      const Screen = require('./TaskDetailScreen').default
+      ui.rerender(<I18nProvider><Screen navigation={{ goBack: jest.fn(), setParams: jest.fn() }} route={{ params: { id: 'property_deep_cleaning:d1' } }} /></I18nProvider>)
+      await waitFor(() => expect(ui.getByTestId('maintenance-action-photo-0')).toHaveProp('localUri', 'file:///new-owner.jpg'))
+      await require('@testing-library/react-native').act(async () => { release!([{ media_id: 'old-owner', local_uri: 'file:///old-owner.jpg', remote_reference: 'mzapp/old-owner.jpg', upload_state: 'remote_stored' }]) })
+      expect(ui.getByTestId('maintenance-action-photo-0')).toHaveProp('localUri', 'file:///new-owner.jpg')
+    } finally { mockAuthState.user = previousUser; ui.unmount() }
+  })
+
+  test('late after capture result is ignored after owner switch', async () => {
+    const picker = require('expo-image-picker')
+    let release: ((result: any) => void) | undefined
+    picker.launchCameraAsync.mockImplementationOnce(async () => await new Promise((resolve) => { release = resolve }))
+    const previousUser = mockAuthState.user
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    drafts.setMaintenanceCompletionPhotoDraft.mockClear()
+    const api = require('../../lib/api')
+    const uploads = api.uploadMzappMedia.mock.calls.length
+    const { ui } = renderDeep()
+    try {
+      await waitFor(() => expect(ui.getByTestId('deep-cleaning-task-complete').props.accessibilityState.disabled).toBe(false))
+      fireEvent.press(ui.getByTestId('offline-task-mark-camera'))
+      await waitFor(() => expect(release).toBeDefined())
+      mockAuthState.user = { ...previousUser, id: 'u2' }
+      const Screen = require('./TaskDetailScreen').default
+      ui.rerender(<I18nProvider><Screen navigation={{ goBack: jest.fn(), setParams: jest.fn() }} route={{ params: { id: 'property_deep_cleaning:d1' } }} /></I18nProvider>)
+      await require('@testing-library/react-native').act(async () => { release!({ canceled: false, assets: [{ uri: 'file:///old-capture.jpg', mimeType: 'image/jpeg' }] }) })
+      expect(api.uploadMzappMedia.mock.calls.length).toBe(uploads)
+      expect(drafts.setMaintenanceCompletionPhotoDraft).not.toHaveBeenCalled()
+      expect(ui.queryByTestId('maintenance-action-photo-0')).toBeNull()
+    } finally { mockAuthState.user = previousUser; ui.unmount() }
+  })
+
+  test('late after upload acknowledgment persists only to original owner and never renders for new owner', async () => {
+    const local = require('../../lib/localMediaDrafts')
+    const persist = jest.spyOn(local, 'persistCompressedDraftMedia').mockResolvedValue({ localUri: 'file:///old-after.jpg', name: 'after.jpg', mimeType: 'image/jpeg' })
+    const exists = jest.spyOn(local, 'draftFileExists').mockReturnValue(true)
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    const cache = new Map<string, any[]>()
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string, owner: string) => cache.get(`${owner}|${key}`) || [])
+    drafts.setMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string, owner: string, photos: any[]) => { cache.set(`${owner}|${key}`, photos); return photos })
+    const api = require('../../lib/api')
+    let release: ((result: any) => void) | undefined
+    api.uploadMzappMedia.mockImplementationOnce(async () => await new Promise((resolve) => { release = resolve }))
+    require('expo-image-picker').launchCameraAsync.mockResolvedValueOnce({ canceled: false, assets: [{ uri: 'file:///capture.jpg', mimeType: 'image/jpeg' }] })
+    const previousUser = mockAuthState.user
+    const { ui } = renderDeep()
+    try {
+      await waitFor(() => expect(ui.getByTestId('deep-cleaning-task-complete').props.accessibilityState.disabled).toBe(false))
+      fireEvent.press(ui.getByTestId('offline-task-mark-camera'))
+      await waitFor(() => expect(release).toBeDefined())
+      mockAuthState.user = { ...previousUser, id: 'u2' }
+      const Screen = require('./TaskDetailScreen').default
+      ui.rerender(<I18nProvider><Screen navigation={{ goBack: jest.fn(), setParams: jest.fn() }} route={{ params: { id: 'property_deep_cleaning:d1' } }} /></I18nProvider>)
+      await require('@testing-library/react-native').act(async () => { release!({ url: 'mzapp/old-owner-upload.jpg' }) })
+      expect(cache.get('u1|property_deep_cleaning:d1')?.[0].remote_reference).toBe('mzapp/old-owner-upload.jpg')
+      expect(cache.has('u2|property_deep_cleaning:d1')).toBe(false)
+      expect(ui.queryByTestId('maintenance-action-photo-0')).toBeNull()
+    } finally {
+      mockAuthState.user = previousUser; ui.unmount(); persist.mockRestore(); exists.mockRestore()
+      drafts.setMaintenanceCompletionPhotoDraft.mockImplementation(async (_key: string, _owner: string, photos: any[]) => photos)
+    }
+  })
+
+  test('after draft read failure blocks completion and preserves stored evidence', async () => {
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string) => {
+      if (!key.startsWith('deep-cleaning-before:')) throw new Error('fixture after read failed')
+      return []
+    })
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByText('后图草稿读取失败，请重新打开任务重试；原资料未删除。')).toBeTruthy())
+    expect(ui.getByTestId('deep-cleaning-task-complete').props.accessibilityState.disabled).toBe(true)
+    expect(drafts.clearMaintenanceCompletionPhotoDraft).not.toHaveBeenCalled()
+    expect(require('../../lib/api').submitDeepCleaningCompletion).not.toHaveBeenCalled()
+  })
+
+  test.each(['before', 'after'])('missing %s local file without upload is not described as uploaded evidence', async (phase) => {
+    const drafts = require('../../lib/maintenanceCompletionPhotoDraft')
+    drafts.getMaintenanceCompletionPhotoDraft.mockImplementation(async (key: string) => (key.startsWith('deep-cleaning-before:') === (phase === 'before')) ? [{ media_id: 'missing-file', local_uri: null, remote_reference: null, upload_state: 'blocked_local_missing' }] : [])
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByText(phase === 'before' ? '本地前图已丢失且未上传，请移除此草稿后重新拍摄' : '本地后图已丢失且未上传，请移除此草稿后重新拍摄。')).toBeTruthy())
+    expect(require('../../lib/api').submitDeepCleaningCompletion).not.toHaveBeenCalled()
+  })
+
+  test('original photos use exact shared reader context and never become after evidence', async () => {
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByText('清洁前照片')).toBeTruthy())
+    expect(ui.getByText('清洁后照片')).toBeTruthy()
+    expect(ui.queryByTestId('maintenance-action-photo-0')).toBeNull()
+    expect(ui.getByTestId('deep-cleaning-before-photo-0')).toBeTruthy()
+    const before = ui.getByLabelText('mzapp/deep-before.jpg|property_deep_cleaning:d1')
+    expect(before.props.resizeMode).toBe('contain')
+    fireEvent.press(ui.getByTestId('deep-cleaning-before-photo-0'))
+    expect(ui.getByTestId('cleaning-media-preview')).toHaveProp('accessibilityLabel', 'mzapp/deep-before.jpg|property_deep_cleaning:d1')
+  })
+  test('completion uses dedicated no-price action and authoritative pending-review receipt', async () => {
+    seedDraft()
+    const { ui, navigation } = renderDeep()
+    await waitFor(() => expect(ui.getByTestId('maintenance-action-photo-0')).toBeTruthy())
+    expect(ui.getByTestId('maintenance-action-photo-0').props.localUri).toBe('file:///documents/deep-after.jpg')
+    fireEvent.press(ui.getByTestId('deep-cleaning-task-complete'))
+    await waitFor(() => expect(navigation.goBack).toHaveBeenCalled())
+    const api = require('../../lib/api')
+    expect(api.markWorkTask).not.toHaveBeenCalled()
+    expect(api.submitDeepCleaningCompletion).toHaveBeenCalledWith('t1', expect.objectContaining({ recordId: 'd1', completionPhotoUrls: [after], operationId: expect.any(String) }))
+    expect(api.submitDeepCleaningCompletion.mock.calls.at(-1)[1]).not.toHaveProperty('amount')
+    expect(snapshot.items[0]).toMatchObject({ status: 'pending_review', source_workflow_status: 'pending_review', deep_cleaning_workflow: { status: 'pending_review', available_actions: [] }, counts_as_active_task: false })
+    expect(ui.getByText('待审核')).toBeTruthy()
+    expect(ui.queryByText('待处理')).toBeNull()
+    expect(snapshot.items[0].work_record_visible).toBe(false)
+  })
+  test.each(['finance', 'hr'])('server-authorized assigned deep completion is not hidden for %s role', async (role) => {
+    const previousUser = mockAuthState.user
+    mockAuthState.user = { id: 'u1', username: 'synthetic-executor', role }
+    try {
+      seedDraft()
+      const { ui, navigation } = renderDeep()
+      await waitFor(() => expect(ui.getByTestId('maintenance-action-photo-0')).toBeTruthy())
+      fireEvent.press(ui.getByTestId('deep-cleaning-task-complete'))
+      await waitFor(() => expect(navigation.goBack).toHaveBeenCalled())
+      expect(require('../../lib/api').submitDeepCleaningCompletion).toHaveBeenCalledWith('t1', expect.objectContaining({ recordId: 'd1' }))
+      expect(ui.getByText('待审核')).toBeTruthy()
+      expect(ui.queryByTestId('deep-cleaning-task-complete')).toBeNull()
+      ui.unmount()
+    } finally { mockAuthState.user = previousUser }
+  })
+  test('save failure retains uploaded draft and retry uses same operation without reupload', async () => {
+    seedDraft()
+    const api = require('../../lib/api')
+    api.submitDeepCleaningCompletion.mockRejectedValueOnce(new Error('offline'))
+    const uploadsBefore = api.uploadMzappMedia.mock.calls.length
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByTestId('maintenance-action-photo-0')).toBeTruthy())
+    fireEvent.press(ui.getByTestId('deep-cleaning-task-complete'))
+    await waitFor(() => expect(Alert.alert).toHaveBeenCalledWith(expect.any(String), 'offline'))
+    expect(require('../../lib/maintenanceCompletionPhotoDraft').clearMaintenanceCompletionPhotoDraft).not.toHaveBeenCalled()
+    fireEvent.press(ui.getByTestId('deep-cleaning-task-complete'))
+    await waitFor(() => expect(api.submitDeepCleaningCompletion).toHaveBeenCalledTimes(2))
+    expect(api.submitDeepCleaningCompletion.mock.calls[0][1].operationId).toBe(api.submitDeepCleaningCompletion.mock.calls[1][1].operationId)
+    expect(api.uploadMzappMedia.mock.calls.length).toBe(uploadsBefore)
+  })
+  test('mixed saved and new photos retain canonical readonly evidence', async () => {
+    snapshot.items[0].completion_photo_urls = ['mzapp/already-saved.jpg']
+    seedDraft()
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByTestId('maintenance-action-photo-1')).toBeTruthy())
+    expect(ui.getByTestId('maintenance-action-photo-0').props.remoteReference).toBe('mzapp/already-saved.jpg')
+    expect(ui.getByTestId('maintenance-action-photo-1').props.remoteReference).toBe('')
+    expect(ui.getAllByLabelText('删除标记照片')).toHaveLength(1)
+    fireEvent.press(ui.getByLabelText('删除标记照片'))
+    expect(require('../../lib/maintenanceCompletionPhotoDraft').removeMaintenanceCompletionPhotoDraft).toHaveBeenCalledWith('property_deep_cleaning:d1', 'u1', 'deep-media')
+    expect(ui.getByTestId('maintenance-action-photo-0').props.remoteReference).toBe('mzapp/already-saved.jpg')
+  })
+  test('missing local unsaved photo never requests unassociated remote bytes', async () => {
+    require('../../lib/maintenanceCompletionPhotoDraft').getMaintenanceCompletionPhotoDraft.mockResolvedValueOnce([{
+      media_id: 'missing-deep-media', local_uri: null, remote_reference: after,
+      name: 'deep.jpg', mime_type: 'image/jpeg', captured_at: '', upload_state: 'remote_stored', error_code: null,
+    }])
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByTestId('deep-cleaning-photo-local-missing')).toBeTruthy())
+    expect(ui.queryByLabelText(`${after}|property_deep_cleaning:d1`)).toBeNull()
+    expect(require('../../lib/maintenanceCompletionPhotoDraft').clearMaintenanceCompletionPhotoDraft).not.toHaveBeenCalled()
+  })
+  test.each(['pending_review', 'completed', 'assigned'])('cached/direct %s without server action cannot mutate', async (status) => {
+    snapshot.items[0] = { ...snapshot.items[0], status, completion_photo_urls: [after], deep_cleaning_workflow: { status, available_actions: [] } }
+    const { ui } = renderDeep()
+    await waitFor(() => expect(ui.getByText('清洁后照片')).toBeTruthy())
+    expect(ui.queryByTestId('deep-cleaning-task-complete')).toBeNull()
+    expect(ui.queryByTestId('offline-task-mark-camera')).toBeNull()
+    expect(ui.queryByLabelText('删除标记照片')).toBeNull()
+    expect(ui.queryByText('未完成')).toBeNull()
+    expect(require('../../lib/api').submitDeepCleaningCompletion).not.toHaveBeenCalled()
+  })
+})
+
+test.each(['property_maintenance', 'cleaning_offline_tasks'])('completion photo refresh preserves unsaved %s notes and unfinished draft', async (source_type) => {
+  const store = require('../../lib/workTasksStore')
+  const snapshot = store.getWorkTasksSnapshot()
+  const previous = snapshot.items[0]
+  snapshot.items[0] = { id: 'draft-isolation', source_id: 'draft-fixture', source_type, task_kind: source_type === 'property_maintenance' ? 'maintenance' : 'offline', title: 'Fixture', property: { code: 'DRAFT' }, status: 'assigned', scheduled_date: '2026-01-01', available_actions: [], completion_photo_urls: [], maintenance_workflow: { status: 'assigned', available_actions: ['executor_complete', 'executor_unfinished'] } }
+  const Screen = require('./TaskDetailScreen').default
+  try {
+    const ui = render(<I18nProvider><Screen navigation={{ goBack: jest.fn(), setParams: jest.fn() }} route={{ params: { id: 'draft-isolation' } }} /></I18nProvider>)
+    await waitFor(() => expect(ui.getByPlaceholderText('备注')).toBeTruthy())
+    fireEvent.changeText(ui.getByPlaceholderText('备注'), '尚未保存的备注')
+    fireEvent.press(ui.getByText('未完成'))
+    fireEvent.changeText(ui.getByPlaceholderText('未完成原因'), '尚未保存的原因')
+    await require('@testing-library/react-native').act(async () => { await store.patchWorkTaskItem('draft-isolation', { completion_photo_urls: ['fixture/remote.jpg'] }) })
+    expect(ui.getByPlaceholderText('备注').props.value).toBe('尚未保存的备注')
+    expect(ui.getByPlaceholderText('未完成原因').props.value).toBe('尚未保存的原因')
+    ui.unmount()
+  } finally { snapshot.items[0] = previous }
+})
+
+test.each([
+  ['cleaning_tasks', 'cleaning', 'checkout_clean'],
+  ['cleaning_tasks', 'cleaning', 'stayover_clean'],
+  ['cleaning_tasks', 'inspection', 'checkout_clean'],
+  ['property_maintenance', 'maintenance', ''],
+])('deep scope fix preserves existing %s/%s/%s turnover display', async (source_type, task_kind, task_type) => {
+  const snapshot = require('../../lib/workTasksStore').getWorkTasksSnapshot()
+  const previous = snapshot.items[0]
+  snapshot.items[0] = { id: 'normal-scope', source_id: 'normal-source', source_type, task_kind, task_type, title: 'Fixture', property: { code: 'NORMAL' }, status: 'assigned', start_time: '10am', end_time: '3pm', scheduled_date: '2026-01-01', available_actions: [] }
+  const Screen = require('./TaskDetailScreen').default
+  try {
+    const ui = render(<I18nProvider><Screen navigation={{ goBack: jest.fn(), setParams: jest.fn() }} route={{ params: { id: 'normal-scope' } }} /></I18nProvider>)
+    expect(ui.getByText('NORMAL 退房 入住')).toBeTruthy()
+    expect(ui.getByText('退房时间：10am  入住时间：3pm')).toBeTruthy()
+    expect(ui.getByText('无入住指南，请联系管理员')).toBeTruthy()
+    if (task_type === 'stayover_clean') expect(ui.getByText('入住中清洁')).toBeTruthy()
+    ui.unmount()
+  } finally { snapshot.items[0] = previous }
+})
+
+describe('MZ118 ordinary offline task private completion photo lifecycle', () => {
+  let previousTask: any
+  let alertSpy: jest.SpyInstance
+  const mount = () => {
+    const TaskDetailScreen = require('./TaskDetailScreen').default
+    return render(<I18nProvider><TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() }} route={{ key: 'mz118', name: 'TaskDetail', params: { id: 'w1' } }} /></I18nProvider>)
+  }
+  beforeEach(() => {
+    const snapshot = require('../../lib/workTasksStore').getWorkTasksSnapshot()
+    previousTask = { ...snapshot.items[0] }
+    snapshot.items[0] = { ...previousTask, source_type: 'cleaning_offline_tasks', source_id: 'offline-118', task_kind: 'offline', assignee_id: 'u1', status: 'assigned', available_actions: undefined, completion_photo_urls: [], work_record_read_only: false }
+    mockAuthState.user = { id: 'u1', username: 'tester', role: 'staff' }
+    const api = require('../../lib/api')
+    api.uploadMzappMedia.mockReset().mockResolvedValue({ remoteReference: 'mzapp/completion-photo.jpg', url: 'mzapp/completion-photo.jpg' })
+    api.markWorkTask.mockReset().mockResolvedValue({ ok: true })
+    api.appendWorkTaskCompletionPhotos.mockClear()
+    mockAuthState.token = 't1'
+    api.submitMaintenanceExecutorAction.mockClear()
+    alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    require('../../lib/workTasksStore').getWorkTasksSnapshot().items[0] = previousTask
+    mockAuthState.user = { id: 'u1', username: 'tester', role: 'staff' }
+    mockAuthState.token = 't1'
+    require('../../lib/localMediaDrafts').draftFileExists.mockReturnValue(true)
+    alertSpy.mockRestore()
+  })
+
+  test('uploaded but unsubmitted photo previews local durable file and submits using ordinary mark endpoint', async () => {
+    const api = require('../../lib/api')
+    const ui = mount()
+    fireEvent.press(await ui.findByTestId('offline-task-mark-camera'))
+    await waitFor(() => expect(ui.getByTestId('maintenance-action-photo-0').props.localUri).toBe('file:///persistent/completion.jpg'))
+    expect(mockCompletionDrafts['w1:u1'][0].remote_reference).toBe('mzapp/completion-photo.jpg')
+    expect(ui.getByTestId('maintenance-action-photo-0').props.remoteReference).toBe('')
+    fireEvent.press(ui.getByTestId('maintenance-action-photo-0'))
+    await waitFor(() => expect(ui.getByTestId('cleaning-media-preview').props.localUri).toBe('file:///persistent/completion.jpg'))
+    expect(ui.getByTestId('cleaning-media-preview').props.reference).toBe('')
+    fireEvent.press(ui.getByText('关闭'))
+    expect(api.markWorkTask).not.toHaveBeenCalled()
+    fireEvent.press(ui.getByTestId('offline-task-complete'))
+    await waitFor(() => expect(api.markWorkTask).toHaveBeenCalledWith('t1', 'w1', expect.objectContaining({ action: 'done', photo_urls: ['mzapp/completion-photo.jpg'] })))
+    expect(api.submitMaintenanceExecutorAction).not.toHaveBeenCalled()
+  })
+
+  test('failed upload retains local preview and retry uses same persisted photo', async () => {
+    const api = require('../../lib/api')
+    api.uploadMzappMedia.mockRejectedValueOnce(new Error('upload_failed'))
+    const ui = mount()
+    fireEvent.press(await ui.findByTestId('offline-task-mark-camera'))
+    await waitFor(() => expect(mockCompletionDrafts['w1:u1']?.[0]?.upload_state).toBe('failed'))
+    expect(ui.getByTestId('maintenance-action-photo-0').props.localUri).toBe('file:///persistent/completion.jpg')
+    fireEvent.press(ui.getByTestId('maintenance-photo-retry-upload'))
+    await waitFor(() => expect(mockCompletionDrafts['w1:u1'][0].remote_reference).toBe('mzapp/completion-photo.jpg'))
+    expect(api.uploadMzappMedia).toHaveBeenCalledTimes(2)
+    expect(api.markWorkTask).not.toHaveBeenCalled()
+  })
+
+  test('saved task photos use the exact work-task authorized remote reference after reentry', async () => {
+    const snapshot = require('../../lib/workTasksStore').getWorkTasksSnapshot()
+    snapshot.items[0].completion_photo_urls = ['mzapp/saved.jpg']
+    const ui = mount()
+    const photo = await ui.findByTestId('maintenance-action-photo-0')
+    expect(photo.props.remoteReference).toBe('mzapp/saved.jpg')
+    expect(photo.props.accessWorkTaskId).toBe('w1')
+    expect(photo.props.localUri).toBeNull()
+  })
+
+  test('an unsaved draft with missing local file never falls back to unassociated remote media', async () => {
+    mockCompletionDrafts['w1:u1'] = [{ media_id: 'missing', local_uri: 'file:///gone.jpg', remote_reference: 'mzapp/not-associated.jpg', name: 'x.jpg', mime_type: 'image/jpeg', captured_at: '', upload_state: 'remote_stored' }]
+    require('../../lib/localMediaDrafts').draftFileExists.mockReturnValue(false)
+    const ui = mount()
+    await ui.findByTestId('completion-photo-local-missing-0')
+    expect(ui.queryByTestId('maintenance-action-photo-0')).toBeNull()
+    expect(require('../../lib/api').uploadMzappMedia).not.toHaveBeenCalled()
+    expect(mockCompletionDrafts['w1:u1'][0].remote_reference).toBe('mzapp/not-associated.jpg')
+  })
+
+  test('ordinary unfinished submission persists its photo association and reopens with authorized remote media', async () => {
+    const api = require('../../lib/api')
+    let ui = mount()
+    fireEvent.press(await ui.findByTestId('offline-task-mark-camera'))
+    await waitFor(() => expect(mockCompletionDrafts['w1:u1']?.[0]?.remote_reference).toBe('mzapp/completion-photo.jpg'))
+    fireEvent.press(ui.getByTestId('offline-task-not-complete'))
+    fireEvent.changeText(ui.getByPlaceholderText('未完成原因'), '客人还在房间')
+    fireEvent.press(ui.getByText('提交'))
+    await waitFor(() => expect(api.markWorkTask).toHaveBeenCalledWith('t1', 'w1', expect.objectContaining({ action: 'defer', reason: '客人还在房间', photo_urls: ['mzapp/completion-photo.jpg'] })))
+    await waitFor(() => expect(require('../../lib/workTasksStore').getWorkTasksSnapshot().items[0].completion_photo_urls).toEqual(['mzapp/completion-photo.jpg']))
+    ui.unmount()
+    ui = mount()
+    await waitFor(() => expect(ui.getByTestId('maintenance-action-photo-0').props.remoteReference).toBe('mzapp/completion-photo.jpg'))
+    expect(ui.getByTestId('maintenance-action-photo-0').props.accessWorkTaskId).toBe('w1')
+    expect(api.submitMaintenanceExecutorAction).not.toHaveBeenCalled()
+    expect(api.uploadMzappMedia).toHaveBeenCalledTimes(1)
+  })
+
+  test('deleting a mixed canonical/draft display removes the selected draft identity, not a shifted index', async () => {
+    const snapshot = require('../../lib/workTasksStore').getWorkTasksSnapshot()
+    snapshot.items[0].completion_photo_urls = ['mzapp/saved-first.jpg']
+    mockCompletionDrafts['w1:u1'] = [{ media_id: 'new-draft', local_uri: 'file:///persistent/new.jpg', remote_reference: 'mzapp/new-draft.jpg', name: 'x.jpg', mime_type: 'image/jpeg', captured_at: '', upload_state: 'remote_stored' }]
+    const ui = mount()
+    await waitFor(() => expect(ui.getAllByLabelText('删除标记照片')).toHaveLength(2))
+    fireEvent.press(ui.getAllByLabelText('删除标记照片')[1])
+    await waitFor(() => expect(mockCompletionDrafts['w1:u1']).toEqual([]))
+    expect(ui.getByTestId('maintenance-action-photo-0').props.remoteReference).toBe('mzapp/saved-first.jpg')
+    expect(snapshot.items[0].completion_photo_urls).toEqual(['mzapp/saved-first.jpg'])
+  })
+
+  test('completed task resumes an acknowledged draft without a pending queue through explicit append retry', async () => {
+    const snapshot = require('../../lib/workTasksStore').getWorkTasksSnapshot()
+    snapshot.items[0].status = 'done'
+    snapshot.items[0].available_actions = [{ id: 'append_completion_photo', label: '补充完成记录照片', placement: 'more', enabled: true, target: 'TaskDetail', intent: 'completion' }]
+    mockCompletionDrafts['w1:u1'] = [{ media_id: 'interrupted', local_uri: 'file:///persistent/new.jpg', remote_reference: 'mzapp/completion-photo.jpg', name: 'x.jpg', mime_type: 'image/jpeg', captured_at: '', upload_state: 'remote_stored' }]
+    const api = require('../../lib/api')
+    const pendingStore = require('../../lib/workTaskCompletionPhotoPending')
+    const ui = mount()
+    const retry = await ui.findByTestId('offline-task-completion-photo-retry-save')
+    expect(api.appendWorkTaskCompletionPhotos).not.toHaveBeenCalled()
+    expect(api.uploadMzappMedia).not.toHaveBeenCalled()
+    fireEvent.press(retry)
+    await waitFor(() => expect(api.appendWorkTaskCompletionPhotos).toHaveBeenCalledWith('t1', 'w1', { photo_urls: ['mzapp/completion-photo.jpg'] }))
+    expect(pendingStore.setPendingWorkTaskCompletionPhotoReferences).toHaveBeenCalledWith('w1', 'u1', ['mzapp/completion-photo.jpg'])
+    expect(pendingStore.setPendingWorkTaskCompletionPhotoReferences.mock.invocationCallOrder[0]).toBeLessThan(api.appendWorkTaskCompletionPhotos.mock.invocationCallOrder[0])
+    expect(api.uploadMzappMedia).not.toHaveBeenCalled()
+  })
+
+  test('completed task can discard a failed local draft without deleting its saved business photos', async () => {
+    const snapshot = require('../../lib/workTasksStore').getWorkTasksSnapshot()
+    snapshot.items[0].status = 'done'
+    snapshot.items[0].completion_photo_urls = ['mzapp/saved-completed.jpg']
+    snapshot.items[0].available_actions = [{ id: 'append_completion_photo', label: '补充完成记录照片', placement: 'more', enabled: true, target: 'TaskDetail', intent: 'completion' }]
+    mockCompletionDrafts['w1:u1'] = [{ media_id: 'failed-missing', local_uri: 'file:///gone.jpg', remote_reference: null, name: 'x.jpg', mime_type: 'image/jpeg', captured_at: '', upload_state: 'failed' }]
+    require('../../lib/localMediaDrafts').draftFileExists.mockReturnValue(false)
+    const api = require('../../lib/api')
+    const ui = mount()
+    await ui.findByTestId('completion-photo-local-missing-1')
+    expect(ui.getAllByLabelText('删除标记照片')).toHaveLength(1)
+    fireEvent.press(ui.getByLabelText('删除标记照片'))
+    await waitFor(() => expect(mockCompletionDrafts['w1:u1']).toEqual([]))
+    expect(snapshot.items[0].completion_photo_urls).toEqual(['mzapp/saved-completed.jpg'])
+    expect(ui.queryByLabelText('删除标记照片')).toBeNull()
+    expect(api.appendWorkTaskCompletionPhotos).not.toHaveBeenCalled()
+    expect(api.markWorkTask).not.toHaveBeenCalled()
+  })
+
+  test('an upload acknowledgement arriving after account switch cannot populate the next account', async () => {
+    const api = require('../../lib/api')
+    let finishUpload: (value: any) => void = () => {}
+    api.uploadMzappMedia.mockImplementationOnce(() => new Promise((resolve) => { finishUpload = resolve }))
+    const ui = mount()
+    fireEvent.press(await ui.findByTestId('offline-task-mark-camera'))
+    await waitFor(() => expect(api.uploadMzappMedia).toHaveBeenCalledTimes(1))
+    mockAuthState.user = { id: 'u2', username: 'other', role: 'staff' }
+    mockAuthState.token = 't2'
+    const TaskDetailScreen = require('./TaskDetailScreen').default
+    ui.rerender(<I18nProvider><TaskDetailScreen navigation={{ goBack: jest.fn(), setParams: jest.fn() }} route={{ key: 'mz118', name: 'TaskDetail', params: { id: 'w1' } }} /></I18nProvider>)
+    await act(async () => { finishUpload({ remoteReference: 'mzapp/old-account.jpg', url: 'mzapp/old-account.jpg' }) })
+    await waitFor(() => expect(ui.queryByTestId('maintenance-action-photo-0')).toBeNull())
+    expect(mockCompletionDrafts['w1:u2']).toBeUndefined()
+    expect(api.markWorkTask).not.toHaveBeenCalled()
+    expect(api.appendWorkTaskCompletionPhotos).not.toHaveBeenCalled()
+  })
+
+  test.each(['done', 'defer'])('combined ordinary %s completion ignores late receipt after account switch', async (action) => {
+    const api = require('../../lib/api')
+    let finish: (value: any) => void = () => {}
+    api.markWorkTask.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const navigation = { goBack: jest.fn(), setParams: jest.fn() }
+    const Screen = require('./TaskDetailScreen').default
+    const ui = render(<I18nProvider><Screen navigation={navigation} route={{ params: { id: 'w1' } }} /></I18nProvider>)
+    if (action === 'defer') {
+      fireEvent.press(ui.getByText('未完成'))
+      fireEvent.changeText(ui.getByPlaceholderText('未完成原因'), 'fixture reason')
+      fireEvent.press(ui.getByText('提交'))
+    } else fireEvent.press(await ui.findByTestId('offline-task-complete'))
+    await waitFor(() => expect(api.markWorkTask).toHaveBeenCalledTimes(1))
+    mockAuthState.user = { id: 'u2', username: 'other', role: 'staff' }
+    mockAuthState.token = 't2'
+    ui.rerender(<I18nProvider><Screen navigation={navigation} route={{ params: { id: 'w1' } }} /></I18nProvider>)
+    await act(async () => { finish({ ok: true }) })
+    expect(require('../../lib/workTasksStore').getWorkTasksSnapshot().items[0].status).toBe('assigned')
+    expect(navigation.goBack).not.toHaveBeenCalled()
+  })
+
+  test('business save failure retains acknowledged upload across reentry and never shares it with another owner', async () => {
+    const api = require('../../lib/api')
+    api.markWorkTask.mockRejectedValueOnce(new Error('business_save_failed'))
+    let ui = mount()
+    fireEvent.press(await ui.findByTestId('offline-task-mark-camera'))
+    await waitFor(() => expect(mockCompletionDrafts['w1:u1']?.[0]?.remote_reference).toBe('mzapp/completion-photo.jpg'))
+    fireEvent.press(ui.getByTestId('offline-task-complete'))
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('business_save_failed')))
+    ui.unmount()
+    ui = mount()
+    await waitFor(() => expect(ui.getByTestId('maintenance-action-photo-0').props.localUri).toBe('file:///persistent/completion.jpg'))
+    expect(api.uploadMzappMedia).toHaveBeenCalledTimes(1)
+    ui.unmount()
+    mockAuthState.user = { id: 'u2', username: 'other', role: 'staff' }
+    ui = mount()
+    await waitFor(() => expect(require('../../lib/maintenanceCompletionPhotoDraft').getMaintenanceCompletionPhotoDraft).toHaveBeenCalledWith('w1', 'u2'))
+    expect(ui.queryByTestId('maintenance-action-photo-0')).toBeNull()
+    expect(mockCompletionDrafts['w1:u1'][0].remote_reference).toBe('mzapp/completion-photo.jpg')
+    expect(api.submitMaintenanceExecutorAction).not.toHaveBeenCalled()
+  })
 })

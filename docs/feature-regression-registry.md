@@ -1,5 +1,23 @@
 # Feature Regression Registry
 
+## FR-MZ115 — Deep-cleaning completion is pending review, not settlement
+
+- **Status:** local candidate, not released.
+- **Maintenance scope:** mobile TaskDetail deep-cleaning domain, API DTO, cache visibility and existing feedback optional-time form; paired backend `root/CRL-20261112-001`.
+- **Last reviewed:** 2026-11-12 UTC.
+- **Business outcome:** Only server-authorized completion; no executor price requirement, no optimistic done, no personnel settlement; pending-review records are not active execution tasks. Before/after photo ownership stays separate, unsynced local evidence survives failed save.
+- **Test mapping (wired through full Jest/check:ci):** TaskDetailScreen.test.tsx covers dedicated submission, normal/direct cached readonly entry, exact before/after reader context, upload-versus-save retry and capability denial; api.test.ts verifies dedicated no-price payload; workTasksStore.test.ts and dailyTaskExecutionVisibility.test.ts cover workflow-patch visibility; maintenanceCompletionPhotoDraft.test.ts covers deep/maintenance and cross-owner isolation. Existing FeedbackFormScreen suite protects ordinary feedback and media/history behavior.
+- **Deep photo-access matrix:** actual TaskDetail taps test local-only before/after full preview and identity-change dismissal; after tests cover delayed task/owner hydration, late load/capture/upload acknowledgment, persisted canonical cleanup and read failure; admin/staff pending R2 context tests verify props, not live backend permission. Maintenance uses its preexisting legacy draft path.
+- **Before evidence:** TaskDetail/adapter/draft tests cover empty before panel, capture without source write, independent before/after payloads, stable failed-submit retry, private preview prohibition, canonical-only reentry cleanup, after-required invariant and cross-phase/source/owner cleanup isolation, failed hydration blocking, and delayed task/owner switches with extra unsynced evidence retained.
+- **Domain isolation:** TaskDetail tests build pure deep fixtures, reject leaked turnover fields, preserve existing cleaning/stayover/inspection/maintenance display and non-deep unsaved notes/reasons on completion-photo refresh. Visibility/store tests ignore deep workflow on foreign sources, including deep-only patches preserving manual hidden projection.
+- **Executor eligibility:** server roster remains authoritative without a mobile field-role filter; TaskDetailScreen tests finance/non-field executor completion only with server capability. Deep labels distinguish 实际执行人 from historical 提交人. Manager completed-report authority is unchanged.
+- **Preview-discovered badge regression:** taskVisualTheme.test.ts verifies deep pending_review label without work-record visibility, stale assigned projection and unchanged unrelated sources; TaskDetailScreen.test.ts verifies the real completion receipt renders 待审核 without granting work_record_visible. Synthetic state export uses the actual component, not a manually corrected HTML badge.
+- **Validation strategy:** guarded local TypeScript and focused Jest followed by check:ci; exact paired backend/mobile contract review before release. No role inferred on client. Details in `docs/mz115-deep-cleaning-mobile.md`.
+- **Last verification:** 2026-11-12 final deep photo-access guarded check:ci passed: 88 suites / 979 assertions, TypeScript, lint, button and ledger gates; recovery/inspection 61 focused assertions and feedback 49 focused assertions passed.
+- **Related CRLs:** `mobile/CRL-20261112-001`, `root/CRL-20261112-001`.
+- **Non-protection scope:** native camera, physical device, network interruption, live media objects, production deployment and payroll not verified or implemented.
+- **Authorized addendum:** FeedbackFormScreen and inspectionPanelSubmitQueue tests protect explicit eligible actual-person selection, self default only when eligible, no required times, atomic completed-report request, existing source reuse and persistent retry identity. Legacy submitted queues have explicit per-item supplement tests for same owner, server-proven mapped owner/source, canonical acknowledgment-lost recovery, cross-account blocking and ownerless/unmapped blocking. InspectionPanelScreen tests require manual confirmation before resume. No automatic person attribution or production migration is performed.
+
 ## FR-P1-MED-12 — MZ-114 入住中清洁未关联照片本机预览
 
 - **Status:** local Phase 3 candidate; runtime verification blocked, not released.

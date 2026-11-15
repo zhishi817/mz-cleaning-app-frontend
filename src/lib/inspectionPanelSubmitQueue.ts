@@ -1,15 +1,17 @@
-import { ApiError, createPropertyFeedbackBatch, completePropertyFeedbackProject, saveInspectionPhotos, saveRestockProof, uploadCleaningMedia, type InspectionPhotoArea } from './api'
+import { createDeepCleaningRecordId, deepCleaningRecordOperationId } from './deepCleaningCompletion'
+import { getDeepCleaningRecoveryContext, listDeepCleaningExecutors, recordDeepCleaningCompletion as api_recordDeepCleaningCompletion } from './api'
+import { getMediaCaptureUserId, assertMediaCaptureSession, guardMediaRequest } from './mediaCaptureIdentity'
+import {  ApiError,createPropertyFeedbackBatch as api_createPropertyFeedbackBatch,completePropertyFeedbackProject as api_completePropertyFeedbackProject,saveInspectionPhotos as api_saveInspectionPhotos,saveRestockProof as api_saveRestockProof,uploadCleaningMedia as api_uploadCleaningMedia, type InspectionPhotoArea  } from './api'
 import { normalizeCleaningObjectKey } from './cleaningMedia'
 import { clearInspectionPanelFeedbackDraft, type InspectionPanelDeepCleaningDraft, type InspectionPanelFeedbackDraftState } from './inspectionPanelFeedbackDraft'
 import { clearInspectionPanelDraft } from './inspectionPanelDraft'
 import {
   createInspectionThumbnail,
   inspectionThumbnailExists,
-  pruneInspectionThumbnailCache,
 } from './inspectionThumbnailCache'
 import { draftFileExists, draftMimeTypeFrom, persistDraftMedia } from './localMediaDrafts'
 import { withLocalMediaLock } from './localMediaLocks'
-import { getJson, setJson } from './storage'
+import { getOwnedMediaJson as rawGetJson, setOwnedMediaJson as rawSetJson } from './mediaCaptureIdentity'
 
 export type InspectionPanelBatchStatus =
   | 'draft'
@@ -22,6 +24,7 @@ export type InspectionPanelBatchStatus =
 export type InspectionPanelSubmitStepStatus = 'pending' | 'syncing' | 'succeeded' | 'failed'
 
 export type InspectionPanelBatchMedia = {
+  captured_by_user_id?: string
   id: string
   local_uri: string | null
   thumbnail_uri?: string | null
@@ -51,6 +54,7 @@ export type InspectionPanelRoomPhotoMap = Record<Exclude<InspectionPanelRoomPhot
 export type InspectionPanelRoomPhotoRequirement = 'required' | 'password_only' | 'guest_arrival_confirmed'
 
 export type InspectionPanelBatchSnapshot = {
+  owner_user_id?: string | null
   task_id: string
   cleaning_task_id: string
   property_id?: string | null
@@ -80,6 +84,7 @@ export type InspectionPanelSubmitStepState = {
 }
 
 export type InspectionPanelSubmitQueueItem = {
+  captured_by_user_id?: string
   submit_id: string
   task_id: string
   cleaning_task_id: string
@@ -167,12 +172,13 @@ function normalizeMedia(item: any): InspectionPanelBatchMedia | null {
   const uploadedUrl = cleanText(item?.uploaded_url)
   const name = cleanText(item?.name) || `${id}.jpg`
   const mimeType = cleanText(item?.mime_type) || 'image/jpeg'
-  const capturedAt = cleanText(item?.captured_at) || nowIso()
+  const capturedAt = cleanText(item?.captured_at)
   const watermarkText = cleanText(item?.watermark_text) || null
   const note = cleanText(item?.note) || null
   if (!localUri && !thumbnailUri && !uploadedKey && !uploadedUrl) return null
   return {
     id,
+    captured_by_user_id: cleanText(item?.captured_by_user_id),
     local_uri: localUri || null,
     thumbnail_uri: thumbnailUri || null,
     uploaded_key: uploadedKey || null,
@@ -220,6 +226,7 @@ function normalizeSnapshot(raw: any): InspectionPanelBatchSnapshot | null {
   return {
     task_id: taskId,
     cleaning_task_id: cleaningTaskId,
+    owner_user_id: cleanText(raw.owner_user_id) || null,
     property_id: cleanText(raw.property_id) || null,
     property_code: cleanText(raw.property_code) || null,
     submitted_at: cleanText(raw.submitted_at) || null,
@@ -336,6 +343,7 @@ function normalizeQueueItem(raw: any): InspectionPanelSubmitQueueItem | null {
   }
   const normalizedStatus = status === 'draft' || status === 'pending_submit' || status === 'syncing' || status === 'partial_failed' || status === 'failed' || status === 'synced' ? status : 'draft'
   return {
+    captured_by_user_id: cleanText(raw.captured_by_user_id),
     submit_id: submitId,
     task_id: taskId,
     cleaning_task_id: cleaningTaskId || cleanText(snapshot.cleaning_task_id),
@@ -425,13 +433,14 @@ function collectBatchMedia(snapshot: InspectionPanelBatchSnapshot) {
       key: uri,
       media: {
         id: uri,
+        captured_by_user_id: cleanText(meta?.captured_by_user_id),
         local_uri: uri,
         thumbnail_uri: null,
         uploaded_key: null,
         uploaded_url: null,
         name: cleanText(meta?.name) || `feedback-${Date.now()}.jpg`,
         mime_type: cleanText(meta?.mime_type) || 'image/jpeg',
-        captured_at: cleanText(meta?.captured_at) || nowIso(),
+        captured_at: cleanText(meta?.captured_at),
         watermark_text: cleanText(meta?.watermark_text) || null,
       },
       meta: { purpose: 'feedback' },
@@ -699,6 +708,7 @@ async function processIndependentStep(
     await handler()
     return true
   } catch (error: any) {
+    checkQueueSession()
     const message = cleanText(error?.message) || '同步失败'
     await markStep(
       taskId,
@@ -744,6 +754,7 @@ async function processUploadMediaStep(token: string, taskId: string) {
         task_id: cleanText(current.snapshot.cleaning_task_id) || cleanText(current.task_id),
         media_id: stableUploadMediaId(current.submit_id, entry.media.id || entry.key),
         captured_at: entry.media.captured_at,
+        captured_by_user_id: entry.media.captured_by_user_id || '',
         watermark: cleanText(entry.media.watermark_text) ? '1' : '',
         watermark_text: cleanText(entry.media.watermark_text) || '',
         property_code: cleanText(current.snapshot.property_code) || undefined,
@@ -780,7 +791,7 @@ async function cleanupRemoteBackedBatchFiles(taskId: string) {
   // page may still be rendering the file:// URI while the authenticated R2
   // proxy is unavailable on Android; deleting it here leaves only a remote
   // reference that can render as a black image.
-  pruneInspectionThumbnailCache(finalized.thumbnailUris)
+  // Global housekeeping prunes thumbnails using all-account retention roots.
 }
 
 async function processRestockStep(token: string, taskId: string) {
@@ -838,7 +849,7 @@ async function processFeedbackCreateStep(token: string, taskId: string) {
     detail: cleanText(draft.detail),
     media_urls: feedbackRemoteUrls(current, draft.media),
   }))
-  const deepPayloads = (feedback.deepCleaningDrafts || []).filter((draft) => !mapping[draft.client_item_id]).map((draft) => ({
+  const deepPayloads = (feedback.deepCleaningDrafts || []).filter((draft) => !draft.submitAsCompleted && !mapping[draft.client_item_id]).map((draft) => ({
     client_item_id: draft.client_item_id,
     kind: 'deep_cleaning' as const,
     property_id: cleanText(current.snapshot.property_id),
@@ -909,14 +920,30 @@ async function processFeedbackCompleteStep(token: string, taskId: string) {
     for (const entry of completionDrafts) {
       if (!entry.draft.submitAsCompleted) continue
       if (doneMap[entry.draft.client_item_id]?.completed) continue
+      if (entry.kind === 'deep_cleaning') {
+        const draft = entry.draft as InspectionPanelDeepCleaningDraft
+        const existingId = cleanText(createdMap[draft.client_item_id]?.feedback_id)
+        const recordId = existingId || cleanText(draft.completionRecordId)
+        if (!recordId || !cleanText(draft.completionAssigneeId)) throw new Error('请返回深清反馈选择实际执行人并重新保存本页')
+        const receipt = await recordDeepCleaningCompletion(token, {
+          recordId, operationId: deepCleaningRecordOperationId(cleanText(draft.completionRecordId) || recordId),
+          assigneeId: cleanText(draft.completionAssigneeId), existingRecord: !!existingId,
+          propertyId: cleanText(current.snapshot.property_id), areas: cleanText(draft.area) ? [cleanText(draft.area)] : [],
+          detail: cleanText(draft.detail), beforePhotos: feedbackRemoteUrls(current, draft.media), afterPhotos: feedbackRemoteUrls(current, draft.completionAfterPhotos),
+          note: cleanText(draft.completionNote), sourceTaskId: current.task_id, clientItemId: draft.client_item_id,
+          startedAt: draft.completionStartedAt, endedAt: draft.completionEndedAt,
+        })
+        if (receipt.workflow_status !== 'pending_review') throw new Error('深清完工回执不完整，请保留批次重试')
+        doneMap[draft.client_item_id] = { completed: true, feedback_id: receipt.id || recordId }
+        await markStep(taskId, 'complete_feedback_projects', { output: doneMap }, 'syncing', null)
+        continue
+      }
       const feedbackId = cleanText(createdMap[entry.draft.client_item_id]?.feedback_id)
       if (!feedbackId) throw new Error('缺少反馈映射，无法提交完工信息')
       await completePropertyFeedbackProject(token, entry.kind, feedbackId, `legacy-${feedbackId}`, {
         note: cleanText(entry.draft.completionNote) || undefined,
         detail: cleanText(entry.draft.detail) || undefined,
         source_task_id: current.task_id,
-        started_at: entry.kind === 'deep_cleaning' ? cleanText((entry.draft as InspectionPanelDeepCleaningDraft).completionStartedAt) || undefined : undefined,
-        ended_at: entry.kind === 'deep_cleaning' ? cleanText((entry.draft as InspectionPanelDeepCleaningDraft).completionEndedAt) || undefined : undefined,
         before_photos: feedbackRemoteUrls(current, entry.draft.media),
         after_photos: feedbackRemoteUrls(current, entry.draft.completionAfterPhotos),
       })
@@ -1026,6 +1053,7 @@ export async function saveInspectionPanelDraftBatch(params: {
     if (!snapshot) return current
     const submitId = normalizeSubmitId(current?.submit_id) || makeSubmitId()
     return {
+      captured_by_user_id: current?.captured_by_user_id || getMediaCaptureUserId(),
       submit_id: submitId,
       task_id: taskId,
       cleaning_task_id: cleanText(params.cleaning_task_id),
@@ -1104,6 +1132,60 @@ export async function bindInspectionPanelCleaningTaskId(params: {
   })
 }
 
+export async function supplementDeepCleaningBatchExecutor(params: {
+  token: string; actorId: string; taskId: string; clientItemId: string; assigneeId: string
+}) {
+  assertMediaCaptureSession(params.token, params.actorId)
+  if (processing) throw new Error('批次正在同步，请稍后补选')
+  const before = await getInspectionPanelBatch(params.taskId)
+  const draft = before?.snapshot.feedback?.deepCleaningDrafts.find((entry) => entry.client_item_id === params.clientItemId)
+  if (!before || !draft || !draft.submitAsCompleted || before.status === 'draft' || before.status === 'synced' || before.status === 'syncing') throw new Error('当前批次不允许补选')
+  const done = before.steps.complete_feedback_projects.output as Record<string, { completed?: boolean }> | undefined
+  if (before.steps.complete_feedback_projects.status === 'succeeded' || done?.[params.clientItemId]?.completed) throw new Error('该深清已提交，不可更换人员')
+  if (cleanText(draft.completionAssigneeId) && cleanText(draft.completionRecordId) && cleanText(draft.completionOwnerId || before.snapshot.owner_user_id)) throw new Error('该深清已有完整提交身份，请重试原操作，不可改派')
+  const owner = cleanText(draft.completionOwnerId || before.snapshot.owner_user_id)
+  if (owner && owner !== params.actorId) throw new Error('此批次属于其他账号，不可补选')
+  const mapping = before.steps.create_feedback_batch.output as Record<string, { feedback_id?: string }> | undefined
+  const existingId = cleanText(mapping?.[params.clientItemId]?.feedback_id)
+  if (!owner && !existingId) throw new Error('旧批次无法确认原提交账号，请保留资料并联系管理员核实')
+  const knownId = existingId || cleanText(draft.completionRecordId)
+  let alreadySaved = false
+  if (knownId) {
+    try {
+      const context = await getDeepCleaningRecoveryContext(params.token, knownId, before.task_id)
+      assertMediaCaptureSession(params.token, params.actorId)
+      if (context.record_id !== knownId || context.source_task_id !== before.task_id || context.owner_user_id !== params.actorId) throw new Error('深清恢复归属不匹配')
+      if (!context.can_resume) {
+        const canonical = new Set(context.completion_photo_urls || [])
+        const expected = feedbackRemoteUrls(before, draft.completionAfterPhotos)
+        alreadySaved = ['pending_review', 'completed', 'closed'].includes(context.workflow_status) && expected.length > 0 && expected.every((reference) => canonical.has(reference))
+        if (!alreadySaved) throw new Error('后台状态已变化，不能自动补选，请保留批次核实')
+      }
+    } catch (error: any) {
+      if (!(error?.status === 404 && owner === params.actorId && !existingId)) throw error
+    }
+  }
+  if (!alreadySaved) {
+    const eligible = await listDeepCleaningExecutors(params.token)
+    assertMediaCaptureSession(params.token, params.actorId)
+    if (!eligible.some((person) => person.id === params.assigneeId)) throw new Error('选择的人员不符合当前派工条件')
+  }
+  const recordId = knownId || createDeepCleaningRecordId()
+  assertMediaCaptureSession(params.token, params.actorId)
+  return await updateQueueItem(params.taskId, (current) => {
+    assertMediaCaptureSession(params.token, params.actorId)
+    const currentDraft = current?.snapshot.feedback?.deepCleaningDrafts.find((entry) => entry.client_item_id === params.clientItemId)
+    if (processing || !current || !currentDraft || current.submit_id !== before.submit_id || current.cleaning_task_id !== before.cleaning_task_id || JSON.stringify(currentDraft) !== JSON.stringify(draft)) throw new Error('批次已变化，请刷新后重新确认')
+    const output = { ...(current.steps.complete_feedback_projects.output || {}), ...(alreadySaved ? { [params.clientItemId]: { completed: true, feedback_id: knownId } } : {}) }
+    return {
+      ...current,
+      snapshot: { ...current.snapshot, feedback: { ...current.snapshot.feedback!, deepCleaningDrafts: current.snapshot.feedback!.deepCleaningDrafts.map((entry) => entry.client_item_id === params.clientItemId ? { ...entry, completionOwnerId: params.actorId, completionAssigneeId: alreadySaved ? entry.completionAssigneeId : params.assigneeId, completionRecordId: recordId } : entry) } },
+      steps: { ...current.steps, complete_feedback_projects: { ...current.steps.complete_feedback_projects, status: 'pending', error: null, output } },
+      last_error: null,
+    }
+  })
+}
+
 export async function submitInspectionPanelBatch(taskId: string) {
   const key = cleanText(taskId)
   if (!key) return null
@@ -1139,6 +1221,7 @@ export async function hasInspectionPanelFormalSubmission(taskId: string) {
 }
 
 export function createInspectionPanelLocalMedia(params: {
+  captured_by_user_id?: string
   sourceUri: string
   name: string
   mimeType: string
@@ -1157,26 +1240,40 @@ export function createInspectionPanelLocalMedia(params: {
   })
   return {
     id: makeId(params.prefix),
+    captured_by_user_id: params.captured_by_user_id || getMediaCaptureUserId(),
     local_uri: localUri,
     thumbnail_uri: null,
     uploaded_key: null,
     uploaded_url: null,
     name: cleanText(params.name) || `${params.prefix}-${Date.now()}.jpg`,
     mime_type: resolvedMimeType,
-    captured_at: cleanText(params.capturedAt) || nowIso(),
+    captured_at: params.capturedAt === undefined ? nowIso() : cleanText(params.capturedAt),
     watermark_text: cleanText(params.watermarkText) || null,
     note: cleanText(params.note) || null,
   } satisfies InspectionPanelBatchMedia
 }
 
-export async function processInspectionPanelSubmitQueue(token: string) {
+export async function processInspectionPanelSubmitQueue(token: string, actorId?: string) {
+  assertMediaCaptureSession(token, actorId || getMediaCaptureUserId())
+  actorId = actorId || getMediaCaptureUserId() || undefined
   if (processing) return { processed: 0, remaining: (await loadQueue()).filter((item) => item.status !== 'draft' && item.status !== 'synced').length }
   processing = true
+  queueSessionToken = token
   try {
     const items = (await loadQueue()).filter((item) => item.status !== 'draft' && item.status !== 'synced')
     let processed = 0
     for (const item of items) {
       try {
+        const deepMapping = item.steps.create_feedback_batch.output as Record<string, { feedback_id?: string }> | undefined
+        const deepDone = item.steps.complete_feedback_projects.output as Record<string, { completed?: boolean }> | undefined
+        const foreignOwnedDeep = item.steps.complete_feedback_projects.status !== 'succeeded' && (item.snapshot.feedback?.deepCleaningDrafts || []).some((draft) => draft.submitAsCompleted && !deepDone?.[draft.client_item_id]?.completed && cleanText(draft.completionOwnerId || item.snapshot.owner_user_id) && cleanText(draft.completionOwnerId || item.snapshot.owner_user_id) !== cleanText(actorId))
+        if (foreignOwnedDeep) continue // Another account's frozen evidence is never processed or rewritten.
+        const blockedLegacyDeep = item.steps.complete_feedback_projects.status !== 'succeeded' && (item.snapshot.feedback?.deepCleaningDrafts || []).some((draft) => draft.submitAsCompleted && !deepDone?.[draft.client_item_id]?.completed && (!cleanText(draft.completionOwnerId || item.snapshot.owner_user_id) || !cleanText(draft.completionAssigneeId) || (!cleanText(draft.completionRecordId) && !cleanText(deepMapping?.[draft.client_item_id]?.feedback_id))))
+        if (blockedLegacyDeep) {
+          const message = '深清批次缺少实际执行人或稳定提交编号，已停止自动同步。请保留本机批次并联系管理员补选，勿放弃重建。'
+          if (item.last_error !== message) await markStep(item.task_id, 'complete_feedback_projects', { status: 'failed', error: message }, 'partial_failed', message)
+          continue
+        }
         if (!cleanText(item.cleaning_task_id)) {
           await markWaitingForTaskInfo(item.task_id)
           continue
@@ -1215,12 +1312,13 @@ export async function processInspectionPanelSubmitQueue(token: string) {
           // Do not delete the local original at business-save time. The
           // authenticated image proxy may still be unavailable, and the
           // existing orphan-media housekeeping can remove this copy later.
-          pruneInspectionThumbnailCache(finalized.thumbnailUris)
+          // Global housekeeping prunes thumbnails using all-account retention roots.
           await clearInspectionPanelDraft(next.task_id)
           await clearInspectionPanelFeedbackDraft(next.task_id)
         }
         processed += 1
       } catch (error: any) {
+        assertMediaCaptureSession(token)
         const stepError = cleanText(error?.message) || '同步失败'
         const current = await getInspectionPanelBatch(item.task_id)
         if (current) {
@@ -1239,6 +1337,29 @@ export async function processInspectionPanelSubmitQueue(token: string) {
     }
     return { processed, remaining: (await loadQueue()).filter((item) => item.status !== 'draft' && item.status !== 'synced').length }
   } finally {
+    queueSessionToken = null
     processing = false
   }
 }
+
+const createPropertyFeedbackBatch = guardMediaRequest(api_createPropertyFeedbackBatch)
+const completePropertyFeedbackProject = guardMediaRequest(api_completePropertyFeedbackProject)
+const saveInspectionPhotos = guardMediaRequest(api_saveInspectionPhotos)
+const saveRestockProof = guardMediaRequest(api_saveRestockProof)
+const uploadCleaningMedia = guardMediaRequest(api_uploadCleaningMedia, true)
+
+
+let queueSessionToken: string | null = null
+function checkQueueSession() { if (queueSessionToken) assertMediaCaptureSession(queueSessionToken) }
+async function getJson<T>(key: string): Promise<T | null> {
+  checkQueueSession()
+  const result = await rawGetJson<T>(key)
+  checkQueueSession()
+  return result
+}
+async function setJson<T>(key: string, value: T) {
+  checkQueueSession()
+  return rawSetJson(key, value)
+}
+
+const recordDeepCleaningCompletion = guardMediaRequest(api_recordDeepCleaningCompletion)

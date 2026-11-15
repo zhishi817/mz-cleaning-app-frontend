@@ -1,3 +1,4 @@
+function fixtureToken(token: string) { require('./mediaCaptureIdentity').setMediaCaptureSession('cleaner-1', token); return token }
 jest.mock('./api', () => ({
   startCleaningTask: jest.fn(),
   uploadCleaningMedia: jest.fn(),
@@ -23,6 +24,7 @@ function getAsyncStorage() {
 beforeEach(async () => {
   jest.resetModules()
   await getAsyncStorage().clear()
+  require('./mediaCaptureIdentity').setMediaCaptureSession('cleaner-1', 'token-1')
 })
 
 test('retries key upload from start_cleaning_task without re-uploading media', async () => {
@@ -49,7 +51,7 @@ test('retries key upload from start_cleaning_task without re-uploading media', a
     file_name: 'key-1.heic',
   })
 
-  const first = await queueMod.processKeyUploadQueue('token-1')
+  const first = await queueMod.processKeyUploadQueue(fixtureToken('token-1'))
 
   expect(first).toEqual({ processed: 0, remaining: 1 })
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
@@ -72,7 +74,7 @@ test('retries key upload from start_cleaning_task without re-uploading media', a
   expect(failedItem?.steps.start_cleaning_task.status).toBe('failed')
   expect(queueMod.selectKeyPhotoEffectiveState({ key_photo_url: null, has_local_pending: true })).toBe('pending_sync')
 
-  const second = await queueMod.processKeyUploadQueue('token-1')
+  const second = await queueMod.processKeyUploadQueue(fixtureToken('token-1'))
 
   expect(second).toEqual({ processed: 1, remaining: 0 })
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
@@ -108,8 +110,8 @@ test('shares one in-flight key upload run across concurrent maintenance callers'
     file_name: 'key-shared.jpg',
   })
 
-  const first = queueMod.processKeyUploadQueue('token-1')
-  const second = queueMod.processKeyUploadQueue('token-1')
+  const first = queueMod.processKeyUploadQueue(fixtureToken('token-1'))
+  const second = queueMod.processKeyUploadQueue(fixtureToken('token-1'))
 
   expect(second).toBe(first)
   await uploadStarted
@@ -120,4 +122,27 @@ test('shares one in-flight key upload run across concurrent maintenance callers'
   ])
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
   expect(api.startCleaningTask).toHaveBeenCalledTimes(1)
+})
+
+
+test('account switch during upload cannot mutate the other account queue or submit old media', async () => {
+  const identity = require('./mediaCaptureIdentity')
+  const queue = require('./keyUploadQueue')
+  const api = require('./api')
+  identity.setMediaCaptureSession('B', 'tokenB')
+  await queue.enqueueKeyUpload({ cleaning_task_id: 'same-task', source_uri: 'file:///B.jpg', captured_by_user_id: 'B' })
+  const beforeB = await queue.listKeyUploadQueueItems()
+  identity.setMediaCaptureSession('A', 'tokenA')
+  await queue.enqueueKeyUpload({ cleaning_task_id: 'same-task', source_uri: 'file:///A.jpg', captured_by_user_id: 'A' })
+  let resolve!: (value: unknown) => void
+  api.uploadCleaningMedia.mockImplementationOnce(() => new Promise((r) => { resolve = r }))
+  const pending = queue.processKeyUploadQueue('tokenA')
+  while (!resolve) await Promise.resolve()
+  identity.setMediaCaptureSession('B', 'tokenB')
+  resolve({ url: 'https://example.com/A.jpg' })
+  await expect(pending).rejects.toThrow('OWNER_MISMATCH')
+  expect(await queue.listKeyUploadQueueItems()).toEqual(beforeB)
+  expect(api.startCleaningTask).not.toHaveBeenCalled()
+  identity.setMediaCaptureSession('A', 'tokenA')
+  expect(await queue.listKeyUploadQueueItems()).toEqual(expect.arrayContaining([expect.objectContaining({ captured_by_user_id: 'A', local_uri: expect.stringContaining('A.jpg') })]))
 })

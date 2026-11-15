@@ -1,3 +1,5 @@
+import { assertMediaCaptureSession } from '../../lib/mediaCaptureIdentity'
+import { buildMediaWatermark, mediaOperatorName } from '../../lib/mediaWatermark'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
@@ -21,6 +23,7 @@ type PhotoItem = {
   id: string
   uri: string
   captured_at: string
+  captured_by_user_id?: string
   uploaded_url: string | null
   watermark_text?: string
 }
@@ -64,7 +67,8 @@ function toPhotoItems(items: Array<{ id?: string; url: string; captured_at?: str
   return (items || []).map((it, idx) => ({
     id: String(it.id || `${prefix}_${idx}`),
     uri: String(it.url || ''),
-    captured_at: String(it.captured_at || new Date().toISOString()),
+    captured_at: String(it.captured_at || ''),
+    captured_by_user_id: '',
     uploaded_url: String(it.url || '').trim() || null,
   }))
 }
@@ -538,11 +542,8 @@ export default function DayEndBackupKeysScreen(props: Props) {
   }, [canEdit, consumableItems, currentUserId, draftReady, keyItems, rejectItems, returnWashItems, saveDraftSnapshot, warehouseKeyItems, warehouseKeyNotUsed])
 
   function buildWatermarkText(kind: DayEndCaptureKind, capturedAt: string) {
-    const d = new Date(capturedAt)
-    const pad2 = (n: number) => String(n).padStart(2, '0')
-    const stamp = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
     const label = kind === 'key' ? '日终交接-备用钥匙' : kind === 'return_wash' ? '日终交接-脏床品' : kind === 'warehouse_key' ? '日终交接-仓库钥匙' : kind === 'consumable' ? '日终交接-剩余消耗品' : '日终交接-Reject床品'
-    return `${username || '未知用户'}  ${label}\n${stamp}`
+    return buildMediaWatermark(label, mediaOperatorName(user), capturedAt)
   }
 
   function updateRejectItem(itemId: string, patch: Partial<RejectItemState>) {
@@ -749,7 +750,8 @@ export default function DayEndBackupKeysScreen(props: Props) {
         prefix,
         media_id: tempId,
       })
-      const up = await uploadCleaningMedia(token, { uri: tempItem.uri, name: identity.name, mimeType: 'image/jpeg' }, { purpose, task_id: identity.task_id, media_id: identity.media_id, captured_at: capturedAt, watermark: '1', watermark_text: watermarkText }, { skipImageCompression: true })
+      assertMediaCaptureSession(token, tempItem.captured_by_user_id || '')
+      const up = await uploadCleaningMedia(token, { uri: tempItem.uri, name: identity.name, mimeType: 'image/jpeg' }, { purpose, task_id: identity.task_id, media_id: identity.media_id, captured_at: capturedAt, captured_by_user_id: String(user?.id || ''), watermark: '1', watermark_text: watermarkText }, { skipImageCompression: true })
       const remoteReference = cleaningMediaReference(up)
       if (kind === 'key') {
         setKeyItems((prev) => {

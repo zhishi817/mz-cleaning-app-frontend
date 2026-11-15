@@ -1,5 +1,6 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { AppState } from 'react-native'
+import { setMediaCaptureSession, clearMediaCaptureSession, hasUnownedMediaDrafts } from './mediaCaptureIdentity'
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { Alert, AppState } from 'react-native'
 import NetInfo from '@react-native-community/netinfo'
 import { forgotPasswordApi, loginApi, meApi, unregisterExpoPushToken } from './api'
 import { API_BASE_URL, LOCAL_LOGIN_ENABLED, LOCAL_LOGIN_PASSWORD, LOCAL_LOGIN_ROLE, LOCAL_LOGIN_USERNAME } from '../config/env'
@@ -62,10 +63,23 @@ export function AuthProvider(props: { children: React.ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('booting')
   const [token, setToken] = useState<string | null>(null)
   const [user, setUser] = useState<StoredUser | null>(null)
+  const legacyMediaNoticeUsers = useRef(new Set<string>())
+  useEffect(() => {
+    const userId = user?.id || ''
+    if (status !== 'signedIn' || !userId || legacyMediaNoticeUsers.current.has(userId)) return
+    let active = true
+    void hasUnownedMediaDrafts().then((present) => {
+      if (!active || !present) return
+      legacyMediaNoticeUsers.current.add(userId)
+      Alert.alert('旧版照片草稿已保留', '检测到旧版待核对的媒体记录，因缺少可靠的操作账号，已保留并暂停自动上传，未删除。请联系管理员核对原账号；不要重复拍摄或清理本机资料。新拍照片可正常继续。')
+    }).catch(() => {})
+    return () => { active = false }
+  }, [status, user?.id])
   const [isSigningIn, setIsSigningIn] = useState(false)
   const [authIssue, setAuthIssue] = useState<string | null>(null)
 
   const signOutInternal = useCallback(async (reason: 'manual' | 'session_expired' = 'manual') => {
+    clearMediaCaptureSession()
     deactivateWorkTasksRealtime()
     await clearCleaningMediaCache()
     const currentToken = token
@@ -108,6 +122,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       roles: nextUser.roles,
       permissions: nextUser.permissions,
     })
+    setMediaCaptureSession(nextUser.id, nextToken)
     setToken(nextToken)
     setUser(nextUser)
     setStatus('signedIn')
@@ -153,14 +168,16 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       const t = await getAuthToken()
       const u = await getStoredUser()
       if (!t) {
-        deactivateWorkTasksRealtime()
+        clearMediaCaptureSession()
+      deactivateWorkTasksRealtime()
         await clearCleaningMediaCache()
         setStatus('signedOut')
         return
       }
       if (t.startsWith('local:')) {
         if (!canUseLocalLogin()) {
-          deactivateWorkTasksRealtime()
+          clearMediaCaptureSession()
+      deactivateWorkTasksRealtime()
           await clearCleaningMediaCache()
           await clearAuthToken()
           if (u) await clearStoredUser()
@@ -183,6 +200,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
           roles: localUser.roles,
           permissions: localUser.permissions,
         })
+        setMediaCaptureSession(localUser.id, t)
         setToken(t)
         setUser(localUser)
         setStatus('signedIn')
@@ -196,6 +214,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         if (!recovered) await signOutInternal('session_expired')
       }
     } catch {
+      clearMediaCaptureSession()
       deactivateWorkTasksRealtime()
       await clearCleaningMediaCache()
       setStatus('signedOut')
@@ -224,7 +243,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
       try {
         await pruneExpiredInspectionMediaItems()
         await processInspectionMediaQueue(token)
-        await processInspectionPanelSubmitQueue(token)
+        await processInspectionPanelSubmitQueue(token, String(user?.id || ''))
         await processCleaningConsumablesSubmitQueue(token, String(user?.username || '').trim())
         await processKeyUploadQueue(token)
         await processDayEndHandoverQueue(token)
@@ -249,10 +268,11 @@ export function AuthProvider(props: { children: React.ReactNode }) {
         appStateSub.remove()
       } catch {}
     }
-  }, [status, token, user?.username])
+  }, [status, token, user?.id, user?.username])
 
   useEffect(() => {
     return subscribeAuthInvalidated(() => {
+      clearMediaCaptureSession()
       deactivateWorkTasksRealtime()
       trySilentReauth().then((recovered) => {
         if (!recovered) signOutInternal('session_expired').catch(() => null)
@@ -283,6 +303,7 @@ export function AuthProvider(props: { children: React.ReactNode }) {
           roles: localUser.roles,
           permissions: localUser.permissions,
         })
+        setMediaCaptureSession(localUser.id, localToken)
         setToken(localToken)
         setUser(localUser)
         setStatus('signedIn')

@@ -153,6 +153,7 @@ const EXECUTION_VISIBILITY_INPUT_FIELDS = new Set([
   'status',
   'source_workflow_status',
   'maintenance_workflow',
+  'deep_cleaning_workflow',
   'scheduled_date',
   'task_date',
   'date',
@@ -733,6 +734,7 @@ export function redactReadOnlyWorkRecord(task: WorkTaskItem): WorkTaskItem {
     capabilities: null,
     available_actions: recordActions,
     maintenance_workflow: maintenanceWorkflow,
+    deep_cleaning_workflow: task.deep_cleaning_workflow ? { ...task.deep_cleaning_workflow, available_actions: [] } : task.deep_cleaning_workflow,
     turnover_display: turnoverDisplay,
     display_conflicts: redactWorkRecordConflicts(task.display_conflicts),
     property: task.property
@@ -811,21 +813,23 @@ export function reconcileExecutionListVisibilityAfterPatch(
   options: DailyTaskExecutionVisibilityOptions = {},
 ) {
   const redactedTask = redactReadOnlyWorkRecord(task)
+  const source = String(redactedTask.source_type || '').trim().toLowerCase()
   const touchesVisibility = changedFields.some((field) => {
     const root = String(field || '').trim().split('.')[0]
-    return EXECUTION_VISIBILITY_INPUT_FIELDS.has(root)
+    return (root !== 'deep_cleaning_workflow' || source === 'property_deep_cleaning') && EXECUTION_VISIBILITY_INPUT_FIELDS.has(root)
   })
   if (!touchesVisibility) return redactedTask
   const fieldRoots = new Set(changedFields.map((field) => String(field || '').trim().split('.')[0]))
-  const source = String(redactedTask.source_type || '').trim().toLowerCase()
-  const maintenanceWorkflowChanged = fieldRoots.has('status') || fieldRoots.has('maintenance_workflow')
-  const isMaintenance = source === 'property_maintenance' || source === 'external_maintenance_orders'
+  const maintenanceWorkflowChanged = fieldRoots.has('status') || fieldRoots.has('maintenance_workflow') || (source === 'property_deep_cleaning' && fieldRoots.has('deep_cleaning_workflow'))
+  const isMaintenance = source === 'property_maintenance' || source === 'external_maintenance_orders' || source === 'property_deep_cleaning'
   const workflowStatus = String(
-    fieldRoots.has('maintenance_workflow')
+    source === 'property_deep_cleaning' && fieldRoots.has('deep_cleaning_workflow')
+      ? (redactedTask.deep_cleaning_workflow?.status || redactedTask.status || '')
+      : fieldRoots.has('maintenance_workflow')
       ? (redactedTask.maintenance_workflow?.status || redactedTask.status || '')
       : fieldRoots.has('status')
         ? (redactedTask.status || '')
-        : (redactedTask.source_workflow_status || redactedTask.maintenance_workflow?.status || redactedTask.status || ''),
+        : (redactedTask.source_workflow_status || (source === 'property_deep_cleaning' ? redactedTask.deep_cleaning_workflow?.status : null) || redactedTask.maintenance_workflow?.status || redactedTask.status || ''),
   ).trim()
   const next = isMaintenance && maintenanceWorkflowChanged && !fieldRoots.has('source_workflow_status')
     ? { ...redactedTask, source_workflow_status: workflowStatus || null }

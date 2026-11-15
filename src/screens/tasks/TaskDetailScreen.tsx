@@ -1,4 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { deepCleaningBeforeDraftKey } from '../../lib/deepCleaningCompletion'
+import { buildMediaWatermark, mediaOperatorName } from '../../lib/mediaWatermark'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { Ionicons } from '@expo/vector-icons'
@@ -25,7 +27,7 @@ import { hairline, isCompactWidth, moderateScale } from '../../lib/scale'
 import { layoutTokens } from '../../lib/theme'
 import { canViewReadOnlyWorkRecordLockCodes, findWorkTaskItemByAnyId, getWorkTasksSnapshot, patchWorkTaskItem, patchWorkTaskItems, reconcileActiveWorkTasksAfterLocalPatch, requestWorkTasksRefresh, type WorkTaskItem, type WorkTasksView, subscribeWorkTasks } from '../../lib/workTasksStore'
 import type { TasksStackParamList } from '../../navigation/RootNavigator'
-import { appendWorkTaskCompletionPhotos, changeGuestReadyNotification, deleteKeyPhoto, getWorkTaskFormPhotos, listCleaningAppPropertyCodes, listUsers, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, submitMaintenanceExecutorAction, updateCleaningOfflineTask, updateWorkTaskPhotos, uploadMzappMedia } from '../../lib/api'
+import { appendWorkTaskCompletionPhotos, changeGuestReadyNotification, deleteKeyPhoto, getWorkTaskFormPhotos, listCleaningAppPropertyCodes, listUsers, markGuestCheckedOutByOrder, markGuestCheckedOutByTasks, markWorkTask, submitDeepCleaningCompletion, submitMaintenanceExecutorAction, updateCleaningOfflineTask, updateWorkTaskPhotos, uploadMzappMedia } from '../../lib/api'
 import GuestLuggageCard from '../../components/GuestLuggageCard'
 import { normalizeHttpUrl } from '../../lib/urls'
 import { isPropertyFollowupTask, propertyFollowupTaskDetail, propertyFollowupTaskTitle } from '../../lib/propertyFollowupTaskDisplay'
@@ -193,6 +195,14 @@ function maintenanceDomainForSourceType(sourceType: any): 'internal' | 'external
   return null
 }
 
+function isDeepCleaningSource(sourceType: unknown) {
+  return String(sourceType || '').trim() === 'property_deep_cleaning'
+}
+
+function usesCompletionPhotoDraft(sourceType: unknown) {
+  return !!maintenanceDomainForSourceType(sourceType) || isDeepCleaningSource(sourceType) || sourceType === 'cleaning_offline_tasks'
+}
+
 function roleNamesOf(user: any) {
   const values = Array.isArray(user?.roles) ? user.roles : []
   const ids: string[] = values.map((x: any) => String(x || '').trim()).filter(Boolean)
@@ -267,7 +277,10 @@ export default function TaskDetailScreen(props: Props) {
   const maintenanceOperationIds = React.useRef(new Map<string, string>())
   const [markPhotoUrls, setMarkPhotoUrls] = useState<string[]>([])
   const [pendingCompletionPhotoReferences, setPendingCompletionPhotoReferences] = useState<string[]>([])
-  const [maintenanceCompletionPhotoDrafts, setMaintenanceCompletionPhotoDrafts] = useState<MaintenanceCompletionPhotoDraft[]>([])
+  const [legacyMaintenanceDrafts, setLegacyMaintenanceDrafts] = useState<MaintenanceCompletionPhotoDraft[]>([])
+  const [deepAfterState, setDeepAfterState] = useState<{ identity: string; photos: MaintenanceCompletionPhotoDraft[] }>({ identity: '', photos: [] })
+  const [deepAfterLoadError, setDeepAfterLoadError] = useState(false)
+  const [previewDeepIdentity, setPreviewDeepIdentity] = useState<string | null>(null)
   const [taskPhotoUrls, setTaskPhotoUrls] = useState<string[]>([])
   const [taskPhotoSaving, setTaskPhotoSaving] = useState(false)
   const [markNote, setMarkNote] = useState('')
@@ -301,6 +314,61 @@ export default function TaskDetailScreen(props: Props) {
   const [readOnlyTaskPhotosLoading, setReadOnlyTaskPhotosLoading] = useState(false)
   const [readOnlyTaskPhotosError, setReadOnlyTaskPhotosError] = useState<string | null>(null)
   const taskDetailBusy = marking || taskPhotoSaving || keyUploading || keyDeleting || offlineEditBusy
+
+
+  useEffect(() => {
+    setHasInit(true)
+    const unsub = subscribeWorkTasks(() => bump(v => v + 1))
+    bump(v => v + 1)
+    return () => {
+      unsub()
+    }
+  }, [])
+
+  const items = getWorkTasksSnapshot().items
+  const task = useMemo<WorkTaskItem | null>(() => findWorkTaskItemByAnyId(id), [id, items])
+  const mediaAccessWorkTaskId = String(task?.media_access_work_task_id || task?.id || '').trim() || null
+  const maintenancePhotoDraftTaskId = task && usesCompletionPhotoDraft(task.source_type) ? String(task.id || '').trim() : ''
+  const maintenancePhotoDraftOwnerId = isDeepCleaningSource(task?.source_type) ? String(user?.id || '').trim() : String((user as any)?.id || (user as any)?.user_id || (user as any)?.username || '').trim()
+  const deepAfterIdentity = JSON.stringify([String(task?.id || ''), String(task?.source_id || ''), maintenancePhotoDraftOwnerId, 'deep-after'])
+  const deepAfterIdentityRef = React.useRef(deepAfterIdentity)
+  deepAfterIdentityRef.current = deepAfterIdentity
+  const deepAfterReady = isDeepCleaningSource(task?.source_type) && deepAfterState.identity === deepAfterIdentity
+  const maintenanceCompletionPhotoDrafts = isDeepCleaningSource(task?.source_type) ? (deepAfterReady ? deepAfterState.photos : []) : legacyMaintenanceDrafts
+  function setMaintenanceCompletionPhotoDrafts(value: React.SetStateAction<MaintenanceCompletionPhotoDraft[]>) {
+    if (!isDeepCleaningSource(task?.source_type)) { setLegacyMaintenanceDrafts(value); return }
+    if (deepAfterIdentityRef.current !== deepAfterIdentity) return
+    setDeepAfterState((previous) => ({ identity: deepAfterIdentity, photos: typeof value === 'function' ? value(previous.identity === deepAfterIdentity ? previous.photos : []) : value }))
+  }
+  const completionPhotoPendingTaskId = task && String(task.source_type || '').trim() === 'cleaning_offline_tasks' ? String(task.id || '').trim() : ''
+  const completionPhotoPendingOwnerId = maintenancePhotoDraftOwnerId
+  const beforeDraftTaskKey = isDeepCleaningSource(task?.source_type) && task?.id && task?.source_id ? deepCleaningBeforeDraftKey(String(task.id), String(task.source_id)) : ''
+  const beforeDraftOwner = String(user?.id || '').trim()
+  const [beforeDraftState, setBeforeDraftState] = useState<{ identity: string; photos: MaintenanceCompletionPhotoDraft[] }>({ identity: '', photos: [] })
+  const [beforeDraftLoadError, setBeforeDraftLoadError] = useState(false)
+  const beforeIdentity = `${beforeDraftOwner}|${beforeDraftTaskKey}`
+  const beforeDraftScopeMatches = beforeDraftState.identity === beforeIdentity
+  const beforeDraftReady = beforeDraftScopeMatches
+  const beforePhotoDrafts = beforeDraftScopeMatches ? beforeDraftState.photos : []
+  function setBeforePhotoDrafts(photos: MaintenanceCompletionPhotoDraft[]) {
+    setBeforeDraftState({ identity: beforeIdentity, photos })
+  }
+  const beforeIdentityRef = React.useRef(beforeIdentity)
+  beforeIdentityRef.current = beforeIdentity
+  const completionSessionKey = JSON.stringify([maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId, token])
+  const activeCompletionSession = useRef<string | null>(completionSessionKey)
+  activeCompletionSession.current = completionSessionKey
+  useEffect(() => {
+    activeCompletionSession.current = completionSessionKey
+    setMarking(false)
+    return () => { activeCompletionSession.current = null }
+  }, [completionSessionKey])
+  const isCurrentCompletionSession = () => activeCompletionSession.current === completionSessionKey
+  const assertCompletionSession = () => {
+    if (!isCurrentCompletionSession()) throw new Error('任务或登录账号已变化，请重新打开任务')
+  }
+
+  const taskCompletionPhotoUrlsKey = useMemo(() => JSON.stringify(normalizePhotoUrls((task as any)?.completion_photo_urls)), [task])
   const taskDetailDraftActive = offlineEditOpen
     || !!markNote.trim()
     || !!deferReason.trim()
@@ -315,23 +383,6 @@ export default function TaskDetailScreen(props: Props) {
         : '任务页面有尚未保存的输入或照片',
   })
 
-  useEffect(() => {
-    setHasInit(true)
-    const unsub = subscribeWorkTasks(() => bump(v => v + 1))
-    bump(v => v + 1)
-    return () => {
-      unsub()
-    }
-  }, [])
-
-  const items = getWorkTasksSnapshot().items
-  const task = useMemo<WorkTaskItem | null>(() => findWorkTaskItemByAnyId(id), [id, items])
-  const mediaAccessWorkTaskId = String(task?.media_access_work_task_id || task?.id || '').trim() || null
-  const maintenancePhotoDraftTaskId = task && maintenanceDomainForSourceType(task.source_type) ? String(task.id || '').trim() : ''
-  const maintenancePhotoDraftOwnerId = String((user as any)?.id || (user as any)?.user_id || (user as any)?.username || '').trim()
-  const completionPhotoPendingTaskId = task && String(task.source_type || '').trim() === 'cleaning_offline_tasks' ? String(task.id || '').trim() : ''
-  const completionPhotoPendingOwnerId = maintenancePhotoDraftOwnerId
-  const taskCompletionPhotoUrlsKey = useMemo(() => JSON.stringify(normalizePhotoUrls((task as any)?.completion_photo_urls)), [task])
   const openPreview = (
     url: string,
     workTaskId?: string | null,
@@ -340,6 +391,7 @@ export default function TaskDetailScreen(props: Props) {
     sourceIds: string[] = [],
     mediaScope: 'cleaner' | 'inspector' | 'manager' | null = null,
   ) => {
+    setPreviewDeepIdentity(isDeepCleaningSource(task?.source_type) ? deepAfterIdentity : null)
     setPreviewWorkTaskId(String(workTaskId || '').trim() || null)
     setPreviewOfflineWorkTaskMedia(offlineWorkTaskMedia)
     setPreviewLocalUri(String(localUri || '').trim() || null)
@@ -349,6 +401,7 @@ export default function TaskDetailScreen(props: Props) {
   }
   const closePreview = () => {
     setPreviewUrl(null)
+    setPreviewDeepIdentity(null)
     setPreviewWorkTaskId(null)
     setPreviewOfflineWorkTaskMedia(false)
     setPreviewLocalUri(null)
@@ -358,7 +411,19 @@ export default function TaskDetailScreen(props: Props) {
 
   useEffect(() => {
     let cancelled = false
+    if (isDeepCleaningSource(task?.source_type)) {
+      setDeepAfterState({ identity: '', photos: [] })
+      setDeepAfterLoadError(false)
+      if (!maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId) return () => { cancelled = true }
+      void getMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId).then((photos) => {
+        if (!cancelled && deepAfterIdentityRef.current === deepAfterIdentity) setDeepAfterState({ identity: deepAfterIdentity, photos })
+      }).catch(() => { if (!cancelled) setDeepAfterLoadError(true) })
+      return () => { cancelled = true }
+    }
     setMaintenanceCompletionPhotoDrafts([])
+    setPreviewUrl(null)
+    setPreviewLocalUri(null)
+    setMarking(false)
     if (!maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId) return () => { cancelled = true }
     void getMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId)
       .then((photos) => {
@@ -370,14 +435,56 @@ export default function TaskDetailScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [maintenancePhotoDraftOwnerId, maintenancePhotoDraftTaskId])
+  }, [token, maintenancePhotoDraftOwnerId, maintenancePhotoDraftTaskId, isDeepCleaningSource(task?.source_type) ? deepAfterIdentity : null])
 
   useEffect(() => {
+    let cancelled = false
+    setBeforeDraftState({ identity: '', photos: [] })
+    setBeforeDraftLoadError(false)
+    if (!beforeDraftTaskKey || !beforeDraftOwner) return () => { cancelled = true }
+    void getMaintenanceCompletionPhotoDraft(beforeDraftTaskKey, beforeDraftOwner).then((photos) => {
+      if (!cancelled) setBeforeDraftState({ identity: beforeIdentity, photos })
+    }).catch(() => { if (!cancelled) setBeforeDraftLoadError(true) })
+    return () => { cancelled = true }
+  }, [token, beforeDraftTaskKey, beforeDraftOwner])
+
+  useEffect(() => {
+    if (!beforeDraftScopeMatches || !beforeDraftReady || !beforeDraftTaskKey || !beforeDraftOwner || !beforePhotoDrafts.length) return
+    const status = String(task?.deep_cleaning_workflow?.status || task?.status || '')
+    if (!['pending_review', 'completed'].includes(status)) return
+    const canonical = normalizePhotoUrls(task?.photo_urls)
+    if (beforePhotoDrafts.some((photo) => !photo.remote_reference || !canonical.includes(photo.remote_reference))) return
+    let cancelled = false
+    void (async () => {
+      const persisted = await getMaintenanceCompletionPhotoDraft(beforeDraftTaskKey, beforeDraftOwner)
+      if (cancelled || beforeIdentityRef.current !== beforeIdentity || !persisted.length || persisted.some((photo) => !photo.remote_reference || !canonical.includes(photo.remote_reference))) return
+      await clearMaintenanceCompletionPhotoDraft(beforeDraftTaskKey, beforeDraftOwner, { deleteLocalFiles: true })
+      if (!cancelled && beforeIdentityRef.current === beforeIdentity) setBeforePhotoDrafts([])
+    })().catch(() => undefined)
+    return () => { cancelled = true }
+  }, [beforeDraftTaskKey, beforeDraftOwner, beforePhotoDrafts, beforeDraftReady, beforeDraftScopeMatches, beforeIdentity, task])
+
+  useEffect(() => {
+    if (isDeepCleaningSource(task?.source_type)) {
+      if (!deepAfterReady || !maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId || !maintenanceCompletionPhotoDrafts.length) return
+      if (!['pending_review', 'completed'].includes(String(task?.deep_cleaning_workflow?.status || task?.status || ''))) return
+      const canonical = normalizePhotoUrls(task?.completion_photo_urls)
+      if (maintenanceCompletionPhotoDrafts.some((photo) => !photo.remote_reference || !canonical.includes(photo.remote_reference))) return
+      let cancelled = false
+      void (async () => {
+        const persisted = await getMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId)
+        if (cancelled || deepAfterIdentityRef.current !== deepAfterIdentity || !persisted.length || persisted.some((photo) => !photo.remote_reference || !canonical.includes(photo.remote_reference))) return
+        await clearMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId, { deleteLocalFiles: true })
+        if (!cancelled && deepAfterIdentityRef.current === deepAfterIdentity) setDeepAfterState({ identity: deepAfterIdentity, photos: [] })
+      })().catch(() => undefined)
+      return () => { cancelled = true }
+    }
     const remoteReferences = maintenanceCompletionPhotoDrafts
       .map((photo) => String(photo.remote_reference || '').trim())
       .filter(Boolean)
     if (!maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId || !remoteReferences.length) return
     const canonical = normalizePhotoUrls((task as any)?.completion_photo_urls)
+    if (maintenanceCompletionPhotoDrafts.some((photo) => !photo.remote_reference)) return
     if (!remoteReferences.every((reference) => canonical.includes(reference))) return
     let cancelled = false
     void clearMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId, { deleteLocalFiles: true })
@@ -388,7 +495,7 @@ export default function TaskDetailScreen(props: Props) {
     return () => {
       cancelled = true
     }
-  }, [maintenanceCompletionPhotoDrafts, maintenancePhotoDraftOwnerId, maintenancePhotoDraftTaskId, task, taskCompletionPhotoUrlsKey])
+  }, [maintenanceCompletionPhotoDrafts, maintenancePhotoDraftOwnerId, maintenancePhotoDraftTaskId, task, taskCompletionPhotoUrlsKey, deepAfterReady, deepAfterIdentity])
 
   useEffect(() => {
     let cancelled = false
@@ -545,18 +652,18 @@ export default function TaskDetailScreen(props: Props) {
 
   useEffect(() => {
     if (!task) return
-    setMarkPhotoUrls(normalizePhotoUrls((task as any).completion_photo_urls).length ? normalizePhotoUrls((task as any).completion_photo_urls) : photoUrlsFromText(task.summary))
+    setMarkPhotoUrls(normalizePhotoUrls(task.completion_photo_urls).length ? normalizePhotoUrls(task.completion_photo_urls) : isDeepCleaningSource(task.source_type) ? [] : photoUrlsFromText(task.summary))
     setTaskPhotoUrls(normalizePhotoUrls((task as any).photo_urls))
     setMarkNote(String((task as any).completion_note || '').trim())
     setDeferReason(String((task as any).completion_reason || '').trim())
     setShowUnfinished(false)
-  }, [task?.id, taskPhotoUrlsKey])
+  }, [task?.id, taskPhotoUrlsKey, isDeepCleaningSource(task?.source_type) ? taskCompletionPhotoUrlsKey : null])
 
   useEffect(() => {
     if (!hasInit) return
     if (!token || !user?.id) return
     const cachedTaskId = String(task?.id || '').trim()
-    const isCachedInternalMaintenanceTask = String(task?.source_type || '').trim() === 'property_maintenance'
+    const isCachedInternalMaintenanceTask = String(task?.source_type || '').trim() === 'property_maintenance' || isDeepCleaningSource(task?.source_type)
     if (cachedTaskId && !isCachedInternalMaintenanceTask) return
     let cancelled = false
     const view: WorkTasksView = canManagerView ? 'all' : 'mine'
@@ -621,11 +728,8 @@ export default function TaskDetailScreen(props: Props) {
 
       const propertyCode = String((task as any)?.property?.code || '').trim()
       const now = new Date()
-      const pad2 = (n: number) => String(n).padStart(2, '0')
-      const watermarkTime = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`
-      const username = String((user as any)?.username || '').trim()
-      const watermarkText = `${propertyCode || '未知房号'}  ${username || '未知用户'}\n${watermarkTime}`
       const capturedAt = now.toISOString()
+      const watermarkText = buildMediaWatermark(propertyCode, mediaOperatorName(user), capturedAt)
 
       try {
         await enqueueKeyUpload({
@@ -633,6 +737,7 @@ export default function TaskDetailScreen(props: Props) {
           source_uri: uri,
           property_code: propertyCode,
           captured_at: capturedAt,
+          captured_by_user_id: String(user?.id || ''),
           watermark_text: watermarkText,
           file_name: String(a.fileName || uri.split('/').pop() || `key-${Date.now()}.jpg`),
           mime_type: String(a.mimeType || 'image/jpeg'),
@@ -702,19 +807,103 @@ export default function TaskDetailScreen(props: Props) {
     }
   }
 
+  async function saveDeepBeforeDrafts(photos: MaintenanceCompletionPhotoDraft[]) {
+    if (!beforeDraftTaskKey || !beforeDraftOwner) throw new Error('缺少清洁前照片归属')
+    assertCompletionSession()
+    const saved = await setMaintenanceCompletionPhotoDraft(beforeDraftTaskKey, beforeDraftOwner, photos)
+    assertCompletionSession()
+    if (beforeIdentityRef.current === beforeIdentity) setBeforePhotoDrafts(saved)
+    return saved
+  }
+
+  async function uploadDeepBeforePhoto(photo: MaintenanceCompletionPhotoDraft) {
+    assertCompletionSession()
+    if (!token || !beforeDraftTaskKey || !beforeDraftOwner) throw new Error('缺少清洁前照片归属')
+    const current = await getMaintenanceCompletionPhotoDraft(beforeDraftTaskKey, beforeDraftOwner)
+    assertCompletionSession()
+    const item = current.find((entry) => entry.media_id === photo.media_id) || photo
+    if (item.remote_reference) { await saveDeepBeforeDrafts(current); return }
+    if (!item.local_uri || !draftFileExists(item.local_uri)) throw new Error('本地清洁前照片已丢失，请重新拍摄')
+    let acknowledgedRemote: string | null = null
+    try {
+      const response = await uploadMzappMedia(token, { uri: item.local_uri, name: item.name, mimeType: item.mime_type }, undefined, { skipImageCompression: true })
+      const reference = String(response?.remoteReference || response?.url || '').trim()
+      if (!reference) throw new Error('上传未返回照片引用')
+      acknowledgedRemote = reference
+      const next = current.map((entry) => entry.media_id === item.media_id ? { ...entry, remote_reference: reference, upload_state: 'remote_stored' as const, error_code: null } : entry)
+      if (!isCurrentCompletionSession()) {
+        await setMaintenanceCompletionPhotoDraft(beforeDraftTaskKey, beforeDraftOwner, next)
+        assertCompletionSession()
+      }
+      await saveDeepBeforeDrafts(next)
+    } catch (error) {
+      if (!isCurrentCompletionSession()) throw error
+      const next = current.map((entry) => entry.media_id === item.media_id ? { ...entry, remote_reference: acknowledgedRemote || entry.remote_reference, upload_state: acknowledgedRemote ? 'remote_stored' as const : 'failed' as const, error_code: 'UPLOAD_FAILED' } : entry)
+      setBeforePhotoDrafts(next)
+      await saveDeepBeforeDrafts(next).catch(() => undefined)
+      throw error
+    }
+  }
+
+  async function appendDeepBeforePhotos(source: 'camera' | 'library') {
+    if (!isDeepCleaningTask || !deepCleaningCanComplete || !beforeDraftReady || marking || !beforeDraftTaskKey || !beforeDraftOwner) return
+    const permitted = source === 'camera' ? await ensureCameraPerm() : await ensureLibraryPerm()
+    if (!permitted || !isCurrentCompletionSession()) return
+    setMarking(true)
+    try {
+      let keepCapturing = true
+      while (keepCapturing && beforeIdentityRef.current === beforeIdentity) {
+        const result = source === 'camera'
+          ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+          : await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false, allowsMultipleSelection: true, selectionLimit: 0 })
+        if (!isCurrentCompletionSession() || beforeIdentityRef.current !== beforeIdentity || result.canceled || !result.assets?.length) break
+        for (const asset of result.assets) {
+          assertCompletionSession()
+          const local = await persistCompressedDraftMedia({ dirName: 'mzstay-deep-before-media', prefix: 'deep-before', sourceUri: asset.uri, name: asset.fileName || 'before.jpg', mimeType: asset.mimeType || 'image/jpeg', maxWidth: 1920, quality: 0.76 })
+          const photo: MaintenanceCompletionPhotoDraft = { media_id: createMaintenanceCompletionPhotoMediaId(), local_uri: local.localUri, remote_reference: null, name: local.name, mime_type: local.mimeType, captured_at: new Date().toISOString(), upload_state: 'local_persisted', error_code: null }
+          const current = await getMaintenanceCompletionPhotoDraft(beforeDraftTaskKey, beforeDraftOwner)
+          await saveDeepBeforeDrafts([...current, photo])
+          await uploadDeepBeforePhoto(photo)
+        }
+        keepCapturing = source === 'camera'
+      }
+    } catch (error: any) { if (!isCurrentCompletionSession()) return; Alert.alert(t('common_error'), `清洁前照片未提交，草稿已保留：${String(error?.message || '上传失败')}`) }
+    finally { if (isCurrentCompletionSession()) setMarking(false) }
+  }
+
+  async function retryDeepBeforeUploads() {
+    if (!isDeepCleaningTask || !deepCleaningCanComplete || marking) return
+    setMarking(true)
+    try { for (const photo of beforePhotoDrafts) if (!photo.remote_reference) await uploadDeepBeforePhoto(photo) }
+    catch (error: any) { if (isCurrentCompletionSession()) Alert.alert(t('common_error'), String(error?.message || '照片上传失败，草稿已保留')) }
+    finally { if (isCurrentCompletionSession()) setMarking(false) }
+  }
+
+  async function removeDeepBeforePhoto(mediaId: string) {
+    if (!isDeepCleaningTask || !deepCleaningCanComplete || marking) return
+    try {
+      const saved = await removeMaintenanceCompletionPhotoDraft(beforeDraftTaskKey, beforeDraftOwner, mediaId)
+      if (beforeIdentityRef.current === beforeIdentity) setBeforePhotoDrafts(saved)
+    } catch { Alert.alert(t('common_error'), '删除草稿失败，请重试') }
+  }
+
   async function saveMaintenanceCompletionPhotoDrafts(photos: MaintenanceCompletionPhotoDraft[]) {
     if (!maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId) throw new Error('缺少维修照片草稿归属')
+    assertCompletionSession()
     const saved = await setMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId, photos)
+    assertCompletionSession()
     setMaintenanceCompletionPhotoDrafts(saved)
     return saved
   }
 
   async function uploadMaintenanceCompletionPhoto(photo: MaintenanceCompletionPhotoDraft) {
+    assertCompletionSession()
     if (!token) throw new Error('请先登录')
     if (!maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId) throw new Error('缺少维修照片草稿归属')
     const current = await getMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId)
+    if (isDeepCleaningSource(task?.source_type) && (!deepAfterReady || deepAfterIdentityRef.current !== deepAfterIdentity)) throw new Error('任务或账号已变化，后图草稿已保留')
     const currentPhoto = current.find((item) => item.media_id === photo.media_id) || photo
-    if (String(currentPhoto.remote_reference || '').trim()) return current
+    if (String(currentPhoto.remote_reference || '').trim()) return await saveMaintenanceCompletionPhotoDrafts(current)
     if (!currentPhoto.local_uri || !draftFileExists(currentPhoto.local_uri)) {
       const next = current.map((item) => item.media_id === currentPhoto.media_id
         ? { ...item, local_uri: null, upload_state: 'blocked_local_missing' as const, error_code: 'LOCAL_MEDIA_MISSING' }
@@ -727,26 +916,37 @@ export default function TaskDetailScreen(props: Props) {
       ? { ...item, upload_state: 'uploading' as const, error_code: null }
       : item)
     await saveMaintenanceCompletionPhotoDrafts(uploading)
+    let acknowledgedRemote: string | null = null
     try {
+      assertCompletionSession()
       const uploaded = await uploadMzappMedia(
         token,
         { uri: currentPhoto.local_uri, name: currentPhoto.name, mimeType: currentPhoto.mime_type },
         undefined,
         { skipImageCompression: true },
       )
-      const remoteReference = String(uploaded?.url || '').trim()
+      const remoteReference = String(uploaded?.remoteReference || uploaded?.url || '').trim()
       if (!remoteReference) throw new Error('上传成功但未返回照片引用')
+      acknowledgedRemote = remoteReference
       const next = uploading.map((item) => item.media_id === currentPhoto.media_id
         ? { ...item, remote_reference: remoteReference, upload_state: 'remote_stored' as const, error_code: null }
         : item)
+      if (!isCurrentCompletionSession()) {
+        // Complete only the old owner's local receipt; never publish it into the new session.
+        await setMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId, next)
+        assertCompletionSession()
+      }
       return await saveMaintenanceCompletionPhotoDrafts(next)
     } catch (error: any) {
       const rawCode = error && typeof error === 'object' ? String((error as { code?: unknown }).code || '').trim() : ''
       const code = /^[A-Za-z0-9_.-]{1,48}$/.test(rawCode) ? rawCode : 'UPLOAD_FAILED'
+      if (!isCurrentCompletionSession()) throw error
       const next = uploading.map((item) => item.media_id === currentPhoto.media_id
-        ? { ...item, upload_state: 'failed' as const, error_code: code }
+        ? { ...item, remote_reference: acknowledgedRemote || item.remote_reference, upload_state: acknowledgedRemote ? 'remote_stored' as const : 'failed' as const, error_code: code }
         : item)
-      await saveMaintenanceCompletionPhotoDrafts(next)
+      // Retain the acknowledged reference in memory even if durable storage is unavailable.
+      setMaintenanceCompletionPhotoDrafts(next)
+      await saveMaintenanceCompletionPhotoDrafts(next).catch(() => undefined)
       throw error
     }
   }
@@ -763,16 +963,106 @@ export default function TaskDetailScreen(props: Props) {
         firstError = firstError || error
       }
     }
+    if (!isCurrentCompletionSession()) return
     setMarking(false)
     if (firstError) {
       Alert.alert(t('common_error'), `照片未能上传，已保留本地草稿：${String(firstError?.message || '请重试')}`)
+      return
+    }
+    if (task?.source_type === 'cleaning_offline_tasks' && isAlreadyDone) {
+      const drafts = await getMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId)
+      await saveUploadedCompletionPhotoReferences(drafts.map((photo) => photo.remote_reference || '').filter(Boolean))
       return
     }
     Alert.alert(t('common_ok'), pending.length > 1 ? `已上传 ${pending.length} 张照片` : '照片已上传')
   }
 
   async function onAppendMaintenanceCompletionPhotos(source: 'camera' | 'library') {
+    if (isDeepCleaningSource(task?.source_type)) return await onAppendDeepCleaningCompletionPhotos(source)
     if (!task || !token) return
+    if (!maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId) {
+      Alert.alert(t('common_error'), '缺少维修照片草稿归属')
+      return
+    }
+    const permitted = source === 'camera' ? await ensureCameraPerm() : await ensureLibraryPerm()
+    if (!permitted) {
+      Alert.alert(t('common_error'), source === 'camera' ? '请先开启相机权限' : '请先开启相册权限')
+      return
+    }
+    if (!isCurrentCompletionSession()) return
+    setMarking(true)
+    let uploadedCount = 0
+    let firstError: any = null
+    try {
+      const continuousCamera = source === 'camera' && task.source_type === 'cleaning_offline_tasks' && String(task.task_kind || '').toLowerCase() === 'deep_cleaning'
+      let keepCapturing = true
+      while (keepCapturing) {
+        const result = source === 'camera'
+          ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+          : await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: 'images',
+              quality: 0.75,
+              allowsEditing: false,
+              allowsMultipleSelection: true,
+              selectionLimit: 0,
+            })
+        assertCompletionSession()
+        if (result.canceled || !result.assets?.length) break
+        for (const asset of result.assets as any[]) {
+          assertCompletionSession()
+          const sourceUri = String(asset?.uri || '').trim()
+          if (!sourceUri) continue
+          const name = String(asset?.fileName || sourceUri.split('/').pop() || `maintenance-${Date.now()}.jpg`)
+          const mimeType = String(asset?.mimeType || 'image/jpeg')
+          const local = await persistCompressedDraftMedia({
+            dirName: 'mzstay-maintenance-completion-media',
+            prefix: 'maintenance-completion',
+            sourceUri,
+            name,
+            mimeType,
+            maxWidth: 1920,
+            quality: 0.76,
+          })
+          const photo: MaintenanceCompletionPhotoDraft = {
+            media_id: createMaintenanceCompletionPhotoMediaId(),
+            local_uri: local.localUri,
+            remote_reference: null,
+            name: local.name,
+            mime_type: local.mimeType,
+            captured_at: new Date().toISOString(),
+            upload_state: 'local_persisted',
+            error_code: null,
+          }
+          const current = await getMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId)
+          const saved = await saveMaintenanceCompletionPhotoDrafts([...current, photo])
+          const savedPhoto = saved.find((item) => item.media_id === photo.media_id) || photo
+          try {
+            await uploadMaintenanceCompletionPhoto(savedPhoto)
+            uploadedCount += 1
+          } catch (error) {
+            assertCompletionSession()
+            firstError = firstError || error
+          }
+        }
+        keepCapturing = continuousCamera && !firstError
+      }
+      if (firstError) {
+        Alert.alert(t('common_error'), `照片未能上传，已保留本地草稿：${String(firstError?.message || '请重试')}`)
+      } else if (uploadedCount && task.source_type === 'cleaning_offline_tasks' && isAlreadyDone) {
+        const drafts = await getMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId)
+        await saveUploadedCompletionPhotoReferences(drafts.map((photo) => photo.remote_reference || '').filter(Boolean))
+      } else if (uploadedCount) {
+        Alert.alert(t('common_ok'), uploadedCount > 1 ? `已上传 ${uploadedCount} 张照片` : '照片已上传')
+      }
+    } catch (error: any) {
+      if (isCurrentCompletionSession()) Alert.alert(t('common_error'), String(error?.message || '保存照片失败'))
+    } finally {
+      if (isCurrentCompletionSession()) setMarking(false)
+    }
+  }
+
+  async function onAppendDeepCleaningCompletionPhotos(source: 'camera' | 'library') {
+    if (!task || !token || !deepAfterReady || deepAfterIdentityRef.current !== deepAfterIdentity) return
     if (!maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId) {
       Alert.alert(t('common_error'), '缺少维修照片草稿归属')
       return
@@ -786,49 +1076,54 @@ export default function TaskDetailScreen(props: Props) {
     let uploadedCount = 0
     let firstError: any = null
     try {
-      const result = source === 'camera'
-        ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
-        : await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: 'images',
-            quality: 0.75,
-            allowsEditing: false,
-            allowsMultipleSelection: true,
-            selectionLimit: 0,
+      let keepCapturing = true
+      while (keepCapturing) {
+        const result = source === 'camera'
+          ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.75, allowsEditing: false })
+          : await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: 'images',
+              quality: 0.75,
+              allowsEditing: false,
+              allowsMultipleSelection: true,
+              selectionLimit: 0,
+            })
+        if (deepAfterIdentityRef.current !== deepAfterIdentity || result.canceled || !result.assets?.length) break
+        for (const asset of result.assets as any[]) {
+          if (deepAfterIdentityRef.current !== deepAfterIdentity) break
+          const sourceUri = String(asset?.uri || '').trim()
+          if (!sourceUri) continue
+          const name = String(asset?.fileName || sourceUri.split('/').pop() || `maintenance-${Date.now()}.jpg`)
+          const mimeType = String(asset?.mimeType || 'image/jpeg')
+          const local = await persistCompressedDraftMedia({
+            dirName: 'mzstay-maintenance-completion-media',
+            prefix: 'maintenance-completion',
+            sourceUri,
+            name,
+            mimeType,
+            maxWidth: 1920,
+            quality: 0.76,
           })
-      if (result.canceled || !result.assets?.length) return
-      for (const asset of result.assets as any[]) {
-        const sourceUri = String(asset?.uri || '').trim()
-        if (!sourceUri) continue
-        const name = String(asset?.fileName || sourceUri.split('/').pop() || `maintenance-${Date.now()}.jpg`)
-        const mimeType = String(asset?.mimeType || 'image/jpeg')
-        const local = await persistCompressedDraftMedia({
-          dirName: 'mzstay-maintenance-completion-media',
-          prefix: 'maintenance-completion',
-          sourceUri,
-          name,
-          mimeType,
-          maxWidth: 1920,
-          quality: 0.76,
-        })
-        const photo: MaintenanceCompletionPhotoDraft = {
-          media_id: createMaintenanceCompletionPhotoMediaId(),
-          local_uri: local.localUri,
-          remote_reference: null,
-          name: local.name,
-          mime_type: local.mimeType,
-          captured_at: new Date().toISOString(),
-          upload_state: 'local_persisted',
-          error_code: null,
+          const photo: MaintenanceCompletionPhotoDraft = {
+            media_id: createMaintenanceCompletionPhotoMediaId(),
+            local_uri: local.localUri,
+            remote_reference: null,
+            name: local.name,
+            mime_type: local.mimeType,
+            captured_at: new Date().toISOString(),
+            upload_state: 'local_persisted',
+            error_code: null,
+          }
+          const current = await getMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId)
+          const saved = await saveMaintenanceCompletionPhotoDrafts([...current, photo])
+          const savedPhoto = saved.find((item) => item.media_id === photo.media_id) || photo
+          try {
+            await uploadMaintenanceCompletionPhoto(savedPhoto)
+            uploadedCount += 1
+          } catch (error) {
+            firstError = firstError || error
+          }
         }
-        const current = await getMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId)
-        const saved = await saveMaintenanceCompletionPhotoDrafts([...current, photo])
-        const savedPhoto = saved.find((item) => item.media_id === photo.media_id) || photo
-        try {
-          await uploadMaintenanceCompletionPhoto(savedPhoto)
-          uploadedCount += 1
-        } catch (error) {
-          firstError = firstError || error
-        }
+        keepCapturing = source === 'camera' && isDeepCleaningSource(task.source_type) && !firstError && deepAfterIdentityRef.current === deepAfterIdentity
       }
       if (firstError) {
         Alert.alert(t('common_error'), `照片未能上传，已保留本地草稿：${String(firstError?.message || '请重试')}`)
@@ -843,6 +1138,7 @@ export default function TaskDetailScreen(props: Props) {
   }
 
   async function saveUploadedCompletionPhotoReferences(references: string[]) {
+    if (!isCurrentCompletionSession()) return false
     if (!task || !token) return false
     if (!completionPhotoPendingTaskId || !completionPhotoPendingOwnerId) {
       Alert.alert(t('common_error'), '缺少完成照片待保存归属')
@@ -856,13 +1152,16 @@ export default function TaskDetailScreen(props: Props) {
     let persisted: string[]
     try {
       persisted = await setPendingWorkTaskCompletionPhotoReferences(completionPhotoPendingTaskId, completionPhotoPendingOwnerId, pending)
+      assertCompletionSession()
       setPendingCompletionPhotoReferences(persisted)
     } catch (error: any) {
       Alert.alert(t('common_error'), `照片已上传，但待保存记录写入失败；请保持当前页面并点击重试保存：${String(error?.message || '请重试')}`)
       return false
     }
     try {
+      assertCompletionSession()
       const receipt = await appendWorkTaskCompletionPhotos(token, String(task.id), { photo_urls: persisted })
+      assertCompletionSession()
       const saved = normalizePhotoUrls(receipt.completion_photo_urls)
       setMarkPhotoUrls(saved)
       setPendingCompletionPhotoReferences([])
@@ -878,10 +1177,10 @@ export default function TaskDetailScreen(props: Props) {
   }
 
   async function retrySavingUploadedCompletionPhotos() {
-    if (!pendingCompletionPhotoReferences.length) return
+    if (!pendingCompletionPhotoReferences.length && !unsavedCompletionDraftReferences.length) return
     setMarking(true)
     try {
-      await saveUploadedCompletionPhotoReferences([])
+      await saveUploadedCompletionPhotoReferences(unsavedCompletionDraftReferences)
     } finally {
       setMarking(false)
     }
@@ -893,7 +1192,8 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_error'), '请先登录')
       return
     }
-    if (maintenanceDomainForSourceType(task.source_type)) {
+    if (usesCompletionPhotoDraft(task.source_type)) {
+      if (isDeepCleaningTask && !deepCleaningCanComplete) return
       await onAppendMaintenanceCompletionPhotos(source)
       return
     }
@@ -957,10 +1257,15 @@ export default function TaskDetailScreen(props: Props) {
   }
 
   function removeMarkPhoto(index: number) {
-    if (maintenanceDomainForSourceType(task?.source_type)) {
-      const removed = maintenanceCompletionPhotoDrafts[index]
-      if (!removed || !maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId) return
-      setMaintenanceCompletionPhotoDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index))
+    if (usesCompletionPhotoDraft(task?.source_type)) {
+      if (isDeepCleaningTask && !deepCleaningCanComplete) return
+      const removed = completionDisplayPhotoDrafts[index]
+      if (!removed || !maintenanceCompletionPhotoDrafts.some((photo) => photo.media_id === removed.media_id)) {
+        setMarkPhotoUrls((current) => current.filter((reference) => reference !== removed?.remote_reference))
+        return
+      }
+      if (!maintenancePhotoDraftTaskId || !maintenancePhotoDraftOwnerId) return
+      setMaintenanceCompletionPhotoDrafts((current) => current.filter((item) => item.media_id !== removed.media_id))
       void removeMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId, removed.media_id)
         .catch(() => setMaintenanceCompletionPhotoDrafts((current) => current))
       return
@@ -1035,8 +1340,8 @@ export default function TaskDetailScreen(props: Props) {
     }
   }
 
-  function maintenanceOperationId(actionName: 'executor_complete' | 'executor_unfinished', photoUrls: string[], note: string | null, reason: string | null) {
-    const signature = [String(task?.id || ''), actionName, ...photoUrls, note || '', reason || ''].join('\u001f')
+  function maintenanceOperationId(actionName: 'executor_complete' | 'executor_unfinished' | 'deep_cleaning_complete', photoUrls: string[], note: string | null, reason: string | null, beforePhotoUrls?: string[]) {
+    const signature = [String(task?.id || ''), actionName, ...photoUrls, note || '', reason || '', ...(beforePhotoUrls ? [JSON.stringify({ before: beforePhotoUrls })] : [])].join('\u001f')
     const existing = maintenanceOperationIds.current.get(signature)
     if (existing) return existing
     const operationId = `maintenance-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
@@ -1084,6 +1389,11 @@ export default function TaskDetailScreen(props: Props) {
     const refreshed = findWorkTaskItemByAnyId(String(task?.id || ''))
     const canonical = normalizePhotoUrls((refreshed as any)?.completion_photo_urls)
     if (!submittedReferences.every((reference) => canonical.includes(reference))) return
+    if (isDeepCleaningSource(task?.source_type)) {
+      if (!deepAfterReady || deepAfterIdentityRef.current !== deepAfterIdentity) return
+      const persisted = await getMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId)
+      if (deepAfterIdentityRef.current !== deepAfterIdentity || persisted.some((photo) => !photo.remote_reference || !canonical.includes(photo.remote_reference))) return
+    }
     await clearMaintenanceCompletionPhotoDraft(maintenancePhotoDraftTaskId, maintenancePhotoDraftOwnerId, { deleteLocalFiles: true })
     setMaintenanceCompletionPhotoDrafts([])
   }
@@ -1098,8 +1408,20 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_error'), '请先拍照上传')
       return
     }
-    if (maintenanceDomain && maintenanceCompletionPhotoDrafts.some((photo) => !String(photo.remote_reference || '').trim())) {
+    if (usesCompletionPhotoDraft(task.source_type) && maintenanceCompletionPhotoDrafts.some((photo) => !String(photo.remote_reference || '').trim())) {
       Alert.alert(t('common_error'), '仍有照片等待上传，请先重试照片上传或删除该照片')
+      return
+    }
+    if (isDeepCleaningTask && (!beforeDraftReady || !deepAfterReady)) {
+      Alert.alert(t('common_error'), '前后图草稿尚未读取，请稍后重试；读取失败请重新打开任务')
+      return
+    }
+    if (isDeepCleaningTask && beforePhotoDrafts.some((photo) => !photo.remote_reference)) {
+      Alert.alert(t('common_error'), '清洁前照片仍待上传，请重试或移除本次草稿')
+      return
+    }
+    if (isDeepCleaningTask && !deepCleaningCanComplete) {
+      Alert.alert(t('common_error'), '当前深清任务暂无提交操作，请刷新后重试。')
       return
     }
     if (isMaintenanceTask && !maintenanceCanComplete) {
@@ -1107,8 +1429,54 @@ export default function TaskDetailScreen(props: Props) {
       return
     }
     try {
+      assertCompletionSession()
       setMarking(true)
       const note = markNote.trim() || null
+      if (isDeepCleaningTask) {
+        const beforeReferences = normalizePhotoUrls(beforePhotoDrafts.map((photo) => photo.remote_reference))
+        const receipt = await submitDeepCleaningCompletion(token, {
+          recordId: String(task.source_id || '').trim(),
+          completionPhotoUrls: effectiveMarkPhotoUrls,
+          completionNote: note,
+          beforePhotoUrls: beforeReferences.length ? beforeReferences : undefined,
+          operationId: maintenanceOperationId('deep_cleaning_complete', effectiveMarkPhotoUrls, note, null, beforeReferences),
+        })
+        assertCompletionSession()
+        const status = String(receipt.workflow_status || receipt.status || '').trim()
+        if (status !== 'pending_review') throw new Error('提交回执状态不完整，请刷新确认，勿重复上传照片')
+        assertCompletionSession()
+        await patchWorkTaskItem(String(task.id), {
+          status: receipt.status,
+          source_workflow_status: status,
+          ...(Array.isArray(receipt.photo_urls) ? { photo_urls: normalizePhotoUrls(receipt.photo_urls) } : {}),
+          deep_cleaning_workflow: { status, available_actions: receipt.available_actions || [] },
+          available_actions: [],
+          ...(Array.isArray(receipt.completion_photo_urls) || Array.isArray(receipt.repair_photo_urls)
+            ? { completion_photo_urls: receipt.completion_photo_urls || receipt.repair_photo_urls } : {}),
+          completion_note: note,
+          completed_at: receipt.completed_at ?? null,
+          work_record_visible: receipt.work_record_visible === true,
+          work_record_state: receipt.work_record_state ?? status,
+          work_record_date: receipt.work_record_date ?? null,
+          work_record_read_only: receipt.work_record_read_only === true,
+          counts_as_active_task: receipt.counts_as_active_task !== false,
+        }).catch(() => undefined)
+        assertCompletionSession()
+        void reconcileActiveWorkTasksAfterLocalPatch().catch(() => undefined)
+        if (beforeReferences.length && beforeReferences.every((reference) => normalizePhotoUrls(receipt.photo_urls).includes(reference))) {
+          await (async () => {
+            const persisted = await getMaintenanceCompletionPhotoDraft(beforeDraftTaskKey, beforeDraftOwner)
+            if (!persisted.length || persisted.some((photo) => !photo.remote_reference || !normalizePhotoUrls(receipt.photo_urls).includes(photo.remote_reference))) return
+            await clearMaintenanceCompletionPhotoDraft(beforeDraftTaskKey, beforeDraftOwner, { deleteLocalFiles: true })
+            if (beforeIdentityRef.current === beforeIdentity) setBeforePhotoDrafts([])
+          })().catch(() => undefined)
+        }
+        await cleanupSyncedMaintenanceCompletionPhotoDrafts(effectiveMarkPhotoUrls).catch(() => undefined)
+        assertCompletionSession()
+        Alert.alert(t('common_ok'), '已提交完成，等待管理员审核')
+        props.navigation.goBack()
+        return
+      }
       if (maintenanceDomain) {
         const receipt = await submitMaintenanceExecutorAction(token, {
           domain: maintenanceDomain,
@@ -1118,12 +1486,14 @@ export default function TaskDetailScreen(props: Props) {
           completionNote: note,
           operationId: maintenanceOperationId('executor_complete', effectiveMarkPhotoUrls, note, null),
         })
+        assertCompletionSession()
         await applyMaintenanceExecutorReceipt(receipt)
         // Keep the authoritative executor receipt in the currently displayed
         // task-list bucket. A detail fallback refresh uses a different bucket;
         // switching to it here can restore the original day's stale `assigned`
         // cache when navigation returns to the task list.
         await cleanupSyncedMaintenanceCompletionPhotoDrafts(effectiveMarkPhotoUrls)
+        assertCompletionSession()
         Alert.alert(t('common_ok'), '已提交完成，等待审核')
         props.navigation.goBack()
         return
@@ -1134,6 +1504,7 @@ export default function TaskDetailScreen(props: Props) {
         photo_urls: effectiveMarkPhotoUrls,
         note,
       })
+      assertCompletionSession()
       await patchWorkTaskItem(String(task.id), {
         status: 'done',
         completion_photo_urls: effectiveMarkPhotoUrls,
@@ -1151,13 +1522,16 @@ export default function TaskDetailScreen(props: Props) {
             }
           : {}),
       } as any)
+      assertCompletionSession()
       Alert.alert(t('common_ok'), '已标记完成')
       props.navigation.goBack()
     } catch (e: any) {
+      if (!isCurrentCompletionSession()) return
       if (isMaintenanceTask && isMaintenanceStateChangedError(e)) {
         try {
           const refreshed = await reconcileActiveWorkTasksAfterLocalPatch()
           if (refreshed) {
+            assertCompletionSession()
             Alert.alert(t('common_ok'), '维修任务状态已同步，请查看最新状态。')
             return
           }
@@ -1169,11 +1543,12 @@ export default function TaskDetailScreen(props: Props) {
       }
       Alert.alert(t('common_error'), String(e?.message || '提交失败'))
     } finally {
-      setMarking(false)
+      if (isCurrentCompletionSession()) setMarking(false)
     }
   }
 
   async function onMarkDefer() {
+    if (isDeepCleaningSource(task?.source_type)) return
     if (!task) return
     if (!token) {
       Alert.alert(t('common_error'), '请先登录')
@@ -1190,7 +1565,7 @@ export default function TaskDetailScreen(props: Props) {
       Alert.alert(t('common_error'), '请填写未完成原因')
       return
     }
-    if (maintenanceDomain && maintenanceCompletionPhotoDrafts.some((photo) => !String(photo.remote_reference || '').trim())) {
+    if (usesCompletionPhotoDraft(task.source_type) && maintenanceCompletionPhotoDrafts.some((photo) => !String(photo.remote_reference || '').trim())) {
       Alert.alert(t('common_error'), '仍有照片等待上传，请先重试照片上传或删除该照片')
       return
     }
@@ -1199,6 +1574,7 @@ export default function TaskDetailScreen(props: Props) {
       return
     }
     try {
+      assertCompletionSession()
       setMarking(true)
       const note = markNote.trim() || null
       if (maintenanceDomain) {
@@ -1211,8 +1587,10 @@ export default function TaskDetailScreen(props: Props) {
           reason: r,
           operationId: maintenanceOperationId('executor_unfinished', effectiveMarkPhotoUrls, note, r),
         })
+        assertCompletionSession()
         await applyMaintenanceExecutorReceipt(receipt)
         await cleanupSyncedMaintenanceCompletionPhotoDrafts(effectiveMarkPhotoUrls)
+        assertCompletionSession()
         Alert.alert(t('common_ok'), '已记录未完成原因，任务仍待处理')
         props.navigation.goBack()
         return
@@ -1224,14 +1602,18 @@ export default function TaskDetailScreen(props: Props) {
         reason: r,
         note,
       })
+      assertCompletionSession()
       await patchWorkTaskItem(String(task.id), { status: 'todo', completion_photo_urls: effectiveMarkPhotoUrls, completion_note: note, completion_reason: r } as any)
+      assertCompletionSession()
       Alert.alert(t('common_ok'), '已挪到下次')
       props.navigation.goBack()
     } catch (e: any) {
+      if (!isCurrentCompletionSession()) return
       if (isMaintenanceTask && isMaintenanceStateChangedError(e)) {
         try {
           const refreshed = await reconcileActiveWorkTasksAfterLocalPatch()
           if (refreshed) {
+            assertCompletionSession()
             Alert.alert(t('common_ok'), '维修任务状态已同步，请查看最新状态。')
             return
           }
@@ -1243,7 +1625,7 @@ export default function TaskDetailScreen(props: Props) {
       }
       Alert.alert(t('common_error'), String(e?.message || '提交失败'))
     } finally {
-      setMarking(false)
+      if (isCurrentCompletionSession()) setMarking(false)
     }
   }
 
@@ -1382,8 +1764,9 @@ export default function TaskDetailScreen(props: Props) {
   const title = isPropertyFollowupTask(task) && followupTitle
     ? [region ? `${region} ${code}` : code, followupTitle || task.title || '-'].filter(Boolean).join(' · ').trim()
     : `${region ? `${region} ` : ''}${code || task.title || '-'}`.trim()
-  const checkoutTime = checkoutTimeForDisplay(task)
-  const checkinTime = checkinTimeForDisplay(task)
+  const isDeepCleaningTask = isDeepCleaningSource(task.source_type)
+  const checkoutTime = isDeepCleaningTask ? '' : checkoutTimeForDisplay(task)
+  const checkinTime = isDeepCleaningTask ? '' : checkinTimeForDisplay(task)
   const guideUrl = normalizeHttpUrl(task.property?.access_guide_link)
   const taskType = String((task as any).task_type || '').trim().toLowerCase()
   const isCheckoutTask = taskType === 'checkout_clean' || !!checkoutTime
@@ -1407,7 +1790,7 @@ export default function TaskDetailScreen(props: Props) {
   const isLateCheckout = hasCheckout && isLateCheckoutDisplay(task, checkoutTime)
   const isEarlyCheckin = hasCheckin && isEarlyCheckinDisplay(task, checkinTime)
   const isLateCheckin = hasCheckin && isLateCheckinDisplay(task, checkinTime)
-  const titleSuffix = cleaningTaskTitleSuffix(task as any)
+  const titleSuffix = isDeepCleaningTask ? '' : cleaningTaskTitleSuffix(task as any)
   const title2 = `${title}${titleSuffix ? ` ${titleSuffix}` : ''}`.trim()
   const remoteKeyPhotoUrl = String((task as any).key_photo_url || '').trim() || null
   const pendingKeyPhotoUrl = String(keyQueueItem?.local_uri || keyQueueItem?.uploaded_url || '').trim() || null
@@ -1452,6 +1835,10 @@ export default function TaskDetailScreen(props: Props) {
   const isOfflineTask = String(task.task_kind || '').toLowerCase() === 'offline'
   const maintenanceDomain = maintenanceDomainForSourceType(task.source_type)
   const isMaintenanceTask = maintenanceDomain !== null
+  const deepCleaningWorkflow = task.deep_cleaning_workflow
+  const deepCleaningCanComplete = !workRecordReadOnly && deepCleaningWorkflow?.available_actions?.includes('complete') === true
+  const deepCleaningPendingReview = isDeepCleaningTask && String(deepCleaningWorkflow?.status || task.status) === 'pending_review'
+  const usesPhotoDraft = usesCompletionPhotoDraft(task.source_type)
   const isInternalMaintenanceTask = maintenanceDomain === 'internal'
   const maintenanceWorkflow = task.maintenance_workflow || null
   const maintenanceActions = new Set(Array.isArray(maintenanceWorkflow?.available_actions) ? maintenanceWorkflow.available_actions : [])
@@ -1479,28 +1866,29 @@ export default function TaskDetailScreen(props: Props) {
       ? task.guest_ready_outside_key
       : null)
   const completionPhotoAppendAction = taskActions.find((action) => action.id === 'append_completion_photo') || null
-  const canAppendCompletionPhotos = !workRecordReadOnly && !isMaintenanceTask && isAlreadyDone && completionPhotoAppendAction?.enabled === true
-  const canEditTaskHandling = !workRecordReadOnly && ((!isMaintenanceTask && !isAlreadyDone) || maintenanceCanAct)
+  const canAppendCompletionPhotos = !workRecordReadOnly && !isMaintenanceTask && !isDeepCleaningTask && isAlreadyDone && completionPhotoAppendAction?.enabled === true
+  const canEditTaskHandling = !workRecordReadOnly && (isDeepCleaningTask ? deepCleaningCanComplete : ((!isMaintenanceTask && !isAlreadyDone) || maintenanceCanAct))
   const maintenancePendingReview = isMaintenanceTask && String(maintenanceWorkflow?.status || '').trim() === 'pending_review'
   // The server receipt removes executor actions after submission. Keep the two
   // maintenance actions visible in pending review as disabled status controls;
   // do not infer a new action or locally close the workflow.
   const showTaskHandlingControls = !workRecordReadOnly && (canEditTaskHandling || maintenancePendingReview)
-  const maintenanceBeforePhotoUrls = isInternalMaintenanceTask
-    ? normalizePhotoUrls((task as any).maintenance_before_photo_urls)
-    : []
-  const maintenanceDisplayPhotoDrafts: MaintenanceCompletionPhotoDraft[] = maintenanceCompletionPhotoDrafts.length
-    ? maintenanceCompletionPhotoDrafts
-    : normalizePhotoUrls((task as any).completion_photo_urls).map((reference, index) => ({
-        media_id: `saved-maintenance-photo-${index}`,
-        local_uri: null,
-        remote_reference: reference,
-        name: `maintenance-${index + 1}.jpg`,
-        mime_type: 'image/jpeg',
-        captured_at: '',
-        upload_state: 'remote_stored',
-        error_code: null,
-      }))
+  const maintenanceBeforePhotoUrls = isDeepCleaningTask
+    ? normalizePhotoUrls(task.photo_urls)
+    : isInternalMaintenanceTask ? normalizePhotoUrls((task as any).maintenance_before_photo_urls) : []
+  const canonicalCompletionPhotoDrafts: MaintenanceCompletionPhotoDraft[] = normalizePhotoUrls(task.completion_photo_urls).map((reference, index) => ({
+    media_id: `saved-maintenance-photo-${index}`,
+    local_uri: null,
+    remote_reference: reference,
+    name: `maintenance-${index + 1}.jpg`,
+    mime_type: 'image/jpeg',
+    captured_at: '',
+    upload_state: 'remote_stored',
+    error_code: null,
+  }))
+  const maintenanceDisplayPhotoDrafts: MaintenanceCompletionPhotoDraft[] = isDeepCleaningTask
+    ? [...canonicalCompletionPhotoDrafts, ...(deepCleaningCanComplete ? maintenanceCompletionPhotoDrafts.filter((photo) => !photo.remote_reference || !canonicalCompletionPhotoDrafts.some((saved) => saved.remote_reference === photo.remote_reference)) : [])]
+    : maintenanceCompletionPhotoDrafts.length ? maintenanceCompletionPhotoDrafts : canonicalCompletionPhotoDrafts
   const selectedOfflineEditAssignee = offlineEditUsers.find((item) => item.id === offlineEditAssigneeId) || null
   const selectedOfflineEditProperty = offlineEditProperties.find((item) => item.id === offlineEditPropertyId) || null
 
@@ -1698,17 +2086,30 @@ export default function TaskDetailScreen(props: Props) {
       </Pressable>
     )
   }
+  const previewVisible = previewDeepIdentity ? isDeepCleaningTask && previewDeepIdentity === deepAfterIdentity && !!(previewUrl || previewLocalUri) : !!(previewUrl || previewLocalUri)
+
   const detailText = (() => {
     if (isCleaningSource) return null
     if (isOfflineTask) return null
     const s = stripPhotoLines(task.summary)
     return propertyFollowupTaskDetail(task, s) || null
   })()
-  const effectiveMarkPhotoUrls = isMaintenanceTask
-    ? maintenanceDisplayPhotoDrafts.map((photo) => String(photo.remote_reference || '').trim()).filter(Boolean)
+  const completionDisplayPhotoDrafts = (isMaintenanceTask || isDeepCleaningTask) ? maintenanceDisplayPhotoDrafts : [
+    ...markPhotoUrls.filter((url) => !maintenanceCompletionPhotoDrafts.some((photo) => photo.remote_reference === url)).map((url, index): MaintenanceCompletionPhotoDraft => ({
+      media_id: `saved-offline-${index}`, local_uri: null, remote_reference: url, name: `photo-${index}.jpg`,
+      mime_type: 'image/jpeg', captured_at: '', upload_state: 'remote_stored', error_code: null,
+    })),
+    ...maintenanceCompletionPhotoDrafts,
+  ]
+  const effectiveMarkPhotoUrls = usesPhotoDraft
+    ? completionDisplayPhotoDrafts.map((photo) => String(photo.remote_reference || '').trim()).filter(Boolean)
     : markPhotoUrls
-  const maintenancePhotosAwaitingUpload = isMaintenanceTask && maintenanceDisplayPhotoDrafts.some((photo) => !String(photo.remote_reference || '').trim())
-  const hasPendingCompletionPhotoSave = !isMaintenanceTask && isAlreadyDone && pendingCompletionPhotoReferences.length > 0
+  const maintenancePhotosAwaitingUpload = usesPhotoDraft && completionDisplayPhotoDrafts.some((photo) => !String(photo.remote_reference || '').trim())
+  const unsavedCompletionDraftReferences = task.source_type === 'cleaning_offline_tasks'
+    ? maintenanceCompletionPhotoDrafts.map((photo) => String(photo.remote_reference || '').trim())
+      .filter((reference) => reference && !normalizePhotoUrls(task.completion_photo_urls).includes(reference))
+    : []
+  const hasPendingCompletionPhotoSave = !isMaintenanceTask && isAlreadyDone && (pendingCompletionPhotoReferences.length > 0 || unsavedCompletionDraftReferences.length > 0)
   const requiresMarkPhotos = !isOfflineTask
   const offlineDetail = (() => {
     if (!isOfflineTask) return null
@@ -1725,7 +2126,7 @@ export default function TaskDetailScreen(props: Props) {
   return (
     <>
     <ScrollView style={styles.page} contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, moderateScale(20)) + moderateScale(12) }]} showsVerticalScrollIndicator={false}>
-      <GuestLuggageCard
+      {!isDeepCleaningTask && <GuestLuggageCard
         notice={guestLuggage}
         token={token}
         accessWorkTaskId={workRecordReadOnly ? task?.id || null : null}
@@ -1733,7 +2134,7 @@ export default function TaskDetailScreen(props: Props) {
         showAcknowledge={!workRecordReadOnly && !canManagerView && roleNames.some((role) => ['cleaner', 'cleaner_inspector', 'cleaning_inspector'].includes(role))}
         showAcknowledgementSummary={canManagerView}
         onChanged={workRecordReadOnly ? undefined : ((notice) => task ? patchWorkTaskItem(task.id, { guest_luggage: notice } as any) : undefined)}
-      />
+      />}
 
       <View style={styles.card}>
         <View style={[styles.titleMetaRow, isCompactLayout ? styles.titleRowCompact : null]}>
@@ -2008,7 +2409,7 @@ export default function TaskDetailScreen(props: Props) {
           </View>
         ) : null}
 
-        {guideUrl ? (
+        {!isDeepCleaningTask && (guideUrl ? (
           <Pressable
             onPress={async () => {
               try {
@@ -2031,7 +2432,7 @@ export default function TaskDetailScreen(props: Props) {
               无入住指南，请联系管理员
             </Text>
           </View>
-        )}
+        ))}
 
         {isCleaningSource && feedbackTaskAction ? (
           <View
@@ -2164,18 +2565,40 @@ export default function TaskDetailScreen(props: Props) {
                 <Text style={styles.summary}>{offlineDetail || detailText}</Text>
               </View>
             ) : null}
-            {maintenanceBeforePhotoUrls.length ? (
+            {isDeepCleaningTask || maintenanceBeforePhotoUrls.length ? (
               <View style={styles.taskPhotosPanel}>
-                <Text style={styles.sectionTitle}>维修前照片</Text>
+                <Text style={styles.sectionTitle}>{isDeepCleaningTask ? '清洁前照片' : '维修前照片'}</Text>
+                {isDeepCleaningTask && deepCleaningCanComplete ? <>
+                  <Text style={styles.mutedSmall}>新增前图将在提交待审核时与后图一起保存；已有前图只读。</Text>
+                  {!beforeDraftReady ? <Text style={styles.mutedSmall}>{beforeDraftLoadError ? '前图草稿读取失败，请重新打开任务重试；原资料未删除。' : '正在读取前图草稿…'}</Text> : null}
+                  <View style={styles.compactActionRow}>
+                    <Pressable testID="deep-before-camera" accessibilityRole="button" disabled={marking || !beforeDraftReady} onPress={() => { void appendDeepBeforePhotos('camera') }} style={({ pressed }) => [styles.compactActionBtn, pressed ? styles.pressed : null, marking || !beforeDraftReady ? styles.compactActionBtnDisabled : null]}>
+                      <Ionicons name="camera-outline" size={moderateScale(16)} color={marking || !beforeDraftReady ? '#9CA3AF' : '#2563EB'} />
+                      <Text style={[styles.compactActionText, marking || !beforeDraftReady ? styles.compactActionTextDisabled : null]}>拍照上传</Text>
+                    </Pressable>
+                    <Pressable testID="deep-before-library" accessibilityRole="button" disabled={marking || !beforeDraftReady} onPress={() => { void appendDeepBeforePhotos('library') }} style={({ pressed }) => [styles.compactActionBtn, pressed ? styles.pressed : null, marking || !beforeDraftReady ? styles.compactActionBtnDisabled : null]}>
+                      <Ionicons name="images-outline" size={moderateScale(16)} color={marking || !beforeDraftReady ? '#9CA3AF' : '#2563EB'} />
+                      <Text style={[styles.compactActionText, marking || !beforeDraftReady ? styles.compactActionTextDisabled : null]}>相册上传</Text>
+                    </Pressable>
+                  </View>
+                  {beforePhotoDrafts.some((photo) => !photo.remote_reference) ? <AppButton testID="deep-before-retry" label="重试前图上传" disabled={marking} onPress={() => { void retryDeepBeforeUploads() }} tone="outline" /> : null}
+                  <ScrollView horizontal contentContainerStyle={styles.markPhotoList}>
+                    {beforePhotoDrafts.map((photo) => <View key={photo.media_id} style={styles.markPhotoCard}>
+                      {photo.local_uri ? <Pressable onPress={() => openPreview('', mediaAccessWorkTaskId, photo.local_uri)}><CleaningMediaImage testID={`deep-before-draft-${photo.media_id}`} token={token} localUri={photo.local_uri} accessWorkTaskId={mediaAccessWorkTaskId} style={styles.markPhotoThumb} resizeMode="contain" /></Pressable> : <Text testID="deep-before-local-missing">{photo.remote_reference ? '本地前图不可用，上传引用仍保留' : '本地前图已丢失且未上传，请移除此草稿后重新拍摄'}</Text>}
+                      <AppButton testID={`deep-before-remove-${photo.media_id}`} label="移除本次前图" disabled={marking} tone="outline" onPress={() => { void removeDeepBeforePhoto(photo.media_id) }} />
+                    </View>)}
+                  </ScrollView>
+                </> : null}
+
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.markPhotoList}>
                   {maintenanceBeforePhotoUrls.map((url, index) => (
                     <View key={`${url}:${index}`} style={styles.markPhotoCard}>
                       <Pressable
-                        testID={`maintenance-before-photo-${index}`}
+                        testID={`${isDeepCleaningTask ? 'deep-cleaning' : 'maintenance'}-before-photo-${index}`}
                         onPress={() => openPreview(String(url), mediaAccessWorkTaskId)}
                         style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
                       >
-                        <CleaningMediaImage token={token} remoteReference={String(url)} accessWorkTaskId={mediaAccessWorkTaskId} style={styles.markPhotoThumb} resizeMode="cover" />
+                        <CleaningMediaImage token={token} remoteReference={String(url)} accessWorkTaskId={mediaAccessWorkTaskId} style={styles.markPhotoThumb} resizeMode={isDeepCleaningTask ? "contain" : "cover"} />
                       </Pressable>
                     </View>
                   ))}
@@ -2219,13 +2642,18 @@ export default function TaskDetailScreen(props: Props) {
                 ) : null}
               </View>
             ) : null}
-            <Text style={styles.sectionTitle}>任务处理</Text>
+            <Text style={styles.sectionTitle}>{isDeepCleaningTask ? '清洁后照片' : '任务处理'}</Text>
+            {isDeepCleaningTask && !deepAfterReady ? <Text style={styles.mutedSmall}>{deepAfterLoadError ? '后图草稿读取失败，请重新打开任务重试；原资料未删除。' : '正在读取后图草稿…'}</Text> : null}
             <Text style={styles.mutedSmall} numberOfLines={2}>
-              {workRecordReadOnly
+              {deepCleaningPendingReview
+                ? '已提交完成，等待管理员审核'
+                : workRecordReadOnly
                 ? '该工作记录仅供查看，不可修改或再次提交。'
                 : maintenancePendingReview
                 ? '已提交完成，等待审核'
-                : isMaintenanceTask && !maintenanceCanAct
+                : isDeepCleaningTask && !deepCleaningCanComplete
+                  ? '当前深清任务仅供查看，请刷新确认任务状态。'
+                  : isMaintenanceTask && !maintenanceCanAct
                   ? '当前维修任务暂无可操作动作，请刷新后重试。'
                   : hasPendingCompletionPhotoSave
                     ? `已有 ${pendingCompletionPhotoReferences.length} 张照片已上传，等待保存到完成记录`
@@ -2253,12 +2681,12 @@ export default function TaskDetailScreen(props: Props) {
                 <Text style={[styles.compactActionText, marking || (isMaintenanceTask && !maintenanceCanAct) ? styles.compactActionTextDisabled : null]}>{canAppendCompletionPhotos ? '补充相册' : '相册上传'}</Text>
               </Pressable>
             </View> : null}
-            {maintenancePhotosAwaitingUpload && canEditTaskHandling ? (
+            {maintenancePhotosAwaitingUpload && (canEditTaskHandling || canAppendCompletionPhotos) ? (
               <AppButton
                 testID="maintenance-photo-retry-upload"
                 label="重试照片上传"
                 loading={marking}
-                disabled={!maintenanceCanAct}
+                disabled={isDeepCleaningTask ? !deepCleaningCanComplete : isMaintenanceTask && !maintenanceCanAct}
                 tone="outline"
                 onPress={() => { void retryMaintenanceCompletionPhotoUploads() }}
                 style={styles.maintenancePhotoRetryBtn}
@@ -2275,10 +2703,10 @@ export default function TaskDetailScreen(props: Props) {
                 style={styles.maintenancePhotoRetryBtn}
               />
             ) : null}
-            {(isMaintenanceTask ? maintenanceDisplayPhotoDrafts.length : effectiveMarkPhotoUrls.length) ? (
+            {(usesPhotoDraft ? completionDisplayPhotoDrafts.length : effectiveMarkPhotoUrls.length) ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.markPhotoList}>
-                {(isMaintenanceTask
-                  ? maintenanceDisplayPhotoDrafts
+                {(usesPhotoDraft
+                  ? completionDisplayPhotoDrafts
                   : effectiveMarkPhotoUrls.map((url, index) => ({
                       media_id: `mark-photo-${index}`,
                       local_uri: null,
@@ -2289,21 +2717,30 @@ export default function TaskDetailScreen(props: Props) {
                       upload_state: 'remote_stored' as const,
                       error_code: null,
                     }))
-                ).map((photo, index) => (
+                ).map((photo, index) => {
+                  const unsavedOfflineDraft = (task.source_type === 'cleaning_offline_tasks' || isDeepCleaningTask)
+                    && maintenanceCompletionPhotoDrafts.some((draft) => draft.media_id === photo.media_id)
+                    && !normalizePhotoUrls(task.completion_photo_urls).includes(String(photo.remote_reference || ''))
+                  // An uploaded object is not yet authorized by a task association. Never
+                  // fall through to its private URL if this unsaved local file disappears.
+                  const readableRemote = unsavedOfflineDraft ? '' : String(photo.remote_reference || '')
+                  const missingLocal = unsavedOfflineDraft && (!photo.local_uri || !draftFileExists(photo.local_uri))
+                  return (
                   <View key={`${photo.media_id}:${index}`} style={styles.markPhotoCard}>
                     <Pressable
-                      onPress={() => openPreview(String(photo.remote_reference || ''), mediaAccessWorkTaskId, photo.local_uri)}
+                      disabled={missingLocal}
+                      onPress={() => openPreview(readableRemote, mediaAccessWorkTaskId, photo.local_uri)}
                       style={({ pressed }) => [styles.markPhotoThumbWrap, pressed ? styles.pressed : null]}
                     >
-                      <CleaningMediaImage testID={`maintenance-action-photo-${index}`} token={token} localUri={photo.local_uri} remoteReference={String(photo.remote_reference || '')} accessWorkTaskId={mediaAccessWorkTaskId} style={styles.markPhotoThumb} resizeMode="cover" />
+                      {missingLocal ? <Text testID={isDeepCleaningTask ? "deep-cleaning-photo-local-missing" : `completion-photo-local-missing-${index}`}>{isDeepCleaningTask ? (photo.remote_reference ? '本地照片不可用，已上传照片仍保留，提交后可查看。' : '本地后图已丢失且未上传，请移除此草稿后重新拍摄。') : (photo.remote_reference ? '本地预览已丢失，照片引用仍保留，可继续提交' : '本地照片已丢失，请删除后重新拍摄')}</Text> : <CleaningMediaImage testID={`maintenance-action-photo-${index}`} token={token} localUri={photo.local_uri} remoteReference={readableRemote} accessWorkTaskId={mediaAccessWorkTaskId} style={styles.markPhotoThumb} resizeMode={isDeepCleaningTask ? "contain" : "cover"} />}
                     </Pressable>
-                    {(!isAlreadyDone && !isMaintenanceTask) || (isMaintenanceTask && maintenanceCanAct && maintenanceCompletionPhotoDrafts.length) ? (
-                      <AppIconButton accessibilityLabel="删除标记照片" onPress={() => removeMarkPhoto(index)} style={styles.markPhotoRemoveBtn} visualStyle={styles.markPhotoRemoveVisual}>
+                    {(isDeepCleaningTask ? deepCleaningCanComplete && maintenanceCompletionPhotoDrafts.some((draft) => draft.media_id === photo.media_id) : (!isAlreadyDone && !isMaintenanceTask) || (isMaintenanceTask && maintenanceCanAct && maintenanceCompletionPhotoDrafts.length) || (canAppendCompletionPhotos && !photo.remote_reference && maintenanceCompletionPhotoDrafts.some((draft) => draft.media_id === photo.media_id))) ? (
+                      <AppIconButton disabled={marking} accessibilityLabel="删除标记照片" onPress={() => removeMarkPhoto(index)} style={styles.markPhotoRemoveBtn} visualStyle={styles.markPhotoRemoveVisual}>
                         <Ionicons name="close" size={moderateScale(14)} color="#FFFFFF" />
                       </AppIconButton>
                     ) : null}
                   </View>
-                ))}
+                )})}
               </ScrollView>
             ) : null}
 
@@ -2312,14 +2749,16 @@ export default function TaskDetailScreen(props: Props) {
               <TextInput
                 value={markNote}
                 onChangeText={setMarkNote}
-                style={styles.input}
+                style={isDeepCleaningTask ? [styles.input, styles.deepCleaningNoteInput] : styles.input}
                 placeholder="备注"
                 placeholderTextColor="#9CA3AF"
                 editable={!maintenancePendingReview}
               />
 
               <View style={isOfflineTask ? styles.compactCompletionRow : [styles.markRow, isCompactLayout ? styles.actionsRowCompact : null]}>
-                {isMaintenanceTask ? (
+                {isDeepCleaningTask ? (
+                  <AppButton testID="deep-cleaning-task-complete" label="提交待审核" onPress={() => { void onMarkDone() }} loading={marking} disabled={!deepCleaningCanComplete || !beforeDraftReady || !deepAfterReady} style={styles.maintenanceActionButton} />
+                ) : isMaintenanceTask ? (
                   <AppButton
                     testID="maintenance-task-complete"
                     label="标记完成"
@@ -2344,7 +2783,7 @@ export default function TaskDetailScreen(props: Props) {
                     <Text style={styles.markPrimaryText}>标记完成</Text>
                   </Pressable>
                 )}
-                {isMaintenanceTask ? (
+                {isDeepCleaningTask ? null : isMaintenanceTask ? (
                   <AppButton
                     testID="maintenance-task-not-complete"
                     label="未完成"
@@ -2466,7 +2905,7 @@ export default function TaskDetailScreen(props: Props) {
         </View>
       </KeyboardAvoidingView>
     </Modal>
-    <Modal visible={!!previewUrl} transparent animationType="fade" onRequestClose={closePreview}>
+    <Modal visible={previewVisible} transparent animationType="fade" onRequestClose={closePreview}>
       <Pressable style={styles.previewBackdrop} onPress={closePreview}>
         <Pressable style={styles.previewCard} onPress={() => {}}>
           <View style={[styles.previewTopRow, { paddingTop: Math.max(10, insets.top) }]}>
@@ -2484,9 +2923,9 @@ export default function TaskDetailScreen(props: Props) {
             bounces={false}
             centerContent
           >
-            {previewUrl ? (
+            {previewVisible ? (
               <View style={{ width: previewSize.width, height: Math.max(240, previewSize.height - insets.top - insets.bottom - 80) }}>
-                <CleaningMediaPreview token={token} reference={previewUrl} localUri={previewLocalUri} accessWorkTaskId={previewWorkTaskId} accessSourceIds={previewSourceIds} mediaScope={previewMediaScope} offlineWorkTaskMedia={previewOfflineWorkTaskMedia} style={{ width: '100%', height: '100%' }} />
+                <CleaningMediaPreview token={token} reference={previewUrl || ''} localUri={previewLocalUri} accessWorkTaskId={previewWorkTaskId} accessSourceIds={previewSourceIds} mediaScope={previewMediaScope} offlineWorkTaskMedia={previewOfflineWorkTaskMedia} style={{ width: '100%', height: '100%' }} />
               </View>
             ) : null}
           </ScrollView>
@@ -2578,6 +3017,7 @@ const styles = StyleSheet.create({
   taskPhotosPanel: { marginTop: 4, marginBottom: 4 },
   label: { marginTop: 14, marginBottom: 8, color: '#111827', fontWeight: '900' },
   input: { height: 44, borderRadius: 12, borderWidth: hairline(), borderColor: '#D1D5DB', paddingHorizontal: 12, fontWeight: '700', color: '#111827' },
+  deepCleaningNoteInput: { textAlignVertical: 'center', paddingVertical: 0 },
   markRow: { marginTop: 14, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   markBtn: { marginTop: 12, minHeight: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 0 },
   markUploadRow: { marginTop: 12, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },

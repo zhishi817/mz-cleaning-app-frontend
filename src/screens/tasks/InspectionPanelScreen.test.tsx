@@ -1,3 +1,4 @@
+import { setMediaCaptureSession, clearMediaCaptureSession } from '../../lib/mediaCaptureIdentity'
 import React from 'react'
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
 import { StyleSheet } from 'react-native'
@@ -10,6 +11,7 @@ const mockSnapshot = {
     source_type: 'cleaning_tasks',
     source_id: 'cleaning-1',
     title: '测试房源检查',
+    assignee_name: 'Cleaner A',
     property_id: 'property-1',
     property: { id: 'property-1', code: 'TEST-1', address: '测试地址' },
     available_actions: [{ id: 'submit_inspection', enabled: true, target: 'InspectionPanel' }],
@@ -46,7 +48,7 @@ jest.mock('expo-av', () => {
   return { ResizeMode: { CONTAIN: 'contain' }, Video: (props: any) => mockReact.createElement(View, props) }
 })
 
-jest.mock('../../lib/auth', () => ({ useAuth: () => ({ token: 'test-token', user: { id: 'inspector-1', role: 'cleaning_inspector' } }) }))
+jest.mock('../../lib/auth', () => ({ useAuth: () => ({ token: 'test-token', user: { id: 'inspector-1', username: 'Inspector B', role: 'cleaning_inspector' } }) }))
 jest.mock('../../lib/inspectionPanelFeedbackDraft', () => ({ getInspectionPanelFeedbackDraft: jest.fn(async () => null) }))
 jest.mock('../../lib/inspectionPanelDraft', () => ({
   clearInspectionPanelDraft: jest.fn(async () => {}),
@@ -55,7 +57,7 @@ jest.mock('../../lib/inspectionPanelDraft', () => ({
 }))
 jest.mock('../../lib/inspectionPanelSubmitQueue', () => ({
   bindInspectionPanelCleaningTaskId: jest.fn(async () => null),
-  createInspectionPanelLocalMedia: jest.fn(async () => ({ id: 'media-1', local_uri: 'file:///test.jpg' })),
+  createInspectionPanelLocalMedia: jest.fn(async (params: any) => ({ id: 'media-1', local_uri: 'file:///test.jpg', captured_by_user_id: params.captured_by_user_id, captured_at: params.capturedAt, watermark_text: params.watermarkText })),
   discardInspectionPanelBatch: jest.fn(async () => null),
   findInspectionPanelValidationIssue: jest.fn(() => null),
   getInspectionPanelBatch: mockGetInspectionPanelBatch,
@@ -68,6 +70,7 @@ jest.mock('../../lib/inspectionPanelSubmitQueue', () => ({
   inspectionPanelLocalMediaSummary: jest.fn(() => null),
   processInspectionPanelSubmitQueue: jest.fn(async () => null),
   saveInspectionPanelDraftBatch: jest.fn(async () => null),
+  supplementDeepCleaningBatchExecutor: jest.fn(async () => null),
   submitInspectionPanelBatch: jest.fn(async () => null),
   subscribeInspectionPanelSubmitQueue: jest.fn((listener: () => void) => {
     inspectionQueueListener = listener
@@ -99,6 +102,7 @@ jest.mock('../../lib/storage', () => ({
   remove: jest.fn(async () => {}),
 }))
 jest.mock('../../lib/api', () => ({
+  listDeepCleaningExecutors: jest.fn(async () => [{ id: 'actual-cleaner', name: 'Fixture Cleaner' }]),
   appendInspectionIssuePhotos: jest.fn(async () => ({ ok: true, appended: 1 })),
   getCleaningConsumables: jest.fn(async () => null),
   getInspectionPhotos: jest.fn(async () => ({ items: [] })),
@@ -862,6 +866,9 @@ test('进入检查与补充先确认房号，成功同步后仅可从相册追�
   await waitFor(() => expect(ui.queryByTestId('inspection-room-confirmation')).toBeNull())
   fireEvent.press(ui.getByTestId('inspection-post-submit-issue-library'))
   await waitFor(() => expect(ui.getByTestId('inspection-post-submit-issue-submit')).toBeTruthy())
+  expect(queue.createInspectionPanelLocalMedia).toHaveBeenCalledWith(expect.objectContaining({
+    captured_by_user_id: 'inspector-1', watermarkText: expect.stringContaining('Inspector B'),
+  }))
   fireEvent.press(ui.getByTestId('inspection-post-submit-issue-submit'))
 
   await waitFor(() => {
@@ -1272,3 +1279,35 @@ test('展示任务 ID 变化后继续使用唯一同源本机批次的原存储�
   })
   ui.unmount()
 })
+
+test('旧深清补选必须人工确认并保留同一批次恢复，不默认历史人员', async () => {
+  const queue = require('../../lib/inspectionPanelSubmitQueue')
+  const { Alert } = require('react-native')
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+  queue.supplementDeepCleaningBatchExecutor.mockClear()
+  queue.getInspectionPanelBatch.mockReset().mockResolvedValue({
+    submit_id: 'legacy-deep', task_id: 'w-inspection', cleaning_task_id: 'cleaning-1',
+    property_id: 'property-1', status: 'failed',
+    snapshot: { task_id: 'w-inspection', cleaning_task_id: 'cleaning-1', room_photos: {},
+      restock: [], cleaning_issue: [], feedback: { maintenanceDrafts: [],
+        deepCleaningDrafts: [{ client_item_id: 'deep-old', submitAsCompleted: true, detail: '历史深清', beforePhotos: [], afterPhotos: [] }] } },
+    steps: { complete_feedback_projects: { status: 'failed', output: {} } },
+  })
+  queue.resolveInspectionPanelBatch.mockImplementation(async (params: any) => ({ item: await queue.getInspectionPanelBatch(params.task_id), matched_by: 'display_task_id', ambiguous_count: 0 }))
+  const Screen = require('./InspectionPanelScreen').default
+  const ui = render(<I18nProvider><Screen navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}), setOptions: jest.fn() }} route={{ key: 'deep-recovery', name: 'InspectionPanel', params: { taskId: 'w-inspection', sourceId: 'cleaning-1' } }} /></I18nProvider>)
+  await waitFor(() => expect(ui.getByTestId('deep-recovery-deep-old')).toBeTruthy())
+  fireEvent.press(ui.getByTestId('deep-recovery-deep-old'))
+  await waitFor(() => expect(ui.getByTestId('deep-recovery-person-actual-cleaner')).toBeTruthy())
+  expect(queue.supplementDeepCleaningBatchExecutor).not.toHaveBeenCalled()
+  fireEvent.press(ui.getByTestId('deep-recovery-person-actual-cleaner'))
+  expect(queue.supplementDeepCleaningBatchExecutor).not.toHaveBeenCalled()
+  const confirmation = alert.mock.calls.find((call: any) => call[0] === '确认实际执行人') as any
+  await act(async () => { confirmation[2].find((button: any) => button.text === '确认补选并继续').onPress() })
+  await waitFor(() => expect(queue.supplementDeepCleaningBatchExecutor).toHaveBeenCalledWith({ token: 'test-token', actorId: 'inspector-1', taskId: 'w-inspection', clientItemId: 'deep-old', assigneeId: 'actual-cleaner' }))
+  expect(queue.processInspectionPanelSubmitQueue).toHaveBeenCalledWith('test-token', 'inspector-1')
+  ui.unmount()
+  alert.mockRestore()
+})
+beforeEach(() => { setMediaCaptureSession('inspector-1', 'test-token') })
+afterEach(() => { clearMediaCaptureSession() })

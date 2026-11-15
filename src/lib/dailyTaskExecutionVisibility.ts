@@ -9,6 +9,7 @@ export type DailyTaskExecutionCandidate = {
   status?: unknown
   source_workflow_status?: unknown
   maintenance_workflow?: { status?: unknown } | null
+  deep_cleaning_workflow?: { status?: unknown } | null
   scheduled_date?: unknown
   task_date?: unknown
   date?: unknown
@@ -85,7 +86,7 @@ export function isDailyTaskExecutionVisible(
   if (task.execution_list_visible === false) return false
 
   const source = normalized(task.source_type)
-  const workflowStatus = normalized(task.source_workflow_status || task.maintenance_workflow?.status || task.status)
+  const workflowStatus = normalized(task.source_workflow_status || (source === 'property_deep_cleaning' ? task.deep_cleaning_workflow?.status : null) || task.maintenance_workflow?.status || task.status)
   if (REVIEW_ONLY_STATUSES.has(workflowStatus) || TERMINAL_STATUSES.has(workflowStatus)) return false
   if (REVIEW_COMPLETION_ALIAS_SOURCES.has(source) && MAINTENANCE_REVIEW_ALIASES.has(workflowStatus)) return false
   if (ASSIGNMENT_FIRST_SOURCES.has(source) && workflowStatus === 'pending_assignment') return false

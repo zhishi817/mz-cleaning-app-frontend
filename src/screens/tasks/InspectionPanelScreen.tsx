@@ -1,3 +1,6 @@
+import { listDeepCleaningExecutors } from '../../lib/api'
+import { assertMediaCaptureSession } from '../../lib/mediaCaptureIdentity'
+import { buildMediaWatermark, mediaOperatorName } from '../../lib/mediaWatermark'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
@@ -25,6 +28,7 @@ import {
   resolveInspectionPanelBatch,
   saveInspectionPanelDraftBatch,
   submitInspectionPanelBatch,
+  supplementDeepCleaningBatchExecutor,
   subscribeInspectionPanelSubmitQueue,
   inspectionPanelFailedStepDetails,
   inspectionPanelLocalMediaSummary,
@@ -115,8 +119,8 @@ function cleanText(value: any) {
   return String(value || '').trim()
 }
 
-function postSubmitIssueDraftKey(taskId: string) {
-  return `mzstay.inspection_post_submit_issue_draft.v1:${cleanText(taskId)}`
+function postSubmitIssueDraftKey(taskId: string, userId: string) {
+  return `mzstay.media_owner.v1:${encodeURIComponent(userId)}:mzstay.inspection_post_submit_issue_draft.v1:${cleanText(taskId)}`
 }
 
 function makePostSubmitIssueId(taskId: string) {
@@ -342,6 +346,7 @@ function mergeRestockItems(base: RestockState[], incoming: RestockState[]) {
 function buildSnapshot(params: {
   taskId: string
   cleaningTaskId: string
+  ownerId?: string | null
   propertyId?: string | null
   propertyCode?: string | null
   restock: RestockState[]
@@ -353,6 +358,7 @@ function buildSnapshot(params: {
 }) {
   return {
     task_id: params.taskId,
+    owner_user_id: params.ownerId || null,
     cleaning_task_id: params.cleaningTaskId,
     property_id: cleanText(params.propertyId) || null,
     property_code: cleanText(params.propertyCode) || null,
@@ -390,7 +396,7 @@ export default function InspectionPanelScreen(props: Props) {
     message: '检查表单或照片草稿尚未完成',
   })
   const { t } = useI18n()
-  const { token } = useAuth()
+  const { token, user } = useAuth()
   const netInfo = useNetInfo()
   const insets = useSafeAreaInsets()
   const suppliesCatalog = useSuppliesCatalogStore()
@@ -416,6 +422,8 @@ export default function InspectionPanelScreen(props: Props) {
   const [historicalKeyPhoto, setHistoricalKeyPhoto] = useState<{ reference: string; taskId: string } | null>(null)
   const [historicalLockboxVideo, setHistoricalLockboxVideo] = useState<{ reference: string; taskId: string } | null>(null)
   const [batchItem, setBatchItem] = useState<InspectionPanelSubmitQueueItem | null>(null)
+  const [deepRecoveryItemId, setDeepRecoveryItemId] = useState<string | null>(null)
+  const [deepRecoveryPeople, setDeepRecoveryPeople] = useState<Array<{ id: string; name: string }>>([])
   const [batchLookupIssue, setBatchLookupIssue] = useState<'ambiguous' | 'conflict' | null>(null)
   const [serverSubmission, setServerSubmission] = useState<InspectionPanelServerSubmission | null>(null)
   const [serverPhotoLoadState, setServerPhotoLoadState] = useState<'idle' | 'loading' | 'loaded' | 'failed'>('idle')
@@ -463,7 +471,7 @@ export default function InspectionPanelScreen(props: Props) {
     if (readOnly) return
     const taskId = cleanText(props.route.params.taskId)
     if (!taskId) return
-    void getJson<PostSubmitIssueDraft>(postSubmitIssueDraftKey(taskId)).then((saved) => {
+    void getJson<PostSubmitIssueDraft>(postSubmitIssueDraftKey(taskId, String(user?.id || ''))).then((saved) => {
       if (cancelled || !saved) return
       const submitId = cleanText(saved.submit_id)
       const items = Array.isArray(saved.items)
@@ -594,6 +602,7 @@ export default function InspectionPanelScreen(props: Props) {
     () => (
       showValidationIssue && task
         ? findInspectionPanelValidationIssue(buildSnapshot({
+          ownerId: user?.id,
             taskId: task.id,
             cleaningTaskId,
             propertyId,
@@ -842,6 +851,7 @@ export default function InspectionPanelScreen(props: Props) {
   ) => {
     if (!task || isFrozen) return
     const snapshot = buildSnapshot({
+          ownerId: user?.id,
       taskId: localBatchTaskId,
       cleaningTaskId,
       propertyId,
@@ -868,22 +878,22 @@ export default function InspectionPanelScreen(props: Props) {
     }
   }, [cleaningIssue, feedbackDraft, guestArrivalPhotoSkipConfirmed, loading, persistDraft, restock, restockConfirmedSufficient, roomPhotos])
 
-  async function createMediaFromAsset(asset: any, prefix: string, note?: string) {
+  async function createMediaFromAsset(asset: any, prefix: string, note?: string, source: 'camera' | 'library' = 'camera') {
     const uri = cleanText(asset?.uri)
     if (!uri) return null
     const preparedUri = await compressImageForUpload(uri)
     const convertedToJpeg = preparedUri && preparedUri !== uri
-    const capturedAt = new Date().toISOString()
-    const username = cleanText((task as any)?.assignee_name || '')
-    const watermarkTime = capturedAt.replace('T', ' ').slice(0, 16)
+    const capturedAt = source === 'camera' ? new Date().toISOString() : ''
+    const username = mediaOperatorName(user)
     return createInspectionPanelLocalMedia({
       sourceUri: preparedUri || uri,
       name: convertedToJpeg ? `${prefix}-${Date.now()}.jpg` : cleanText(asset?.fileName) || cleanText(uri.split('/').pop()) || `${prefix}-${Date.now()}`,
       mimeType: convertedToJpeg ? 'image/jpeg' : cleanText(asset?.mimeType),
       prefix,
       capturedAt,
+      captured_by_user_id: String(user?.id || ''),
       note,
-      watermarkText: `${propertyCode || '未知房号'}  ${username || '未知用户'}\n${watermarkTime}`,
+      watermarkText: buildMediaWatermark(propertyCode, username, capturedAt),
     })
   }
 
@@ -953,7 +963,7 @@ export default function InspectionPanelScreen(props: Props) {
     const created: InspectionPanelBatchMedia[] = []
     for (const asset of (res.assets as any[]).slice(0, 12 - cleaningIssue.length)) {
       try {
-        const media = await createMediaFromAsset(asset, 'unclean', '')
+        const media = await createMediaFromAsset(asset, 'unclean', '', source)
         if (media) created.push(media)
       } catch (error: any) {
         Alert.alert(t('common_error'), String(error?.message || '照片格式转换失败，请重新拍摄'))
@@ -968,10 +978,10 @@ export default function InspectionPanelScreen(props: Props) {
     const taskId = cleanText(props.route.params.taskId)
     if (!taskId) return
     if (!next?.items.length) {
-      await removeStorage(postSubmitIssueDraftKey(taskId))
+      await removeStorage(postSubmitIssueDraftKey(taskId, String(user?.id || '')))
       return
     }
-    await setJson(postSubmitIssueDraftKey(taskId), next)
+    await setJson(postSubmitIssueDraftKey(taskId, String(user?.id || '')), next)
   }
 
   async function onAddPostSubmitCleaningIssueFromLibrary() {
@@ -994,7 +1004,7 @@ export default function InspectionPanelScreen(props: Props) {
     const created: InspectionPanelBatchMedia[] = []
     for (const asset of (res.assets as any[]).slice(0, remaining)) {
       try {
-        const media = await createMediaFromAsset(asset, 'inspection-issue', '')
+        const media = await createMediaFromAsset(asset, 'inspection-issue', '', 'library')
         if (media) created.push(media)
       } catch (error: any) {
         Alert.alert(t('common_error'), String(error?.message || '照片格式转换失败，请重新选择'))
@@ -1045,6 +1055,7 @@ export default function InspectionPanelScreen(props: Props) {
         if (!remoteReference) {
           const localUri = cleanText(uploaded.local_uri)
           if (!localUri) throw new Error('缺少可提交的问题照片')
+          assertMediaCaptureSession(token, uploaded.captured_by_user_id || '')
           const upload = await uploadCleaningMedia(
             token,
             {
@@ -1059,7 +1070,8 @@ export default function InspectionPanelScreen(props: Props) {
               media_id: uploaded.id,
               property_code: propertyCode || undefined,
               captured_at: cleanText(uploaded.captured_at) || undefined,
-              watermark_text: `${propertyCode || '未知房号'}\n${cleanText(uploaded.captured_at).replace('T', ' ').slice(0, 16)}`,
+              watermark_text: cleanText(uploaded.watermark_text) || buildMediaWatermark(propertyCode, '', uploaded.captured_at),
+              captured_by_user_id: uploaded.captured_by_user_id || '',
             },
             { skipImageCompression: true },
           )
@@ -1142,6 +1154,7 @@ export default function InspectionPanelScreen(props: Props) {
   function validateDraft() {
     if (!task) return { section: 'restock' as const, message: '任务数据尚未加载完成' }
     return findInspectionPanelValidationIssue(buildSnapshot({
+          ownerId: user?.id,
       taskId: task.id,
       cleaningTaskId,
       propertyId,
@@ -1183,7 +1196,7 @@ export default function InspectionPanelScreen(props: Props) {
     if (currentBatch && currentBatch.status !== 'draft') {
       setSubmitting(true)
       try {
-        await processInspectionPanelSubmitQueue(token)
+        await processInspectionPanelSubmitQueue(token, String(user?.id || ''))
         setBatchItem(await resolveCurrentBatch())
       } catch (e: any) {
         Alert.alert(t('common_error'), String(e?.message || '重试同步失败'))
@@ -1208,6 +1221,7 @@ export default function InspectionPanelScreen(props: Props) {
         property_id: propertyId,
         property_code: propertyCode,
         snapshot: buildSnapshot({
+          ownerId: user?.id,
           taskId: localBatchTaskId,
           cleaningTaskId,
           propertyId,
@@ -1222,7 +1236,7 @@ export default function InspectionPanelScreen(props: Props) {
       })
       const submitted = await submitInspectionPanelBatch(localBatchTaskId)
       setBatchItem(submitted)
-      await processInspectionPanelSubmitQueue(token)
+      await processInspectionPanelSubmitQueue(token, String(user?.id || ''))
       const latest = await resolveCurrentBatch()
       setBatchItem(latest)
       Alert.alert(
@@ -1237,6 +1251,34 @@ export default function InspectionPanelScreen(props: Props) {
     } finally {
       setSubmitting(false)
     }
+  }
+
+  async function openDeepRecovery(clientItemId: string) {
+    if (!token || !user?.id || submitting) return
+    try {
+      setSubmitting(true)
+      const people = await listDeepCleaningExecutors(token)
+      setDeepRecoveryPeople(people)
+      setDeepRecoveryItemId(clientItemId)
+    } catch (error: any) { Alert.alert(t('common_error'), String(error?.message || '人员名单不可用')) }
+    finally { setSubmitting(false) }
+  }
+  function confirmDeepRecovery(person: { id: string; name: string }) {
+    if (!deepRecoveryItemId || !token || !user?.id) return
+    const clientItemId = deepRecoveryItemId
+    Alert.alert('确认实际执行人', `将此深清的实际执行人补为 ${person.name}，保留全部照片与已成功步骤后继续同步；不会重建反馈。`, [
+      { text: '取消', style: 'cancel' },
+      { text: '确认补选并继续', onPress: () => { void (async () => {
+        setSubmitting(true)
+        try {
+          await supplementDeepCleaningBatchExecutor({ token, actorId: String(user.id), taskId: localBatchTaskId, clientItemId, assigneeId: person.id })
+          setDeepRecoveryItemId(null)
+          await processInspectionPanelSubmitQueue(token, String(user?.id || ''))
+          setBatchItem(await resolveCurrentBatch())
+        } catch (error: any) { Alert.alert(t('common_error'), String(error?.message || '补选未完成，原资料已保留')) }
+        finally { setSubmitting(false) }
+      })() } },
+    ])
   }
 
   async function onDiscardFailedBatch() {
@@ -1903,6 +1945,11 @@ export default function InspectionPanelScreen(props: Props) {
                   ))}
                 </View>
               ) : null}
+              {(batchItem?.snapshot.feedback?.deepCleaningDrafts || []).filter((draft) => draft.submitAsCompleted && (!draft.completionOwnerId && !batchItem?.snapshot.owner_user_id || !draft.completionAssigneeId || !draft.completionRecordId) && !(batchItem?.steps.complete_feedback_projects.output as any)?.[draft.client_item_id]?.completed && batchItem?.steps.complete_feedback_projects.status !== 'succeeded').map((draft) => <View key={draft.client_item_id}>
+                <Text style={styles.mutedSmall}>{`深清：${draft.detail || draft.area || '待补选记录'}`}</Text>
+                <AppButton testID={`deep-recovery-${draft.client_item_id}`} label="补选实际执行人" onPress={() => void openDeepRecovery(draft.client_item_id)} disabled={submitting} tone="secondary" />
+                {deepRecoveryItemId === draft.client_item_id ? <View>{deepRecoveryPeople.map((person) => <AppButton key={person.id} testID={`deep-recovery-person-${person.id}`} label={person.name} onPress={() => confirmDeepRecovery(person)} disabled={submitting} tone="outline" />)}</View> : null}
+              </View>)}
               {localMediaSummary ? (
                 <Text testID="inspection-local-media-summary" style={styles.localMediaText}>
                   {`本批次照片共 ${localMediaSummary.total} 张；本机仍保留 ${localMediaSummary.retained} 张，已有远端引用 ${localMediaSummary.remoteReferenced} 张。同步失败时不会因重试自动删除仍保留的本地照片。`}

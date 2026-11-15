@@ -1,6 +1,10 @@
+function fixtureToken(token: string) { require('./mediaCaptureIdentity').setMediaCaptureSession('cleaner-1', token); return token }
 jest.mock('./api', () => ({
   ApiError: class ApiError extends Error {},
   completePropertyFeedbackProject: jest.fn(),
+  getDeepCleaningRecoveryContext: jest.fn(),
+  listDeepCleaningExecutors: jest.fn(async () => [{ id: 'actual-cleaner', name: 'Fixture cleaner' }]),
+  recordDeepCleaningCompletion: jest.fn(async () => ({ ok: true, id: 'deep-atomic-fixture', workflow_status: 'pending_review' })),
   createPropertyFeedbackBatch: jest.fn(),
   isRetryableApiError: jest.fn(),
   saveInspectionPhotos: jest.fn(),
@@ -39,6 +43,7 @@ beforeEach(async () => {
   jest.clearAllMocks()
   jest.resetModules()
   await getAsyncStorage().clear()
+  require('./mediaCaptureIdentity').setMediaCaptureSession('cleaner-1', 'token-1')
 })
 
 function baseSnapshot(taskId: string) {
@@ -71,7 +76,7 @@ function localRoomPhoto(id: string) {
     uploaded_url: null,
     name: `${id}.jpg`,
     mime_type: 'image/jpeg',
-    captured_at: '2026-07-25T00:00:00.000Z',
+    captured_by_user_id: 'cleaner-1', captured_at: '2026-07-25T00:00:00.000Z',
   }
 }
 
@@ -251,7 +256,7 @@ test('exposes failed sync steps and retained local media for the inspector statu
       room_photo_requirement: 'required' as const,
       restock_confirmed_sufficient: true,
       room_photos: {
-        living: [{ id: 'local-1', local_uri: 'file:///local-1.jpg', thumbnail_uri: null, uploaded_key: null, uploaded_url: null, name: 'local-1.jpg', mime_type: 'image/jpeg', captured_at: '2026-07-24T00:00:00.000Z' }],
+        living: [{ id: 'local-1', local_uri: 'file:///local-1.jpg', thumbnail_uri: null, uploaded_key: null, uploaded_url: null, name: 'local-1.jpg', mime_type: 'image/jpeg', captured_by_user_id: 'cleaner-1', captured_at: '2026-07-24T00:00:00.000Z' }],
         sofa: [],
         bedroom: [],
         kitchen: [],
@@ -384,7 +389,7 @@ test('allows carry-forward restock items without proof photos and persists the n
   })
 
   await queueMod.submitInspectionPanelBatch('task-carry-forward')
-  const result = await queueMod.processInspectionPanelSubmitQueue('token-carry')
+  const result = await queueMod.processInspectionPanelSubmitQueue(fixtureToken('token-carry'))
 
   expect(result).toEqual({ processed: 1, remaining: 0 })
   expect(api.uploadCleaningMedia).not.toHaveBeenCalled()
@@ -431,7 +436,7 @@ test('keeps a submitted batch without cleaning task id and syncs after binding t
   })
   await queueMod.submitInspectionPanelBatch('task-wait-source')
 
-  const waiting = await queueMod.processInspectionPanelSubmitQueue('token-wait')
+  const waiting = await queueMod.processInspectionPanelSubmitQueue(fixtureToken('token-wait'))
 
   expect(waiting).toEqual({ processed: 0, remaining: 1 })
   expect(api.saveRestockProof).not.toHaveBeenCalled()
@@ -448,7 +453,7 @@ test('keeps a submitted batch without cleaning task id and syncs after binding t
     property_id: 'property-1',
     property_code: 'A1201',
   })
-  const synced = await queueMod.processInspectionPanelSubmitQueue('token-wait')
+  const synced = await queueMod.processInspectionPanelSubmitQueue(fixtureToken('token-wait'))
 
   expect(synced).toEqual({ processed: 1, remaining: 0 })
   expect(api.saveRestockProof).toHaveBeenCalledWith(
@@ -528,7 +533,7 @@ test('blocks a legacy pending batch with missing required photos before any API 
     saveRestockProof: jest.Mock
     uploadCleaningMedia: jest.Mock
   }
-  await getAsyncStorage().setItem('mzstay.inspection_panel_submit_queue.v1', JSON.stringify([{
+  await getAsyncStorage().setItem(require('./mediaCaptureIdentity').mediaCaptureStorageKey('mzstay.inspection_panel_submit_queue.v1'), JSON.stringify([{
     submit_id: 'legacy-submit-1',
     task_id: 'legacy-task-1',
     cleaning_task_id: 'legacy-cleaning-1',
@@ -551,7 +556,7 @@ test('blocks a legacy pending batch with missing required photos before any API 
   }]))
   const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
 
-  const result = await queueMod.processInspectionPanelSubmitQueue('token-legacy')
+  const result = await queueMod.processInspectionPanelSubmitQueue(fixtureToken('token-legacy'))
 
   expect(result).toEqual({ processed: 0, remaining: 1 })
   expect((await queueMod.getInspectionPanelBatch('legacy-task-1'))).toMatchObject({
@@ -573,7 +578,7 @@ test('migrates an oversized legacy submit id and retries only failed business st
   api.saveInspectionPhotos.mockResolvedValue({ ok: true })
 
   const oversizedSubmitId = 'x'.repeat(121)
-  await getAsyncStorage().setItem('mzstay.inspection_panel_submit_queue.v1', JSON.stringify([{
+  await getAsyncStorage().setItem(require('./mediaCaptureIdentity').mediaCaptureStorageKey('mzstay.inspection_panel_submit_queue.v1'), JSON.stringify([{
     submit_id: oversizedSubmitId,
     task_id: 'legacy-task-long-submit-id',
     cleaning_task_id: 'legacy-cleaning-long-submit-id',
@@ -595,7 +600,7 @@ test('migrates an oversized legacy submit id and retries only failed business st
   }]))
 
   const queueMod = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
-  const result = await queueMod.processInspectionPanelSubmitQueue('token-legacy-long-submit-id')
+  const result = await queueMod.processInspectionPanelSubmitQueue(fixtureToken('token-legacy-long-submit-id'))
 
   expect(result).toEqual({ processed: 1, remaining: 0 })
   expect(api.uploadCleaningMedia).not.toHaveBeenCalled()
@@ -608,7 +613,7 @@ test('migrates an oversized legacy submit id and retries only failed business st
   expect(api.saveInspectionPhotos.mock.calls[0][2].submit_id).toBe(migratedSubmitId)
   expect((await queueMod.getInspectionPanelBatch('legacy-task-long-submit-id'))?.status).toBe('synced')
 
-  const persisted = JSON.parse((await getAsyncStorage().getItem('mzstay.inspection_panel_submit_queue.v1')) || '[]')
+  const persisted = JSON.parse((await getAsyncStorage().getItem(require('./mediaCaptureIdentity').mediaCaptureStorageKey('mzstay.inspection_panel_submit_queue.v1'))) || '[]')
   expect(persisted).toHaveLength(1)
   expect(persisted[0]).toMatchObject({ status: 'synced', submit_id: migratedSubmitId })
 })
@@ -679,7 +684,7 @@ test('persists partial feedback mapping and retries only missing client_item_id 
   })
   await queueMod.submitInspectionPanelBatch('task-feedback')
 
-  const first = await queueMod.processInspectionPanelSubmitQueue('token-1')
+  const first = await queueMod.processInspectionPanelSubmitQueue(fixtureToken('token-1'))
 
   expect(first).toEqual({ processed: 0, remaining: 1 })
   const failedBatch = await queueMod.getInspectionPanelBatch('task-feedback')
@@ -699,7 +704,7 @@ test('persists partial feedback mapping and retries only missing client_item_id 
     ],
   }))
 
-  const second = await queueMod.processInspectionPanelSubmitQueue('token-1')
+  const second = await queueMod.processInspectionPanelSubmitQueue(fixtureToken('token-1'))
 
   expect(second).toEqual({ processed: 1, remaining: 0 })
   expect(api.createPropertyFeedbackBatch).toHaveBeenNthCalledWith(2, 'token-1', expect.objectContaining({
@@ -767,7 +772,7 @@ test('does not re-upload media when restock save retries after upload_media alre
               uploaded_url: null,
               name: 'proof-1.heic',
               mime_type: 'image/heic',
-              captured_at: '2026-06-23T10:00:00.000Z',
+              captured_by_user_id: 'cleaner-1', captured_at: '2026-06-23T10:00:00.000Z',
               watermark_text: null,
               note: null,
             },
@@ -780,7 +785,7 @@ test('does not re-upload media when restock save retries after upload_media alre
   })
   await queueMod.submitInspectionPanelBatch('task-restock')
 
-  const first = await queueMod.processInspectionPanelSubmitQueue('token-2')
+  const first = await queueMod.processInspectionPanelSubmitQueue(fixtureToken('token-2'))
 
   expect(first).toEqual({ processed: 0, remaining: 1 })
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
@@ -814,7 +819,7 @@ test('does not re-upload media when restock save retries after upload_media alre
   expect(failedBatch?.steps.save_inspection_photos.status).toBe('succeeded')
   expect(failedBatch?.status).toBe('partial_failed')
 
-  const second = await queueMod.processInspectionPanelSubmitQueue('token-2')
+  const second = await queueMod.processInspectionPanelSubmitQueue(fixtureToken('token-2'))
 
   expect(second).toEqual({ processed: 1, remaining: 0 })
   expect(api.uploadCleaningMedia).toHaveBeenCalledTimes(1)
@@ -829,7 +834,7 @@ test('does not re-upload media when restock save retries after upload_media alre
   })
   expect(localMedia.deleteDraftMedia).not.toHaveBeenCalled()
   expect(thumbnailCache.pruneInspectionThumbnailCache)
-    .toHaveBeenCalledWith(['file:///cache/restock-proof-thumb.jpg'])
+    .not.toHaveBeenCalled()
 })
 
 test('keeps the original file when thumbnail generation fails after sync', async () => {
@@ -871,7 +876,7 @@ test('keeps the original file when thumbnail generation fails after sync', async
           uploaded_url: null,
           name: 'living-1.jpg',
           mime_type: 'image/jpeg',
-          captured_at: '2026-06-23T10:00:00.000Z',
+          captured_by_user_id: 'cleaner-1', captured_at: '2026-06-23T10:00:00.000Z',
         }],
         sofa: [],
         bedroom: [],
@@ -881,7 +886,7 @@ test('keeps the original file when thumbnail generation fails after sync', async
     },
   })
   await queueMod.submitInspectionPanelBatch('task-thumbnail-failed')
-  await queueMod.processInspectionPanelSubmitQueue('token-3')
+  await queueMod.processInspectionPanelSubmitQueue(fixtureToken('token-3'))
 
   const syncedBatch = await queueMod.getInspectionPanelBatch('task-thumbnail-failed')
   expect(syncedBatch?.status).toBe('synced')
@@ -891,4 +896,150 @@ test('keeps the original file when thumbnail generation fails after sync', async
     uploaded_key: 'cleaning/living-room.jpg',
   })
   expect(localMedia.deleteDraftMedia).not.toHaveBeenCalled()
+})
+
+
+test('deep completed feedback persists actual executor and retries one atomic report identity', async () => {
+  const api = require('./api')
+  api.saveInspectionPhotos.mockResolvedValue({ ok: true })
+  api.saveRestockProof.mockResolvedValue({ ok: true })
+  api.recordDeepCleaningCompletion.mockRejectedValueOnce(new Error('network unavailable')).mockResolvedValue({ ok: true, id: '11111111-1111-4111-8111-111111111111', workflow_status: 'pending_review' })
+  const queue = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  require('./mediaCaptureIdentity').setMediaCaptureSession('fixture-owner', 'fixture-token')
+  const taskId = 'deep-atomic-queue'
+  await queue.saveInspectionPanelDraftBatch({ task_id: taskId, cleaning_task_id: `cleaning-${taskId}`, snapshot: {
+    ...baseSnapshot(taskId), owner_user_id: 'fixture-owner', feedback: { task_id: taskId, updated_at: '', kind: 'deep_cleaning', maintenanceDrafts: [], dailyDrafts: [], deepCleaningDrafts: [{
+      clientId: 'deep-client', client_item_id: 'deep-client', area: 'kitchen', detail: 'fixture deep', media: ['cleaning/before.jpg'], submitAsCompleted: true,
+      completionNote: '', completionAfterPhotos: ['cleaning/after.jpg'], completionStartedAt: null, completionEndedAt: null,
+      completionAssigneeId: 'actual-cleaner', completionRecordId: '11111111-1111-4111-8111-111111111111',
+    }] },
+  } })
+  await queue.submitInspectionPanelBatch(taskId)
+  await queue.processInspectionPanelSubmitQueue('fixture-token', 'fixture-owner')
+  expect(api.createPropertyFeedbackBatch).not.toHaveBeenCalled()
+  expect(api.completePropertyFeedbackProject).not.toHaveBeenCalled()
+  expect((await queue.getInspectionPanelBatch(taskId))?.snapshot.feedback?.deepCleaningDrafts[0].completionAssigneeId).toBe('actual-cleaner')
+  await queue.processInspectionPanelSubmitQueue('fixture-token', 'fixture-owner')
+  expect(api.recordDeepCleaningCompletion).toHaveBeenCalledTimes(2)
+  expect(api.recordDeepCleaningCompletion.mock.calls[0][1]).toEqual(api.recordDeepCleaningCompletion.mock.calls[1][1])
+  expect(api.recordDeepCleaningCompletion.mock.calls[1][1]).toMatchObject({ assigneeId: 'actual-cleaner', operationId: 'deep-report-11111111-1111-4111-8111-111111111111', sourceTaskId: taskId, beforePhotos: ['cleaning/before.jpg'], afterPhotos: ['cleaning/after.jpg'] })
+  expect((await queue.getInspectionPanelBatch(taskId))?.status).toBe('synced')
+})
+
+
+test('legacy completed deep batch without actual person blocks locally without network or evidence cleanup', async () => {
+  const api = require('./api')
+  const queue = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  require('./mediaCaptureIdentity').setMediaCaptureSession('owner-1', 'fixture-token')
+  const taskId = 'legacy-deep-missing-person'
+  await queue.saveInspectionPanelDraftBatch({ task_id: taskId, cleaning_task_id: `cleaning-${taskId}`, snapshot: { ...baseSnapshot(taskId), feedback: { task_id: taskId, updated_at: '', kind: 'deep_cleaning', maintenanceDrafts: [], dailyDrafts: [], deepCleaningDrafts: [{ clientId: 'legacy', client_item_id: 'legacy', area: 'bathroom', detail: 'legacy fixture', media: ['cleaning/before.jpg'], submitAsCompleted: true, completionAfterPhotos: ['cleaning/after.jpg'], completionNote: '', completionStartedAt: null, completionEndedAt: null }] } } })
+  await queue.submitInspectionPanelBatch(taskId)
+  await queue.processInspectionPanelSubmitQueue('fixture-token')
+  await queue.processInspectionPanelSubmitQueue('fixture-token')
+  for (const name of ['createPropertyFeedbackBatch', 'completePropertyFeedbackProject', 'recordDeepCleaningCompletion', 'saveInspectionPhotos', 'saveRestockProof', 'uploadCleaningMedia']) expect(api[name]).not.toHaveBeenCalled()
+  const item = await queue.getInspectionPanelBatch(taskId)
+  expect(item?.last_error).toContain('已停止自动同步')
+  expect(item?.snapshot.feedback?.deepCleaningDrafts[0].completionAfterPhotos).toEqual(['cleaning/after.jpg'])
+  expect(require('./localMediaDrafts').deleteDraftMedia).not.toHaveBeenCalled()
+})
+
+
+async function seedDeepRecoveryBatch(queue: typeof import('./inspectionPanelSubmitQueue'), taskId: string, owner?: string, sourceId?: string) {
+  require('./mediaCaptureIdentity').setMediaCaptureSession(owner || 'owner-1', 'fixture-token')
+  await queue.saveInspectionPanelDraftBatch({ task_id: taskId, cleaning_task_id: `cleaning-${taskId}`, snapshot: { ...baseSnapshot(taskId), owner_user_id: owner, feedback: { task_id: taskId, updated_at: '', kind: 'deep_cleaning', maintenanceDrafts: [], dailyDrafts: [], deepCleaningDrafts: [{ clientId: 'recover-deep', client_item_id: 'recover-deep', area: 'bathroom', detail: 'fixture', media: ['cleaning/before.jpg'], submitAsCompleted: true, completionAfterPhotos: ['cleaning/after.jpg'], completionNote: '', completionStartedAt: null, completionEndedAt: null }] } } })
+  await queue.submitInspectionPanelBatch(taskId)
+  const item = await queue.getInspectionPanelBatch(taskId)
+  if (!item) throw new Error('missing fixture')
+  item.status = 'partial_failed'
+  for (const key of ['upload_media', 'save_restock_proof', 'save_inspection_photos', 'create_feedback_batch'] as const) item.steps[key].status = 'succeeded'
+  item.steps.upload_media.output = { fixture: { remote_key: 'cleaning/already-uploaded.jpg' } }
+  item.steps.create_feedback_batch.output = sourceId ? { 'recover-deep': { feedback_id: sourceId } } : {}
+  item.steps.complete_feedback_projects.status = 'failed'
+  await getAsyncStorage().setItem(require('./mediaCaptureIdentity').mediaCaptureStorageKey('mzstay.inspection_panel_submit_queue.v1'), JSON.stringify([item]))
+  return item
+}
+
+test('explicit same-owner deep supplement preserves refs, successful steps and stable identity', async () => {
+  const queue = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  const before = await seedDeepRecoveryBatch(queue, 'own-deep-recovery', 'owner-1')
+  const after = await queue.supplementDeepCleaningBatchExecutor({ token: 'fixture-token', actorId: 'owner-1', taskId: before.task_id, clientItemId: 'recover-deep', assigneeId: 'actual-cleaner' })
+  expect(after?.steps.upload_media).toEqual(before.steps.upload_media)
+  expect(after?.steps.create_feedback_batch).toEqual(before.steps.create_feedback_batch)
+  expect(after?.snapshot.feedback?.deepCleaningDrafts[0]).toMatchObject({ media: ['cleaning/before.jpg'], completionAfterPhotos: ['cleaning/after.jpg'], completionAssigneeId: 'actual-cleaner', completionOwnerId: 'owner-1', completionRecordId: expect.stringMatching(/^[a-f0-9-]{36}$/) })
+  expect(after?.submit_id).toBe(before.submit_id)
+  await expect(queue.supplementDeepCleaningBatchExecutor({ token: 'fixture-token', actorId: 'owner-1', taskId: before.task_id, clientItemId: 'recover-deep', assigneeId: 'actual-cleaner' })).rejects.toThrow('已有完整提交身份')
+})
+
+test('unknown legacy owner without source mapping never guesses ownership or modifies the batch', async () => {
+  const queue = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  const before = await seedDeepRecoveryBatch(queue, 'unknown-deep-recovery')
+  await expect(queue.supplementDeepCleaningBatchExecutor({ token: 'fixture-token', actorId: 'owner-1', taskId: before.task_id, clientItemId: 'recover-deep', assigneeId: 'actual-cleaner' })).rejects.toThrow('无法确认原提交账号')
+  expect(await queue.getInspectionPanelBatch(before.task_id)).toMatchObject(before)
+  expect(require('./api').recordDeepCleaningCompletion).not.toHaveBeenCalled()
+})
+
+test('legacy source with lost completion acknowledgment reconciles only after exact owner/source/photo proof', async () => {
+  const api = require('./api')
+  const queue = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  const before = await seedDeepRecoveryBatch(queue, 'legacy-ack-recovery', undefined, 'existing-source-id')
+  api.getDeepCleaningRecoveryContext.mockResolvedValue({ record_id: 'existing-source-id', source_task_id: before.task_id, owner_user_id: 'owner-1', workflow_status: 'pending_review', can_resume: false, completion_photo_urls: ['cleaning/after.jpg'] })
+  const after = await queue.supplementDeepCleaningBatchExecutor({ token: 'fixture-token', actorId: 'owner-1', taskId: before.task_id, clientItemId: 'recover-deep', assigneeId: 'actual-cleaner' })
+  expect(after?.steps.create_feedback_batch).toEqual(before.steps.create_feedback_batch)
+  expect(after?.steps.complete_feedback_projects.output).toMatchObject({ 'recover-deep': { completed: true, feedback_id: 'existing-source-id' } })
+  await queue.processInspectionPanelSubmitQueue('fixture-token')
+  expect(api.recordDeepCleaningCompletion).not.toHaveBeenCalled()
+  expect(api.createPropertyFeedbackBatch).not.toHaveBeenCalled()
+  expect(api.uploadCleaningMedia).not.toHaveBeenCalled()
+  expect((await queue.getInspectionPanelBatch(before.task_id))?.status).toBe('synced')
+})
+
+test.each(['wrong-owner', 'wrong-source', 'wrong-photo'])('mapped legacy recovery rejects %s evidence', async (mismatch) => {
+  const api = require('./api')
+  const queue = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  const before = await seedDeepRecoveryBatch(queue, `legacy-${mismatch}`, undefined, 'existing-source-id')
+  api.getDeepCleaningRecoveryContext.mockResolvedValue({ record_id: 'existing-source-id', source_task_id: mismatch === 'wrong-source' ? 'other-task' : before.task_id, owner_user_id: mismatch === 'wrong-owner' ? 'other-user' : 'owner-1', workflow_status: 'pending_review', can_resume: false, completion_photo_urls: mismatch === 'wrong-photo' ? ['cleaning/unrelated.jpg'] : ['cleaning/after.jpg'] })
+  await expect(queue.supplementDeepCleaningBatchExecutor({ token: 'fixture-token', actorId: 'owner-1', taskId: before.task_id, clientItemId: 'recover-deep', assigneeId: 'actual-cleaner' })).rejects.toThrow()
+  expect(await queue.getInspectionPanelBatch(before.task_id)).toMatchObject(before)
+})
+
+
+test('owned deep batch is inert under another signed-in account and resumes under the owner', async () => {
+  const api = require('./api')
+  const queue = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  const before = await seedDeepRecoveryBatch(queue, 'account-switch-deep', 'owner-a')
+  const restored = await queue.supplementDeepCleaningBatchExecutor({ token: 'fixture-token', actorId: 'owner-a', taskId: before.task_id, clientItemId: 'recover-deep', assigneeId: 'actual-cleaner' })
+  require('./mediaCaptureIdentity').setMediaCaptureSession('owner-b', 'other-token')
+  await queue.processInspectionPanelSubmitQueue('other-token', 'owner-b')
+  expect(api.recordDeepCleaningCompletion).not.toHaveBeenCalled()
+  expect(await queue.getInspectionPanelBatch(before.task_id)).toBeNull()
+  require('./mediaCaptureIdentity').setMediaCaptureSession('owner-a', 'owner-token')
+  expect(await queue.getInspectionPanelBatch(before.task_id)).toEqual(restored)
+  await queue.processInspectionPanelSubmitQueue('owner-token', 'owner-a')
+  expect(api.recordDeepCleaningCompletion).toHaveBeenCalledTimes(1)
+  expect(api.recordDeepCleaningCompletion.mock.calls[0][0]).toBe('owner-token')
+})
+
+test('legacy mapped source resumes same record only after server owner/source proof', async () => {
+  const api = require('./api')
+  const queue = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  const before = await seedDeepRecoveryBatch(queue, 'legacy-mapped-resume', undefined, 'existing-source-id')
+  api.getDeepCleaningRecoveryContext.mockResolvedValue({ record_id: 'existing-source-id', source_task_id: before.task_id, owner_user_id: 'owner-1', workflow_status: 'pending_assignment', can_resume: true, completion_photo_urls: [] })
+  await queue.supplementDeepCleaningBatchExecutor({ token: 'fixture-token', actorId: 'owner-1', taskId: before.task_id, clientItemId: 'recover-deep', assigneeId: 'actual-cleaner' })
+  await queue.processInspectionPanelSubmitQueue('fixture-token', 'owner-1')
+  expect(api.recordDeepCleaningCompletion).toHaveBeenCalledWith('fixture-token', expect.objectContaining({ recordId: 'existing-source-id', existingRecord: true, assigneeId: 'actual-cleaner' }))
+  expect(api.createPropertyFeedbackBatch).not.toHaveBeenCalled()
+  expect(api.uploadCleaningMedia).not.toHaveBeenCalled()
+})
+
+
+test('ownerless completed identity cannot auto-submit or infer ownership', async () => {
+  const queue = require('./inspectionPanelSubmitQueue') as typeof import('./inspectionPanelSubmitQueue')
+  const before = await seedDeepRecoveryBatch(queue, 'ownerless-full-identity')
+  const draft = before.snapshot.feedback!.deepCleaningDrafts[0]
+  draft.completionAssigneeId = 'actual-cleaner'
+  draft.completionRecordId = '11111111-1111-4111-8111-111111111111'
+  await getAsyncStorage().setItem(require('./mediaCaptureIdentity').mediaCaptureStorageKey('mzstay.inspection_panel_submit_queue.v1'), JSON.stringify([before]))
+  await queue.processInspectionPanelSubmitQueue('fixture-token', 'owner-1')
+  expect(require('./api').recordDeepCleaningCompletion).not.toHaveBeenCalled()
+  await expect(queue.supplementDeepCleaningBatchExecutor({ token: 'fixture-token', actorId: 'owner-1', taskId: before.task_id, clientItemId: 'recover-deep', assigneeId: 'actual-cleaner' })).rejects.toThrow('无法确认原提交账号')
 })

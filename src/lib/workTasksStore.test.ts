@@ -2743,3 +2743,16 @@ test('an already stale same-scope caller cannot replace the current in-flight gu
   expect(api.listWorkTasks).toHaveBeenCalledTimes(1)
   expect(getWorkTasksSnapshot().items.map((task) => task.id)).toEqual(['current-caller-task'])
 })
+
+
+test('deep workflow patch invalidates execution visibility without trusting old source status', () => {
+  const task = makeTask({ source_type: 'property_deep_cleaning', task_kind: 'deep_cleaning', status: 'assigned', source_workflow_status: 'assigned', execution_list_visible: true, assignee_id: 'u1', deep_cleaning_workflow: { status: 'pending_review', available_actions: [] } } as any)
+  expect(reconcileExecutionListVisibilityAfterPatch(task, ['deep_cleaning_workflow'])).toMatchObject({ source_workflow_status: 'pending_review', execution_list_visible: false })
+})
+
+test.each(['cleaning_tasks', 'property_maintenance'])('deep-only foreign-source patch preserves %s visibility and source workflow', (source_type) => {
+  const task: any = { id: 'scope-fixture', source_type, status: 'assigned', scheduled_date: '2026-01-01', assignee_id: 'fixture', source_workflow_status: 'assigned', execution_list_visible: false, maintenance_workflow: { status: 'assigned', available_actions: [] }, deep_cleaning_workflow: { status: 'pending_review', available_actions: [] } }
+  const result = require('./workTasksStore').reconcileExecutionListVisibilityAfterPatch(task, ['deep_cleaning_workflow'])
+  expect(result.execution_list_visible).toBe(false)
+  expect(result.source_workflow_status).toBe('assigned')
+})

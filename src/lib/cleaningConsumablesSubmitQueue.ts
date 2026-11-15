@@ -1,4 +1,6 @@
-import { getCleaningConsumables, isRetryableApiError, isTerminalAuthApiError, saveCompletionPhotos, saveRestockProof, submitCleaningConsumables, uploadCleaningMedia, type CompletionPhotoArea } from './api'
+import { buildMediaWatermark } from './mediaWatermark'
+import { assertMediaCaptureSession, guardMediaRequest } from './mediaCaptureIdentity'
+import { getCleaningConsumables as api_getCleaningConsumables, isRetryableApiError, isTerminalAuthApiError,saveCompletionPhotos as api_saveCompletionPhotos,saveRestockProof as api_saveRestockProof,submitCleaningConsumables as api_submitCleaningConsumables,uploadCleaningMedia as api_uploadCleaningMedia, type CompletionPhotoArea  } from './api'
 import { cleaningMediaReference } from './cleaningMedia'
 import {
   getCleaningConsumablesDraft,
@@ -9,10 +11,11 @@ import {
   type CleaningConsumablesMedia,
 } from './cleaningConsumablesDraft'
 import { withLocalMediaLock } from './localMediaLocks'
-import { getJson, remove, setJson } from './storage'
+import { getOwnedMediaJson as rawGetJson, removeOwnedMediaJson as rawRemove, setOwnedMediaJson as rawSetJson } from './mediaCaptureIdentity'
 import { ALL_KITCHEN_SCENE_PHOTOS } from './cleaningScenePhotoTemplate'
 
 export type CleaningConsumablesQueueItem = {
+  captured_by_user_id?: string
   queue_item_id: string
   draft_id: string
   submit_id: string
@@ -64,6 +67,7 @@ function normalizeQueueItem(raw: any): CleaningConsumablesQueueItem | null {
   if (!taskId) return null
   const status = cleanText(raw?.status)
   return {
+    captured_by_user_id: cleanText(raw?.captured_by_user_id),
     queue_item_id: cleanText(raw?.queue_item_id) || `queue-${taskId}`,
     draft_id: cleanText(raw?.draft_id),
     submit_id: cleanText(raw?.submit_id),
@@ -106,7 +110,8 @@ async function loadQueue() {
     const draft = await getCleaningConsumablesDraft(taskId)
     if (!draft) continue
     migrated.push({
-      queue_item_id: draft.queue_item_id,
+      captured_by_user_id: draft.captured_by_user_id,
+    queue_item_id: draft.queue_item_id,
       draft_id: draft.draft_id,
       submit_id: draft.submit_id,
       task_id: taskId,
@@ -141,6 +146,7 @@ export async function enqueueCleaningConsumablesSubmit(taskId: string) {
   const current = await loadQueue()
   const existing = current.find((item) => item.task_id === key)
   const item: CleaningConsumablesQueueItem = {
+    captured_by_user_id: draft.captured_by_user_id,
     queue_item_id: draft.queue_item_id,
     draft_id: draft.draft_id,
     submit_id: draft.submit_id,
@@ -179,13 +185,7 @@ export async function getCleaningConsumablesSubmitQueueItem(taskId: string) {
 }
 
 function buildWatermarkText(propertyCode: string, username: string, iso: string) {
-  const d = new Date(String(iso || ''))
-  const pad2 = (n: number) => String(n).padStart(2, '0')
-  const line1 = `${propertyCode || '未知房号'}${username ? `  ${username}` : ''}`.trim()
-  const line2 = Number.isNaN(d.getTime())
-    ? String(iso || '').trim()
-    : `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
-  return `${line1}\n${line2}`.trim()
+  return buildMediaWatermark(propertyCode, username, iso)
 }
 
 function errorCode(error: any) {
@@ -212,7 +212,7 @@ function retryDelayMs(retryCount: number) {
 
 function toUploadMeta(draft: CleaningConsumablesDraft, username: string, media: CleaningConsumablesMedia, fallbackName: string) {
   const photoMeta = media.local_uri ? draft.photo_meta?.[media.local_uri] : undefined
-  const capturedAt = cleanText(media.captured_at) || cleanText(photoMeta?.captured_at) || new Date().toISOString()
+  const capturedAt = cleanText(media.captured_at) || cleanText(photoMeta?.captured_at)
   const name = cleanText(media.name) || cleanText(photoMeta?.name) || fallbackName
   const mimeType = cleanText(media.mime_type) || cleanText(photoMeta?.mime_type) || 'image/jpeg'
   const watermarkText = cleanText(media.watermark_text) || cleanText(photoMeta?.watermark_text) || buildWatermarkText(cleanText(draft.property_code), username, capturedAt)
@@ -223,6 +223,7 @@ function toUploadMeta(draft: CleaningConsumablesDraft, username: string, media: 
       media_id: cleanText(media.media_id),
       captured_at: capturedAt,
       property_code: cleanText(draft.property_code) || undefined,
+      captured_by_user_id: media.captured_by_user_id || photoMeta?.captured_by_user_id || '',
       watermark: watermarkText ? '1' : '',
       watermark_text: watermarkText || '',
     },
@@ -273,6 +274,7 @@ async function uploadOneMedia(token: string, username: string, draft: CleaningCo
 
     return saved
   } catch (error) {
+      assertMediaCaptureSession(token)
     const code = errorCode(error)
     await markMedia(draft, media.media_id, {
       upload_status: ['LOCAL_MEDIA_MISSING', 'MISSING_LOCAL_FILE'].includes(code) ? 'missing' : 'failed',
@@ -452,8 +454,10 @@ async function recordFailure(taskId: string, error: any) {
 }
 
 export async function processCleaningConsumablesSubmitQueue(token: string, username = ''): Promise<CleaningConsumablesQueueResult> {
+  assertMediaCaptureSession(token)
   if (processing) return { processed: 0, remaining: (await loadQueue()).length, succeeded_task_ids: [] }
   processing = true
+  queueSessionToken = token
   try {
     const queueItems = await loadQueue()
     let processed = 0
@@ -567,12 +571,14 @@ export async function processCleaningConsumablesSubmitQueue(token: string, usern
         succeededTaskIds.push(item.task_id)
         processed += 1
       } catch (error) {
+      assertMediaCaptureSession(token)
         await recordFailure(item.task_id, error)
       }
     }
     const remaining = (await loadQueue()).filter((item) => item.status !== 'synced').length
     return { processed, remaining, succeeded_task_ids: succeededTaskIds }
   } finally {
+    queueSessionToken = null
     processing = false
   }
 }
@@ -581,3 +587,24 @@ export async function enqueueAndProcessCleaningConsumablesSubmit(token: string, 
   await enqueueCleaningConsumablesSubmit(taskId)
   return processCleaningConsumablesSubmitQueue(token, username)
 }
+
+const getCleaningConsumables = guardMediaRequest(api_getCleaningConsumables)
+const saveCompletionPhotos = guardMediaRequest(api_saveCompletionPhotos)
+const saveRestockProof = guardMediaRequest(api_saveRestockProof)
+const submitCleaningConsumables = guardMediaRequest(api_submitCleaningConsumables)
+const uploadCleaningMedia = guardMediaRequest(api_uploadCleaningMedia, true)
+
+
+let queueSessionToken: string | null = null
+function checkQueueSession() { if (queueSessionToken) assertMediaCaptureSession(queueSessionToken) }
+async function getJson<T>(key: string): Promise<T | null> {
+  checkQueueSession()
+  const result = await rawGetJson<T>(key)
+  checkQueueSession()
+  return result
+}
+async function setJson<T>(key: string, value: T) {
+  checkQueueSession()
+  return rawSetJson(key, value)
+}
+async function remove(key: string) { checkQueueSession(); return rawRemove(key) }

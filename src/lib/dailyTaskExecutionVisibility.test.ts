@@ -156,3 +156,12 @@ describe('daily task execution visibility', () => {
     expect(canLoadLiveSourceMediaForDailyTask({ work_record_read_only: false, work_record_state: 'reassigned' })).toBe(true)
   })
 })
+
+
+test('deep-cleaning authoritative workflow hides pending review from execution even with stale status', () => {
+  expect(isDailyTaskExecutionVisible({ source_type: 'property_deep_cleaning', status: 'assigned', scheduled_date: scheduled, assignee_id: 'u1', deep_cleaning_workflow: { status: 'pending_review' } })).toBe(false)
+})
+
+test.each(['cleaning_tasks', 'property_maintenance'])('unrelated deep workflow cannot hide %s execution', (source_type) => {
+  expect(isDailyTaskExecutionVisible({ source_type, status: 'assigned', scheduled_date: scheduled, assignee_id: 'fixture', deep_cleaning_workflow: { status: 'pending_review' } })).toBe(true)
+})

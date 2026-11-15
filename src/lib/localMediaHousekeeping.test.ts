@@ -65,3 +65,11 @@ test('fails closed when any durable reference cannot be read or parsed', async (
   mockRecoverySnapshots.mockRejectedValueOnce(new Error('recovery snapshot unreadable'))
   await expect(collectProtectedLocalMediaUris()).rejects.toThrow('recovery snapshot unreadable')
 })
+
+
+test('all account-scoped media namespaces remain retention roots', () => {
+  const { isLocalMediaReferenceStorageKey } = require('./localMediaHousekeeping')
+  expect(isLocalMediaReferenceStorageKey('mzstay.media_owner.v1:A:mzstay.key_upload_queue.v2')).toBe(true)
+  expect(isLocalMediaReferenceStorageKey('mzstay.media_owner.v1:B:mzstay.inspection_panel_draft.v2:task')).toBe(true)
+  expect(isLocalMediaReferenceStorageKey('mzstay.inspection_panel_submit_queue.v1')).toBe(true)
+})

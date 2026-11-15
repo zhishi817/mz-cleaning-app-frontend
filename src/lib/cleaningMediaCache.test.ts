@@ -1,6 +1,7 @@
 const mockFiles = new Map<string, { size: number; modificationTime: number }>()
 let mockDownloadError: unknown = null
 let mockDownloadCalls = 0
+let mockDownloadOptions: any[] = []
 let mockHoldDownload: Promise<void> | null = null
 let mockDownloadedFileSize = 1024
 
@@ -62,7 +63,8 @@ jest.mock('expo-file-system', () => {
       mockFiles.delete(this.uri)
     }
 
-    static async downloadFileAsync(_url: string, target: File) {
+    static async downloadFileAsync(_url: string, target: File, options?: any) {
+      mockDownloadOptions.push(options)
       mockDownloadCalls += 1
       if (mockHoldDownload) await mockHoldDownload
       if (mockDownloadError) throw mockDownloadError
@@ -86,6 +88,7 @@ beforeEach(async () => {
   mockFiles.clear()
   mockDownloadError = null
   mockDownloadCalls = 0
+  mockDownloadOptions = []
   mockHoldDownload = null
   mockDownloadedFileSize = 1024
 })
@@ -197,4 +200,23 @@ test('maintenance removes expired partial/final files and trims the active cache
   const trimmedResult = await cache.runCleaningMediaCacheMaintenance(now)
   expect(trimmedResult.bytes).toBeLessThanOrEqual(250 * 1024 * 1024)
   expect(Array.from(mockFiles.keys()).filter((uri) => uri.endsWith('.jpg'))).toHaveLength(1)
+})
+
+
+test('private transport cache headers reach native downloads while the same account still reuses its file cache', async () => {
+  const cache = require('./cleaningMediaCache') as typeof import('./cleaningMediaCache')
+  const privateSource = { ...source, headers: { Authorization: 'Bearer token-one', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' } }
+  const first = await cache.loadCleaningMediaImage(privateSource)
+  expect(first.uri).toMatch(/^file:/)
+  expect(mockDownloadOptions[0]).toEqual({ headers: privateSource.headers, idempotent: false })
+  const again = await cache.loadCleaningMediaImage(privateSource)
+  expect(again.uri).toBe(first.uri)
+  expect(mockDownloadCalls).toBe(1)
+  await cache.establishCleaningMediaCacheSession({ userId: 'other', role: 'cleaner', roles: ['cleaner'] })
+  mockDownloadError = { status: 403 }
+  const deniedSource = { ...privateSource, headers: { ...privateSource.headers, Authorization: 'Bearer token-other' } }
+  const denied = await cache.loadCleaningMediaImage(deniedSource)
+  expect(denied).toEqual({ uri: null, failure: { status: 403, message: '无查看这张照片的权限', retryable: false } })
+  expect(mockDownloadCalls).toBe(2)
+  expect(mockDownloadOptions[1]).toEqual({ headers: deniedSource.headers, idempotent: false })
 })
