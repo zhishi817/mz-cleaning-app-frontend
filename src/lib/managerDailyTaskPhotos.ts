@@ -171,6 +171,18 @@ export type ManagerCompletionPhotoItem = {
   note?: string | null
 }
 
+/** Preserve every returned inspection category; issue photos have their own section. */
+export function managerInspectionPhotoGroups(items: ManagerCompletionPhotoItem[]) {
+  const areas = uniqueTextList([
+    'living', 'sofa', 'bedroom', 'kitchen', 'bathroom', 'balcony',
+    ...items.filter((item) => item.area !== 'unclean' && !!item.url).map((item) => item.area),
+  ])
+  return areas.map((area) => ({
+    area,
+    inspectorItems: items.filter((item) => item.area === area && !!item.url),
+  }))
+}
+
 export function mergeManagerLivingRoomPhotoUrls(responses: (any | null | undefined)[]) {
   const seen = new Set<string>()
   const out: string[] = []

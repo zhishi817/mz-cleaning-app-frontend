@@ -1,4 +1,28 @@
-import { completionPhotoTaskIdsFromTask, inspectionPhotoTaskIdsFromTask, managerGuestLuggagePhotoDisplayItems, mergeManagerCompletionPhotoItems } from '../../lib/managerDailyTaskPhotos'
+import { completionPhotoTaskIdsFromTask, inspectionPhotoTaskIdsFromTask, managerGuestLuggagePhotoDisplayItems, managerInspectionPhotoGroups, mergeManagerCompletionPhotoItems } from '../../lib/managerDailyTaskPhotos'
+
+test('MZ119 preserves current, historical and unknown returned inspection areas without duplicating issue photos', () => {
+  const items = [
+    { area: 'bathroom', url: 'cleaning/bathroom1.jpg', note: 'first' },
+    { area: 'bathroom', url: 'cleaning/bathroom2.jpg', note: 'second' },
+    { area: 'balcony', url: 'cleaning/balcony.jpg' },
+    { area: 'toilet', url: 'cleaning/legacy.jpg' },
+    { area: 'shower_drain', url: 'cleaning/drain.jpg' },
+    { area: 'future_area', url: 'cleaning/other.jpg' },
+    { area: 'unclean', url: 'cleaning/issue.jpg' },
+    { area: 'empty_area', url: '' },
+  ]
+  const groups = managerInspectionPhotoGroups(items)
+  expect(groups.map((group) => group.area)).toEqual(['living', 'sofa', 'bedroom', 'kitchen', 'bathroom', 'balcony', 'toilet', 'shower_drain', 'future_area'])
+  expect(groups.find((group) => group.area === 'bathroom')?.inspectorItems).toEqual(items.slice(0, 2))
+  expect(groups.flatMap((group) => group.inspectorItems)).toEqual(items.slice(0, 6))
+  expect(managerInspectionPhotoGroups(items)).toEqual(groups)
+})
+
+test('MZ119 empty inspection list has stable empty room sections, not stale media', () => {
+  expect(managerInspectionPhotoGroups([])).toEqual(
+    ['living', 'sofa', 'bedroom', 'kitchen', 'bathroom', 'balcony'].map((area) => ({ area, inspectorItems: [] })),
+  )
+})
 
 test('temporary notice retains a local preview until save and attaches notice context only afterwards', () => {
   expect(
