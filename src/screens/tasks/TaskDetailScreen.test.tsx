@@ -1,6 +1,6 @@
 import React from 'react'
 import { Alert, Keyboard, Platform, StyleSheet } from 'react-native'
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native'
+import { act, fireEvent, fireEventAsync, render, waitFor } from '@testing-library/react-native'
 import { I18nProvider } from '../../lib/i18n'
 
 let mockCompletionDrafts: Record<string, any[]> = {}
@@ -2292,19 +2292,35 @@ describe('deep-cleaning assigned workflow', () => {
     await waitFor(() => expect(ui.getByTestId('deep-before-library').props.accessibilityState.disabled).toBe(false))
     fireEvent.press(ui.getByTestId('deep-before-library'))
     await waitFor(() => expect(api.uploadMzappMedia).toHaveBeenCalledTimes(1))
-    mockAuthState.token = 'new-token'
-    const Screen = require('./TaskDetailScreen').default
-    ui.rerender(<I18nProvider><Screen navigation={navigation} route={{ params: { id: 'property_deep_cleaning:d1' } }} /></I18nProvider>)
-    await act(async () => { finish({ remoteReference: 'mzapp/old-token-before.jpg' }) })
-    const key = require('../../lib/deepCleaningCompletion').deepCleaningBeforeDraftKey('property_deep_cleaning:d1', 'd1')
-    expect(mockCompletionDrafts[`${key}:u1`]?.[0]?.remote_reference).toBe('mzapp/old-token-before.jpg')
-    expect(api.submitDeepCleaningCompletion).not.toHaveBeenCalled()
-    expect(navigation.goBack).not.toHaveBeenCalled()
-    await waitFor(() => expect(ui.getByTestId('deep-before-library').props.accessibilityState.disabled).toBe(false))
-    fireEvent.press(ui.getByText('重试前图上传'))
-    await waitFor(() => expect(ui.queryByText('重试前图上传')).toBeNull())
-    expect(api.uploadMzappMedia).toHaveBeenCalledTimes(1)
-    mockAuthState.token = 't1'
+    const previousToken = mockAuthState.token
+    try {
+      mockAuthState.token = 'new-token'
+      const Screen = require('./TaskDetailScreen').default
+      ui.rerender(<I18nProvider><Screen navigation={navigation} route={{ params: { id: 'property_deep_cleaning:d1' } }} /></I18nProvider>)
+      await act(async () => { finish({ remoteReference: 'mzapp/old-token-before.jpg' }) })
+      const key = require('../../lib/deepCleaningCompletion').deepCleaningBeforeDraftKey('property_deep_cleaning:d1', 'd1')
+      expect(mockCompletionDrafts[`${key}:u1`]?.[0]?.remote_reference).toBe('mzapp/old-token-before.jpg')
+      expect(api.submitDeepCleaningCompletion).not.toHaveBeenCalled()
+      expect(navigation.goBack).not.toHaveBeenCalled()
+      await waitFor(() => expect(ui.getByTestId('deep-before-library').props.accessibilityState.disabled).toBe(false))
+      const readsBeforeRetry = drafts.getMaintenanceCompletionPhotoDraft.mock.calls.length
+      const writesBeforeRetry = drafts.setMaintenanceCompletionPhotoDraft.mock.calls.length
+      // Retry reads the acknowledged draft asynchronously. Flush that interaction,
+      // rather than relying on a later 1-second UI poll to flush React's updates.
+      await waitFor(() => expect(ui.getByTestId('deep-before-retry').props.accessibilityState.disabled).toBe(false))
+      await fireEventAsync.press(ui.getByTestId('deep-before-retry'))
+      expect(drafts.getMaintenanceCompletionPhotoDraft.mock.calls.length).toBeGreaterThan(readsBeforeRetry)
+      expect(drafts.setMaintenanceCompletionPhotoDraft.mock.calls.length).toBeGreaterThan(writesBeforeRetry)
+      expect(drafts.setMaintenanceCompletionPhotoDraft).toHaveBeenLastCalledWith(key, 'u1', expect.arrayContaining([
+        expect.objectContaining({ remote_reference: 'mzapp/old-token-before.jpg' }),
+      ]))
+      expect(ui.queryByTestId('deep-before-retry')).toBeNull()
+      expect(api.uploadMzappMedia).toHaveBeenCalledTimes(1)
+      expect(api.submitDeepCleaningCompletion).not.toHaveBeenCalled()
+      expect(navigation.goBack).not.toHaveBeenCalled()
+    } finally {
+      mockAuthState.token = previousToken
+    }
   })
 
   test.each(['account', 'token', 'task'])('combined deep completion ignores delayed receipt after %s change', async (change) => {

@@ -1,5 +1,77 @@
 # Change Release Ledger
 
+## CRL-20261116-001 — PR455 deep-before retry regression synchronization
+
+- **Status:** ready
+- **Repository:** `mobile`
+- **Updated:** 2026-11-16 UTC
+- **Request:** Diagnose and repair the failing PR455 regression locally; no push, merge or production data changes.
+- **Outcome:** Await the asynchronous retry interaction and verify acknowledged draft recovery without weakening session isolation or no-reupload assertions.
+
+### Implementation
+
+- Previous test clicked an inner Text synchronously and relied on a later UI polling interval to flush asynchronous storage and React work.
+- Await `fireEventAsync.press` on the enabled retry control; verify draft read/write and acknowledged reference, disappearance, no extra upload, no business submit and no navigation.
+- Restore the previous token in `finally` so failed assertions cannot leak authentication fixture state.
+- No runtime code changed. The original CI failure did not reproduce locally; timing remains suspected, not a confirmed production defect.
+
+### Files / Areas
+
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — modified: asynchronous retry regression and fixture cleanup.
+- `docs/change-release-ledger.md` — modified: this isolated diagnostic record.
+
+### Impact / Dependencies
+
+- API, database / migration, configuration, dependencies: none.
+- Related: MZ115-118 integrated release; exact mobile base `cfe8784056b35a55b0daae9594fa387105b0beea`; root PR455 head `0cfed07732d6eb36d4940f074f16b743ff618eaa`.
+- Test transport guard blocks external network access; synthetic mock data only.
+
+### Validation
+
+- Unmodified base: focused stale-token test PASS; TaskDetailScreen 104/104 PASS; full Jest 90 suites / 1012 tests PASS on macOS Node26.8.1.
+- CI ran Linux Node20 and failed one stale-token retry assertion; local success does not prove that CI is repaired.
+- Modified focused no-cache stale-token test PASS; TaskDetailScreen 104/104 PASS.
+- `npm run check:ci` PASS (exit 0): ledger range-audit 57 tests, ledger 2/2 paths covered, TypeScript, lint, strict button contract (27 documented legacy exceptions), fast 8 suites / 166 tests, full Jest 90 suites / 1012 tests. Existing act warnings remain; no assertion failures.
+- `git diff --check` PASS. Independent read-only review found no P0/P1 or scope issues; GO limited to this test synchronization candidate, not remote CI or push.
+- Remote Linux/Node20 CI, root paired integration, iOS simulator, Android emulator and physical devices not run for this test-only change; original CI outcome still requires verification.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `0b075cf476d7fa7a3bdd6ef3afd7d31636eed0ce80f26be7f9402030ca7c10a7`
+- `src/screens/tasks/TaskDetailScreen.test.tsx` — SHA-256: `17e01be45bdf6a69ce95f6fb6cdcf47d16594e27ca7c3e4e574fb381e94d2f4e`
+
+### Release Attempts
+
+#### RA-20261116-001
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261116-001`
+- Selected CRL identities: `mobile/CRL-20261116-001`
+- Intended action: `commit`
+- Branch: `codex/pr455-mobile-retry-ci`
+- Base: `origin/Dev@cfe8784056b35a55b0daae9594fa387105b0beea`; fetched at `2026-11-16 UTC`
+- Candidate patch SHA-256: `862d00cefbb94e9ce2847de12744787b19201c4221b90440f06f519fad90200f`
+- Commit SHA: `955aaf3c4c75a2f0af0828678ee7f8ef59c56a70`
+- Dependencies: none
+- Required validation: PASS; focused, 104 screen tests, check:ci 90 suites / 1012 tests plus TypeScript/lint/ledger/button contracts
+- Shared-hunk review: PASS; independent reviewer inspected exact two selected test hunks and new CRL only; no historical change overwritten
+- Generated-file review: PASS; test and ledger only
+- Technical state: committed
+- User authorization: selected-for-commit; owner explicitly requested submitting and pushing this test fix, not merging
+- Independent review: GO for commit; independent read-only review matched exact staged fingerprint, scope and completed check:ci
+- Action conclusion: GO; blockers: none
+
+### Risks / Release Notes
+
+- Test-only synchronization hardening; no permission, upload, status, price or production behavior changes.
+- No secrets, real customer data or credentials included.
+- Revert this test hunk to roll back. Source-only worktree reuses unchanged existing dependencies; no install or build cache copy.
+- Git: not committed; not pushed; no new PR; not merged; not deployed; OTA not published; native/device verification not run.
+
+
 ## CRL-20261110-001 — MZ-114 completion draft preview before business association
 - **Repository:** `mobile`
 - **Status:** verified combined candidate; complete local gates passed and independent commit review GO
