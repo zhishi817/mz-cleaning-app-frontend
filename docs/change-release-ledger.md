@@ -1,5 +1,87 @@
 # Change Release Ledger
 
+## CRL-20261116-002 — MZ-119 complete manager inspection photo categories
+- **Repository:** `mobile`
+- **Status:** ready
+- **Updated:** 2026-11-16 UTC
+- **Request:** Create a board number then repair PR3001 bathroom/balcony inspection photos missing from manager mobile detail.
+- **Outcome:** Manager inspection section preserves all returned nonempty categories, including bathroom/balcony and historical areas; existing issue-photo permission and section remain intact.
+
+### Implementation
+
+- Previous: four hardcoded room areas silently discarded saved bathroom/balcony and other inspection categories at rendering.
+- New: domain-only grouping retains six current areas and appends other returned non-unclean areas; uses existing authenticated thumbnails and preview unchanged.
+- Source diagnosis and baseline failing tests recorded before repair. No upload/save, action, navigation, historical actor filter or shared media dependency changes.
+
+### Files / Areas
+
+- `src/lib/managerDailyTaskPhotos.ts` — modified: inspection-only category grouping.
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — modified: consume grouping and label bathroom/balcony.
+- `src/screens/tasks/ManagerDailyTaskScreen.test.ts` — modified: empty/multiple/legacy/unknown category tests.
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — modified: three manager roles, complete media count, preview reopen and historical context protection.
+- `docs/mz119-inspection-photo-display.md` — added: diagnosis, phase/scope and surface reference.
+- `docs/feature-regression-registry.md` — modified: FR-P1-MED-14 protection.
+- `docs/change-release-ledger.md` — modified: current change record only; remote history preserved.
+
+### Impact / Dependencies
+
+- API, database / migration, configuration, dependencies: none.
+- Base: fresh origin/Dev cfc22004d86119c54f172fe692d07f0bb3ef7833 fetched 2026-11-16 12:36 UTC.
+- Root inspection-photos source contract inspected read-only; no paired backend modification.
+- Existing Jest network transport guard retained; synthetic data only. Scope does not include PR3001 object recovery or production writes.
+
+### Validation
+
+- Baseline three-role render tests: FAIL (expected omitted categories), before source repair.
+- Focused screen and grouping tests: PASS, 2 suites / 44 tests.
+- `npm run check:ci`: PASS, exit 0; 57 ledger audit tests, 7/7 local paths covered, TypeScript/lint/button audit, fast 8 suites / 166 tests and full 90 suites / 1017 tests. Mac arm64 Node26.8.1 with unchanged reused dependency manifests; no new dependency installation. Existing unrelated TaskDetail act warnings remain non-failing.
+- Independent read-only source review: no P0/P1 or blocking findings; exact history source/actor, unclean role boundary, thumbnail/preview context and scope preservation verified. This is not release authorization.
+- `git diff --check`: PASS. Native iOS/Android simulators, physical devices, weak network, real proxy/object and production data validation not run. Function verification remains limited to mocked component regression; no real-device completion claim.
+
+### Staged Commit Scope
+
+- **Repository:** `mobile`
+- **Status:** prepared
+- **Untracked review:** none
+- `docs/feature-regression-registry.md` — SHA-256: `3170b6cbdf5da7ec6beca27b692d7549af0f1933c9323f17cfd8388a95899f7c`
+- `docs/mz119-inspection-photo-display.md` — SHA-256: `c32d9ad6e7cee54f57760e49cdb92fa75a479b3f3ea87c106efecfaf1a7d09e4`
+- `src/lib/managerDailyTaskPhotos.ts` — SHA-256: `b8678261c57b1905c453e9fa9c70f18afd3258075608d814fd8ebee01cca1030`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `39362c5be56e5be7063711584c863255fb5102c9d93de29bd13f9610cc5f1b00`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `8506569cd7b4652b5c0e47725d848fbf9ffa228367ee538af82d8cbec5011505`
+- `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` — SHA-256: `d7c952fb55e0875c50d55883e5469be8183f30cce1faa19d307a2ac84ab85481`
+- `src/screens/tasks/ManagerDailyTaskScreen.test.ts` — SHA-256: `267ea493de35ad6dcf889320a8f0225ab855219ddfa6907621a1bf67847d7789`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `34559ad68177149f3fe2073f4f1e5b1aa0e81d1bfb7247a41e34e42938503e3a`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `6912c398aee672221e0c0ad0dd39ef0af837c6915abd3949c0cb81330c1c9a95`
+- `src/screens/tasks/ManagerDailyTaskScreen.tsx` — SHA-256: `941165678face84f1ef9b75b6b7279cdc32918b80fadc3acee634d5706b37ad3`
+
+### Release Attempts
+
+#### RA-20261116-002
+
+- Repository: `mobile`
+- Selected CRLs: `CRL-20261116-002`
+- Selected CRL identities: `mobile/CRL-20261116-002`
+- Intended action: `commit`
+- Branch: `codex/mz119-inspection-photo-display`
+- Base: `origin/Dev@cfc22004d86119c54f172fe692d07f0bb3ef7833`; fetched at `2026-11-16T13:22 UTC`
+- Candidate patch SHA-256: `c93a10364ae74e453899ab24e56616b890ab776094f6764c6e7cd19b1d93b377`
+- Commit SHA: `not committed`
+- Dependencies: none; current Root inspection-photos interface already supports these categories.
+- Required validation: PASS; targeted44, full check:ci90 suites/1017 tests, ledger/typecheck/lint/button gates.
+- Shared-hunk review: PASS; six non-ledger files exclusively belong to this change; original mixed workspace untouched.
+- Generated-file review: PASS; source/test/docs only, no dependencies or cache staged.
+- Technical state: verified
+- User authorization: selected-for-commit; owner explicitly requested MZ119 commit, push, PR and merge to Dev on November 16. Exact-commit push confirmation remains separate under repository rules.
+- Independent review: GO for commit; independent read-only reviewer verified all seven staged files, ten content hunks, exact candidate fingerprint, current base and full check:ci; no P0/P1/P2 findings.
+- Action conclusion: GO for commit; blockers: none. Exact-version push approval remains pending.
+
+### Risks / Release Notes
+
+- Unknown server-returned categories now use their area key label; original reference and permission are retained. Empty sections remain placeholders, never evidence of an absent upload.
+- Rollback: revert this isolated grouping/label change; no data recovery needed.
+- Sensitive review: synthetic paths only, no credentials, customer data, environment files or generated artifacts.
+- Git: not committed; not pushed; PR not created; not merged; not deployed; OTA not published; device verification not run.
+
 ## CRL-20261116-001 — PR455 deep-before retry regression synchronization
 
 - **Status:** ready

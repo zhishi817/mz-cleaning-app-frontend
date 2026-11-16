@@ -167,6 +167,54 @@ beforeEach(() => {
   mockWorkTasksStoreListener = null
 })
 
+test.each(['admin', 'customer_service', 'offline_manager'])('MZ119 %s sees all inspection categories and can reopen bathroom/balcony previews', async (role) => {
+  const beforeUser = mockAuthState.user
+  const beforeInspection = (api.getInspectionPhotos as jest.Mock).getMockImplementation()
+  const photos = [
+    { area: 'living', url: 'cleaning/mz119-living.jpg' },
+    { area: 'sofa', url: 'cleaning/mz119-sofa.jpg' },
+    { area: 'bedroom', url: 'cleaning/mz119-bedroom1.jpg' },
+    { area: 'bedroom', url: 'cleaning/mz119-bedroom2.jpg' },
+    { area: 'kitchen', url: 'cleaning/mz119-kitchen1.jpg' },
+    { area: 'kitchen', url: 'cleaning/mz119-kitchen2.jpg' },
+    { area: 'bathroom', url: 'cleaning/mz119-bathroom.jpg' },
+    { area: 'balcony', url: 'cleaning/mz119-balcony.jpg' },
+    { area: 'toilet', url: 'cleaning/mz119-legacy-toilet.jpg' },
+    { area: 'future_area', url: 'cleaning/mz119-other.jpg' },
+    { area: 'unclean', url: 'cleaning/mz119-issue.jpg' },
+  ]
+  mockAuthState.user = { ...beforeUser, role, roles: [role] }
+  ;(api.getInspectionPhotos as jest.Mock).mockResolvedValue({ items: photos })
+  const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
+  const ui = render(<I18nProvider><ManagerDailyTaskScreen
+    navigation={{ navigate: jest.fn(), addListener: jest.fn(() => () => {}) }}
+    route={{ key: 'mz119-entry', name: 'ManagerDailyTask', params: { taskId: mockTask.id } }}
+  /></I18nProvider>)
+  try {
+    await waitFor(() => {
+      const images = ui.UNSAFE_getAllByType('CleaningMediaImage' as any)
+      for (const photo of photos) {
+        const count = photo.area === 'unclean' && role === 'customer_service' ? 0 : 1
+        expect(images.filter((node) => node.props.remoteReference === photo.url)).toHaveLength(count)
+      }
+    })
+    expect(ui.getByText('浴室')).toBeTruthy()
+    expect(ui.getByText('阳台')).toBeTruthy()
+    for (const area of ['bathroom', 'balcony', 'bathroom']) {
+      const reference = `cleaning/mz119-${area}.jpg`
+      fireEvent.press(ui.UNSAFE_getAllByType('CleaningMediaImage' as any).find((node) => node.props.remoteReference === reference)!)
+      expect(ui.UNSAFE_getByType('CleaningMediaPreview' as any).props.reference).toBe(reference)
+      fireEvent.press(ui.getByText('点击任意位置关闭'))
+      expect(ui.UNSAFE_queryAllByType('CleaningMediaPreview' as any)).toHaveLength(0)
+    }
+    expect(api.updateCleaningTaskManagerFields).not.toHaveBeenCalled()
+  } finally {
+    ui.unmount()
+    mockAuthState.user = beforeUser
+    ;(api.getInspectionPhotos as jest.Mock).mockImplementation(beforeInspection!)
+  }
+})
+
 test('manager status obeys authoritative key-handover completion and explicit absence', () => {
   const ManagerDailyTaskScreen = jest.requireActual<typeof import('./ManagerDailyTaskScreen')>('./ManagerDailyTaskScreen').default as React.ComponentType<any>
   const originalStatus = mockTask.status
@@ -409,6 +457,9 @@ test('customer-service reassigned history uses exact actor-bound media and keeps
     items: [
       { id: 'former-photo', task_id: 'checkout-source', source: 'completion', area: 'living', url: 'cleaning/former.jpg', uploader_id: 'former-cleaner' },
       { id: 'former-video', task_id: 'checkout-source', source: 'lockbox_video', area: 'key_handover', url: 'cleaning/former.mp4', uploader_id: 'former-cleaner' },
+      { id: 'former-bathroom', task_id: 'checkout-source', source: 'inspection', area: 'bathroom', url: 'cleaning/former-bathroom.jpg', uploader_id: 'former-cleaner' },
+      { id: 'former-balcony', task_id: 'checkout-source', source: 'inspection', area: 'balcony', url: 'cleaning/former-balcony.jpg', uploader_id: 'former-cleaner' },
+      { id: 'replacement-bathroom', task_id: 'checkout-source', source: 'inspection', area: 'bathroom', url: 'cleaning/replacement-bathroom.jpg', uploader_id: 'replacement-cleaner' },
       { id: 'replacement-photo', task_id: 'checkout-source', source: 'completion', area: 'kitchen', url: 'cleaning/replacement.jpg', uploader_id: 'replacement-cleaner' },
       { id: 'other-task-photo', task_id: 'same-property-other-task', source: 'completion', area: 'bedroom', url: 'cleaning/unrelated.jpg', uploader_id: 'former-cleaner' },
     ],
@@ -442,6 +493,15 @@ test('customer-service reassigned history uses exact actor-bound media and keeps
     })
     expect(rendered).not.toContain('cleaning/replacement.jpg')
     expect(rendered).not.toContain('cleaning/unrelated.jpg')
+    expect(rendered).not.toContain('cleaning/replacement-bathroom.jpg')
+    for (const area of ['bathroom', 'balcony']) {
+      const reference = `cleaning/former-${area}.jpg`
+      const thumbnail = ui.UNSAFE_getAllByType('CleaningMediaImage' as any).find((node) => node.props.remoteReference === reference)!
+      expect(thumbnail.props).toEqual(expect.objectContaining({ accessSourceIds: ['checkout-source'], mediaScope: 'manager' }))
+      fireEvent.press(thumbnail)
+      expect(ui.UNSAFE_getByType('CleaningMediaPreview' as any).props).toEqual(expect.objectContaining({ reference, accessSourceIds: ['checkout-source'], mediaScope: 'manager' }))
+      fireEvent.press(ui.getByText('点击任意位置关闭'))
+    }
     expect(api.getCompletionPhotos).not.toHaveBeenCalled()
     expect(ui.getByTestId('work-record-read-only-info')).toBeTruthy()
     expect(ui.getByText('查看入住指南')).toBeTruthy()

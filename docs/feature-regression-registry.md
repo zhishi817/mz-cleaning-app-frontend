@@ -1,5 +1,14 @@
 # Feature Regression Registry
 
+## FR-P1-MED-14 — MZ-119 管理检查照片分类完整展示
+
+- **Status:** local candidate; not committed or released.
+- **Maintenance scope:** ManagerDailyTaskScreen inspection section and domain-only managerInspectionPhotoGroups.
+- **Business outcome:** 所有后端已返回且有权查看的检查照片保留分类展示；浴室、阳台不漏显，多张照片保留，历史及未知非空分类可见。unclean 仍走原独立区块与角色限制，不扩大权限。
+- **Tests:** `src/screens/tasks/ManagerDailyTaskScreen.test.ts`, `src/screens/tasks/ManagerDailyTaskScreen.render.test.tsx` cover empty/multiple/legacy categories, three reader roles, repeat preview, exact historical actor and thumbnail/preview authority consistency.
+- **Incident reference:** `docs/mz119-inspection-photo-display.md`.
+- **Boundary:** no production data, object, proxy, upload, save or shared viewer change; native/device verification separate.
+
 ## FR-MZ115 — Deep-cleaning completion is pending review, not settlement
 
 - **Status:** local candidate, not released.

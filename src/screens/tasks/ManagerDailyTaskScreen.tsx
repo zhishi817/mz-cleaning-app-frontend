@@ -44,6 +44,7 @@ import {
   mergeManagerLivingRoomPhotoUrls,
   managerDailyTaskPhotoLoadIssue,
   managerHistoricalMediaRecords,
+  managerInspectionPhotoGroups,
   type ManagerDailyTaskPhotoLoadIssue,
   type ManagerDailyTaskPhotoSource,
 } from '../../lib/managerDailyTaskPhotos'
@@ -98,6 +99,8 @@ const AREA_LABEL: Record<string, string> = {
   sofa: '沙发',
   bedroom: '卧室',
   kitchen: '厨房',
+  bathroom: '浴室',
+  balcony: '阳台',
   shower_drain: '浴室下水口',
   remote_tv: '电视和空调遥控器',
   remote_ac: '电视和空调遥控器（旧记录）',
@@ -1138,12 +1141,7 @@ export default function ManagerDailyTaskScreen(props: Props) {
   const feedbackAction = availableActionsForTask(task, { roleNames, activeRole }).find((action) => action.id === 'report_issue') || null
 
   const uncleanPhotos = inspectionItems.filter((x) => x.area === 'unclean')
-  const roomPhotoAreas = ['living', 'sofa', 'bedroom', 'kitchen'] as const
-  const roomPhotosByArea = roomPhotoAreas.map((a) => ({
-    area: a,
-    cleanerItems: completionItems.filter((x) => x.area === a),
-    inspectorItems: inspectionItems.filter((x) => x.area === a),
-  }))
+  const roomPhotosByArea = managerInspectionPhotoGroups(inspectionItems)
   const remoteTvRow = consumableItems.find((x) => x.item_id === 'remote_tv') || null
   const remoteAcRow = consumableItems.find((x) => x.item_id === 'remote_ac') || null
   const remoteTvPhotoUrl = normalizeUrlList(remoteTvRow?.photo_urls, remoteTvRow?.photo_url)[0] || null
