@@ -65,12 +65,12 @@
 - Branch: `codex/mz119-inspection-photo-display`
 - Base: `origin/Dev@cfc22004d86119c54f172fe692d07f0bb3ef7833`; fetched at `2026-11-16T13:22 UTC`
 - Candidate patch SHA-256: `c93a10364ae74e453899ab24e56616b890ab776094f6764c6e7cd19b1d93b377`
-- Commit SHA: `not committed`
-- Dependencies: none; current Root inspection-photos interface already supports these categories.
+- Commit SHA: `27886081d92e5454f30f5ffece4a6badd28e9e00`
+- Dependencies: none
 - Required validation: PASS; targeted44, full check:ci90 suites/1017 tests, ledger/typecheck/lint/button gates.
 - Shared-hunk review: PASS; six non-ledger files exclusively belong to this change; original mixed workspace untouched.
 - Generated-file review: PASS; source/test/docs only, no dependencies or cache staged.
-- Technical state: verified
+- Technical state: committed
 - User authorization: selected-for-commit; owner explicitly requested MZ119 commit, push, PR and merge to Dev on November 16. Exact-commit push confirmation remains separate under repository rules.
 - Independent review: GO for commit; independent read-only reviewer verified all seven staged files, ten content hunks, exact candidate fingerprint, current base and full check:ci; no P0/P1/P2 findings.
 - Action conclusion: GO for commit; blockers: none. Exact-version push approval remains pending.
